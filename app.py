@@ -943,6 +943,47 @@ def web():
         volume.commit()
         return {"ok": True, "saved": saved}
 
+    @api.post("/api/prepend-trigger")
+    async def prepend_trigger(payload: dict) -> dict[str, Any]:
+        """
+        Put the trigger word at the front of every caption that lacks it.
+
+        For imported datasets: your own .txt files are used verbatim, so a
+        caption without the trigger word trains a LoRA the trigger cannot
+        summon. This fixes that without discarding the text.
+
+        Idempotent by design — the test is `startswith`, not `in`. A substring
+        test would false-positive on short triggers (a "cat" LoRA would skip
+        "a cat sitting"), and running this twice must never double the prefix.
+        """
+        job_id = str(payload.get("job_id") or "")
+        trigger = str(payload.get("trigger_word") or "").strip()
+        if not NAME_RE.match(job_id):
+            return {"error": "Invalid job_id."}
+        if not trigger:
+            return {"error": "A trigger word is required."}
+
+        volume.reload()
+        src = UPLOADS / job_id
+        if not src.is_dir():
+            return {"error": "Dataset not found."}
+
+        changed = 0
+        for img in sorted(p for p in src.iterdir() if p.suffix.lower() in IMAGE_EXTS):
+            txt = img.with_suffix(".txt")
+            cur = txt.read_text().strip() if txt.exists() else ""
+            if not cur:
+                new = trigger
+            elif cur.startswith(trigger):
+                continue
+            else:
+                new = f"{trigger}, {cur}"
+            txt.write_text(new[:MAX_CAPTION_CHARS])
+            changed += 1
+
+        volume.commit()
+        return {"ok": True, "changed": changed}
+
     @api.post("/api/caption")
     async def caption(payload: dict) -> dict[str, Any]:
         job_id = str(payload.get("job_id") or "")
@@ -1251,6 +1292,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
           <select id="cap-style" style="width:auto"><option value="descriptive">Descriptive</option><option value="casual">Casual</option><option value="tags">Tags</option></select>
           <select id="cap-len" style="width:auto"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
           <label style="display:flex;align-items:center;gap:7px;margin:0;color:#ddd"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
+          <span class="grow"></span>
+          <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Prepend trigger</button>
         </div>
         <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
       </div>
@@ -1403,6 +1446,16 @@ async function flush(){
   const send={...captions}; captions={};
   await post('/api/captions',{job_id:jobId,captions:send});
 }
+$('#do-prepend').onclick=async()=>{
+  const trig=$('#ltrig').value.trim();
+  if(!trig){$('#train-err').innerHTML='<div class="err-box">Set a trigger word first.</div>';return}
+  clearTimeout(saveT); await flush();          // never clobber unsaved edits
+  const b=$('#do-prepend'); b.disabled=true; const was=b.textContent;
+  const r=await post('/api/prepend-trigger',{job_id:jobId,trigger_word:trig});
+  if(r.error){$('#train-err').innerHTML='<div class="err-box">'+r.error+'</div>'}
+  else{ b.textContent=r.changed?`Updated ${r.changed}`:'Already set'; await loadTiles(); }
+  setTimeout(()=>{b.textContent=was;b.disabled=false},1800);
+};
 $('#do-caption').onclick=async()=>{
   clearTimeout(saveT); await flush();
   const btn=$('#do-caption'); btn.disabled=true;
