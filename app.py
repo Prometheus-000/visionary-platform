@@ -333,6 +333,44 @@ def _safe_extract_zip(zip_path: Path, dest: Path) -> int:
     return count
 
 
+def _require_models(*keys: str) -> None:
+    """
+    Assert the given models are on the volume, and if not, say what IS there.
+
+    "Not downloaded" is useless when the file looks present in the UI. The
+    listing distinguishes the three real causes at a glance: an empty volume
+    (wrong Modal profile), a filename or case mismatch, or a partial download.
+    """
+    missing = [MODEL_CATALOGUE[k] for k in keys if not MODEL_CATALOGUE[k]["dest"].exists()]
+    if not missing:
+        return
+
+    lines = [f"Missing: {', '.join(s['label'] for s in missing)}", ""]
+    for spec in missing:
+        lines.append(f"  expected: {spec['dest']}")
+    lines.append("")
+    lines.append("Actually on the volume:")
+    for d in sorted({MODEL_CATALOGUE[k]["dest"].parent for k in keys}):
+        if not d.is_dir():
+            lines.append(f"  {d}/  (directory does not exist)")
+            continue
+        entries = sorted(p.name for p in d.iterdir() if not p.name.startswith("."))
+        if entries:
+            for name in entries[:12]:
+                size = (d / name).stat().st_size / 1e9
+                lines.append(f"  {d}/{name}  ({size:.2f} GB)")
+            if len(entries) > 12:
+                lines.append(f"  … and {len(entries) - 12} more")
+        else:
+            lines.append(f"  {d}/  (empty)")
+    lines += [
+        "",
+        "If those directories are empty, this Modal profile's forge-webui-repo "
+        "is not the one holding your weights — check `modal profile current`.",
+    ]
+    raise RuntimeError("\n".join(lines))
+
+
 def _model_status() -> list[dict[str, Any]]:
     out = []
     for key, spec in MODEL_CATALOGUE.items():
@@ -563,13 +601,7 @@ def train_job(
     jobs[job_id] = {"status": "running", "phase": "starting", "stop": False}
     volume.reload()
 
-    for key in ("raw", "vae", "text_encoder"):
-        spec = MODEL_CATALOGUE[key]
-        if not spec["dest"].exists():
-            raise RuntimeError(
-                f"{spec['label']} is not downloaded. Open the Models tab and "
-                "download it first."
-            )
+    _require_models("raw", "vae", "text_encoder")
 
     src = UPLOADS / job_id
     if not src.is_dir():
@@ -732,11 +764,7 @@ def generate_job(
 
     use_turbo = model != "raw"
     dit = TURBO_PATH if use_turbo else RAW_PATH
-    needed = ("turbo" if use_turbo else "raw", "vae", "text_encoder")
-    for key in needed:
-        spec = MODEL_CATALOGUE[key]
-        if not spec["dest"].exists():
-            raise RuntimeError(f"{spec['label']} is not downloaded — see the Models tab.")
+    _require_models("turbo" if use_turbo else "raw", "vae", "text_encoder")
 
     # Turbo and RAW need genuinely different sampler settings; defaulting per
     # model avoids silently rendering 8-step RAW output, which looks broken.
@@ -807,6 +835,28 @@ def web():
     @api.get("/", response_class=HTMLResponse)
     async def index() -> str:
         return UI_HTML
+
+    @api.get("/api/where")
+    async def where() -> dict[str, Any]:
+        """
+        What this deployment can actually see on the volume.
+
+        Cheap CPU check for when the Models tab and a GPU job disagree — the
+        usual cause is the app running against a different Modal profile than
+        the one holding the weights.
+        """
+        volume.reload()
+        tree: dict[str, Any] = {}
+        for d in (MODELS / "Stable-diffusion", MODELS / "VAE",
+                  MODELS / "text_encoder", LORA_OUT, UPLOADS):
+            if d.is_dir():
+                tree[str(d)] = sorted(
+                    f"{p.name} ({p.stat().st_size / 1e9:.2f} GB)" if p.is_file() else f"{p.name}/"
+                    for p in d.iterdir() if not p.name.startswith(".")
+                )[:25]
+            else:
+                tree[str(d)] = "(directory does not exist)"
+        return {"volume": "forge-webui-repo", "mounted_at": str(WORKSPACE), "contents": tree}
 
     @api.get("/api/state")
     async def state() -> dict[str, Any]:
