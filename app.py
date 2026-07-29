@@ -23,7 +23,17 @@ already exist — if it does not, you are on the wrong profile.
 Nothing downloads on its own — pick what you want on the Models tab.
 """
 
-from __future__ import annotations
+# NOTE: deliberately NO `from __future__ import annotations`.
+#
+# It turns every annotation into a string, and FastAPI resolves those with
+# get_type_hints() against the *module* globals. The routes live inside web()
+# and import Request locally, so "Request" was unresolvable — FastAPI then fell
+# back to treating `request` as a required query parameter and answered every
+# upload with 422 {"loc":["query","request"],"msg":"Field required"}.
+# Only /api/upload was affected; every other route annotates `payload: dict`,
+# and `dict` resolves from builtins either way.
+#
+# All images run Python 3.10+, so `X | Y` and `list[...]` work natively without it.
 
 import base64
 import io
