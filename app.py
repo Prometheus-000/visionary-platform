@@ -852,6 +852,20 @@ def web():
         Stage images. Pass an existing job_id to add to that dataset instead of
         starting a new one, so more files can be dropped in at any point.
         """
+        try:
+            return await _do_upload(request)
+        except Exception as exc:
+            # Surface the real reason in the UI instead of an opaque 500. A
+            # missing python-multipart, a full volume or a permissions problem
+            # all look identical otherwise.
+            import traceback
+
+            traceback.print_exc()
+            return JSONResponse(
+                {"error": f"{type(exc).__name__}: {exc}"}, status_code=500
+            )
+
+    async def _do_upload(request: Request) -> JSONResponse:
         form = await request.form()
 
         # Appending must never be able to delete a dataset that already exists,
@@ -1463,8 +1477,11 @@ function upload(list){
   x.onload=async()=>{
     uploading=false; box.classList.add('hide'); bar.style.width='0%';
     let r={}; try{ r=JSON.parse(x.responseText) }catch{}
-    if(r.error||x.status>=400){
-      $('#train-err').innerHTML='<div class="err-box">'+(r.error||'Upload failed')+'</div>';
+    if(r.error||x.status>=400||!r.job_id){
+      // Show the status and any raw body — an opaque "failed" is not debuggable.
+      const detail = r.error || (x.responseText||'').slice(0,300) || 'no response body';
+      $('#train-err').innerHTML='<div class="err-box">Upload failed ('+x.status+'): '+
+        detail.replace(/</g,'&lt;')+'</div>';
       resetDropLabel(); return;
     }
     jobId=r.job_id;
