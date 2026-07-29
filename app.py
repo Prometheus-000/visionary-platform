@@ -848,12 +848,21 @@ def web():
 
     @api.post("/api/upload")
     async def upload(request: Request) -> JSONResponse:
-        job_id = f"ds{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+        """
+        Stage images. Pass an existing job_id to add to that dataset instead of
+        starting a new one, so more files can be dropped in at any point.
+        """
+        form = await request.form()
+
+        # Appending must never be able to delete a dataset that already exists,
+        # so track whether this call created the directory.
+        existing = str(form.get("job_id") or "").strip()
+        appending = bool(existing) and bool(NAME_RE.match(existing)) and (UPLOADS / existing).is_dir()
+        job_id = existing if appending else f"ds{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         raw = UPLOADS / job_id
         raw.mkdir(parents=True, exist_ok=True)
 
         count, zips = 0, []
-        form = await request.form()
         for up in form.getlist("files"):
             filename = getattr(up, "filename", None)
             if not filename:
@@ -880,11 +889,17 @@ def web():
                 z.unlink(missing_ok=True)
 
         if not count:
-            shutil.rmtree(raw, ignore_errors=True)
+            # Only bin the directory if this call made it — an append that
+            # happens to contain no images must leave the dataset alone.
+            if not appending:
+                shutil.rmtree(raw, ignore_errors=True)
             return JSONResponse({"error": "No images found in the upload."}, 400)
 
         volume.commit()
-        return JSONResponse({"job_id": job_id, "count": count})
+        # Same-named files overwrite rather than duplicate, so re-dropping the
+        # same folder is idempotent instead of doubling the dataset.
+        total = sum(1 for p in raw.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+        return JSONResponse({"job_id": job_id, "added": count, "count": total})
 
     @api.get("/api/dataset/{job_id}")
     async def dataset(job_id: str) -> dict[str, Any]:
@@ -942,6 +957,31 @@ def web():
                 saved += 1
         volume.commit()
         return {"ok": True, "saved": saved}
+
+    @api.post("/api/remove-image")
+    async def remove_image(payload: dict) -> dict[str, Any]:
+        """Drop one image from a staged dataset, with its caption and thumbnail."""
+        job_id = str(payload.get("job_id") or "")
+        if not NAME_RE.match(job_id):
+            return {"error": "Invalid job_id."}
+        volume.reload()
+        src = UPLOADS / job_id
+        if not src.is_dir():
+            return {"error": "Dataset not found."}
+
+        # Basename only — a client-supplied name must not escape the directory.
+        name = Path(str(payload.get("name") or "")).name
+        img = src / name
+        if not name or img.suffix.lower() not in IMAGE_EXTS or not img.exists():
+            return {"error": "Image not found."}
+
+        img.unlink(missing_ok=True)
+        img.with_suffix(".txt").unlink(missing_ok=True)
+        (src / ".thumbs" / (img.stem + ".jpg")).unlink(missing_ok=True)
+
+        volume.commit()
+        remaining = sum(1 for p in src.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+        return {"ok": True, "count": remaining}
 
     @api.post("/api/prepend-trigger")
     async def prepend_trigger(payload: dict) -> dict[str, Any]:
@@ -1210,6 +1250,11 @@ button.s:disabled{opacity:.4;cursor:not-allowed}
 .tile{border:1px solid var(--line);border-radius:14px;padding:11px;display:flex;gap:11px}
 .tile img{width:88px;height:88px;object-fit:cover;border-radius:10px;flex:0 0 88px}
 .tile textarea{font-size:12px;min-height:76px}
+.rm{background:none;border:0;color:var(--dim);font-size:17px;line-height:1;padding:2px 6px;border-radius:6px;cursor:pointer;flex:0 0 auto}
+.rm:hover{background:rgba(248,113,113,.15);color:#f87171}
+.rm:disabled{opacity:.3}
+#tiles{display:grid;gap:10px;grid-template-columns:1fr}
+@media(min-width:900px){#tiles{grid-template-columns:1fr 1fr}}
 .drop{border:1px dashed rgba(255,255,255,.2);border-radius:16px;padding:34px;text-align:center;cursor:pointer}
 .drop.hot{border-color:rgba(255,255,255,.45);background:rgba(255,255,255,.05)}
 .hide{display:none}
@@ -1253,52 +1298,53 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
     <p class="sub">Krea 2 RAW · rank 32 · bf16</p>
     <div id="train-err"></div>
 
-    <div id="step-upload">
+    <div id="step-build">
+      <!-- Dropzone stays put: it is how you start AND how you add more. -->
       <div class="drop" id="drop">
         <div style="font-size:22px;opacity:.35">↑</div>
-        <div style="margin-top:6px">Drop images or a .zip</div>
-        <div class="muted" style="margin-top:3px">or click to browse</div>
+        <div style="margin-top:6px" id="drop-title">Drop images or a .zip</div>
+        <div class="muted" style="margin-top:3px" id="drop-sub">or click to browse</div>
         <input type="file" id="files" multiple accept="image/*,.zip,.txt" class="hide">
+        <div id="up-prog" class="hide"><div class="bar"><i style="width:0%"></i></div></div>
       </div>
-      <p class="muted" id="picked" style="margin:10px 2px"></p>
-      <div class="card grid2">
-        <div><label>LoRA name</label><input id="lname" placeholder="my_style" spellcheck="false"></div>
-        <div><label>Trigger word</label><input id="ltrig" placeholder="ohwx_style" spellcheck="false"></div>
-      </div>
-      <details class="card"><summary class="muted" style="cursor:pointer">Advanced</summary>
-        <div class="grid2" style="margin-top:14px">
-          <div><label>Rank (dim)</label><input id="a-dim" type="number" value="32"></div>
-          <div><label>Alpha</label><input id="a-alpha" type="number" value="32"></div>
-          <div><label>Epochs</label><input id="a-epochs" type="number" value="30"></div>
-          <div><label>Learning rate</label><input id="a-lr" type="number" step="0.00001" value="0.0001"></div>
-          <div><label>Resolution</label><input id="a-res" type="number" step="64" value="1024"></div>
-          <div><label>Repeats</label><input id="a-rep" type="number" value="1"></div>
-          <div><label>Batch size</label><input id="a-bs" type="number" value="1"></div>
-          <div><label>Seed</label><input id="a-seed" type="number" value="42"></div>
-        </div>
-      </details>
-      <button class="b" id="go-upload" disabled style="width:100%">Upload &amp; review</button>
-    </div>
 
-    <div id="step-review" class="hide">
-      <div class="row" style="margin-bottom:12px">
-        <button class="s" id="back-upload">← Back</button>
-        <span class="grow"></span>
-        <span class="muted" id="cap-count"></span>
-      </div>
-      <div class="card">
-        <div class="row" style="gap:8px;flex-wrap:wrap">
-          <button class="s" id="do-caption">Auto-caption</button>
-          <select id="cap-style" style="width:auto"><option value="descriptive">Descriptive</option><option value="casual">Casual</option><option value="tags">Tags</option></select>
-          <select id="cap-len" style="width:auto"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
-          <label style="display:flex;align-items:center;gap:7px;margin:0;color:#ddd"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
-          <span class="grow"></span>
-          <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Prepend trigger</button>
+      <!-- Everything below appears only once there is a dataset. -->
+      <div id="dataset" class="hide">
+        <div class="card" style="margin-top:12px">
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <button class="s" id="do-caption">Auto-caption</button>
+            <select id="cap-style" style="width:auto"><option value="descriptive">Descriptive</option><option value="casual">Casual</option><option value="tags">Tags</option></select>
+            <select id="cap-len" style="width:auto"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
+            <label style="display:flex;align-items:center;gap:7px;margin:0;color:#ddd"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
+            <span class="grow"></span>
+            <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Prepend trigger</button>
+          </div>
+          <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
         </div>
-        <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
+
+        <div class="row" style="margin:14px 2px 8px"><span class="muted" id="cap-count"></span></div>
+        <div id="tiles"></div>
+
+        <!-- Name and trigger sit here, next to the action that uses them. -->
+        <div class="card grid2" style="margin-top:14px">
+          <div><label>LoRA name</label><input id="lname" placeholder="my_style" spellcheck="false"></div>
+          <div><label>Trigger word</label><input id="ltrig" placeholder="ohwx_style" spellcheck="false"></div>
+        </div>
+        <details class="card"><summary class="muted" style="cursor:pointer">Advanced</summary>
+          <div class="grid2" style="margin-top:14px">
+            <div><label>Rank (dim)</label><input id="a-dim" type="number" value="32"></div>
+            <div><label>Alpha</label><input id="a-alpha" type="number" value="32"></div>
+            <div><label>Epochs</label><input id="a-epochs" type="number" value="30"></div>
+            <div><label>Learning rate</label><input id="a-lr" type="number" step="0.00001" value="0.0001"></div>
+            <div><label>Resolution</label><input id="a-res" type="number" step="64" value="1024"></div>
+            <div><label>Repeats</label><input id="a-rep" type="number" value="1"></div>
+            <div><label>Batch size</label><input id="a-bs" type="number" value="1"></div>
+            <div><label>Seed</label><input id="a-seed" type="number" value="42"></div>
+          </div>
+        </details>
+        <button class="b" id="go-train" disabled style="width:100%">Start training</button>
+        <p class="muted" id="train-hint" style="text-align:center;margin-top:8px;height:16px"></p>
       </div>
-      <div id="tiles" class="grid4" style="grid-template-columns:1fr"></div>
-      <button class="b" id="go-train" style="width:100%;margin-top:14px">Start training</button>
     </div>
 
     <div id="step-run" class="hide">
@@ -1389,58 +1435,101 @@ async function startDownload(key,btn){
   },3000);
 }
 
-// ---------- upload ----------
+// ---------- upload (fires immediately on drop; no prerequisites) ----------
 const drop=$('#drop'), fin=$('#files');
-drop.onclick=()=>fin.click();
+let uploading=false;
+drop.onclick=()=>{ if(!uploading) fin.click() };
 drop.ondragover=e=>{e.preventDefault();drop.classList.add('hot')};
 drop.ondragleave=()=>drop.classList.remove('hot');
-drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');addFiles(e.dataTransfer.files)};
-fin.onchange=()=>addFiles(fin.files);
-function addFiles(list){
-  files=[...files,...[...list]];
-  const imgs=files.filter(f=>!f.name.toLowerCase().endsWith('.zip')&&!f.name.toLowerCase().endsWith('.txt')).length;
-  const zips=files.filter(f=>f.name.toLowerCase().endsWith('.zip')).length;
-  const mb=(files.reduce((a,f)=>a+f.size,0)/1e6).toFixed(1);
-  $('#picked').textContent=files.length?`${imgs} images${zips?', '+zips+' zip':''} · ${mb} MB`:'';
-  checkReady();
-}
-const checkReady=()=>$('#go-upload').disabled=!(files.length&&$('#lname').value.trim()&&$('#ltrig').value.trim());
-$('#lname').oninput=checkReady; $('#ltrig').oninput=checkReady;
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');upload(e.dataTransfer.files)};
+fin.onchange=()=>{ upload(fin.files); fin.value=''; };   // reset so the same file can be re-picked
 
-$('#go-upload').onclick=async()=>{
-  const btn=$('#go-upload'); btn.disabled=true; btn.textContent='Uploading…';
-  $('#train-err').innerHTML='';
-  const fd=new FormData(); files.forEach(f=>fd.append('files',f,f.name));
-  try{
-    const r=await api('/api/upload',{method:'POST',body:fd});
-    if(r.error) throw new Error(r.error);
-    jobId=r.job_id; show('review'); await loadTiles();
-  }catch(e){ $('#train-err').innerHTML='<div class="err-box">'+e.message+'</div>'; }
-  btn.disabled=false; btn.textContent='Upload & review';
-};
-const show=s=>['upload','review','run'].forEach(x=>$('#step-'+x).classList.toggle('hide',x!==s));
-$('#back-upload').onclick=()=>show('upload');
+function upload(list){
+  const keep=[...list].filter(f=>/\.(png|jpe?g|webp|bmp|avif|zip|txt)$/i.test(f.name));
+  if(!keep.length||uploading) return;
+  uploading=true; $('#train-err').innerHTML='';
+  const box=$('#up-prog'); box.classList.remove('hide'); const bar=box.querySelector('i');
+  $('#drop-title').textContent='Uploading…';
+  $('#drop-sub').textContent=`${keep.length} file${keep.length>1?'s':''}`;
+
+  const fd=new FormData();
+  keep.forEach(f=>fd.append('files',f,f.name));
+  if(jobId) fd.append('job_id',jobId);          // append to the existing dataset
+
+  // XHR, not fetch — fetch reports no upload progress.
+  const x=new XMLHttpRequest();
+  x.open('POST','/api/upload');
+  x.upload.onprogress=e=>{ if(e.lengthComputable) bar.style.width=Math.round(e.loaded/e.total*100)+'%' };
+  x.onload=async()=>{
+    uploading=false; box.classList.add('hide'); bar.style.width='0%';
+    let r={}; try{ r=JSON.parse(x.responseText) }catch{}
+    if(r.error||x.status>=400){
+      $('#train-err').innerHTML='<div class="err-box">'+(r.error||'Upload failed')+'</div>';
+      resetDropLabel(); return;
+    }
+    jobId=r.job_id;
+    $('#dataset').classList.remove('hide');
+    await loadTiles();
+  };
+  x.onerror=()=>{ uploading=false; box.classList.add('hide'); resetDropLabel();
+    $('#train-err').innerHTML='<div class="err-box">Network error during upload.</div>'; };
+  x.send(fd);
+}
+function resetDropLabel(n){
+  $('#drop-title').textContent = jobId ? 'Drop more images' : 'Drop images or a .zip';
+  $('#drop-sub').textContent = 'or click to browse';
+}
+const show=s=>['build','run'].forEach(x=>$('#step-'+x).classList.toggle('hide',x!==s));
 
 // ---------- review ----------
 async function loadTiles(){
   const d=await api('/api/dataset/'+jobId);
   if(d.error){$('#train-err').innerHTML='<div class="err-box">'+d.error+'</div>';return}
   captions={};
-  $('#tiles').innerHTML=d.images.map((i,n)=>`
-    <div class="tile">
-      ${i.thumb?`<img src="${i.thumb}" alt="">`:'<div class="tile-x"></div>'}
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  $('#tiles').innerHTML=d.images.map(i=>`
+    <div class="tile" data-tile="${esc(i.name)}">
+      ${i.thumb?`<img src="${i.thumb}" alt="">`:'<div style="width:88px;height:88px;border-radius:10px;background:rgba(255,255,255,.05);flex:0 0 88px"></div>'}
       <div class="grow">
-        <div class="muted" style="margin-bottom:5px"><code>${i.name}</code></div>
-        <textarea data-n="${i.name}" placeholder="No caption">${i.caption.replace(/</g,'&lt;')}</textarea>
+        <div class="row" style="gap:8px;margin-bottom:5px">
+          <code class="grow" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.name)}</code>
+          <button class="rm" data-rm="${esc(i.name)}" title="Remove from dataset">×</button>
+        </div>
+        <textarea data-n="${esc(i.name)}" placeholder="No caption">${esc(i.caption)}</textarea>
       </div>
     </div>`).join('');
   $$('#tiles textarea').forEach(t=>t.oninput=()=>{
     captions[t.dataset.n]=t.value;
     clearTimeout(saveT); saveT=setTimeout(flush,1200);
   });
-  const done=d.images.filter(i=>i.caption.trim()).length;
-  $('#cap-count').textContent=`${done} / ${d.images.length} captioned`;
+  $$('#tiles [data-rm]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    const r=await post('/api/remove-image',{job_id:jobId,name:b.dataset.rm});
+    if(r.error){$('#train-err').innerHTML='<div class="err-box">'+r.error+'</div>';b.disabled=false;return}
+    delete captions[b.dataset.rm];
+    b.closest('[data-tile]').remove();
+    countTiles(r.count);
+    if(!r.count){ $('#dataset').classList.add('hide'); jobId=null; }
+    resetDropLabel();
+  });
+  countTiles(d.images.length, d.images.filter(i=>i.caption.trim()).length);
+  resetDropLabel();
+  checkTrainReady();
 }
+function countTiles(total, done){
+  if(done===undefined) done=$$('#tiles textarea').filter(t=>t.value.trim()).length;
+  if(total===undefined) total=$$('#tiles [data-tile]').length;
+  $('#cap-count').textContent=`${total} image${total===1?'':'s'} · ${done} captioned`;
+  checkTrainReady();
+}
+function checkTrainReady(){
+  const n=$$('#tiles [data-tile]').length;
+  const ok=n>0&&$('#lname').value.trim()&&$('#ltrig').value.trim();
+  $('#go-train').disabled=!ok;
+  $('#train-hint').textContent = !n ? '' :
+    (!$('#lname').value.trim()||!$('#ltrig').value.trim()) ? 'Name it and set a trigger word to train' : '';
+}
+document.addEventListener('input',e=>{ if(e.target.id==='lname'||e.target.id==='ltrig') checkTrainReady() });
 async function flush(){
   if(!Object.keys(captions).length) return;
   const send={...captions}; captions={};
