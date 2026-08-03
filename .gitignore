@@ -5,3 +5,7 @@ node_modules/
 .next/
 *.tsbuildinfo
 .env.local
+
+# Reference clone of sd-webui-forge-classic (neo). Only the slice under forge/
+# is committed — see forge/VENDOR.md for what is copied and how to re-sync.
+sd-webui-forge-classic/

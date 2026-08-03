@@ -7,18 +7,28 @@ URL that is the whole application.
 
     modal deploy app.py
 
-Portable across Modal accounts: every path below is fixed, so switching profiles
-lands on the identical sd-webui-forge-classic (neo) layout. The volume must
-already exist — if it does not, you are on the wrong profile.
+Training runs on musubi-tuner. Inference runs on sd-webui-forge-classic (neo),
+vendored into forge/ — see forge/VENDOR.md. The two are deliberately separate
+images: forge wants newer transformers/diffusers than musubi pins, and the
+generation side gets Forge's LoRA stacking, samplers and schedules for free.
 
-    forge-webui-repo  ->  /workspace
-      models/Stable-diffusion/raw.safetensors      Krea 2 RAW DiT   (training)
-      models/Stable-diffusion/turbo.safetensors    Krea 2 Turbo DiT (inference)
-      models/VAE/qwen_image_vae.safetensors
-      models/text_encoder/qwen3vl_4b_bf16.safetensors
-      models/Lora/{name}/                          trained output
-      outputs/{job}/                               generated images
-      datasets/{job}/, uploads/{job}/              working dirs
+Storage is ours, not borrowed. The volume is created on first deploy and the
+layout is flat and self-describing — nothing here mirrors a checkout of another
+project, so there is no directory that only makes sense to somebody who has read
+Forge's source.
+
+    $VISIONARY_VOLUME (default "visionary")  ->  /workspace
+      models/krea2-raw.safetensors        Krea 2 RAW DiT   (training)
+      models/krea2-turbo.safetensors      Krea 2 Turbo DiT (inference)
+      models/qwen-image-vae.safetensors
+      models/qwen3vl-4b-bf16.safetensors
+      loras/{folder}/{name}.safetensors   trained output, any nesting
+      outputs/{job}/                      generated images
+      datasets/{job}/, uploads/{job}/     working dirs
+      .cache/                             HF staging, never read directly
+
+Set VISIONARY_VOLUME to run a second copy (staging, a different account) against
+its own storage.
 
 Nothing downloads on its own — pick what you want on the Models tab.
 """
@@ -52,24 +62,35 @@ import modal
 
 APP_NAME = "visionary"
 
-# Deliberately NO create_if_missing: every profile already has this volume, so
-# a missing one means the wrong Modal profile is active. Failing loudly on
-# deploy beats silently creating an empty volume and re-downloading 60 GB.
-volume = modal.Volume.from_name("forge-webui-repo")
+# Storage this app owns. create_if_missing because a fresh account or a new
+# VISIONARY_VOLUME should just work — the cost is that a typo'd name silently
+# yields an empty volume rather than an error, so _require_models() prints the
+# resolved name and what it actually found instead of a bare "not downloaded".
+VOLUME_NAME = os.environ.get("VISIONARY_VOLUME", "visionary")
+volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 # Live job state (progress, stop flags) and the saved HF token. Dicts rather
 # than Secrets so there is no CLI setup step — paste the key into the UI.
 jobs = modal.Dict.from_name("visionary-jobs", create_if_missing=True)
 config = modal.Dict.from_name("visionary-config", create_if_missing=True)
 
+# Mount point is an internal detail; the layout under it is the contract.
+# Weights are addressed by exact path, never scanned, so models/ is flat with
+# descriptive filenames rather than the per-architecture directories a webui
+# needs in order to populate its dropdowns.
 WORKSPACE = Path("/workspace")
 MODELS = WORKSPACE / "models"
-LORA_OUT = MODELS / "Lora"
+LORAS = WORKSPACE / "loras"
 DATASETS = WORKSPACE / "datasets"
 UPLOADS = WORKSPACE / "uploads"
 OUTPUTS = WORKSPACE / "outputs"
 STAGING = WORKSPACE / ".cache" / "hf-staging"
 MUSUBI = Path("/opt/musubi-tuner")
+
+# The vendored sd-webui-forge-classic backend that inference runs on. Lives next
+# to this file so `modal deploy` from anywhere still finds it.
+FORGE_DIR = str(Path(__file__).parent / "forge")
+FORGE = Path("/opt/forge")
 
 GPU = "A100-40GB"  # measured 29.26 GiB peak at 1024px, rank 32 — ~11 GiB spare
 
@@ -125,6 +146,48 @@ trainer_image = (
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1"})
 )
 
+# Inference runs on sd-webui-forge-classic's backend, not musubi — see
+# forge/VENDOR.md. Deliberately a separate image from the trainer: forge wants
+# newer transformers/diffusers than musubi pins, and coupling them means every
+# forge sync risks breaking training.
+#
+# Python 3.11 because comfy-kitchen ships cp311 manylinux wheels and numpy 2.x
+# requires >=3.11. CUDA 12.8 for the torch 2.8 wheels; comfy-kitchen disables
+# its own CUDA backend below CUDA 13 and falls back to plain torch ops, which is
+# fine — Krea 2 only uses it for fused RoPE.
+inference_image = (
+    modal.Image.from_registry(
+        "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04", add_python="3.11"
+    )
+    .apt_install("libgl1", "libglib2.0-0")
+    .pip_install(
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        index_url="https://download.pytorch.org/whl/cu128",
+    )
+    .pip_install(
+        "accelerate==1.10.1",
+        "comfy-kitchen==0.2.26",
+        "diffusers==0.35.1",
+        "einops==0.8.1",
+        "huggingface_hub==0.34.4",
+        "numpy==2.2.6",
+        "pillow==11.3.0",
+        "psutil==7.0.0",
+        "pyyaml==6.0.2",
+        "rich==14.1.0",
+        "safetensors==0.6.2",
+        "scipy==1.16.1",          # sd_schedulers' Beta schedule
+        "torchsde==0.2.6",        # the SDE samplers' Brownian tree
+        "transformers==4.56.1",
+        "tqdm==4.67.1",
+    )
+    # The Qwen3-VL tokenizer is loaded from backend/huggingface/krea/.../tokenizer,
+    # so unlike the trainer this image needs no HuggingFace round-trip at runtime.
+    .env({"PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false"})
+    .add_local_dir(FORGE_DIR, remote_path="/opt/forge")
+)
+
 
 # --------------------------------------------------------------------------
 # Model catalogue
@@ -144,7 +207,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "note": "DiT for training",
         "repo_id": "krea/Krea-2-Raw",
         "filename": "raw.safetensors",
-        "dest": MODELS / "Stable-diffusion" / "raw.safetensors",
+        "dest": MODELS / "krea2-raw.safetensors",
         "gated": True,
         "approx_gb": 26.3,
     },
@@ -153,7 +216,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "note": "DiT for generating — 8 steps",
         "repo_id": "krea/Krea-2-Turbo",
         "filename": "turbo.safetensors",
-        "dest": MODELS / "Stable-diffusion" / "turbo.safetensors",
+        "dest": MODELS / "krea2-turbo.safetensors",
         "gated": True,
         "approx_gb": 26.3,
     },
@@ -162,7 +225,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "note": "Required for both",
         "repo_id": "Comfy-Org/Qwen-Image_ComfyUI",
         "filename": "split_files/vae/qwen_image_vae.safetensors",
-        "dest": MODELS / "VAE" / "qwen_image_vae.safetensors",
+        "dest": MODELS / "qwen-image-vae.safetensors",
         "gated": False,
         "approx_gb": 0.25,
     },
@@ -171,7 +234,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "note": "Text encoder, bf16",
         "repo_id": "Comfy-Org/Qwen3-VL",
         "filename": "text_encoders/qwen3vl_4b_bf16.safetensors",
-        "dest": MODELS / "text_encoder" / "qwen3vl_4b_bf16.safetensors",
+        "dest": MODELS / "qwen3vl-4b-bf16.safetensors",
         "gated": False,
         "approx_gb": 8.9,
     },
@@ -365,8 +428,9 @@ def _require_models(*keys: str) -> None:
             lines.append(f"  {d}/  (empty)")
     lines += [
         "",
-        "If those directories are empty, this Modal profile's forge-webui-repo "
-        "is not the one holding your weights — check `modal profile current`.",
+        f"Resolved volume: {VOLUME_NAME!r} (override with VISIONARY_VOLUME). "
+        "If those directories are empty it is a new or wrong volume, not a "
+        "failed download — check `modal profile current` and the Models tab.",
     ]
     raise RuntimeError("\n".join(lines))
 
@@ -402,6 +466,17 @@ def _model_status() -> list[dict[str, Any]]:
 
 @app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume})
 def download_job(key: str) -> dict[str, Any]:
+    job_id = f"dl_{key}"
+    jobs[job_id] = {
+        "status": "running",
+        "phase": f"Downloading {MODEL_CATALOGUE[key]['label']}",
+        "percent": 0,
+    }
+    return _download_weight(key, job_id)
+
+
+def _download_weight(key: str, job_id: str) -> dict[str, Any]:
+    """Fetch one weight to its exact destination. Shared by single and bulk downloads."""
     from huggingface_hub import hf_hub_download
     from huggingface_hub.utils import (
         EntryNotFoundError, GatedRepoError, RepositoryNotFoundError,
@@ -409,8 +484,6 @@ def download_job(key: str) -> dict[str, Any]:
 
     spec = MODEL_CATALOGUE[key]
     dest: Path = spec["dest"]
-    job_id = f"dl_{key}"
-    jobs[job_id] = {"status": "running", "phase": f"Downloading {spec['label']}", "percent": 0}
 
     volume.reload()
     if dest.exists() and dest.stat().st_size > 0:
@@ -468,6 +541,48 @@ def download_job(key: str) -> dict[str, Any]:
     }
     _publish(job_id, **res)
     print(f"[download] {spec['label']}: {res['size_gb']} GB in {res['duration_s']}s")
+    return res
+
+
+@app.function(image=web_image, cpu=2.0, timeout=6 * 60 * 60, volumes={"/workspace": volume})
+def download_missing_job(keys: list[str]) -> dict[str, Any]:
+    """
+    Fetch every missing weight in one container, sequentially.
+
+    Sequential rather than four parallel containers: these are large files
+    sharing one uplink, so running them at once mostly splits the same bandwidth
+    while multiplying container cost — and it gives the UI a single job to
+    follow instead of four independent ones.
+    """
+    job_id = "dl_all"
+    done, failed = [], []
+    for i, key in enumerate(keys, 1):
+        label = MODEL_CATALOGUE[key]["label"]
+        _publish(
+            job_id,
+            status="running",
+            phase=f"{label} ({i} of {len(keys)})",
+            index=i,
+            total=len(keys),
+            percent=round((i - 1) / len(keys) * 100),
+        )
+        try:
+            _download_weight(key, job_id)
+            done.append(key)
+        except Exception as exc:
+            # One gated repo must not abandon the rest of the queue.
+            print(f"[download-all] {label} failed: {exc}")
+            failed.append({"key": key, "label": label, "error": str(exc)})
+
+    res: dict[str, Any] = {
+        "status": "completed" if not failed else "failed",
+        "downloaded": done,
+        "failed": failed,
+        "percent": 100,
+    }
+    if failed:
+        res["error"] = "; ".join(f["error"] for f in failed)
+    _publish(job_id, **res)
     return res
 
 
@@ -647,7 +762,7 @@ num_repeats = {num_repeats}
     )
     volume.commit()
 
-    out_dir = LORA_OUT / lora_name
+    out_dir = LORAS / lora_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -743,76 +858,212 @@ num_repeats = {num_repeats}
 
 # --------------------------------------------------------------------------
 # Generation
+#
+# Backed by sd-webui-forge-classic (neo), not musubi. musubi's
+# krea2_generate_image.py is a one-shot CLI: it reloaded ~35 GB of weights for
+# every image and took a single LoRA at a single strength. This is a Modal Cls,
+# so the checkpoint stays resident between requests, and LoRAs stack the way
+# they do in Forge — any number of them, each with its own UNet and text-encoder
+# weight. See forge/VENDOR.md and forge/krea2/.
 # --------------------------------------------------------------------------
 
 
-@app.function(
-    image=trainer_image, gpu=GPU, cpu=2.0, timeout=60 * 60,
+# Mirrors krea2.sampler_names() / scheduler_names(). Duplicated rather than
+# imported because /api/state runs in the CPU web image, and importing the forge
+# backend needs a CUDA device — see forge/krea2/bootstrap.py. tools/smoke_krea2.py
+# prints the authoritative lists if these ever need re-checking.
+SAMPLERS = [
+    "Euler", "Euler a", "DPM++ 2M", "DPM++ 2M SDE", "DPM++ 3M SDE",
+    "DPM++ SDE", "DPM++ 2s a RF", "Heun", "LMS", "LCM", "ER SDE", "Res Multistep",
+]
+SCHEDULERS = [
+    "Automatic", "Karras", "Exponential", "Polyexponential", "Normal", "Simple",
+    "Uniform", "SGM Uniform", "Linear Quadratic", "KL Optimal", "DDIM",
+    "Align Your Steps", "Beta", "Turbo", "Bong Tangent", "FlowMatchEulerDiscrete",
+]
+MAX_LORAS = 6
+
+
+def _validate_loras(raw: Any) -> list[dict[str, Any]]:
+    """
+    Validate the LoRA stack coming off the wire. Pure stdlib, no torch.
+
+    Paths are confined to loras/ with `resolve()` before the check, so a
+    crafted `../../` cannot read a checkpoint — or anything else — off the
+    volume. Anything malformed raises rather than being silently dropped; a LoRA
+    that quietly does not load looks exactly like a LoRA with no effect.
+
+    Deliberately importable from the CPU web container, so /api/generate can
+    reject a bad stack in milliseconds. Validating only inside the GPU job meant
+    a malformed path still paid a ~30 s cold start and ~35 GB of weight loading
+    before failing, and surfaced as a dead job rather than a form error.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, (str, Path)):
+        raw = [{"path": str(raw)}]
+
+    out: list[dict[str, Any]] = []
+    for entry in list(raw)[:MAX_LORAS]:
+        if isinstance(entry, (str, Path)):
+            entry = {"path": str(entry)}
+        raw_path = str(entry.get("path") or "")
+        path = Path(raw_path).resolve()
+        if not path.is_file() or LORAS.resolve() not in path.parents:
+            raise ValueError(f"LoRA must be a file under loras/: {raw_path!r}")
+
+        try:
+            unet = float(entry.get("unet", entry.get("weight", 1.0)))
+            te = entry.get("text_encoder", entry.get("te"))
+            te = None if te in (None, "") else float(te)
+        except (TypeError, ValueError):
+            raise ValueError(f"LoRA strengths must be numbers: {path.name}")
+
+        out.append({"path": str(path), "unet": unet, "text_encoder": te})
+    return out
+
+
+def _lora_specs(raw: Any) -> list:
+    """GPU-side wrapper. Re-validates: this is the container that opens the file."""
+    from krea2 import LoraSpec
+
+    return [LoraSpec(e["path"], unet=e["unet"], text_encoder=e["text_encoder"])
+            for e in _validate_loras(raw)]
+
+
+def _regions(raw: Any) -> list:
+    """Regional prompting rectangles, in normalised 0..1 canvas coordinates."""
+    from krea2 import Region
+
+    if not raw:
+        return []
+    out = []
+    for entry in list(raw)[:8]:
+        prompt = str(entry.get("prompt") or "").strip()
+        if not prompt:
+            continue
+        out.append(Region(
+            prompt,
+            x=float(entry.get("x", 0.0)), y=float(entry.get("y", 0.0)),
+            width=float(entry.get("width", 1.0)), height=float(entry.get("height", 1.0)),
+            weight=float(entry.get("weight", 1.0)),
+        ))
+    return out
+
+
+@app.cls(
+    image=inference_image, gpu=GPU, cpu=2.0, timeout=60 * 60,
     volumes={"/workspace": volume},
+    # One container: the checkpoint is ~35 GB across DiT/VAE/TE, so a second
+    # replica costs a full cold load rather than sharing the warm one.
+    max_containers=1,
+    scaledown_window=10 * 60,
 )
-def generate_job(
-    job_id: str, prompt: str, model: str = "turbo",
-    lora_path: str | None = None, lora_multiplier: float = 1.0,
-    width: int = 1024, height: int = 1024, num_images: int = 1,
-    steps: int | None = None, guidance_scale: float | None = None,
-    seed: int | None = None,
-) -> dict[str, Any]:
-    started = time.time()
-    log: deque[str] = deque(maxlen=200)
-    jobs[job_id] = {"status": "running", "phase": "generate", "stop": False}
-    volume.reload()
+@modal.concurrent(max_inputs=1)  # one GPU, one sampling loop
+class Generator:
+    """Holds a loaded Krea 2 checkpoint across requests."""
 
-    use_turbo = model != "raw"
-    dit = TURBO_PATH if use_turbo else RAW_PATH
-    _require_models("turbo" if use_turbo else "raw", "vae", "text_encoder")
+    @modal.enter()
+    def setup(self):
+        import sys
 
-    # Turbo and RAW need genuinely different sampler settings; defaulting per
-    # model avoids silently rendering 8-step RAW output, which looks broken.
-    if steps is None:
-        steps = 8 if use_turbo else 28
-    if guidance_scale is None:
-        guidance_scale = 1.0 if use_turbo else 5.5
+        sys.path.insert(0, str(FORGE))
+        self._pipelines: dict[str, Any] = {}
 
-    out_dir = OUTPUTS / job_id
-    out_dir.mkdir(parents=True, exist_ok=True)
+    def _pipeline(self, model: str):
+        from krea2 import Krea2Pipeline, unload_all
 
-    cmd = [
-        "python", "src/musubi_tuner/krea2_generate_image.py",
-        prompt,  # positional
-        "--dit", str(dit), "--vae", str(VAE_PATH), "--text_encoder", str(TE_PATH),
-        "--width", str(width), "--height", str(height),
-        "--steps", str(steps), "--guidance_scale", str(guidance_scale),
-        # Note the hyphen — the only hyphenated option in that script
-        # (dest="num_images"). "--num_images" is an unrecognised argument.
-        "--num-images", str(num_images),
-        "--save_path", str(out_dir), "--attn_mode", "torch",
-    ]
-    if use_turbo:
-        cmd += ["--mu", "1.15"]  # RAW leaves mu unset for its resolution-aware default
-    if seed is not None:
-        cmd += ["--seed", str(seed)]
-    if lora_path:
-        p = Path(lora_path)
-        if not p.is_file() or LORA_OUT not in p.parents:
-            raise ValueError("LoRA must be a file under models/Lora.")
-        cmd += ["--lora_weight", str(p), "--lora_multiplier", str(lora_multiplier)]
+        if model not in self._pipelines:
+            # Only one checkpoint fits on the card, so switching between Turbo
+            # and RAW evicts the outgoing one first — dropping the reference
+            # alone leaves its weights resident and the new load OOMs.
+            if self._pipelines:
+                self._pipelines.clear()
+                unload_all()
+            _require_models(model, "vae", "text_encoder")
+            self._pipelines[model] = Krea2Pipeline(
+                dit_path=TURBO_PATH if model == "turbo" else RAW_PATH,
+                vae_path=VAE_PATH,
+                text_encoder_path=TE_PATH,
+                key=model,
+            )
+        return self._pipelines[model]
 
-    before = {p.name for p in out_dir.glob("*.png")}
-    _run(cmd, "generate", job_id, log)
-    new = sorted(p for p in out_dir.glob("*.png") if p.name not in before)
-    volume.commit()
+    @modal.method()
+    def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        from krea2 import GenerateRequest
 
-    # Only filenames go into the job record. The PNGs themselves are served by
-    # /api/outputs/{job_id} straight off the volume — a 1024px base64 image is
-    # megabytes, and this dict is polled every few seconds.
-    res = {
-        "status": "completed", "job_id": job_id,
-        "files": [p.name for p in new],
-        "model": "turbo" if use_turbo else "raw", "steps": steps,
-        "output_dir": str(out_dir), "duration_s": round(time.time() - started, 1),
-    }
-    _publish(job_id, **res)
-    return res
+        started = time.time()
+        jobs[job_id] = {"status": "running", "phase": "loading", "stop": False}
+        volume.reload()
+
+        model = "turbo" if str(params.get("model") or "turbo") != "raw" else "raw"
+
+        try:
+            pipe = self._pipeline(model)
+            _publish(job_id, phase="generate", step=0, percent=0)
+
+            def progress(step: int, total: int) -> None:
+                _publish(job_id, phase="generate", step=step, total_steps=total,
+                         percent=int(step * 100 / max(1, total)))
+                # Stop between steps rather than mid-forward: the model stays
+                # loaded and the container survives for the next request, which
+                # a killed process would not.
+                if _stop_requested(job_id):
+                    raise StopRequested("generate")
+
+            req = GenerateRequest(
+                prompt=str(params.get("prompt") or ""),
+                negative_prompt=str(params.get("negative_prompt") or ""),
+                width=int(params.get("width") or 1024),
+                height=int(params.get("height") or 1024),
+                steps=params.get("steps") or None,
+                cfg_scale=params.get("cfg_scale"),
+                seed=params.get("seed"),
+                batch_size=max(1, min(4, int(params.get("num_images") or 1))),
+                sampler=str(params.get("sampler") or "Euler"),
+                scheduler=str(params.get("scheduler") or "Automatic"),
+                shift=float(params.get("shift") or 1.15),
+                loras=_lora_specs(params.get("loras")),
+                regions=_regions(params.get("regions")),
+                region_weight=float(params.get("region_weight") or 1.0),
+            )
+            if not req.prompt.strip() and not req.regions:
+                raise ValueError("A prompt is required.")
+
+            images = pipe.generate(req, progress=progress)
+        except StopRequested:
+            res = {"status": "stopped", "job_id": job_id, "files": [],
+                   "duration_s": round(time.time() - started, 1)}
+            _publish(job_id, **res)
+            return res
+        except Exception as exc:
+            _publish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+
+        out_dir = OUTPUTS / job_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%H%M%S")
+        names = []
+        for i, image in enumerate(images):
+            name = f"{stamp}_{i:02d}.png"
+            image.save(out_dir / name)
+            names.append(name)
+        volume.commit()
+
+        report = getattr(pipe, "last_report", {})
+
+        # Only filenames go into the job record. The PNGs themselves are served
+        # by /api/outputs/{job_id} straight off the volume — a 1024px base64
+        # image is megabytes, and this dict is polled every few seconds.
+        res = {
+            "status": "completed", "job_id": job_id, "files": names,
+            "model": model, "output_dir": str(out_dir),
+            "duration_s": round(time.time() - started, 1),
+            **report,
+        }
+        _publish(job_id, **res)
+        return res
 
 
 # --------------------------------------------------------------------------
@@ -842,13 +1093,12 @@ def web():
         What this deployment can actually see on the volume.
 
         Cheap CPU check for when the Models tab and a GPU job disagree — the
-        usual cause is the app running against a different Modal profile than
-        the one holding the weights.
+        usual cause is the app resolving a different volume than the one
+        holding the weights, so the resolved name is part of the answer.
         """
         volume.reload()
         tree: dict[str, Any] = {}
-        for d in (MODELS / "Stable-diffusion", MODELS / "VAE",
-                  MODELS / "text_encoder", LORA_OUT, UPLOADS):
+        for d in (MODELS, LORAS, UPLOADS, OUTPUTS):
             if d.is_dir():
                 tree[str(d)] = sorted(
                     f"{p.name} ({p.stat().st_size / 1e9:.2f} GB)" if p.is_file() else f"{p.name}/"
@@ -856,14 +1106,14 @@ def web():
                 )[:25]
             else:
                 tree[str(d)] = "(directory does not exist)"
-        return {"volume": "forge-webui-repo", "mounted_at": str(WORKSPACE), "contents": tree}
+        return {"volume": VOLUME_NAME, "mounted_at": str(WORKSPACE), "contents": tree}
 
     @api.get("/api/state")
     async def state() -> dict[str, Any]:
         volume.reload()
         loras = []
-        if LORA_OUT.is_dir():
-            for d in sorted(LORA_OUT.iterdir()):
+        if LORAS.is_dir():
+            for d in sorted(LORAS.iterdir()):
                 if not d.is_dir():
                     continue
                 final = d / f"{d.name}.safetensors"
@@ -890,6 +1140,9 @@ def web():
             "models": _model_status(),
             "loras": loras,
             "hf_token_set": bool(_hf_token()),
+            "samplers": SAMPLERS,
+            "schedulers": SCHEDULERS,
+            "max_loras": MAX_LORAS,
         }
 
     @api.post("/api/token")
@@ -905,6 +1158,34 @@ def web():
             return {"error": f"Unknown model: {key}"}
         download_job.spawn(key)
         return {"ok": True, "job_id": f"dl_{key}"}
+
+    @api.post("/api/download-missing")
+    async def download_missing(payload: dict) -> dict[str, Any]:
+        """
+        Save the token (if one was supplied) and queue every missing weight.
+
+        Taking the token in the same call is deliberate: pasting a key and then
+        having to press Save before Download is a step that exists for no reason.
+        """
+        token = str(payload.get("hf_token") or "").strip()
+        if token:
+            config["hf_token"] = token
+
+        volume.reload()
+        missing = [m["key"] for m in _model_status() if not m["present"]]
+        if not missing:
+            return {"ok": True, "job_id": None, "missing": [], "note": "Everything is already here."}
+
+        gated = [k for k in missing if MODEL_CATALOGUE[k]["gated"]]
+        if gated and not _hf_token():
+            return {
+                "error": "A HuggingFace token is required for "
+                + ", ".join(MODEL_CATALOGUE[k]["label"] for k in gated)
+                + ". Paste one in the field above."
+            }
+
+        download_missing_job.spawn(missing)
+        return {"ok": True, "job_id": "dl_all", "missing": missing}
 
     @api.post("/api/upload")
     async def upload(request: Request) -> JSONResponse:
@@ -1150,7 +1431,8 @@ def web():
     @api.post("/api/generate")
     async def generate(payload: dict) -> dict[str, Any]:
         prompt = str(payload.get("prompt") or "").strip()
-        if not prompt:
+        regions = payload.get("regions") or []
+        if not prompt and not regions:
             return {"error": "A prompt is required."}
 
         def num(k, d, cast):
@@ -1160,16 +1442,38 @@ def web():
             except (TypeError, ValueError):
                 return d
 
+        # `lora_path`/`lora_multiplier` are the pre-stack shape of this request;
+        # accepted so an older client keeps working against the new backend.
+        stack = payload.get("loras")
+        if not stack and payload.get("lora_path"):
+            stack = [{"path": payload["lora_path"], "unet": num("lora_multiplier", 1.0, float)}]
+
+        # Reject here rather than in the job: a bad path is a form error, and
+        # spawning would cost a cold A100 before discovering it.
+        volume.reload()
+        try:
+            stack = _validate_loras(stack)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        generate_job.spawn(
-            job_id=job_id, prompt=prompt,
-            model=str(payload.get("model") or "turbo"),
-            lora_path=payload.get("lora_path") or None,
-            lora_multiplier=num("lora_multiplier", 1.0, float),
-            width=num("width", 1024, int), height=num("height", 1024, int),
-            num_images=max(1, min(4, num("num_images", 1, int))),
-            seed=num("seed", None, int),
-        )
+        Generator().generate.spawn(job_id=job_id, params={
+            "prompt": prompt,
+            "negative_prompt": str(payload.get("negative_prompt") or ""),
+            "model": str(payload.get("model") or "turbo"),
+            "loras": stack,
+            "regions": regions,
+            "region_weight": num("region_weight", 1.0, float),
+            "width": num("width", 1024, int),
+            "height": num("height", 1024, int),
+            "num_images": max(1, min(4, num("num_images", 1, int))),
+            "steps": num("steps", None, int),
+            "cfg_scale": num("cfg_scale", None, float),
+            "seed": num("seed", None, int),
+            "sampler": str(payload.get("sampler") or "Euler"),
+            "scheduler": str(payload.get("scheduler") or "Automatic"),
+            "shift": num("shift", 1.15, float),
+        })
         return {"ok": True, "job_id": job_id}
 
     @api.get("/api/outputs/{job_id}")
@@ -1334,6 +1638,10 @@ button.s:disabled{opacity:.4;cursor:not-allowed}
 .hide{display:none}
 .gen-out{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .gen-out img{width:100%;border-radius:14px;border:1px solid var(--line)}
+.lora-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.lora-row select{flex:1;min-width:0}
+.lora-row input{width:70px;text-align:center}
+.lora-row button{padding:8px 10px}
 code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 @media(max-width:760px){.app{flex-direction:column}aside{width:auto;flex:none;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid rgba(255,255,255,.07)}.brand,.seclabel{display:none}nav{display:flex;gap:4px}nav button{white-space:nowrap}main{padding:20px 16px 60px}.grid2{grid-template-columns:1fr}}
 </style></head><body>
@@ -1357,11 +1665,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
       <div class="row">
         <input id="tok" type="password" class="grow" placeholder="hf_…" autocomplete="off">
         <button class="s" id="tok-save">Save</button>
+        <button class="b" id="dl-all" style="padding:9px 16px;font-size:13px">Download missing</button>
       </div>
       <p class="muted" style="margin-top:8px">
         Needed for Krea 2 RAW and Turbo, which are gated. Accept the licence at
         huggingface.co/krea/Krea-2-Raw with the same account. <span id="tok-state"></span>
       </p>
+      <div id="dl-all-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
     </div>
     <div id="models"></div>
   </section>
@@ -1437,11 +1747,12 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
     <h1>Image</h1>
     <p class="sub" id="gen-model-line">Krea 2 Turbo · 8 steps</p>
     <div id="gen-err"></div>
+    <p class="muted warn" id="gen-note" style="margin:-10px 2px 12px"></p>
     <div class="card">
       <textarea id="prompt" rows="3" placeholder="Describe an image…"></textarea>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
-        <select id="g-model" style="width:auto"><option value="turbo">Krea 2 Turbo</option><option value="raw">Krea 2 RAW</option></select>
-        <select id="g-lora" style="width:auto"><option value="">No LoRA</option></select>
+        <!-- populated from /api/state; models not on the volume are disabled -->
+        <select id="g-model" style="width:auto"></select>
         <select id="g-aspect" style="width:auto">
           <option value="1024x1024">1:1</option><option value="1152x896">4:3</option>
           <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
@@ -1452,9 +1763,39 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         <span class="grow"></span>
         <button class="b" id="go-gen">Generate</button>
       </div>
+
+      <!-- LoRA stack. Rows are added by hand; order is the order they patch in. -->
+      <div id="lora-stack" style="margin-top:12px"></div>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <button class="s" id="add-lora">Add LoRA</button>
+        <span class="grow"></span>
+        <button class="s" id="toggle-adv">Advanced</button>
+      </div>
+
+      <div id="gen-adv" class="hide" style="margin-top:12px">
+        <textarea id="g-neg" rows="2" placeholder="Negative prompt"></textarea>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+          <select id="g-sampler" style="width:auto"></select>
+          <select id="g-scheduler" style="width:auto"></select>
+          <input id="g-steps" placeholder="steps" style="width:78px" inputmode="numeric">
+          <input id="g-cfg" placeholder="CFG" style="width:78px" inputmode="decimal">
+          <input id="g-shift" placeholder="shift 1.15" style="width:96px" inputmode="decimal">
+        </div>
+        <div class="row" style="gap:8px;margin-top:12px">
+          <label class="row" style="gap:6px"><input type="checkbox" id="g-regional"> Regional</label>
+          <span class="grow"></span>
+          <select id="g-region-dir" class="hide" style="width:auto"><option value="columns">Columns</option><option value="rows">Rows</option></select>
+        </div>
+        <div id="region-stack" class="hide" style="margin-top:8px"></div>
+        <div class="row hide" id="region-add-row" style="gap:8px;margin-top:8px">
+          <button class="s" id="add-region">Add region</button>
+        </div>
+      </div>
+
       <div id="gen-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
     </div>
     <div id="gen-out" class="gen-out"></div>
+    <p class="muted" id="gen-meta" style="margin:10px 2px"></p>
   </section>
 </main>
 </div>
@@ -1474,6 +1815,12 @@ $$('nav button').forEach(b=>b.onclick=()=>{
 async function loadState(){
   const s=await api('/api/state');
   $('#tok-state').innerHTML = s.hf_token_set?'<span class="ok">Token saved.</span>':'<span class="warn">No token saved.</span>';
+  // Name the cost up front: how many are missing and how many GB that is.
+  const miss=s.models.filter(m=>!m.present);
+  const gb=miss.reduce((a,m)=>a+m.approx_gb,0);
+  const dlAll=$('#dl-all');
+  dlAll.disabled=!miss.length;
+  dlAll.textContent=miss.length?`Download ${miss.length} missing · ${gb.toFixed(1)} GB`:'All models present';
   $('#models').innerHTML = s.models.map(m=>`
     <div class="card row">
       <div class="grow">
@@ -1489,14 +1836,58 @@ async function loadState(){
       </div>
     </div>`).join('');
   $$('[data-dl]').forEach(b=>b.onclick=()=>startDownload(b.dataset.dl,b));
-  const sel=$('#g-lora'); const cur=sel.value;
-  sel.innerHTML='<option value="">No LoRA</option>'+s.loras.map(l=>
-    l.files.map(f=>`<option value="${f.path}" data-t="${l.trigger_word||''}">${l.name} · ${f.name}</option>`).join('')).join('');
-  sel.value=cur;
+
+  // Options for every LoRA row, existing and future. Rebuilt on each poll so a
+  // freshly trained LoRA appears without a reload; current picks are kept.
+  window.MAX_LORAS=s.max_loras||6;
+  loraOpts=s.loras.map(l=>l.files.map(f=>
+    `<option value="${f.path}" data-t="${l.trigger_word||''}">${l.name} · ${f.name}</option>`).join('')).join('');
+  $$('#lora-stack [data-f=path]').forEach(el=>{const v=el.value; el.innerHTML=loraOpts; el.value=v;});
+  $('#add-lora').disabled=!s.loras.length;
+
+  if(s.samplers&&!$('#g-sampler').options.length){
+    $('#g-sampler').innerHTML=s.samplers.map(x=>`<option>${x}</option>`).join('');
+    $('#g-scheduler').innerHTML=s.schedulers.map(x=>`<option>${x}</option>`).join('');
+  }
+
+  // Model picker reflects the volume rather than being hardcoded — otherwise it
+  // claims both models are available even when neither is downloaded.
+  const ms=$('#g-model'), prev=ms.value;
+  const pick=s.models.filter(m=>m.key==='turbo'||m.key==='raw');
+  ms.innerHTML=pick.map(m=>
+    `<option value="${m.key}" ${m.present?'':'disabled'}>${m.label}${m.present?'':' — not downloaded'}</option>`).join('');
+  const avail=pick.filter(m=>m.present).map(m=>m.key);
+  ms.value = avail.includes(prev) ? prev : (avail[0]||'');
+  const missing=pick.filter(m=>!m.present).length===pick.length;
+  $('#go-gen').disabled=missing;
+  $('#gen-note').textContent = missing
+    ? 'No DiT on the volume — download Krea 2 Turbo on the Models tab.'
+    : (s.models.find(m=>m.key==='vae')?.present && s.models.find(m=>m.key==='text_encoder')?.present
+        ? '' : 'The VAE and text encoder are also required.');
+  syncModelLine();
 }
 $('#tok-save').onclick=async()=>{
   const r=await post('/api/token',{hf_token:$('#tok').value});
   $('#tok').value=''; $('#tok-state').innerHTML=r.hf_token_set?'<span class="ok">Token saved.</span>':'<span class="warn">Cleared.</span>';
+};
+$('#dl-all').onclick=async()=>{
+  const b=$('#dl-all'); b.disabled=true;
+  const box=$('#dl-all-prog'), bar=box.querySelector('i'), msg=box.querySelector('p');
+  box.classList.remove('hide'); bar.style.width='0%'; msg.textContent='Starting…';
+  // Token rides along, so pasting a key and pressing Download is one action.
+  const r=await post('/api/download-missing',{hf_token:$('#tok').value});
+  $('#tok').value='';
+  if(r.error){ msg.innerHTML='<span class="err">'+r.error+'</span>'; b.disabled=false; return }
+  if(!r.job_id){ msg.textContent=r.note||'Nothing missing.'; b.disabled=false; loadState(); return }
+  const t=setInterval(async()=>{
+    const s=await api('/api/status/dl_all');
+    bar.style.width=(s.percent||0)+'%';
+    msg.textContent=s.phase||'Downloading…';
+    if(s.status==='completed'){ clearInterval(t); bar.style.width='100%';
+      msg.innerHTML='<span class="ok">All models downloaded.</span>'; b.disabled=false; loadState(); }
+    else if(s.status==='failed'){ clearInterval(t);
+      msg.innerHTML='<span class="err">'+(s.error||'Download failed')+'</span>'; b.disabled=false; loadState(); }
+  },3000);
 };
 async function startDownload(key,btn){
   btn.disabled=true; const el=$('#dl-'+key); el.textContent='Starting…';
@@ -1680,21 +2071,120 @@ async function pollTrain(){
 $('#do-stop').onclick=async()=>{ $('#do-stop').disabled=true; await post('/api/stop/'+jobId); };
 
 // ---------- generate ----------
-$('#g-model').onchange=()=>{
-  const t=$('#g-model').value==='turbo';
-  $('#gen-model-line').textContent=t?'Krea 2 Turbo · 8 steps':'Krea 2 RAW · 28 steps';
+function syncModelLine(){
+  const v=$('#g-model').value;
+  $('#gen-model-line').textContent = !v ? 'No model downloaded'
+    : v==='turbo' ? 'Krea 2 Turbo · 8 steps · CFG 1.0'
+    : 'Krea 2 RAW · 28 steps · CFG 5.5';
+}
+$('#g-model').onchange=syncModelLine;
+$('#toggle-adv').onclick=()=>$('#gen-adv').classList.toggle('hide');
+
+// ---------- LoRA stack ----------
+// One row per LoRA. Two weights each, the way Forge splits them: the first
+// patches the DiT, the second the text encoder. Order matters — LoRAs patch in
+// the order shown, so the arrows are authority, not decoration.
+let loraOpts='';
+function loraRow(sel,unet,te){
+  const row=document.createElement('div');
+  row.className='lora-row'; row.dataset.lora='1';
+  row.innerHTML=`
+    <select data-f="path">${loraOpts}</select>
+    <input data-f="unet" inputmode="decimal" value="${unet??1}" title="UNet weight">
+    <input data-f="te" inputmode="decimal" value="${te??1}" title="Text encoder weight">
+    <button class="s" data-f="up">↑</button>
+    <button class="s" data-f="down">↓</button>
+    <button class="s" data-f="rm">✕</button>`;
+  if(sel) row.querySelector('[data-f=path]').value=sel;
+  const q=f=>row.querySelector('[data-f='+f+']');
+  q('rm').onclick=()=>row.remove();
+  q('up').onclick=()=>row.previousElementSibling&&row.parentNode.insertBefore(row,row.previousElementSibling);
+  q('down').onclick=()=>row.nextElementSibling&&row.parentNode.insertBefore(row.nextElementSibling,row);
+  q('path').onchange=()=>{
+    const t=q('path').selectedOptions[0]?.dataset.t;
+    if(t&&!$('#prompt').value.includes(t))
+      $('#prompt').value=(t+', '+$('#prompt').value).trim().replace(/,\s*$/,'');
+  };
+  return row;
+}
+$('#add-lora').onclick=()=>{
+  const stack=$('#lora-stack');
+  if(stack.children.length>=(window.MAX_LORAS||6)) return;
+  stack.appendChild(loraRow());
 };
-$('#g-lora').onchange=()=>{
-  const o=$('#g-lora').selectedOptions[0], t=o&&o.dataset.t;
-  if(t&&!$('#prompt').value.includes(t)) $('#prompt').value=(t+', '+$('#prompt').value).trim().replace(/,\s*$/,'');
+function readLoras(){
+  return $$('#lora-stack [data-lora]').map(r=>({
+    path:r.querySelector('[data-f=path]').value,
+    unet:parseFloat(r.querySelector('[data-f=unet]').value)||0,
+    text_encoder:parseFloat(r.querySelector('[data-f=te]').value)||0,
+  })).filter(l=>l.path);
+}
+
+// ---------- regions ----------
+// Rectangles in normalised canvas coordinates. Columns/Rows lay them out
+// automatically; the x/y/w/h fields are there when a strip is not what you want.
+function regionRow(prompt){
+  const row=document.createElement('div');
+  row.className='lora-row'; row.dataset.region='1';
+  row.innerHTML=`
+    <input data-f="prompt" placeholder="Region prompt" value="${prompt||''}" style="flex:1">
+    <input data-f="x" inputmode="decimal" placeholder="x" style="width:62px">
+    <input data-f="y" inputmode="decimal" placeholder="y" style="width:62px">
+    <input data-f="width" inputmode="decimal" placeholder="w" style="width:62px">
+    <input data-f="height" inputmode="decimal" placeholder="h" style="width:62px">
+    <input data-f="weight" inputmode="decimal" value="1" style="width:62px" title="Weight">
+    <button class="s" data-f="rm">✕</button>`;
+  row.querySelector('[data-f=rm]').onclick=()=>{row.remove();autoLayout()};
+  return row;
+}
+function autoLayout(){
+  // Blank x/y/w/h means "let the direction decide"; a typed value is kept.
+  const rows=$$('#region-stack [data-region]'), n=rows.length, cols=$('#g-region-dir').value==='columns';
+  rows.forEach((r,i)=>{
+    const set=(f,v)=>{const el=r.querySelector('[data-f='+f+']'); if(!el.dataset.touched) el.value=v};
+    set('x',cols?(i/n).toFixed(3):'0'); set('y',cols?'0':(i/n).toFixed(3));
+    set('width',cols?(1/n).toFixed(3):'1'); set('height',cols?'1':(1/n).toFixed(3));
+  });
+}
+document.addEventListener('input',e=>{
+  if(e.target.closest('[data-region]')&&['x','y','width','height'].includes(e.target.dataset.f))
+    e.target.dataset.touched='1';
+});
+$('#add-region').onclick=()=>{ $('#region-stack').appendChild(regionRow()); autoLayout(); };
+$('#g-region-dir').onchange=autoLayout;
+$('#g-regional').onchange=()=>{
+  const on=$('#g-regional').checked;
+  ['#region-stack','#region-add-row','#g-region-dir'].forEach(s=>$(s).classList.toggle('hide',!on));
+  if(on&&!$$('#region-stack [data-region]').length){
+    $('#region-stack').appendChild(regionRow());
+    $('#region-stack').appendChild(regionRow());
+    autoLayout();
+  }
 };
+function readRegions(){
+  if(!$('#g-regional').checked) return [];
+  return $$('#region-stack [data-region]').map(r=>{
+    const g=f=>r.querySelector('[data-f='+f+']').value;
+    return {prompt:g('prompt'),x:parseFloat(g('x'))||0,y:parseFloat(g('y'))||0,
+            width:parseFloat(g('width'))||1,height:parseFloat(g('height'))||1,
+            weight:parseFloat(g('weight'))||1};
+  }).filter(r=>r.prompt.trim());
+}
+
 $('#go-gen').onclick=async()=>{
-  const p=$('#prompt').value.trim(); if(!p)return;
-  $('#gen-err').innerHTML=''; const btn=$('#go-gen'); btn.disabled=true;
+  const p=$('#prompt').value.trim(), regions=readRegions();
+  if(!p&&!regions.length)return;
+  $('#gen-err').innerHTML=''; $('#gen-meta').textContent='';
+  const btn=$('#go-gen'); btn.disabled=true;
   const box=$('#gen-prog'); box.classList.remove('hide'); box.querySelector('p').textContent='Queued…';
   const [w,h]=$('#g-aspect').value.split('x');
-  const r=await post('/api/generate',{prompt:p,model:$('#g-model').value,
-    lora_path:$('#g-lora').value||null,width:w,height:h,num_images:$('#g-n').value,seed:$('#g-seed').value});
+  const r=await post('/api/generate',{
+    prompt:p, negative_prompt:$('#g-neg').value, model:$('#g-model').value,
+    loras:readLoras(), regions,
+    width:w, height:h, num_images:$('#g-n').value, seed:$('#g-seed').value,
+    sampler:$('#g-sampler').value, scheduler:$('#g-scheduler').value,
+    steps:$('#g-steps').value, cfg_scale:$('#g-cfg').value, shift:$('#g-shift').value,
+  });
   if(r.error){$('#gen-err').innerHTML='<div class="err-box">'+r.error+'</div>';btn.disabled=false;box.classList.add('hide');return}
   const t=setInterval(async()=>{
     const s=await api('/api/status/'+r.job_id);
@@ -1705,11 +2195,22 @@ $('#go-gen').onclick=async()=>{
       const out=await api('/api/outputs/'+r.job_id);
       $('#gen-out').innerHTML=(out.images||[]).map(i=>`<img src="${i.data}" alt="">`).join('')
         || '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
+      // Surface which LoRAs actually matched — a stack that silently no-ops
+      // looks identical to a stack that had no effect.
+      const skipped=(s.loras||[]).filter(l=>!l.applied);
+      $('#gen-meta').textContent=[
+        (s.seeds||[]).join(', ')&&('seed '+(s.seeds||[]).join(', ')),
+        s.sampler&&`${s.sampler} · ${s.steps} steps · CFG ${s.cfg_scale}`,
+        s.duration_s&&`${s.duration_s}s`,
+        skipped.length&&('not applied: '+skipped.map(l=>l.name+(l.reason?` (${l.reason})`:'')).join(', ')),
+      ].filter(Boolean).join(' · ');
+    } else if(s.status==='stopped'){
+      clearInterval(t); btn.disabled=false; box.classList.add('hide');
     } else if(s.status==='failed'){
       clearInterval(t); btn.disabled=false; box.classList.add('hide');
       $('#gen-err').innerHTML='<div class="err-box">'+(s.error||'Generation failed')+'</div>';
     }
-  },3000);
+  },2000);
 };
 
 loadState();
