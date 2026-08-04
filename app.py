@@ -112,6 +112,45 @@ FORGE = Path("/opt/forge")
 
 GPU = "A100-40GB"  # measured 29.26 GiB peak at 1024px, rank 32 — ~11 GiB spare
 
+# Video is its own GPU class. The H3 stack is 42.5 GB of weights before any
+# activations, so it does not share a card with training or Krea 2 — and an
+# A100-40GB cannot hold it at all.
+VIDEO_GPU = os.environ.get("VISIONARY_VIDEO_GPU", "H100")
+
+# Cards the UI may ask for, per feature.
+#
+# Modal's Cls.with_options() returns a variant that autoscales independently of
+# the base configuration — which is exactly the point (one class, any card) and
+# exactly the cost (a card you have not used recently has no warm container, so
+# picking it pays a cold start). The UI confirms before switching for that
+# reason, and requests for the default are sent to the base class rather than
+# through with_options so the common path keeps its warm container.
+#
+# Video is Hopper-only on purpose: SageAttention is compiled for sm_90 in
+# video_image. B200 is sm_100 and would load the model fine and then fall back
+# off the fast kernels — the failure this list exists to prevent. Adding it
+# means changing TORCH_CUDA_ARCH_LIST and forcing an image rebuild.
+IMAGE_GPUS = ("A100-40GB", "A100-80GB", "H100")
+VIDEO_GPUS = ("H100", "H200")
+
+# ComfyUI is the video inference backend, pinned by commit rather than vendored.
+#
+# Vendoring earned its place for Krea 2 (forge/VENDOR.md) because that path
+# needed a patch. This one does not: we drive ComfyUI, we do not modify it, so
+# a SHA in the image definition is both smaller and more honest than a copy of
+# the tree. Updating is a one-line change; `git log` upstream is the changelog.
+#
+# Why ComfyUI at all, when diffusers has a MiniMax-H3 pipeline: the diffusers
+# integration runs the released bf16 weights, 123.6 GB across the transformer
+# and the Qwen3-VL-32B conditioner. ComfyUI runs Comfy's repackage — modulation
+# weights pruned into a lookup table, int8-convrot weights, and their own
+# kernels — for 42.5 GB and int8 tensor-core matmuls instead of bf16 ones. On
+# one card that is the difference between offloading every request and holding
+# the model resident, on top of roughly 2x on the denoise loop itself.
+COMFY_SHA = "16e3f3034f2bba1fff6c70cbd759339778555cd6"  # 2026-08-03, H3 VAE fix
+COMFY = Path("/opt/comfyui")
+COMFY_PORT = 8188
+
 app = modal.App(APP_NAME)
 
 
@@ -238,6 +277,91 @@ caption_image = (
 )
 
 
+# Video: ComfyUI on a CUDA 13 torch wheel.
+#
+# The CUDA version is the whole point of this image, not an incidental pin.
+# ComfyUI's quant_ops.py reads torch.version.cuda and disables comfy-kitchen's
+# CUDA backend below 13, falling back to plain torch ops — which silently
+# throws away exactly the int8-convrot and nvfp4 kernels the H3 repackage is
+# quantized for. A cu128 build would load the same weights, produce the same
+# pictures, and run at roughly half the speed with no error to explain it.
+# That is the failure this pin exists to prevent, so if you move this wheel,
+# check `Comfy-Kitchen ... {'cuda': True}` is still in the container's logs.
+#
+# A -devel base, not debian_slim, because SageAttention below compiles CUDA
+# kernels from source and needs nvcc. The torch wheels carry a CUDA *runtime*,
+# never a compiler, so a slim base gets all the way to the SageAttention build
+# before failing on a missing nvcc.
+video_image = (
+    modal.Image.from_registry(
+        "nvidia/cuda:13.0.3-cudnn-devel-ubuntu24.04", add_python="3.12"
+    )
+    # clang and libomp are for the SageAttention build, not for CUDA: Modal's
+    # add_python ships a clang-built interpreter, so sysconfig hands distutils
+    # `clang++` as the linker for the extension. nvcc compiles the kernels
+    # fine with build-essential alone and then the final link fails.
+    .apt_install("git", "libgl1", "libglib2.0-0", "ffmpeg",
+                 "build-essential", "clang", "libomp-dev")
+    .pip_install(
+        "torch==2.9.1",
+        "torchvision==0.24.1",
+        "torchaudio==2.9.1",
+        index_url="https://download.pytorch.org/whl/cu130",
+    )
+    .run_commands(
+        f"git clone https://github.com/Comfy-Org/ComfyUI {COMFY}",
+        f"cd {COMFY} && git checkout {COMFY_SHA}",
+        # --no-deps on torch is not available here, so requirements.txt is
+        # installed as-is; it lists torch unpinned, which pip leaves satisfied
+        # by the cu130 wheel above rather than replacing with a default-CUDA one.
+        f"cd {COMFY} && pip install -r requirements.txt",
+    )
+    # SageAttention, not FlashAttention.
+    #
+    # Attention is the right lever — H3 runs full self-attention over video,
+    # text and audio rows in one packed sequence, so it is where a 33B dense
+    # model spends its time. But ComfyUI reaches FlashAttention through
+    # `from flash_attn import flash_attn_func`, which is FA2's package. The
+    # only build PyTorch publishes for CUDA 13 is `flash_attn_3`, a different
+    # module name that --use-flash-attention will not find: you would pay the
+    # install and silently get no attention backend at all. SageAttention is
+    # what ComfyUI's own H3 documentation names, and it is worth roughly 2x.
+    #
+    # TORCH_CUDA_ARCH_LIST must match VIDEO_GPU. 9.0 is Hopper (H100/H200);
+    # move to "10.0" for B200 and force a rebuild, or the kernels will not load.
+    .env({"TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8"})
+    # --no-build-isolation is required (the build imports the torch installed
+    # above rather than a fresh one), but it also means pip supplies nothing:
+    # without `wheel` the build dies on `invalid command 'bdist_wheel'`, and
+    # without `ninja` torch's cpp_extension silently falls back to distutils
+    # and compiles the CUDA kernels single-threaded.
+    .pip_install("wheel", "setuptools", "packaging", "ninja")
+    .run_commands(
+        "git clone --depth 1 https://github.com/thu-ml/SageAttention /tmp/sage",
+        "cd /tmp/sage && pip install . --no-build-isolation",
+        "rm -rf /tmp/sage",
+    )
+    # pillow only, and deliberately no huggingface_hub.
+    #
+    # This used to also install huggingface_hub[hf_transfer]==0.35.3, copied
+    # from the images that actually download weights. Here it was worse than
+    # useless: it ran *after* ComfyUI's requirements.txt and pinned the hub
+    # back to the 0.x line, while the transformers those requirements bring
+    # imports `is_offline_mode` from it — a symbol that only exists in 1.x. So
+    # `import execution` died in main.py and ComfyUI never opened a port, which
+    # surfaces as `_wait_ready()` raising "ComfyUI exited during startup" with
+    # a traceback about a symbol nobody here asked for.
+    #
+    # Nothing in this container has any business talking to HuggingFace anyway:
+    # weights arrive on the volume via `_download_weight`, which runs on
+    # web_image on CPU. Leaving the pin out means ComfyUI's own resolution is
+    # the only thing deciding the hub version, which is the only way it can be
+    # right. `tools/smoke_video.py` is what catches it if this regresses.
+    .pip_install("pillow==11.3.0")
+    .env({"PYTHONUNBUFFERED": "1"})
+)
+
+
 # --------------------------------------------------------------------------
 # Model catalogue
 #
@@ -254,6 +378,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
     "raw": {
         "label": "Krea 2 RAW",
         "note": "DiT for training",
+        "family": "Krea 2 — images",
         "repo_id": "krea/Krea-2-Raw",
         "filename": "raw.safetensors",
         "dest": MODELS / "krea2-raw.safetensors",
@@ -263,6 +388,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
     "turbo": {
         "label": "Krea 2 Turbo",
         "note": "DiT for generating — 8 steps",
+        "family": "Krea 2 — images",
         "repo_id": "krea/Krea-2-Turbo",
         "filename": "turbo.safetensors",
         "dest": MODELS / "krea2-turbo.safetensors",
@@ -272,6 +398,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
     "vae": {
         "label": "Qwen Image VAE",
         "note": "Required for both",
+        "family": "Krea 2 — images",
         "repo_id": "Comfy-Org/Qwen-Image_ComfyUI",
         "filename": "split_files/vae/qwen_image_vae.safetensors",
         "dest": MODELS / "qwen-image-vae.safetensors",
@@ -281,12 +408,260 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
     "text_encoder": {
         "label": "Qwen3-VL 4B",
         "note": "Text encoder, bf16",
+        "family": "Krea 2 — images",
         "repo_id": "Comfy-Org/Qwen3-VL",
         "filename": "text_encoders/qwen3vl_4b_bf16.safetensors",
         "dest": MODELS / "qwen3vl-4b-bf16.safetensors",
         "gated": False,
         "approx_gb": 8.9,
     },
+    # ── MiniMax-H3 video ───────────────────────────────────────────────────
+    #
+    # Comfy-Org's repackage, not MiniMaxAI's release. The released checkpoint
+    # is 123.6 GB in bf16; this is the same model with the modulation weights
+    # (~40% of parameters, and a function of timestep and modality only, never
+    # of a token) pruned into a lookup table, then quantized. 42.5 GB total.
+    #
+    # `fl2va` is one checkpoint covering both tasks: text-to-video when no
+    # keyframe is given, image-to-video when one is. There is no second file to
+    # download for i2v, and no second code path to write. `ref2va` — up to 9
+    # images / 3 videos / 3 audio clips as semantic references — is a separate
+    # 21 GB transformer and is deliberately not here; it is its own feature,
+    # not a checkbox on this one.
+    "h3_dit": {
+        "label": "MiniMax-H3",
+        "note": "Video DiT, int8 — t2v and i2v",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "dest": MODELS / "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "gated": False,
+        "approx_gb": 21.0,
+    },
+    # The second half of H3. Same VAEs, same conditioner, different transformer:
+    # this one takes an ordered list of references — up to 9 images, 3 videos,
+    # 3 audio clips, 12 total — and the order is semantic, because it both
+    # labels them in the prompt (<Picture 1>, <Video 1>, <Audio 1>) and advances
+    # the shared audio/video rotary clock. Reordering the same references is a
+    # different request, not a cosmetic change.
+    #
+    # Unlike a first frame, a reference does not bind the geometry: references
+    # are encoded at their own resolution and the canvas stays whatever you ask
+    # for. That is what makes "animate this generated image" a reference job
+    # rather than a keyframe job when you want a new camera on the same subject.
+    "h3_ref_dit": {
+        "label": "MiniMax-H3 Reference",
+        "note": "Video DiT, int8 — reference-to-video",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        "dest": MODELS / "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        "gated": False,
+        "approx_gb": 21.0,
+    },
+    "h3_te": {
+        "label": "Qwen3-VL 32B",
+        "note": "H3 text encoder, nvfp4",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "dest": MODELS / "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "gated": False,
+        "approx_gb": 15.7,
+    },
+    "h3_vae": {
+        "label": "H3 Video VAE",
+        "note": "Required for video",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "vae/minimax_h3_video_vae_fp16.safetensors",
+        "dest": MODELS / "minimax_h3_video_vae_fp16.safetensors",
+        "gated": False,
+        "approx_gb": 5.2,
+    },
+    "h3_audio_vae": {
+        "label": "H3 Audio VAE",
+        "note": "Native stereo soundtrack",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "vae/minimax_h3_audio_vae_fp32.safetensors",
+        "dest": MODELS / "minimax_h3_audio_vae_fp32.safetensors",
+        "gated": False,
+        "approx_gb": 0.6,
+    },
+    # ── Wan 2.2 video ──────────────────────────────────────────────────────
+    #
+    # Comfy-Org's repackage again, and for the same reason the H3 entries use
+    # one: these are the split single-file weights ComfyUI's loaders take, not
+    # the diffusers layout Wan-AI publishes.
+    #
+    # The A14B models are a mixture of two experts, and it is a *storage*
+    # mixture, not a runtime one: high-noise denoises the early steps, low-noise
+    # the rest, and they are separate 14 GB checkpoints. So a 14B task is always
+    # two files, never one, and the pair is what the run needs — half of it
+    # downloaded is not a model that runs at half quality, it is a model that
+    # does not run. `fp8_scaled` rather than the 28.6 GB fp16: two experts plus
+    # the encoder is 35 GB this way against 68 GB, which is the difference
+    # between holding both resident on one H100 and swapping every switch.
+    "wan_t2v_high": {
+        "label": "Wan 2.2 T2V · high noise",
+        "note": "14B fp8 — early steps",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+        "dest": MODELS / "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+        "gated": False,
+        "approx_gb": 14.3,
+    },
+    "wan_t2v_low": {
+        "label": "Wan 2.2 T2V · low noise",
+        "note": "14B fp8 — late steps",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+        "dest": MODELS / "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+        "gated": False,
+        "approx_gb": 14.3,
+    },
+    "wan_i2v_high": {
+        "label": "Wan 2.2 I2V · high noise",
+        "note": "14B fp8 — early steps",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+        "dest": MODELS / "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+        "gated": False,
+        "approx_gb": 14.3,
+    },
+    "wan_i2v_low": {
+        "label": "Wan 2.2 I2V · low noise",
+        "note": "14B fp8 — late steps",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+        "dest": MODELS / "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+        "gated": False,
+        "approx_gb": 14.3,
+    },
+    # The 5B is not a smaller A14B — it is a single dense model with its own
+    # VAE at 16x spatial compression (48 latent channels against 16), which is
+    # why it needs `wan2.2_vae` and the 14B pair needs `wan_2.1_vae`. One file,
+    # one expert, no switch step: it is the whole Wan stack for 10 GB, and it
+    # covers text-to-video and image-to-video from the same checkpoint.
+    "wan_ti2v_5b": {
+        "label": "Wan 2.2 TI2V 5B",
+        "note": "Single 5B DiT — t2v and i2v, 24 fps",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+        "dest": MODELS / "wan2.2_ti2v_5B_fp16.safetensors",
+        "gated": False,
+        "approx_gb": 10.0,
+    },
+    "wan_te": {
+        "label": "umT5-XXL",
+        "note": "Wan text encoder, fp8 scaled",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "dest": MODELS / "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "gated": False,
+        "approx_gb": 6.7,
+    },
+    "wan_vae": {
+        "label": "Wan 2.1 VAE",
+        "note": "Required by the 14B pair",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/vae/wan_2.1_vae.safetensors",
+        "dest": MODELS / "wan_2.1_vae.safetensors",
+        "gated": False,
+        "approx_gb": 0.25,
+    },
+    "wan_vae_22": {
+        "label": "Wan 2.2 VAE",
+        "note": "Required by the 5B",
+        "family": "Wan 2.2 — video",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/vae/wan2.2_vae.safetensors",
+        "dest": MODELS / "wan2.2_vae.safetensors",
+        "gated": False,
+        "approx_gb": 1.4,
+    },
+    # ── Wan 2.2 speed LoRAs ────────────────────────────────────────────────
+    #
+    # These land in loras/, not models/, because that is what they are: they
+    # show up in the LoRA picker beside anything you trained, and nothing
+    # special-cases them. They are here rather than left to a manual upload
+    # because they are the 14B path's draft tier — 4 steps instead of 20, at
+    # CFG 1, which is a bigger lever than resolution and the reason the LoRA
+    # stack below is worth having on day one.
+    #
+    # Paired per expert, and the pair is not interchangeable: the high-noise
+    # LoRA on the low-noise expert is a silent quality loss, not an error. The
+    # folder holds both files so the picker shows them as `high` and `low` of
+    # one thing.
+    "wan_speed_t2v_high": {
+        "label": "Wan 2.2 T2V speed · high",
+        "note": "LightX2V 4-step LoRA",
+        "family": "Wan 2.2 speed LoRAs",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
+        "dest": LORAS / "wan22-speed-t2v" / "high.safetensors",
+        "gated": False,
+        "approx_gb": 1.2,
+    },
+    "wan_speed_t2v_low": {
+        "label": "Wan 2.2 T2V speed · low",
+        "note": "LightX2V 4-step LoRA",
+        "family": "Wan 2.2 speed LoRAs",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+        "dest": LORAS / "wan22-speed-t2v" / "low.safetensors",
+        "gated": False,
+        "approx_gb": 1.2,
+    },
+    "wan_speed_i2v_high": {
+        "label": "Wan 2.2 I2V speed · high",
+        "note": "LightX2V 4-step LoRA",
+        "family": "Wan 2.2 speed LoRAs",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+        "dest": LORAS / "wan22-speed-i2v" / "high.safetensors",
+        "gated": False,
+        "approx_gb": 1.2,
+    },
+    "wan_speed_i2v_low": {
+        "label": "Wan 2.2 I2V speed · low",
+        "note": "LightX2V 4-step LoRA",
+        "family": "Wan 2.2 speed LoRAs",
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+        "dest": LORAS / "wan22-speed-i2v" / "low.safetensors",
+        "gated": False,
+        "approx_gb": 1.2,
+    },
+}
+
+# The video weights keep their upstream filenames, unlike every other entry
+# above. ComfyUI addresses models by basename inside a search path, so a
+# renamed file would have to be renamed again in every graph that names it —
+# and the names Comfy-Org ships already say the quantization, which is the one
+# thing you need to read off a video checkpoint at a glance.
+VIDEO_MODEL_KEYS = ("h3_dit", "h3_te", "h3_vae", "h3_audio_vae")
+# ref2va shares everything but the transformer, so it is one extra 21 GB file
+# on top of the base set rather than a second stack.
+VIDEO_REF_MODEL_KEYS = ("h3_ref_dit", "h3_te", "h3_vae", "h3_audio_vae")
+
+# What each Wan run needs, keyed by (family, task). Written out per task rather
+# than as "the Wan models" because the t2v and i2v 14B pairs are 57 GB together
+# and there is no reason to make a text-to-video run wait on the i2v weights —
+# _require_models() names only the pair the requested run actually loads.
+WAN_MODEL_KEYS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("14b", "t2v"): ("wan_t2v_high", "wan_t2v_low", "wan_te", "wan_vae"),
+    ("14b", "i2v"): ("wan_i2v_high", "wan_i2v_low", "wan_te", "wan_vae"),
+    ("5b", "t2v"): ("wan_ti2v_5b", "wan_te", "wan_vae_22"),
+    ("5b", "i2v"): ("wan_ti2v_5b", "wan_te", "wan_vae_22"),
 }
 
 RAW_PATH = MODEL_CATALOGUE["raw"]["dest"]
@@ -344,8 +719,20 @@ CAPTION_LENGTHS = {
 # --------------------------------------------------------------------------
 
 
-def _publish(job_id: str, **fields: Any) -> None:
-    """Merge progress fields into the job record the UI polls."""
+def _publish(job_id: str, /, **fields: Any) -> None:
+    """
+    Merge progress fields into the job record the UI polls.
+
+    `job_id` is positional-only for a reason. Every completion path builds a
+    result dict that carries its own "job_id" (it is the function's return
+    value as well as the record) and then calls `_publish(job_id, **res)`. With
+    a normal parameter that is `TypeError: got multiple values for argument
+    'job_id'`, raised *after* the images are already on the volume and outside
+    the try block that would have marked the job failed — so the file lands,
+    the status stays "running" forever, and the UI polls a job that will never
+    answer. Positional-only makes the collision impossible instead of relying
+    on every caller remembering to pop the key.
+    """
     try:
         cur = jobs.get(job_id) or {}
         cur.update(fields)
@@ -511,6 +898,10 @@ def _model_status() -> list[dict[str, Any]]:
                 "key": key,
                 "label": spec["label"],
                 "note": spec["note"],
+                # Grouping the sheet, and the order groups appear in is the
+                # order they appear in the catalogue — one source of truth
+                # rather than a second list that drifts when a model is added.
+                "family": spec["family"],
                 "repo_id": spec["repo_id"],
                 "gated": spec["gated"],
                 "approx_gb": spec["approx_gb"],
@@ -1148,14 +1539,184 @@ def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any
     }
 
 
+def _on_gpu(cls: Any, requested: Any, allowed: tuple[str, ...], default: str) -> Any:
+    """
+    Resolve a UI GPU choice to a Cls to spawn from.
+
+    Returns the base class untouched when the choice is the default, so the
+    ordinary request keeps hitting the container that is already warm; only a
+    genuine switch pays for a variant. An unknown card falls back to the default
+    rather than raising — a stale tab asking for a card that has been removed
+    from the list should still get its picture.
+    """
+    gpu = str(requested or default)
+    if gpu not in allowed or gpu == default:
+        return cls
+    return cls.with_options(gpu=gpu)
+
+
+OUTPUT_META = "visionary.json"
+MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
+               ".mp4": "video/mp4"}
+OUTPUT_FILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpg|webp|mp4)$")
+
+
+def _infotext(
+    *,
+    prompt: str,
+    negative_prompt: str = "",
+    model: str = "",
+    seed: Any = None,
+    report: dict[str, Any] | None = None,
+) -> str:
+    """
+    The generation settings as an A1111 `parameters` string.
+
+    Written into the PNG itself, not just the sidecar, because the two answer
+    different questions. The sidecar keeps the gallery working; this keeps the
+    settings attached to the file after it has been dragged out of the browser,
+    dropped into Discord, or found in a folder a year later. It is also the
+    format every existing tool already reads — PNG Info tabs, ComfyUI, the
+    civitai uploader — so "how did I make this" stays answerable outside here.
+
+    Shape is A1111's, deliberately, down to the details that look arbitrary:
+    the prompt is the first line bare, `Negative prompt:` is a whole line and
+    is omitted rather than left empty, and everything else is one comma-joined
+    `Key: value` line. Values containing a comma are quoted, which is how the
+    parsers on the other end know the comma is not a field separator.
+    """
+    report = report or {}
+
+    def field(value: Any) -> str:
+        text = str(value)
+        return f'"{text}"' if ("," in text or ":" in text) else text
+
+    lines = [prompt.strip()]
+    if negative_prompt.strip():
+        lines.append(f"Negative prompt: {negative_prompt.strip()}")
+
+    pairs: list[str] = []
+
+    def add(key: str, value: Any) -> None:
+        if value not in (None, "", []):
+            pairs.append(f"{key}: {field(value)}")
+
+    add("Steps", report.get("steps"))
+    add("Sampler", report.get("sampler"))
+    add("Schedule type", report.get("scheduler"))
+    add("CFG scale", report.get("cfg_scale"))
+    add("Seed", seed)
+    if report.get("width") and report.get("height"):
+        add("Size", f"{report['width']}x{report['height']}")
+    add("Model", model)
+    add("Shift", report.get("shift"))
+
+    # A LoRA stack is the part most worth recovering and the part a bare
+    # filename loses, so name and strength both go in.
+    loras = [
+        f"{l.get('name') or Path(str(l.get('path') or '')).stem}:{l.get('unet', 1.0)}"
+        for l in (report.get("loras") or [])
+        if l.get("applied", True)
+    ]
+    add("Loras", ", ".join(loras))
+
+    regions = report.get("regions") or []
+    if regions:
+        add("Regions", len(regions))
+        add("Region prompts", " | ".join(str(r.get("prompt", "")) for r in regions))
+
+    lines.append(", ".join(pairs))
+    return "\n".join(lines)
+
+
+def _write_output_meta(out_dir: Path, **fields: Any) -> None:
+    """
+    Describe a result beside the result, in the same shape loras/ already uses.
+
+    The job Dict is live state, not a record: it is polled during a run and
+    means nothing afterwards. Everything you would want a week later — the
+    prompt, the seed, the model — has to live next to the file or it is gone,
+    which is why the gallery reads the volume rather than replaying job ids.
+    Non-fatal: an unwritable sidecar must not lose you the image it describes.
+    """
+    try:
+        (out_dir / OUTPUT_META).write_text(json.dumps(fields, indent=2))
+    except OSError as exc:
+        print(f"[meta] {out_dir.name}: {exc}")
+
+
+def _gallery(limit: int = 200) -> list[dict[str, Any]]:
+    """
+    Every output folder on the volume, newest first.
+
+    Keyed by what is on disk, not by a job id the browser happened to keep:
+    a reload, a redeploy, or a job whose record expired all leave the work
+    reachable. A folder with no sidecar still lists — older results predate
+    the metadata and are not less real for it.
+    """
+    if not OUTPUTS.is_dir():
+        return []
+
+    out: list[dict[str, Any]] = []
+    for d in OUTPUTS.iterdir():
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        files = sorted(
+            (p for p in d.iterdir()
+             if p.is_file() and p.suffix.lower() in MEDIA_TYPES),
+            key=lambda p: p.name,
+        )
+        if not files:
+            continue
+        meta: dict[str, Any] = {}
+        try:
+            meta = json.loads((d / OUTPUT_META).read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+        out.append({
+            "job_id": d.name,
+            "kind": "video" if files[0].suffix.lower() == ".mp4" else "image",
+            "files": [p.name for p in files],
+            "modified": max(p.stat().st_mtime for p in files),
+            **meta,
+        })
+
+    out.sort(key=lambda r: r["modified"], reverse=True)
+    return out[:limit]
+
+
+def _lora_path(raw_path: Any) -> Path:
+    """
+    Resolve one LoRA path and confine it to loras/.
+
+    `resolve()` before the check, so a crafted `../../` cannot read a
+    checkpoint — or anything else — off the volume. Shared by the image and
+    video stacks because the confinement rule is a property of the storage
+    layout, not of which model is about to load the file.
+
+    The two failures are reported separately because they have nothing to do
+    with each other: a path outside loras/ is a malformed request, and a path
+    inside it that is not there is a LoRA deleted since the page loaded — which
+    is the one a stale tab actually hits, and which "must be a file under
+    loras/" sends you to debug in entirely the wrong place.
+    """
+    path = Path(str(raw_path or "")).resolve()
+    if LORAS.resolve() not in path.parents:
+        raise ValueError(f"LoRA must be under loras/: {str(raw_path)!r}")
+    if not path.is_file():
+        raise ValueError(
+            f"No such LoRA: {path.relative_to(LORAS.resolve()).as_posix()}. "
+            "It may have been deleted — reload to refresh the list."
+        )
+    return path
+
+
 def _validate_loras(raw: Any) -> list[dict[str, Any]]:
     """
     Validate the LoRA stack coming off the wire. Pure stdlib, no torch.
 
-    Paths are confined to loras/ with `resolve()` before the check, so a
-    crafted `../../` cannot read a checkpoint — or anything else — off the
-    volume. Anything malformed raises rather than being silently dropped; a LoRA
-    that quietly does not load looks exactly like a LoRA with no effect.
+    Anything malformed raises rather than being silently dropped; a LoRA that
+    quietly does not load looks exactly like a LoRA with no effect.
 
     Deliberately importable from the CPU web container, so /api/generate can
     reject a bad stack in milliseconds. Validating only inside the GPU job meant
@@ -1171,10 +1732,7 @@ def _validate_loras(raw: Any) -> list[dict[str, Any]]:
     for entry in list(raw)[:MAX_LORAS]:
         if isinstance(entry, (str, Path)):
             entry = {"path": str(entry)}
-        raw_path = str(entry.get("path") or "")
-        path = Path(raw_path).resolve()
-        if not path.is_file() or LORAS.resolve() not in path.parents:
-            raise ValueError(f"LoRA must be a file under loras/: {raw_path!r}")
+        path = _lora_path(entry.get("path"))
 
         try:
             unet = float(entry.get("unet", entry.get("weight", 1.0)))
@@ -1305,17 +1863,36 @@ class Generator:
             _publish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
             raise
 
+        from PIL import PngImagePlugin
+
         out_dir = OUTPUTS / job_id
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%H%M%S")
+        report = getattr(pipe, "last_report", {})
+        seeds = report.get("seeds") or []
         names = []
         for i, image in enumerate(images):
             name = f"{stamp}_{i:02d}.png"
-            image.save(out_dir / name)
+            # Per-image seed, not the batch's first: in a batch of four each
+            # image has its own, and a metadata block that reports the same
+            # seed for all four cannot reproduce three of them.
+            info = PngImagePlugin.PngInfo()
+            info.add_text("parameters", _infotext(
+                prompt=str(params.get("prompt") or ""),
+                negative_prompt=str(params.get("negative_prompt") or ""),
+                model=model,
+                seed=seeds[i] if i < len(seeds) else None,
+                report=report,
+            ))
+            image.save(out_dir / name, pnginfo=info)
             names.append(name)
+        _write_output_meta(
+            out_dir, kind="image", job_id=job_id, model=model,
+            prompt=str(params.get("prompt") or ""),
+            negative_prompt=str(params.get("negative_prompt") or ""),
+            created=time.time(), **report,
+        )
         volume.commit()
-
-        report = getattr(pipe, "last_report", {})
 
         # Only filenames go into the job record. The PNGs themselves are served
         # by /api/outputs/{job_id} straight off the volume — a 1024px base64
@@ -1331,6 +1908,1011 @@ class Generator:
 
 
 # --------------------------------------------------------------------------
+# Video — MiniMax-H3 through ComfyUI
+#
+# H3 denoises video and audio as one packed sequence: a single transformer
+# call steps both, and the soundtrack is not a second pass. That is why the
+# result of this feature is an mp4 with sound rather than a silent clip, and
+# why the prompt is worth writing to include what you want to *hear*.
+#
+# The checkpoint is guidance-distilled — no CFG, no negative prompt, one
+# forward pass per step. Any UI that offers those is offering knobs the model
+# does not read.
+# --------------------------------------------------------------------------
+
+# 24 fps is the model's native rate; nothing here is configurable because
+# nothing about H3 is trained at another one.
+H3_FPS = 24
+
+# The video VAE decodes in blocks of 17 frames after a leading 5, so a frame
+# count is only valid on the 17n+5 grid. This mirrors the Math Expression node
+# in Comfy's own template rather than inventing a second rounding rule.
+H3_FRAME_STEP = 17
+H3_FRAME_BASE = 5
+
+# Trained range. 124 frames is ~5.2 s, 345 is ~14.4 s — the next grid point up
+# (362) is 15.083 s, past the 15 s the model was trained to, so it is excluded
+# rather than offered and quietly disappointing.
+H3_MIN_FRAMES = 124
+H3_MAX_FRAMES = 345
+
+# H3's canvas is a short edge, not a resolution: the aspect ratio picks the
+# long edge. 768 is what it was trained at; 544 is the draft tier, which is
+# roughly 2.3x faster per step and is the single biggest speed lever there is —
+# far bigger than step count, and it costs detail rather than coherence.
+H3_TIERS = {"full": 768, "draft": 544}
+
+# ref2va's limits: 9 images, 3 videos of 2-15 s, 3 standalone audio clips, and
+# 12 across all types. Standalone audio is not wired up; a video's own
+# soundtrack rides along with it and does not count against the audio budget
+# here because it is packed as that video's, not as its own <Audio n>.
+MAX_H3_REFS = 9
+MAX_H3_REF_VIDEOS = 3
+MAX_H3_REF_TOTAL = 12
+
+# Reference tokens ride through every sampling step, so their size is a per-step
+# cost, not a one-off encode. "match" scales each reference to the generation's
+# pixel area; "max" uses the 2048px short edge the reference pipeline was built
+# for and buys identity fidelity at several times the time.
+H3_REF_SIZES = ("match", "max")
+
+# Shared by every video model, because an aspect ratio is a property of the
+# shot and not of the checkpoint. What differs per model is the short edge and
+# the alignment, which is what _canvas() takes.
+VIDEO_ASPECTS = {
+    "21:9": (21, 9), "16:9": (16, 9), "4:3": (4, 3),
+    "1:1": (1, 1), "3:4": (3, 4), "9:16": (9, 16),
+}
+
+
+def _snap_frames(seconds: float, *, fps: int, step: int, base: int,
+                 lo: int, hi: int) -> int:
+    """
+    Seconds at a model's fps, snapped up onto the frame grid its VAE decodes.
+
+    Every video VAE here has one: a leading `base` frames and then blocks of
+    `step`. Off-grid counts are not a rounding nicety — they are a decode error
+    or a silently truncated clip, so the snap is up and the range is clamped to
+    what the model was trained for rather than to what it will accept.
+    """
+    raw = max(lo, round(float(seconds) * fps))
+    snapped = raw + (base - raw % step) % step
+    return min(hi, snapped)
+
+
+def _canvas(aspect: str, *, short: int, align: int) -> tuple[int, int]:
+    """
+    (width, height) for an aspect ratio at a given short edge.
+
+    Floors the long edge to the alignment rather than rounding: 16:9 at 768
+    is 1344x768 that way, which is the canvas H3 was trained on and the one
+    Comfy's resolution table lists. Rounding gives 1376 and a subtly off-ratio
+    frame.
+    """
+    if aspect not in VIDEO_ASPECTS:
+        raise ValueError(f"Unknown aspect {aspect!r}. One of: {', '.join(VIDEO_ASPECTS)}")
+    num, den = VIDEO_ASPECTS[aspect]
+    long = (short * max(num, den) // min(num, den)) // align * align
+    return (long, short) if num >= den else (short, long)
+
+
+def _fit_canvas(image_path: Path, *, short: int, align: int) -> tuple[int, int]:
+    """
+    The canvas a keyframe implies: its own ratio at the tier's short edge.
+
+    A first frame anchors the geometry of the clip, so the aspect picker stops
+    being the thing that decides it — the alternative is cropping or stretching
+    a frame the user chose, silently. Read from the file on disk rather than
+    from the request, because that is the pixels the model will actually see.
+    """
+    from PIL import Image
+
+    with Image.open(image_path) as im:
+        src_w, src_h = im.size
+    if src_w >= src_h:
+        return (src_w * short // src_h) // align * align, short
+    return short, (src_h * short // src_w) // align * align
+
+
+def _h3_frames(seconds: float) -> int:
+    """Seconds at 24 fps, snapped up to the next 17n+5 the VAE can decode."""
+    return _snap_frames(seconds, fps=H3_FPS, step=H3_FRAME_STEP, base=H3_FRAME_BASE,
+                        lo=H3_MIN_FRAMES, hi=H3_MAX_FRAMES)
+
+
+def _h3_canvas(aspect: str, tier: str) -> tuple[int, int]:
+    """(width, height) for an aspect ratio at an H3 tier's short edge."""
+    if tier not in H3_TIERS:
+        raise ValueError(f"Unknown tier {tier!r}. One of: {', '.join(H3_TIERS)}")
+    return _canvas(aspect, short=H3_TIERS[tier], align=32)
+
+
+def _h3_graph(
+    *,
+    prompt: str,
+    width: int,
+    height: int,
+    frames: int,
+    seed: int,
+    steps: int,
+    sampler: str,
+    scheduler: str,
+    first_frame: str | None = None,
+    last_frame: str | None = None,
+    references: list[str] | None = None,
+    ref_videos: list[str] | None = None,
+    ref_size: str = "match",
+) -> dict[str, Any]:
+    """
+    Build ComfyUI's API-format graph for one H3 clip.
+
+    Wiring is taken from Comfy's own `video_minimax_h3_i2v` template, which is
+    the same graph for t2v — `MiniMaxH3ImageToVideo` covers both and switches on
+    whether a keyframe is connected. Written out as a dict here rather than
+    shipped as workflow JSON so that a wrong node name is a Python error next to
+    the code that caused it, and so nothing in this repo has to be re-exported
+    from a GUI when a parameter changes.
+
+    Note both decoders read SamplerCustomAdvanced slot 0 (`output`), not slot 1
+    (`denoised_output`) — video and audio come out of the same latent.
+    """
+    ref_mode = bool(references or ref_videos)
+    dit = MODEL_CATALOGUE["h3_ref_dit" if ref_mode else "h3_dit"]["dest"].name
+    te = MODEL_CATALOGUE["h3_te"]["dest"].name
+    vae = MODEL_CATALOGUE["h3_vae"]["dest"].name
+    avae = MODEL_CATALOGUE["h3_audio_vae"]["dest"].name
+
+    cond: dict[str, Any] = {
+        "clip": ["clip", 0], "vae": ["vae", 0], "prompt": prompt,
+        "width": width, "height": height, "length": frames,
+    }
+    if ref_mode:
+        # The reference node also encodes audio references, so it takes the
+        # audio VAE directly — the keyframe node never needs it.
+        cond["audio_vae"] = ["avae", 0]
+        cond["ref_image_size"] = ref_size
+    graph: dict[str, Any] = {
+        "dit": {"class_type": "UNETLoader",
+                "inputs": {"unet_name": dit, "weight_dtype": "default"}},
+        # type="minimax" selects H3's conditioner handling: the hidden state is
+        # read from partway up Qwen3-VL, not from its last layer.
+        "clip": {"class_type": "CLIPLoader",
+                 "inputs": {"clip_name": te, "type": "minimax", "device": "default"}},
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "avae": {"class_type": "VAELoader", "inputs": {"vae_name": avae}},
+        "cond": {"class_type": "MiniMaxH3ReferenceToVideo" if ref_mode
+                 else "MiniMaxH3ImageToVideo", "inputs": cond},
+        # BasicGuider, not CFGGuider: there is no negative branch to weigh.
+        "guider": {"class_type": "BasicGuider",
+                   "inputs": {"model": ["dit", 0], "conditioning": ["cond", 0]}},
+        "sampler": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": sampler}},
+        "sigmas": {"class_type": "BasicScheduler",
+                   "inputs": {"model": ["dit", 0], "scheduler": scheduler,
+                              "steps": steps, "denoise": 1.0}},
+        "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "sample": {"class_type": "SamplerCustomAdvanced",
+                   "inputs": {"noise": ["noise", 0], "guider": ["guider", 0],
+                              "sampler": ["sampler", 0], "sigmas": ["sigmas", 0],
+                              "latent_image": ["cond", 1]}},
+        "frames": {"class_type": "VAEDecode",
+                   "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}},
+        "audio": {"class_type": "VAEDecodeAudio",
+                  "inputs": {"samples": ["sample", 0], "vae": ["avae", 0]}},
+        "video": {"class_type": "CreateVideo",
+                  "inputs": {"images": ["frames", 0], "audio": ["audio", 0],
+                             "fps": H3_FPS}},
+        "save": {"class_type": "SaveVideo",
+                 "inputs": {"video": ["video", 0], "filename_prefix": "visionary",
+                            "format": "auto", "codec": "auto"}},
+    }
+
+    # A keyframe is stretched to the canvas when it is the first frame (it
+    # anchors the geometry) and cover-cropped when it is the last — that is
+    # MiniMaxH3ImageToVideo's own behaviour, not something to reimplement here.
+    if first_frame:
+        graph["first"] = {"class_type": "LoadImage", "inputs": {"image": first_frame}}
+        cond["first_frame"] = ["first", 0]
+    if last_frame:
+        graph["last"] = {"class_type": "LoadImage", "inputs": {"image": last_frame}}
+        cond["last_frame"] = ["last", 0]
+
+    # Reference inputs are namespaced by their autogrow group and indexed from
+    # ZERO, while the prompt tag for the same reference counts from one. So
+    # `ref_images.ref_image_0` is the thing the prompt calls <Picture 1>.
+    #
+    # That off-by-one is not ours to correct: both halves are the model's, and
+    # the node's own docstring documents the 1-based side ("ordinals are 1-based
+    # per type") while the schema carries the 0-based side. Verified against
+    # node 136 of Comfy's video_minimax_h3_r2v template, which is the only place
+    # the two appear side by side. Get it wrong and ComfyUI accepts the graph
+    # and ignores the reference.
+    for i, name in enumerate(references or []):
+        graph[f"refimg{i}"] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        cond[f"ref_images.ref_image_{i}"] = [f"refimg{i}", 0]
+
+    # A video reference conditions on motion, and on its soundtrack when it has
+    # one. The node takes frames rather than a VIDEO, so the file is decomposed
+    # first — and the audio output goes to the *same-numbered* audio slot, which
+    # is how the model knows that soundtrack belongs to that clip rather than
+    # being a standalone <Audio n>.
+    for i, name in enumerate(ref_videos or []):
+        graph[f"refvid{i}"] = {"class_type": "LoadVideo", "inputs": {"file": name}}
+        graph[f"refvidparts{i}"] = {"class_type": "GetVideoComponents",
+                                    "inputs": {"video": [f"refvid{i}", 0]}}
+        cond[f"ref_videos.ref_video_{i}"] = [f"refvidparts{i}", 0]
+        cond[f"ref_video_audios.ref_video_audio_{i}"] = [f"refvidparts{i}", 1]
+    return graph
+
+
+# --------------------------------------------------------------------------
+# Video — Wan 2.2 through the same ComfyUI
+#
+# Same container, same warm process, same job/status/stop contract. Wan is a
+# second family in the existing video path rather than a second video path,
+# which is the whole reason the backend was a driven ComfyUI rather than ported
+# model code: adding a family is a graph and a table, not an image.
+#
+# What Wan is *for*, next to H3: it takes LoRAs. H3's repackage is int8-convrot
+# quantized and has no LoRA ecosystem to speak of; Wan 2.2 has both, and phase 4
+# trains against it. It also reads CFG and a negative prompt, which H3 —
+# guidance-distilled — does not. Silent video is the cost.
+# --------------------------------------------------------------------------
+
+# Two families under one name. `14b` is the A14B mixture of experts, two 14 GB
+# transformers split by noise level; `5b` is the single dense TI2V checkpoint
+# with its own higher-compression VAE. They differ in fps, latent stride and
+# frame budget, so nothing below is a shared constant by accident.
+WAN_FPS = {"14b": 16, "5b": 24}
+
+# Latent stride. The 14B pair uses the 2.1 VAE at 8x spatial, so 16-aligned
+# pixels; the 5B's VAE is 16x, so 32-aligned. Feed either an unaligned canvas
+# and the encode silently crops.
+WAN_ALIGN = {"14b": 16, "5b": 32}
+
+# Both families decode 4n+1 frames — a leading frame then blocks of four.
+WAN_FRAME_STEP = 4
+WAN_FRAME_BASE = 1
+WAN_MIN_FRAMES = 17
+
+# Trained length, not maximum accepted length. Wan 2.2 is a five-second model
+# in both families: 81 at 16 fps and 121 at 24 fps are both 5.04 s. Longer runs
+# and then loops or drifts, so it is excluded rather than offered.
+WAN_MAX_FRAMES = {"14b": 81, "5b": 121}
+
+# Short edge per tier, the same shape as H3_TIERS. 720/480 are Wan's own two
+# resolution tiers; the 5B is trained at 704 and reuses 480 as its draft.
+WAN_TIERS = {
+    "14b": {"full": 720, "draft": 480},
+    "5b": {"full": 704, "draft": 480},
+}
+
+# Wan reads CFG, so these are real defaults rather than placeholders. 3.5 for
+# the 14B pair and 5.0 for the 5B are what Comfy's own templates ship, and the
+# shift is the 8.0 both model configs already carry — ModelSamplingSD3 is in
+# the graph so that a speed LoRA (which wants ~5.0) has somewhere to say so.
+WAN_DEFAULT_CFG = {"14b": 3.5, "5b": 5.0}
+WAN_DEFAULT_SHIFT = 8.0
+WAN_DEFAULT_STEPS = {"14b": 20, "5b": 30}
+
+# Which expert a LoRA row patches. The A14B pair is two checkpoints, so a LoRA
+# has to say — and it matters: the LightX2V pair ships one file per expert, and
+# crossing them is a silent quality loss rather than an error. "both" is the
+# default because a LoRA trained on the whole model is the common case, and it
+# is what the 5B always does since it has no second expert to choose.
+WAN_EXPERTS = ("both", "high", "low")
+
+
+# What the composer is allowed to ask for, per video model.
+#
+# Served to the page rather than written into it, for the reason the GPU list
+# already is: which controls a model reads is a property of the model, and a
+# copy in the HTML is a second source of truth that drifts the first time one
+# of them changes. It is also the honest way to present two families that
+# genuinely differ — H3 is guidance-distilled and takes no CFG and no negative
+# prompt, Wan takes both; Wan takes LoRAs, H3's int8 repackage has no LoRA
+# ecosystem to offer. A control that is present but ignored is worse than one
+# that is absent, so absent is what the model says it wants.
+VIDEO_MODELS: dict[str, dict[str, Any]] = {
+    "h3": {
+        "label": "MiniMax-H3",
+        "note": "Sound and picture in one pass",
+        "requires": {"fl2va": VIDEO_MODEL_KEYS, "ref2va": VIDEO_REF_MODEL_KEYS},
+        "tiers": {"full": "768p", "draft": "544p draft"},
+        "lengths": [5, 6, 8, 10, 12, 14],
+        "samplers": ["res_multistep", "euler", "dpmpp_2m"],
+        "schedulers": ["simple", "normal", "beta"],
+        "defaults": {"steps": 20, "sampler": "res_multistep", "scheduler": "simple",
+                     "tier": "full", "seconds": 5},
+        "supports": {"loras": False, "experts": False, "cfg": False,
+                     "negative": False, "references": True, "last_frame": True,
+                     "audio": True},
+    },
+    "wan14b": {
+        "label": "Wan 2.2 A14B",
+        "note": "Two experts · silent",
+        "requires": {"t2v": WAN_MODEL_KEYS[("14b", "t2v")],
+                     "i2v": WAN_MODEL_KEYS[("14b", "i2v")]},
+        "tiers": {"full": "720p", "draft": "480p draft"},
+        "lengths": [2, 3, 4, 5],
+        "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
+        "schedulers": ["simple", "normal", "beta"],
+        "defaults": {"steps": WAN_DEFAULT_STEPS["14b"], "cfg": WAN_DEFAULT_CFG["14b"],
+                     "shift": WAN_DEFAULT_SHIFT, "sampler": "euler",
+                     "scheduler": "simple", "tier": "full", "seconds": 5},
+        "supports": {"loras": True, "experts": True, "cfg": True,
+                     "negative": True, "references": False, "last_frame": True,
+                     "audio": False},
+    },
+    "wan5b": {
+        "label": "Wan 2.2 TI2V 5B",
+        "note": "24 fps · silent",
+        "requires": {"t2v": WAN_MODEL_KEYS[("5b", "t2v")],
+                     "i2v": WAN_MODEL_KEYS[("5b", "i2v")]},
+        "tiers": {"full": "704p", "draft": "480p draft"},
+        "lengths": [2, 3, 4, 5],
+        "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
+        "schedulers": ["simple", "normal", "beta"],
+        "defaults": {"steps": WAN_DEFAULT_STEPS["5b"], "cfg": WAN_DEFAULT_CFG["5b"],
+                     "shift": WAN_DEFAULT_SHIFT, "sampler": "euler",
+                     "scheduler": "simple", "tier": "full", "seconds": 5},
+        "supports": {"loras": True, "experts": False, "cfg": True,
+                     "negative": True, "references": False, "last_frame": False,
+                     "audio": False},
+    },
+}
+
+
+def _video_model_status() -> list[dict[str, Any]]:
+    """
+    Every video model with what is actually on the volume for each of its tasks.
+
+    Per task, not per model, because a 14B t2v run and a 14B i2v run load
+    different 28.6 GB pairs — reporting one "Wan 2.2: missing" would send you to
+    download 57 GB when the run you are composing needs half of it.
+    """
+    out = []
+    for key, spec in VIDEO_MODELS.items():
+        tasks = {}
+        for task, keys in spec["requires"].items():
+            missing = [MODEL_CATALOGUE[k]["label"] for k in keys
+                       if not MODEL_CATALOGUE[k]["dest"].exists()]
+            tasks[task] = {"ready": not missing, "missing": missing}
+        out.append({
+            "key": key, "label": spec["label"], "note": spec["note"],
+            "tiers": spec["tiers"], "lengths": spec["lengths"],
+            "samplers": spec["samplers"], "schedulers": spec["schedulers"],
+            "defaults": spec["defaults"], "supports": spec["supports"],
+            "tasks": tasks,
+            "ready": any(t["ready"] for t in tasks.values()),
+        })
+    return out
+
+
+def _wan_frames(seconds: float, family: str) -> int:
+    """Seconds at the family's fps, snapped up onto its 4n+1 grid."""
+    return _snap_frames(
+        seconds, fps=WAN_FPS[family], step=WAN_FRAME_STEP, base=WAN_FRAME_BASE,
+        lo=WAN_MIN_FRAMES, hi=WAN_MAX_FRAMES[family],
+    )
+
+
+def _wan_canvas(aspect: str, tier: str, family: str) -> tuple[int, int]:
+    """(width, height) for an aspect ratio at a Wan tier's short edge."""
+    if family not in WAN_TIERS:
+        raise ValueError(f"Unknown Wan family {family!r}. One of: {', '.join(WAN_TIERS)}")
+    if tier not in WAN_TIERS[family]:
+        raise ValueError(
+            f"Unknown tier {tier!r}. One of: {', '.join(WAN_TIERS[family])}"
+        )
+    return _canvas(aspect, short=WAN_TIERS[family][tier], align=WAN_ALIGN[family])
+
+
+def _wan_task(first_frame: Any, last_frame: Any) -> str:
+    """
+    Which Wan task a request is, read off what was attached rather than asked.
+
+    The same choice H3 makes, and for the same reason: text-to-video and
+    image-to-video are not two things you pick between, they are what you get
+    depending on whether you gave the clip a frame to start on. The difference
+    is that on the 14B they are genuinely different weights, so this also
+    decides which 28.6 GB pair loads.
+    """
+    return "i2v" if (first_frame or last_frame) else "t2v"
+
+
+def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
+    """
+    Validate the video LoRA stack, and resolve each path to the name ComfyUI
+    addresses it by.
+
+    ComfyUI's LoraLoaderModelOnly takes a *combo* — a filename relative to the
+    loras search path, validated against a directory listing — not a path. So a
+    LoRA that exists on the volume but resolves outside loras/ fails inside the
+    graph as "Value not in list", which reads like a corrupt request rather
+    than a wrong path. Converting here means the failure is a form error naming
+    the file, on CPU, before an H100 is warm.
+
+    Same confinement as the image stack: `resolve()` before the check, so a
+    crafted `../../` cannot name a checkpoint. No text-encoder weight — umT5 is
+    loaded through CLIPLoader and LoraLoaderModelOnly patches the DiT only.
+    """
+    if not raw:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for entry in list(raw)[:MAX_LORAS]:
+        if isinstance(entry, (str, Path)):
+            entry = {"path": str(entry)}
+        path = _lora_path(entry.get("path"))
+
+        try:
+            strength = float(entry.get("unet", entry.get("weight", 1.0)))
+        except (TypeError, ValueError):
+            raise ValueError(f"LoRA strength must be a number: {path.name}")
+
+        expert = str(entry.get("expert") or "both")
+        if expert not in WAN_EXPERTS:
+            raise ValueError(
+                f"{path.name}: expert must be one of {', '.join(WAN_EXPERTS)}"
+            )
+
+        out.append({
+            "path": str(path),
+            # Forward slashes, relative to loras/ — os.walk on Linux produces
+            # exactly this, and it is what the combo is validated against.
+            "name": path.relative_to(LORAS.resolve()).as_posix(),
+            "unet": strength,
+            "expert": expert,
+        })
+    return out
+
+
+def _wan_graph(
+    *,
+    family: str,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    frames: int,
+    seed: int,
+    steps: int,
+    cfg: float,
+    shift: float,
+    switch_at: int,
+    sampler: str,
+    scheduler: str,
+    loras: list[dict[str, Any]] | None = None,
+    first_frame: str | None = None,
+    last_frame: str | None = None,
+) -> dict[str, Any]:
+    """
+    Build ComfyUI's API-format graph for one Wan 2.2 clip.
+
+    Wiring follows Comfy's `video_wan2_2_14B_{t2v,i2v}` and `video_wan2_2_5B_ti2v`
+    templates. Written as a dict here for the same reason `_h3_graph` is: a
+    wrong node name is a Python error next to the code that caused it, not a
+    workflow JSON that has to be re-exported from a GUI when a parameter moves.
+
+    The 14B path is two KSamplerAdvanced calls, not one sampler with a switch.
+    That is the only way to express the mixture: the high-noise expert runs
+    steps 0..switch_at and hands the *unfinished* latent over
+    (`return_with_leftover_noise`), and the low-noise expert picks it up without
+    re-noising it (`add_noise: disable`). Get either flag wrong and the graph
+    still runs — it just produces a clip that is subtly washed out or doubly
+    noised, with nothing in the log to say so.
+    """
+    task = _wan_task(first_frame, last_frame)
+    keys = WAN_MODEL_KEYS[(family, task)]
+    te = MODEL_CATALOGUE["wan_te"]["dest"].name
+    vae = MODEL_CATALOGUE["wan_vae_22" if family == "5b" else "wan_vae"]["dest"].name
+    fps = WAN_FPS[family]
+
+    graph: dict[str, Any] = {
+        # type="wan" selects umT5's tokenizer and Wan's conditioning layout.
+        "clip": {"class_type": "CLIPLoader",
+                 "inputs": {"clip_name": te, "type": "wan", "device": "default"}},
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "pos": {"class_type": "CLIPTextEncode",
+                "inputs": {"clip": ["clip", 0], "text": prompt}},
+        # Unlike H3 there is a negative branch, because Wan is not
+        # guidance-distilled — an empty one is still a real, weighed branch.
+        "neg": {"class_type": "CLIPTextEncode",
+                "inputs": {"clip": ["clip", 0], "text": negative_prompt}},
+    }
+
+    def expert(tag: str, key: str) -> str:
+        """
+        Loader → LoRA chain → shift. Returns the node the sampler reads.
+
+        `tag` is "main" for the single-expert 5B, and that is not cosmetic: it
+        means no row can be filtered out by an expert that does not exist here.
+        A LoRA the user added and the graph quietly skipped is indistinguishable
+        from a LoRA with no effect, so on the 5B every row applies and the API
+        is what refuses a per-expert row it cannot honour.
+        """
+        loader = f"dit_{tag}"
+        graph[loader] = {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": MODEL_CATALOGUE[key]["dest"].name,
+                       "weight_dtype": "default"},
+        }
+        src = loader
+        # Stacked in the order given: each loader patches the model the
+        # previous one returned, so the order shown in the UI is the order
+        # they apply, the same as the image side.
+        for i, lora in enumerate(loras or []):
+            if tag != "main" and lora["expert"] not in ("both", tag):
+                continue
+            node = f"lora_{tag}_{i}"
+            graph[node] = {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {"model": [src, 0], "lora_name": lora["name"],
+                           "strength_model": lora["unet"]},
+            }
+            src = node
+        # After the LoRAs, not before: a speed LoRA changes the schedule it
+        # wants, and the shift has to be the last word on the sampling curve.
+        graph[f"shift_{tag}"] = {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {"model": [src, 0], "shift": shift},
+        }
+        return f"shift_{tag}"
+
+    if family == "5b":
+        model = expert("main", keys[0])
+        graph["latent"] = {
+            "class_type": "Wan22ImageToVideoLatent",
+            "inputs": {"vae": ["vae", 0], "width": width, "height": height,
+                       "length": frames, "batch_size": 1},
+        }
+        if first_frame:
+            graph["first"] = {"class_type": "LoadImage",
+                              "inputs": {"image": first_frame}}
+            graph["latent"]["inputs"]["start_image"] = ["first", 0]
+        pos, neg, latent = ["pos", 0], ["neg", 0], ["latent", 0]
+        stages = [(model, 0, steps, "enable", "disable")]
+    else:
+        high, low = expert("high", keys[0]), expert("low", keys[1])
+        if first_frame and last_frame:
+            # Both ends given is its own node, not the i2v node with an extra
+            # input: the mask it builds pins the tail frames as well as the
+            # head, and WanImageToVideo has no way to express that.
+            cond: dict[str, Any] = {"class_type": "WanFirstLastFrameToVideo"}
+        elif first_frame or last_frame:
+            cond = {"class_type": "WanImageToVideo"}
+        else:
+            cond = {}
+
+        if cond:
+            graph["cond"] = cond
+            cond["inputs"] = {
+                "positive": ["pos", 0], "negative": ["neg", 0], "vae": ["vae", 0],
+                "width": width, "height": height, "length": frames, "batch_size": 1,
+            }
+            if first_frame:
+                graph["first"] = {"class_type": "LoadImage",
+                                  "inputs": {"image": first_frame}}
+                cond["inputs"]["start_image"] = ["first", 0]
+            if last_frame:
+                graph["last"] = {"class_type": "LoadImage",
+                                 "inputs": {"image": last_frame}}
+                # A last frame alone still needs the first-last node; the i2v
+                # node has no end_image input at all.
+                if not first_frame:
+                    cond["class_type"] = "WanFirstLastFrameToVideo"
+                cond["inputs"]["end_image"] = ["last", 0]
+            # The node rewrites both conditioning branches with the encoded
+            # keyframe, so the sampler must read its outputs and not the raw
+            # text encodes — wiring `pos` straight through is a graph that runs
+            # and ignores the image.
+            pos, neg, latent = ["cond", 0], ["cond", 1], ["cond", 2]
+        else:
+            graph["latent"] = {
+                "class_type": "EmptyHunyuanLatentVideo",
+                "inputs": {"width": width, "height": height,
+                           "length": frames, "batch_size": 1},
+            }
+            pos, neg, latent = ["pos", 0], ["neg", 0], ["latent", 0]
+
+        stages = [
+            (high, 0, switch_at, "enable", "enable"),
+            (low, switch_at, steps, "disable", "disable"),
+        ]
+
+    prev = latent
+    for i, (model, start, end, add_noise, leftover) in enumerate(stages):
+        node = f"sample{i}"
+        graph[node] = {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": [model, 0], "add_noise": add_noise, "noise_seed": seed,
+                "steps": steps, "cfg": cfg, "sampler_name": sampler,
+                "scheduler": scheduler, "positive": pos, "negative": neg,
+                "latent_image": prev, "start_at_step": start, "end_at_step": end,
+                "return_with_leftover_noise": leftover,
+            },
+        }
+        prev = [node, 0]
+
+    graph["frames"] = {"class_type": "VAEDecode",
+                       "inputs": {"samples": prev, "vae": ["vae", 0]}}
+    # No audio input: Wan is silent. CreateVideo takes it optionally, so the
+    # difference between the two families is one absent key rather than a
+    # second save path.
+    graph["video"] = {"class_type": "CreateVideo",
+                      "inputs": {"images": ["frames", 0], "fps": fps}}
+    graph["save"] = {"class_type": "SaveVideo",
+                     "inputs": {"video": ["video", 0], "filename_prefix": "visionary",
+                                "format": "auto", "codec": "auto"}}
+    return graph
+
+
+@app.cls(
+    image=video_image, gpu=VIDEO_GPU, cpu=4.0, timeout=60 * 60,
+    volumes={"/workspace": volume},
+    max_containers=1,
+    # Longer than the image side's 10 min: 42.5 GB is a slow thing to reload,
+    # and video is worked in takes — you watch one clip, then adjust and go again.
+    scaledown_window=15 * 60,
+)
+@modal.concurrent(max_inputs=1)
+class VideoGenerator:
+    """
+    Holds a warm ComfyUI process across requests.
+
+    ComfyUI runs as a local server inside this container and is spoken to over
+    127.0.0.1 — it is never exposed, and the only client is the code below.
+    Running the real thing rather than porting its model code is what keeps the
+    int8-convrot kernels, the dynamic offloader and every upstream H3 fix on
+    our side of the line instead of in a fork we would own.
+    """
+
+    @modal.enter()
+    def setup(self):
+        import threading
+
+        # Point ComfyUI at our flat models/ directory instead of moving weights
+        # into the per-type tree it expects. The volume layout is the contract;
+        # ComfyUI adapts to it. Every type maps to the same folder, so all four
+        # files are visible to whichever loader asks for them.
+        #
+        # loras/ is the exception and keeps its nesting, because that nesting is
+        # meaningful — one folder per trained LoRA, checkpoints beside the final
+        # weights. ComfyUI walks it recursively and names a file by its path
+        # relative to here, which is exactly what _validate_video_loras() emits.
+        (COMFY / "extra_model_paths.yaml").write_text(
+            "visionary:\n"
+            f"  base_path: {WORKSPACE}/\n"
+            "  diffusion_models: models/\n"
+            "  text_encoders: models/\n"
+            "  clip: models/\n"
+            "  vae: models/\n"
+            "  loras: loras/\n"
+        )
+
+        # A fresh clone ships input/ and output/, but a changed --base-directory
+        # or a pruned image would not, and the failure would surface as a
+        # LoadImage error about a file we thought we had just written.
+        (COMFY / "input").mkdir(parents=True, exist_ok=True)
+        (COMFY / "output").mkdir(parents=True, exist_ok=True)
+
+        self._job_id: str | None = None
+        self._log: deque[str] = deque(maxlen=200)
+        self._proc = subprocess.Popen(
+            ["python", "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
+             "--disable-auto-launch", "--disable-metadata",
+             # Safe here in a way it would not be on the image side: the Krea 2
+             # path masks attention for regional prompting, and sageattention
+             # asserts `mask is None` and falls back per call. H3 never passes a
+             # mask, so this image gets the fast kernel and the inference image
+             # deliberately still does not. See forge/krea2/regional.py.
+             "--use-sage-attention"],
+            cwd=str(COMFY),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        threading.Thread(target=self._drain, daemon=True).start()
+        self._wait_ready()
+
+    def _drain(self) -> None:
+        """
+        Mirror ComfyUI's output to Modal's logs, and lift step progress out of it.
+
+        ComfyUI prints a tqdm bar for the sampling loop, which TQDM_RE already
+        parses for musubi — the same shape, so the same regex. Reading progress
+        off stdout rather than opening ComfyUI's websocket keeps this to one
+        connection and one dependency-free thread.
+        """
+        assert self._proc.stdout is not None
+        for line in self._proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            print(line, flush=True)
+            self._log.append(line)
+            m = TQDM_RE.search(line)
+            if m and self._job_id:
+                fields: dict[str, Any] = {
+                    "phase": "generate",
+                    "step": int(m.group("step")),
+                    "total_steps": int(m.group("total")),
+                    "percent": int(m.group("pct")),
+                }
+                if m.group("eta"):
+                    fields["eta"] = m.group("eta")
+                    fields["rate"] = f"{m.group('rate')}{m.group('unit')}"
+                _publish(self._job_id, **fields)
+
+    def _wait_ready(self, timeout: float = 300.0) -> None:
+        import urllib.error
+        import urllib.request
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    "ComfyUI exited during startup.\n" + "\n".join(self._log)
+                )
+            try:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{COMFY_PORT}/system_stats", timeout=2
+                ).read()
+                print("[video] ComfyUI ready", flush=True)
+                return
+            except (urllib.error.URLError, OSError):
+                time.sleep(1.0)
+        raise RuntimeError("ComfyUI did not become ready.\n" + "\n".join(self._log))
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{COMFY_PORT}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        return json.loads(urllib.request.urlopen(req, timeout=30).read() or b"{}")
+
+    def _get(self, path: str) -> Any:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{COMFY_PORT}{path}", timeout=30
+        ) as r:
+            return json.loads(r.read() or b"{}")
+
+    @modal.method()
+    def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        """
+        Run one clip, whichever family it is.
+
+        Everything outside the graph is the same job for H3 and for Wan — the
+        record, the staging directory, the stop check, the file that lands on
+        the volume and the sidecar beside it. Only the graph and the numbers
+        that describe it are per-family, so only those are dispatched. That is
+        the same contract the image side uses, extended rather than duplicated.
+        """
+        started = time.time()
+        jobs[job_id] = {"status": "running", "phase": "loading", "stop": False}
+        volume.reload()
+
+        model = str(params.get("model") or "h3")
+
+        try:
+            # Inside the try, not above it: a missing weight raised out here
+            # would leave the record saying "running" forever, and the UI
+            # polling a job that is never going to answer.
+            #
+            # Every input image lands in ComfyUI's input directory under the job
+            # id, so a LoadImage node can name it and two takes cannot collide
+            # on a filename.
+            def stage(blob: str, slot: str, ext: str = "png") -> str:
+                name = f"{job_id}-{slot}.{ext}"
+                (COMFY / "input" / name).write_bytes(base64.b64decode(blob))
+                return name
+
+            plan = (self._plan_h3 if model == "h3" else self._plan_wan)(params, stage)
+            graph, info = plan["graph"], plan["info"]
+
+            self._job_id = job_id
+            _publish(job_id, phase="generate", step=0,
+                     total_steps=info["steps"], percent=0, **info)
+
+            prompt_id = self._post("/prompt", {"prompt": graph})["prompt_id"]
+            out_name = self._await(job_id, prompt_id)
+        except StopRequested:
+            res = {"status": "stopped", "job_id": job_id, "files": [],
+                   "duration_s": round(time.time() - started, 1)}
+            _publish(job_id, **res)
+            return res
+        except Exception as exc:
+            _publish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            self._job_id = None
+
+        out_dir = OUTPUTS / job_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{time.strftime('%H%M%S')}.mp4"
+        shutil.copyfile(COMFY / "output" / out_name, out_dir / name)
+        _write_output_meta(
+            out_dir, kind="video", job_id=job_id, model=model,
+            prompt=params["prompt"], created=time.time(), **info, **plan["meta"],
+        )
+        volume.commit()
+
+        res = {
+            "status": "completed", "job_id": job_id, "files": [name],
+            "output_dir": str(out_dir), "model": model,
+            "duration_s": round(time.time() - started, 1), **info,
+        }
+        _publish(job_id, **res)
+        return res
+
+    @staticmethod
+    def _plan_h3(params: dict[str, Any], stage: Any) -> dict[str, Any]:
+        """Graph and shot description for a MiniMax-H3 take."""
+        refs_b64 = list(params.get("references") or [])[:MAX_H3_REFS]
+        vids_b64 = list(params.get("ref_videos") or [])[:MAX_H3_REF_VIDEOS]
+        _require_models(*(VIDEO_REF_MODEL_KEYS if (refs_b64 or vids_b64)
+                          else VIDEO_MODEL_KEYS))
+
+        width, height = _h3_canvas(params["aspect"], params["tier"])
+        frames = _h3_frames(params["seconds"])
+        seed = params.get("seed")
+        seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
+        steps = int(params["steps"])
+
+        references = [stage(b, f"refimg{i}") for i, b in enumerate(refs_b64)]
+        # LoadVideo lists the input directory and filters it by content
+        # type, so the extension is load-bearing, not cosmetic.
+        ref_videos = [stage(b, f"refvid{i}", "mp4") for i, b in enumerate(vids_b64)]
+        keyframes: dict[str, str] = {}
+        if not (references or ref_videos):
+            for slot in ("first_frame", "last_frame"):
+                if params.get(slot):
+                    keyframes[slot] = stage(params[slot], slot)
+
+        # A first keyframe anchors the geometry, so the canvas follows the
+        # image rather than the aspect picker — cropping a source frame the
+        # user chose is not ours to do silently. References are the opposite
+        # case: they are encoded at their own resolution and bind nothing,
+        # so the canvas stays whatever was asked for.
+        if "first_frame" in keyframes:
+            width, height = _fit_canvas(
+                COMFY / "input" / keyframes["first_frame"],
+                short=H3_TIERS[params["tier"]], align=32,
+            )
+
+        graph = _h3_graph(
+            prompt=params["prompt"], width=width, height=height, frames=frames,
+            seed=seed, steps=steps,
+            sampler=params["sampler"], scheduler=params["scheduler"],
+            references=references, ref_videos=ref_videos,
+            ref_size=params.get("ref_size") or "match",
+            **keyframes,
+        )
+        return {
+            "graph": graph,
+            "info": {"width": width, "height": height, "frames": frames,
+                     "seconds": round(frames / H3_FPS, 2), "fps": H3_FPS,
+                     "seed": seed, "steps": steps},
+            "meta": {"mode": "ref2va" if (references or ref_videos) else "fl2va",
+                     "sampler": params["sampler"], "scheduler": params["scheduler"],
+                     "references": len(references), "ref_videos": len(ref_videos)},
+        }
+
+    @staticmethod
+    def _plan_wan(params: dict[str, Any], stage: Any) -> dict[str, Any]:
+        """Graph and shot description for a Wan 2.2 take."""
+        family = "5b" if str(params.get("model")) == "wan5b" else "14b"
+
+        keyframes: dict[str, str] = {}
+        for slot in ("first_frame", "last_frame"):
+            # The 5B latent node takes a start image only. Dropping a last
+            # frame silently would be a control that looks live and is ignored,
+            # so the UI hides it for this family and this is the backstop.
+            if params.get(slot) and not (family == "5b" and slot == "last_frame"):
+                keyframes[slot] = stage(params[slot], slot)
+
+        task = _wan_task(keyframes.get("first_frame"), keyframes.get("last_frame"))
+        _require_models(*WAN_MODEL_KEYS[(family, task)])
+
+        width, height = _wan_canvas(params["aspect"], params["tier"], family)
+        frames = _wan_frames(params["seconds"], family)
+        seed = params.get("seed")
+        seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
+        steps = int(params["steps"])
+        # Half the run each is Comfy's own split and the only defensible default
+        # without measuring the sigma boundary per checkpoint. Clamped into the
+        # interior: a switch at 0 or at `steps` is a one-expert run wearing the
+        # cost of loading two.
+        #
+        # `is None`, not a falsy test: an explicit 0 is a real request (give the
+        # low-noise expert everything), and `or` would silently answer it with
+        # the default instead.
+        asked = params.get("switch_at")
+        switch_at = steps // 2 if asked is None else max(1, min(steps - 1, int(asked)))
+
+        if "first_frame" in keyframes:
+            width, height = _fit_canvas(
+                COMFY / "input" / keyframes["first_frame"],
+                short=WAN_TIERS[family][params["tier"]], align=WAN_ALIGN[family],
+            )
+
+        loras = _validate_video_loras(params.get("loras"))
+        graph = _wan_graph(
+            family=family, prompt=params["prompt"],
+            negative_prompt=str(params.get("negative_prompt") or ""),
+            width=width, height=height, frames=frames, seed=seed, steps=steps,
+            cfg=float(params["cfg"]), shift=float(params["shift"]),
+            switch_at=switch_at, sampler=params["sampler"],
+            scheduler=params["scheduler"], loras=loras, **keyframes,
+        )
+        return {
+            "graph": graph,
+            "info": {"width": width, "height": height, "frames": frames,
+                     "seconds": round(frames / WAN_FPS[family], 2),
+                     "fps": WAN_FPS[family], "seed": seed, "steps": steps},
+            "meta": {"mode": task, "family": family,
+                     "cfg_scale": float(params["cfg"]),
+                     "shift": float(params["shift"]),
+                     # Only meaningful for the 14B pair, but recorded either way:
+                     # a sidecar that omits it for the 5B is a sidecar you have
+                     # to know the family to read.
+                     "switch_at": switch_at if family == "14b" else None,
+                     "sampler": params["sampler"], "scheduler": params["scheduler"],
+                     "negative_prompt": str(params.get("negative_prompt") or ""),
+                     "loras": [{"name": l["name"], "unet": l["unet"],
+                                "expert": l["expert"]} for l in loras]},
+        }
+
+    def _await(self, job_id: str, prompt_id: str) -> str:
+        """Poll until the graph finishes; return the saved file's basename."""
+        while True:
+            if _stop_requested(job_id):
+                # ComfyUI unwinds the sampler itself and stays warm, which a
+                # killed process would not — the 42.5 GB stays loaded for the
+                # next take.
+                self._post("/interrupt", {})
+                raise StopRequested("generate")
+
+            entry = (self._get(f"/history/{prompt_id}") or {}).get(prompt_id)
+            if entry:
+                status = entry.get("status", {})
+                if status.get("status_str") == "error" or not status.get("completed", True):
+                    raise RuntimeError(self._why_failed(status))
+                for out in entry.get("outputs", {}).values():
+                    for item in (out.get("videos") or []) + (out.get("gifs") or []):
+                        return item["filename"]
+                raise RuntimeError(
+                    "ComfyUI reported success but saved no video.\n"
+                    + "\n".join(list(self._log)[-25:])
+                )
+
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    "ComfyUI exited mid-generation.\n" + "\n".join(list(self._log)[-25:])
+                )
+            time.sleep(1.5)
+
+    @staticmethod
+    def _why_failed(status: dict[str, Any]) -> str:
+        """
+        Turn ComfyUI's execution_error message into one line worth reading.
+
+        The raw record nests the useful part — node type and exception — under
+        a list of (event, payload) pairs, and a bare "status_str: error" sends
+        you to the container logs for something the record already knows.
+        """
+        for event, payload in status.get("messages") or []:
+            if event == "execution_error":
+                node = payload.get("node_type") or payload.get("node_id")
+                return f"{node}: {payload.get('exception_message') or 'failed'}"
+        return "ComfyUI reported an error with no detail."
+
+
+# --------------------------------------------------------------------------
 # Web app — UI + API on a single URL
 # --------------------------------------------------------------------------
 
@@ -1343,7 +2925,7 @@ class Generator:
 @modal.asgi_app()
 def web():
     from fastapi import FastAPI, Request
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
     api = FastAPI()
 
@@ -1407,6 +2989,21 @@ def web():
             "samplers": SAMPLERS,
             "schedulers": SCHEDULERS,
             "max_loras": MAX_LORAS,
+            # Served rather than hardcoded in the page: the allowed cards are a
+            # property of what the images were compiled for (see VIDEO_GPUS), so
+            # a copy in the HTML would be a second source of truth that drifts
+            # silently the first time one of them changes.
+            "gpus": {
+                "image": {"options": list(IMAGE_GPUS), "default": GPU},
+                "video": {"options": list(VIDEO_GPUS), "default": VIDEO_GPU},
+            },
+            "max_refs": MAX_H3_REFS,
+            "max_ref_videos": MAX_H3_REF_VIDEOS,
+            # Same reason as gpus: which controls each video model reads, and
+            # what is on the volume for each of its tasks, are properties of
+            # the deployment. The composer builds itself from this.
+            "video_models": _video_model_status(),
+            "wan_experts": list(WAN_EXPERTS),
         }
 
     @api.post("/api/token")
@@ -1855,7 +3452,8 @@ def web():
             return {"error": str(exc)}
 
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        Generator().generate.spawn(job_id=job_id, params={
+        runner = _on_gpu(Generator, payload.get("gpu"), IMAGE_GPUS, GPU)
+        runner().generate.spawn(job_id=job_id, params={
             "prompt": prompt,
             "negative_prompt": str(payload.get("negative_prompt") or ""),
             "model": str(payload.get("model") or "turbo"),
@@ -1873,6 +3471,185 @@ def web():
             "shift": num("shift", 1.15, float),
         })
         return {"ok": True, "job_id": job_id}
+
+    @api.post("/api/video")
+    async def video(payload: dict) -> dict[str, Any]:
+        """
+        Queue one clip, on whichever video model was asked for.
+
+        Which *task* runs is never asked for — text-to-video, image-to-video and
+        first/last are read off what was attached, the same way the image side
+        never asks whether you meant a batch. What the client picks is the
+        model, because that is the thing it cannot infer.
+
+        Everything rejectable is rejected here, on CPU: a bad aspect, a LoRA
+        outside loras/, a missing weight. Discovering any of them inside the job
+        costs a cold H100 and tens of gigabytes of loading first, and surfaces
+        as a dead job rather than a form error.
+        """
+        prompt = str(payload.get("prompt") or "").strip()
+        if not prompt:
+            return {"error": "A prompt is required."}
+
+        model = str(payload.get("model") or "h3")
+        spec = VIDEO_MODELS.get(model)
+        if spec is None:
+            return {"error": f"Unknown video model {model!r}. "
+                             f"One of: {', '.join(VIDEO_MODELS)}"}
+        supports = spec["supports"]
+
+        def num(k, d, cast):
+            try:
+                v = payload.get(k)
+                return cast(v) if v not in (None, "") else d
+            except (TypeError, ValueError):
+                return d
+
+        first = payload.get("first_frame") or None
+        last = payload.get("last_frame") or None
+        if last and not supports["last_frame"]:
+            return {"error": f"{spec['label']} takes a first frame only."}
+
+        refs = [r for r in (payload.get("references") or []) if r][:MAX_H3_REFS]
+        vids = [v for v in (payload.get("ref_videos") or []) if v][:MAX_H3_REF_VIDEOS]
+        if (refs or vids) and not supports["references"]:
+            return {"error": f"{spec['label']} does not take references."}
+        if len(refs) + len(vids) > MAX_H3_REF_TOTAL:
+            return {"error": f"{MAX_H3_REF_TOTAL} references in total is the "
+                             f"model's limit ({len(refs)} images + {len(vids)} videos)."}
+
+        volume.reload()
+        try:
+            stack = _validate_video_loras(payload.get("loras")) if supports["loras"] else []
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if stack and not supports["experts"]:
+            # One model, so there is no expert to target. Refusing beats
+            # applying it anyway (a high-noise speed LoRA on a dense checkpoint
+            # is a quality loss you would never be told about) and beats
+            # dropping it (a row that does nothing looks like a row that did).
+            crossed = [l["name"] for l in stack if l["expert"] != "both"]
+            if crossed:
+                return {"error": f"{spec['label']} has one expert, so it cannot "
+                                 f"target high or low noise: {', '.join(crossed)}."}
+
+        aspect = str(payload.get("aspect") or "16:9")
+        tier = str(payload.get("tier") or spec["defaults"]["tier"])
+        try:
+            if model == "h3":
+                task = "ref2va" if (refs or vids) else "fl2va"
+                _h3_canvas(aspect, tier)  # raises with the valid set named
+            else:
+                task = _wan_task(first, last)
+                _wan_canvas(aspect, tier, "5b" if model == "wan5b" else "14b")
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+        # Named per task, so "download 57 GB" is never the answer to a run that
+        # needs 28.6 of it.
+        missing = [MODEL_CATALOGUE[k]["label"] for k in spec["requires"][task]
+                   if not MODEL_CATALOGUE[k]["dest"].exists()]
+        if missing:
+            return {"error": f"Not downloaded: {', '.join(missing)}. "
+                             "Get them under Settings."}
+
+        ref_size = str(payload.get("ref_size") or "match")
+        if ref_size not in H3_REF_SIZES:
+            return {"error": f"ref_size must be one of: {', '.join(H3_REF_SIZES)}"}
+
+        d = spec["defaults"]
+        job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+        runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
+        runner().generate.spawn(job_id=job_id, params={
+            "model": model,
+            "prompt": prompt,
+            # Dropped rather than passed through for a model that cannot read
+            # it: a negative prompt that reaches a guidance-distilled checkpoint
+            # is not applied, and a sidecar that records one is a sidecar that
+            # lies about how the clip was made.
+            "negative_prompt": (str(payload.get("negative_prompt") or "")
+                                if supports["negative"] else ""),
+            "aspect": aspect,
+            "tier": tier,
+            "seconds": num("seconds", float(d["seconds"]), float),
+            "steps": max(1, min(60, num("steps", d["steps"], int))),
+            "cfg": num("cfg", d.get("cfg", 1.0), float),
+            "shift": num("shift", d.get("shift", WAN_DEFAULT_SHIFT), float),
+            "switch_at": num("switch_at", None, int),
+            "seed": num("seed", None, int),
+            "sampler": str(payload.get("sampler") or d["sampler"]),
+            "scheduler": str(payload.get("scheduler") or d["scheduler"]),
+            "loras": stack,
+            # References and keyframes are alternatives, not a stack: on H3 they
+            # load different transformers. The job takes both fields and the
+            # generator ignores the keyframes when references are present, so a
+            # client that sends both gets the reference run it asked for rather
+            # than a validation error about a combination it cannot express.
+            "references": refs,
+            "ref_videos": vids,
+            "ref_size": ref_size,
+            "first_frame": first,
+            "last_frame": last,
+        })
+        return {"ok": True, "job_id": job_id, "model": model, "mode": task}
+
+    @api.get("/api/gallery")
+    async def gallery() -> dict[str, Any]:
+        """Everything on the volume, newest first — no job id required."""
+        volume.reload()
+        return {"items": _gallery()}
+
+    @api.get("/api/file/{job_id}/{name}")
+    async def output_file(job_id: str, name: str):
+        """
+        Stream one result off the volume, image or video.
+
+        Deliberately not base64 in a JSON body the way /api/outputs does it:
+        inlining is what made a gallery impossible, since a page of stills or a
+        clip with its soundtrack is tens of megabytes of JSON before anything
+        renders, and a <video> cannot seek until all of it has arrived.
+
+        Matching the whole filename, not its stem: `Path("../../x").stem` is
+        "x", which passes NAME_RE while the joined path still escapes outputs/.
+        The separators have to be visible to the regex to be rejected.
+        """
+        if not NAME_RE.match(job_id) or not OUTPUT_FILE_RE.match(name):
+            return JSONResponse({"error": "Invalid name."}, status_code=400)
+
+        # Optimistic: look first, reload only on a miss.
+        #
+        # Reloading on every request was both slow and actively wrong here. A
+        # gallery is a grid, so opening it fires a dozen of these at once, and
+        # this container serves 20 concurrently — concurrent reloads of the same
+        # volume returned a 500 for one of two simultaneous requests in testing.
+        # A file that is already visible needs no reload at all; only a file
+        # written by the GPU container since this one last synced does, and that
+        # is exactly the miss case.
+        path = OUTPUTS / job_id / name
+        if not path.is_file():
+            volume.reload()
+            if not path.is_file():
+                return JSONResponse({"error": "Not found."}, status_code=404)
+        return FileResponse(
+            str(path),
+            media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    @api.post("/api/outputs/{job_id}/delete")
+    async def delete_output(job_id: str) -> dict[str, Any]:
+        """Cull a result. Moves to outputs/.trash/, the way datasets do."""
+        if not NAME_RE.match(job_id):
+            return {"error": "Invalid job_id."}
+        volume.reload()
+        d = OUTPUTS / job_id
+        if not d.is_dir():
+            return {"error": "Not found."}
+        trash = OUTPUTS / TRASH_DIR
+        trash.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(d), str(trash / f"{job_id}-{int(time.time())}"))
+        volume.commit()
+        return {"ok": True}
 
     @api.get("/api/outputs/{job_id}")
     async def outputs(job_id: str) -> dict[str, Any]:
