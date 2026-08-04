@@ -5541,7 +5541,10 @@ function drawRefs(){
     `<div class="ref"><img src="data:image/png;base64,${b}" alt="">`+
     `<b>P${i+1}</b><button data-k="img" data-i="${i}" title="Remove">×</button></div>`).join('');
   const vid=refVids.map((b,i)=>
-    `<div class="ref"><video src="data:video/mp4;base64,${b}" muted></video>`+
+    // Same media fragment as the gallery card, and for the same reason: a
+    // reference tile with no frame painted is an unlabelled black square,
+    // which defeats the point of showing the reference you attached.
+    `<div class="ref"><video src="data:video/mp4;base64,${b}#t=0.04" muted></video>`+
     `<b>V${i+1}</b><button data-k="vid" data-i="${i}" title="Remove">×</button></div>`).join('');
   $('#v-refs').innerHTML=img+vid;
   $$('#v-refs button').forEach(b=>b.onclick=()=>{
@@ -5744,9 +5747,15 @@ async function loadGallery(){
 function galCard(it,i){
   const src=`/api/file/${it.job_id}/${it.files[0]}`;
   // A poster frame would be a second request per card, so the video element
-  // loads metadata only — enough for a first frame, not the whole clip.
+  // loads metadata only. But metadata is dimensions and duration, not a
+  // picture: with nothing to paint, every clip in the gallery was a black
+  // rectangle you had to open to identify. `#t=` is the media fragment that
+  // fixes it — the browser seeks to that time and paints the frame there,
+  // out of the bytes it already has, so the card costs no extra request.
+  // Not 0: seeking to exactly zero is not required to decode a frame, and
+  // some browsers leave the canvas blank.
   const media=it.kind==='video'
-    ? `<video class="media" src="${src}" preload="metadata" muted playsinline data-open></video>`
+    ? `<video class="media" src="${src}#t=0.04" preload="metadata" muted playsinline data-open></video>`
     : `<img class="media" src="${src}" alt="" loading="lazy" data-open>`;
   const n=it.files.length>1?` · ${it.files.length}`:'';
   return `<div class="gal" data-i="${i}">${media}
