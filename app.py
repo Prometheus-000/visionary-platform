@@ -2931,6 +2931,21 @@ class VideoGenerator:
 
 # --------------------------------------------------------------------------
 # Web app — UI + API on a single URL
+#
+# The routes below are `def`, not `async def`, and that is deliberate: FastAPI
+# runs a sync handler in a threadpool, so everything blocking in it stays off
+# the event loop. Nearly every route here blocks twice over — a Modal Dict or
+# volume call, and real filesystem work (a directory walk, a PIL thumbnail, a
+# file read off the volume). `async def` served by 20 concurrent inputs meant
+# one slow thumbnail stalled every other request in the container, and Modal
+# said so on each one: "A blocking Modal interface is being used in an async
+# context", once per poll of /api/status, which the UI hits every two seconds
+# for the length of a training run.
+#
+# Awaiting the `.aio()` variants would have silenced that warning without
+# fixing it — the Dict call is the part Modal can see, not the part that costs
+# the most. `/api/upload` is the one exception and stays async, because it
+# awaits the multipart stream itself; its one Modal call is `.aio()`d in place.
 # --------------------------------------------------------------------------
 
 
@@ -2947,11 +2962,11 @@ def web():
     api = FastAPI()
 
     @api.get("/", response_class=HTMLResponse)
-    async def index() -> str:
+    def index() -> str:
         return UI_HTML
 
     @api.get("/api/where")
-    async def where() -> dict[str, Any]:
+    def where() -> dict[str, Any]:
         """
         What this deployment can actually see on the volume.
 
@@ -2972,7 +2987,7 @@ def web():
         return {"volume": VOLUME_NAME, "mounted_at": str(WORKSPACE), "contents": tree}
 
     @api.get("/api/state")
-    async def state() -> dict[str, Any]:
+    def state() -> dict[str, Any]:
         volume.reload()
         loras = []
         if LORAS.is_dir():
@@ -3024,13 +3039,13 @@ def web():
         }
 
     @api.post("/api/token")
-    async def set_token(payload: dict) -> dict[str, Any]:
+    def set_token(payload: dict) -> dict[str, Any]:
         token = str(payload.get("hf_token") or "").strip()
         config["hf_token"] = token
         return {"ok": True, "hf_token_set": bool(token)}
 
     @api.post("/api/download")
-    async def download(payload: dict) -> dict[str, Any]:
+    def download(payload: dict) -> dict[str, Any]:
         key = str(payload.get("key") or "")
         if key not in MODEL_CATALOGUE:
             return {"error": f"Unknown model: {key}"}
@@ -3038,7 +3053,7 @@ def web():
         return {"ok": True, "job_id": f"dl_{key}"}
 
     @api.post("/api/download-missing")
-    async def download_missing(payload: dict) -> dict[str, Any]:
+    def download_missing(payload: dict) -> dict[str, Any]:
         """
         Save the token (if one was supplied) and queue every missing weight.
 
@@ -3135,7 +3150,11 @@ def web():
                 shutil.rmtree(raw, ignore_errors=True)
             return JSONResponse({"error": "No images found in the upload."}, 400)
 
-        volume.commit()
+        # `.aio()` rather than the blocking call every other route uses: this
+        # is the one handler that has to stay `async def`, because it awaits
+        # the multipart stream. A blocking commit here stalls the event loop
+        # for the whole web container, not just this request.
+        await volume.commit.aio()
         # Same-named files overwrite rather than duplicate, so re-dropping the
         # same folder is idempotent instead of doubling the dataset.
         return JSONResponse({"dataset": dataset, "added": count, **_dataset_stats(raw)})
@@ -3151,7 +3170,7 @@ def web():
         return d, None
 
     @api.get("/api/datasets")
-    async def list_datasets() -> dict[str, Any]:
+    def list_datasets() -> dict[str, Any]:
         volume.reload()
         DATASETS.mkdir(parents=True, exist_ok=True)
         out = [
@@ -3162,7 +3181,7 @@ def web():
         return {"datasets": out}
 
     @api.post("/api/datasets")
-    async def create_dataset(payload: dict) -> dict[str, Any]:
+    def create_dataset(payload: dict) -> dict[str, Any]:
         name = str(payload.get("name") or "").strip()
         try:
             d = _dataset_dir(name)
@@ -3177,7 +3196,7 @@ def web():
         return {"ok": True, **_dataset_stats(d)}
 
     @api.get("/api/datasets/{name}")
-    async def dataset_detail(name: str) -> dict[str, Any]:
+    def dataset_detail(name: str) -> dict[str, Any]:
         """
         Image metadata only — thumbnails come from /api/thumb one at a time.
 
@@ -3217,7 +3236,7 @@ def web():
         return {**_dataset_stats(d), "images": items}
 
     @api.post("/api/datasets/{name}/meta")
-    async def dataset_meta(name: str, payload: dict) -> dict[str, Any]:
+    def dataset_meta(name: str, payload: dict) -> dict[str, Any]:
         volume.reload()
         d, err = _dataset_or_error(name)
         if err:
@@ -3227,7 +3246,7 @@ def web():
         return {"ok": True, **_dataset_stats(d)}
 
     @api.post("/api/datasets/{name}/delete")
-    async def delete_dataset(name: str) -> dict[str, Any]:
+    def delete_dataset(name: str) -> dict[str, Any]:
         volume.reload()
         d, err = _dataset_or_error(name)
         if err:
@@ -3237,7 +3256,7 @@ def web():
         return {"ok": True}
 
     @api.get("/api/thumb/{name}/{filename}")
-    async def thumb(name: str, filename: str):
+    def thumb(name: str, filename: str):
         """
         One thumbnail, cached beside the dataset, served with a long max-age.
 
@@ -3277,7 +3296,7 @@ def web():
                         headers={"Cache-Control": "public, max-age=86400"})
 
     @api.get("/api/image/{name}/{filename}")
-    async def full_image(name: str, filename: str):
+    def full_image(name: str, filename: str):
         """The original file, for the full-size viewer. Never the thumbnail."""
         from fastapi.responses import Response
 
@@ -3293,7 +3312,7 @@ def web():
                         headers={"Cache-Control": "public, max-age=86400"})
 
     @api.post("/api/datasets/{name}/caption")
-    async def save_caption(name: str, payload: dict) -> dict[str, Any]:
+    def save_caption(name: str, payload: dict) -> dict[str, Any]:
         """One caption, saved on blur. Bulk save was how edits went missing."""
         volume.reload()
         d, err = _dataset_or_error(name)
@@ -3308,7 +3327,7 @@ def web():
         return {"ok": True}
 
     @api.post("/api/datasets/{name}/remove")
-    async def remove_image(name: str, payload: dict) -> dict[str, Any]:
+    def remove_image(name: str, payload: dict) -> dict[str, Any]:
         """
         Move an image and its caption into the dataset's .trash/.
 
@@ -3336,7 +3355,7 @@ def web():
         return {"ok": True, **_dataset_stats(d)}
 
     @api.get("/api/datasets/{name}/insight")
-    async def dataset_insight(name: str, trigger: str = "") -> dict[str, Any]:
+    def dataset_insight(name: str, trigger: str = "") -> dict[str, Any]:
         volume.reload()
         d, err = _dataset_or_error(name)
         if err:
@@ -3344,7 +3363,7 @@ def web():
         return _caption_insight(d, trigger)
 
     @api.post("/api/datasets/{name}/prepend-trigger")
-    async def prepend_trigger(name: str, payload: dict) -> dict[str, Any]:
+    def prepend_trigger(name: str, payload: dict) -> dict[str, Any]:
         """
         Put the trigger word at the front of every caption that lacks it.
 
@@ -3383,7 +3402,7 @@ def web():
         return {"ok": True, "changed": changed}
 
     @api.post("/api/caption")
-    async def caption(payload: dict) -> dict[str, Any]:
+    def caption(payload: dict) -> dict[str, Any]:
         name = str(payload.get("dataset") or "")
         d, err = _dataset_or_error(name)
         if err:
@@ -3402,7 +3421,7 @@ def web():
         return {"ok": True, "job_id": job_id}
 
     @api.post("/api/train")
-    async def train(payload: dict) -> dict[str, Any]:
+    def train(payload: dict) -> dict[str, Any]:
         dataset = str(payload.get("dataset") or "")
         lora_name = str(payload.get("lora_name") or "").strip()
         trigger = str(payload.get("trigger_word") or "").strip()
@@ -3441,7 +3460,7 @@ def web():
         return {"ok": True, "job_id": job_id}
 
     @api.post("/api/generate")
-    async def generate(payload: dict) -> dict[str, Any]:
+    def generate(payload: dict) -> dict[str, Any]:
         prompt = str(payload.get("prompt") or "").strip()
         regions = payload.get("regions") or []
         if not prompt and not regions:
@@ -3490,7 +3509,7 @@ def web():
         return {"ok": True, "job_id": job_id}
 
     @api.post("/api/video")
-    async def video(payload: dict) -> dict[str, Any]:
+    def video(payload: dict) -> dict[str, Any]:
         """
         Queue one clip, on whichever video model was asked for.
 
@@ -3611,13 +3630,13 @@ def web():
         return {"ok": True, "job_id": job_id, "model": model, "mode": task}
 
     @api.get("/api/gallery")
-    async def gallery() -> dict[str, Any]:
+    def gallery() -> dict[str, Any]:
         """Everything on the volume, newest first — no job id required."""
         volume.reload()
         return {"items": _gallery()}
 
     @api.get("/api/file/{job_id}/{name}")
-    async def output_file(job_id: str, name: str):
+    def output_file(job_id: str, name: str):
         """
         Stream one result off the volume, image or video.
 
@@ -3654,7 +3673,7 @@ def web():
         )
 
     @api.post("/api/outputs/{job_id}/delete")
-    async def delete_output(job_id: str) -> dict[str, Any]:
+    def delete_output(job_id: str) -> dict[str, Any]:
         """Cull a result. Moves to outputs/.trash/, the way datasets do."""
         if not NAME_RE.match(job_id):
             return {"error": "Invalid job_id."}
@@ -3669,7 +3688,7 @@ def web():
         return {"ok": True}
 
     @api.get("/api/outputs/{job_id}")
-    async def outputs(job_id: str) -> dict[str, Any]:
+    def outputs(job_id: str) -> dict[str, Any]:
         """Serve generated PNGs off the volume, keeping them out of the job dict."""
         if not NAME_RE.match(job_id):
             return {"error": "Invalid job_id."}
@@ -3686,14 +3705,14 @@ def web():
         }
 
     @api.get("/api/status/{job_id}")
-    async def status(job_id: str) -> dict[str, Any]:
+    def status(job_id: str) -> dict[str, Any]:
         try:
             return jobs.get(job_id) or {"status": "unknown"}
         except Exception as exc:
             return {"status": "unknown", "error": str(exc)}
 
     @api.post("/api/stop/{job_id}")
-    async def stop(job_id: str) -> dict[str, Any]:
+    def stop(job_id: str) -> dict[str, Any]:
         cur = jobs.get(job_id) or {}
         cur["stop"] = True
         jobs[job_id] = cur
