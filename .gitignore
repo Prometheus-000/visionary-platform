@@ -9,3 +9,9 @@ node_modules/
 # Reference clone of sd-webui-forge-classic (neo). Only the slice under forge/
 # is committed — see forge/VENDOR.md for what is copied and how to re-sync.
 sd-webui-forge-classic/
+
+# Reference clones, not dependencies. ai-toolkit informed the Datasets section's
+# interaction patterns; visionary-app is the macOS curation tool whose UX
+# principles it follows. Neither is imported or built against.
+ai-toolkit/
+visionary-app/

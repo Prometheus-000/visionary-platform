@@ -69,6 +69,14 @@ APP_NAME = "visionary"
 VOLUME_NAME = os.environ.get("VISIONARY_VOLUME", "visionary")
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
+# Downloaded model weights live on their own volume, never on the data volume.
+# Qwen3-VL-8B is ~17 GB, and with the HuggingFace cache pointed at /workspace
+# every commit after a caption run had to snapshot those 17 GB — the job wrote
+# all 80 captions in eight minutes and then sat in commit() for another fifteen.
+# Separating them keeps a caption commit proportional to the captions.
+hf_cache = modal.Volume.from_name("visionary-hf-cache", create_if_missing=True)
+HF_CACHE = Path("/hf")
+
 # Live job state (progress, stop flags) and the saved HF token. Dicts rather
 # than Secrets so there is no CLI setup step — paste the key into the UI.
 jobs = modal.Dict.from_name("visionary-jobs", create_if_missing=True)
@@ -81,10 +89,20 @@ config = modal.Dict.from_name("visionary-config", create_if_missing=True)
 WORKSPACE = Path("/workspace")
 MODELS = WORKSPACE / "models"
 LORAS = WORKSPACE / "loras"
+# A dataset is a named folder of images with .txt captions beside them — the
+# same thing musubi reads, so the sidecars stay the source of truth and nothing
+# we build here is required to get a dataset back out. Datasets outlive the
+# training runs that use them; WORK is the per-run scratch copy musubi resizes
+# and caches into, and is disposable.
 DATASETS = WORKSPACE / "datasets"
-UPLOADS = WORKSPACE / "uploads"
+WORK = WORKSPACE / "work"
 OUTPUTS = WORKSPACE / "outputs"
 STAGING = WORKSPACE / ".cache" / "hf-staging"
+
+# Removed images land here rather than being unlinked. Non-destructive by
+# default: a mis-click during a cull should cost a file move, not the file.
+TRASH_DIR = ".trash"
+THUMB_DIR = ".thumbs"
 MUSUBI = Path("/opt/musubi-tuner")
 
 # The vendored sd-webui-forge-classic backend that inference runs on. Lives next
@@ -189,6 +207,37 @@ inference_image = (
 )
 
 
+# Captioning is a third image for the same reason there is a second one:
+# Qwen3VLForConditionalGeneration landed in transformers 4.57, which is newer
+# than musubi's pins and newer than the 4.56.1 forge is verified against.
+# Pinning one transformers across all three would mean every captioner bump
+# re-litigates both training and inference.
+caption_image = (
+    modal.Image.from_registry(
+        "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04", add_python="3.11"
+    )
+    .apt_install("libgl1", "libglib2.0-0")
+    .pip_install(
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        index_url="https://download.pytorch.org/whl/cu128",
+    )
+    .pip_install(
+        "accelerate==1.10.1",
+        # Explicit, not the huggingface_hub[hf_transfer] extra — the extra does
+        # not reliably pull the package, and with the env var set below its
+        # absence surfaces as "Can't load the configuration of <repo>", which
+        # reads like a wrong or gated repo id rather than a missing dependency.
+        "hf_transfer==0.1.9",
+        "huggingface_hub==0.35.3",
+        "pillow==11.3.0",
+        "transformers==4.57.1",
+    )
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1",
+          "TOKENIZERS_PARALLELISM": "false"})
+)
+
+
 # --------------------------------------------------------------------------
 # Model catalogue
 #
@@ -245,31 +294,48 @@ TURBO_PATH = MODEL_CATALOGUE["turbo"]["dest"]
 VAE_PATH = MODEL_CATALOGUE["vae"]["dest"]
 TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
 
-CAPTION_MODEL = "fancyfeast/llama-joycaption-beta-one-hf-llava"
+# Qwen3-VL-8B-Instruct, not a booru tagger and not JoyCaption.
+#
+# Krea 2 reads its prompt through Qwen3-VL-4B, a language model that parses
+# grammar — subordinate clauses, spatial prepositions, and the binding between
+# an adjective and the noun it modifies. Tag lists cannot express binding at
+# all: "red, blue, dress, jacket" leaves the model to guess which colour
+# belongs to which garment, and with two people in frame that guess is where
+# attribute bleed comes from. A sentence resolves it by construction.
+#
+# The second reason is symmetry. You prompt in prose, so the captions should be
+# prose — any gap between how the dataset describes an image and how you
+# describe the one you want is a gap the model has to guess across. Captioning
+# with the same model family the text encoder comes from closes that gap
+# further than a differently-trained captioner can.
+CAPTION_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"}
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_CAPTION_CHARS = 1024
 THUMB_PX = 320
 
+# All prose. The booru-tag style that used to live here is gone rather than
+# hidden: it existed to match CLIP's 77-token bag of words, and emitting it for
+# a grammar-parsing encoder would be actively worse than the default.
 CAPTION_STYLES = {
     "descriptive": (
-        "Write a descriptive caption for this image in a formal tone. Describe the "
-        "subject, its appearance, composition, lighting, setting and artistic style. "
-        "Do not speculate about things you cannot see."
+        "Describe this image in plain, factual prose. Name the subject and what it is "
+        "doing, then its appearance, clothing, pose, setting, lighting and style. "
+        "Attach every adjective to the noun it belongs to, so it is unambiguous which "
+        "garment or object each colour and material describes. Do not speculate about "
+        "anything you cannot see. Do not begin with 'This image' or 'The photo'."
     ),
     "casual": (
-        "Write a descriptive caption for this image in a casual, natural tone. "
-        "Describe what is happening, how it looks, and the overall mood."
-    ),
-    "tags": (
-        "Write a comma-separated list of booru-style tags for this image covering "
-        "subject, clothing, pose, setting, lighting and style. Output only tags."
+        "Describe this image in natural, conversational prose, the way you would "
+        "describe a photo to someone who cannot see it. Cover what is happening, how "
+        "it looks and the overall mood, keeping each adjective clearly attached to the "
+        "thing it describes. Do not begin with 'This image' or 'The photo'."
     ),
 }
 CAPTION_LENGTHS = {
-    "short": " Keep it to one concise sentence.",
+    "short": " Keep it to one dense sentence.",
     "medium": " Keep it to two or three sentences.",
-    "long": " Be thorough and detailed, four or more sentences.",
+    "long": " Be thorough, four or more sentences.",
 }
 
 
@@ -597,7 +663,7 @@ def _caption_images(
 ) -> int:
     import torch
     from PIL import Image
-    from transformers import AutoProcessor, LlavaForConditionalGeneration
+    from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
     every = sorted(p for p in image_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS)
     todo = [
@@ -612,12 +678,24 @@ def _caption_images(
     print(f"[caption] {len(todo)}/{len(every)} images")
     _publish(job_id, phase="caption", step=0, total_steps=len(todo), percent=0)
 
-    cache_dir = str(WORKSPACE / ".cache" / "huggingface")
-    processor = AutoProcessor.from_pretrained(CAPTION_MODEL, cache_dir=cache_dir)
-    model = LlavaForConditionalGeneration.from_pretrained(
-        CAPTION_MODEL, torch_dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
+    cache_dir = str(HF_CACHE)
+    # Cap the vision tower's token budget. Qwen3-VL scales patches with input
+    # resolution, so a 4000px training image would otherwise spend thousands of
+    # tokens on detail that never reaches the caption — slow, and no better.
+    processor = AutoProcessor.from_pretrained(
+        CAPTION_MODEL, cache_dir=cache_dir,
+        min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
+    )
+    model = Qwen3VLForConditionalGeneration.from_pretrained(
+        CAPTION_MODEL, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
     )
     model.eval()
+    # Persist the downloaded weights now, on their own volume, so the next cold
+    # start reuses them and the dataset commit below stays small.
+    try:
+        hf_cache.commit()
+    except Exception as exc:
+        print(f"[caption] hf cache commit skipped: {exc}")
 
     instruction = CAPTION_STYLES.get(style, CAPTION_STYLES["descriptive"])
     instruction += CAPTION_LENGTHS.get(length, CAPTION_LENGTHS["medium"])
@@ -629,20 +707,23 @@ def _caption_images(
             break
         try:
             image = Image.open(img_path).convert("RGB")
-            convo = [
-                {"role": "system", "content": "You are a helpful image captioner."},
-                {"role": "user", "content": f"<image>\n{instruction}"},
-            ]
-            text = processor.apply_chat_template(convo, tokenize=False, add_generation_prompt=True)
-            inputs = processor(text=[text], images=[image], return_tensors="pt").to("cuda:0")
-            inputs["pixel_values"] = inputs["pixel_values"].to(torch.bfloat16)
+            # Qwen3-VL takes the image as a content part, not an inline <image>
+            # token, and apply_chat_template does the placeholder expansion.
+            convo = [{
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": instruction}],
+            }]
+            inputs = processor.apply_chat_template(
+                convo, tokenize=True, add_generation_prompt=True,
+                return_dict=True, return_tensors="pt",
+            ).to("cuda:0")
 
             with torch.no_grad():
                 out = model.generate(
                     **inputs, max_new_tokens=320, do_sample=True,
-                    temperature=0.6, top_p=0.9, suppress_tokens=None,
+                    temperature=0.6, top_p=0.9,
                 )[0][inputs["input_ids"].shape[1]:]
-            caption = processor.tokenizer.decode(out, skip_special_tokens=True).strip()
+            caption = processor.decode(out, skip_special_tokens=True).strip()
 
             # Strip stock preambles so the trigger word stays at the very front,
             # which is where it does its work.
@@ -668,24 +749,26 @@ def _caption_images(
 
 
 @app.function(
-    image=trainer_image, gpu=GPU, cpu=2.0, timeout=2 * 60 * 60,
-    volumes={"/workspace": volume},
+    # A100 rather than the training GPU: Qwen3-VL-8B in bf16 is ~17 GB, so this
+    # does not need the headroom a rank-32 Krea 2 run does.
+    image=caption_image, gpu="A100-40GB", cpu=2.0, timeout=2 * 60 * 60,
+    volumes={"/workspace": volume, str(HF_CACHE): hf_cache},
 )
 def caption_job(
-    job_id: str, trigger_word: str = "", style: str = "descriptive",
+    job_id: str, dataset: str, trigger_word: str = "", style: str = "descriptive",
     length: str = "medium", overwrite: bool = False,
 ) -> dict[str, Any]:
     jobs[job_id] = {"status": "running", "phase": "caption", "stop": False}
     volume.reload()
-    src = UPLOADS / job_id
+    src = _dataset_dir(dataset)
     if not src.is_dir():
-        raise RuntimeError(f"No dataset staged for {job_id}.")
+        raise RuntimeError(f"No dataset named {dataset!r}.")
 
     started = time.time()
     written = _caption_images(src, trigger_word.strip(), job_id, style, length, overwrite)
     res = {
-        "status": "completed", "job_id": job_id, "captioned": written,
-        "duration_s": round(time.time() - started, 1),
+        "status": "completed", "job_id": job_id, "dataset": dataset,
+        "captioned": written, "duration_s": round(time.time() - started, 1),
     }
     _publish(job_id, **res)
     return res
@@ -701,7 +784,7 @@ def caption_job(
     volumes={"/workspace": volume},
 )
 def train_job(
-    job_id: str, lora_name: str, trigger_word: str,
+    job_id: str, dataset: str, lora_name: str, trigger_word: str,
     resolution: int = 1024, batch_size: int = 1, num_repeats: int = 1,
     network_dim: int = 32, network_alpha: int = 32, learning_rate: float = 1e-4,
     max_train_epochs: int = 30, save_every_n_epochs: int = 1,
@@ -718,11 +801,14 @@ def train_job(
 
     _require_models("raw", "vae", "text_encoder")
 
-    src = UPLOADS / job_id
+    src = _dataset_dir(dataset)
     if not src.is_dir():
-        raise RuntimeError(f"No dataset staged for {job_id}.")
+        raise RuntimeError(f"No dataset named {dataset!r}.")
 
-    work = DATASETS / job_id
+    # Copy into per-run scratch rather than training out of the dataset: musubi
+    # writes latent caches beside the images and rewrites missing .txt files, and
+    # a dataset that survives its training runs must not accumulate either.
+    work = WORK / job_id
     image_dir, cache_dir = work / "images", work / "cache"
     image_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -828,7 +914,8 @@ num_repeats = {num_repeats}
     produced = sorted(p.name for p in out_dir.glob("*.safetensors"))
     (out_dir / "visionary.json").write_text(
         json.dumps(
-            {"job_id": job_id, "lora_name": lora_name, "trigger_word": trigger_word,
+            {"job_id": job_id, "dataset": dataset, "lora_name": lora_name,
+             "trigger_word": trigger_word,
              "images": len(images), "status": status, "files": produced,
              "hyperparams": {
                  "resolution": resolution, "network_dim": network_dim,
@@ -841,7 +928,8 @@ num_repeats = {num_repeats}
     volume.commit()
 
     res = {
-        "status": status, "job_id": job_id, "lora_name": lora_name,
+        "status": status, "job_id": job_id, "dataset": dataset,
+        "lora_name": lora_name,
         "trigger_word": trigger_word, "images": len(images),
         "output_dir": str(out_dir), "files": produced,
         "duration_s": round(time.time() - started, 1),
@@ -882,6 +970,217 @@ SCHEDULERS = [
     "Align Your Steps", "Beta", "Turbo", "Bong Tangent", "FlowMatchEulerDiscrete",
 ]
 MAX_LORAS = 6
+
+
+# --------------------------------------------------------------------------
+# Datasets
+#
+# Named, reusable, and independent of any training run — caption once, train a
+# rank sweep from it. The directory is the whole model: images plus .txt
+# sidecars, which is exactly what musubi consumes, so there is no database to
+# fall out of sync with the files and no export step.
+# --------------------------------------------------------------------------
+
+
+def _dataset_dir(name: str) -> Path:
+    if not NAME_RE.match(name or ""):
+        raise ValueError("Dataset names are 1-64 chars of letters, numbers, _ or -.")
+    return DATASETS / name
+
+
+def _dataset_images(d: Path) -> list[Path]:
+    return sorted(p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS) if d.is_dir() else []
+
+
+def _caption_of(img: Path) -> str:
+    txt = img.with_suffix(".txt")
+    try:
+        return txt.read_text().strip() if txt.is_file() else ""
+    except OSError:
+        return ""
+
+
+def _dataset_stats(d: Path) -> dict[str, Any]:
+    images = _dataset_images(d)
+    captioned = sum(1 for p in images if _caption_of(p))
+    meta = d / "dataset.json"
+    info: dict[str, Any] = {}
+    if meta.is_file():
+        try:
+            info = json.loads(meta.read_text())
+        except (OSError, json.JSONDecodeError):
+            info = {}
+    return {
+        "name": d.name,
+        "count": len(images),
+        "captioned": captioned,
+        "uncaptioned": len(images) - captioned,
+        "trigger_word": str(info.get("trigger_word") or ""),
+        "modified": max((p.stat().st_mtime for p in images), default=0.0),
+        "cover": images[0].name if images else None,
+    }
+
+
+def _write_dataset_meta(d: Path, **fields: Any) -> dict[str, Any]:
+    meta = d / "dataset.json"
+    info: dict[str, Any] = {}
+    if meta.is_file():
+        try:
+            info = json.loads(meta.read_text())
+        except (OSError, json.JSONDecodeError):
+            info = {}
+    info.update({k: v for k, v in fields.items() if v is not None})
+    meta.write_text(json.dumps(info, indent=2))
+    return info
+
+
+# Words too common to carry signal. Deliberately short: this is not NLP, it is
+# "stop showing me `the`" — an aggressive list would hide the very phrasing
+# ("a woman standing in") that the panel exists to surface.
+_STOPWORDS = frozenset("""
+a an the and or but of in on at to for with from by is are was were be been being
+this that these those it its as into over under near very quite there their his her
+""".split())
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+# Clause boundaries: a recurring phrase should never straddle one.
+_CLAUSE_RE = re.compile(r"[,.;:!?\n]+")
+
+
+def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any]:
+    """
+    What is this dataset accidentally teaching the model?
+
+    The tag-frequency histogram this replaces counted booru tags, which only
+    made sense while the text encoder was CLIP — a 77-token bag of words. Krea 2
+    reads through Qwen3-VL, which parses grammar, so captions are prose and the
+    unit that carries the same signal is the recurring *phrase*: if most
+    captions open "a woman standing in", the model learns that as surely as it
+    would learn an over-weighted tag. Tags cannot even express the failure they
+    were used to detect — "red, blue, dress, jacket" does not say which colour
+    binds to which garment, and that ambiguity is where attribute bleed starts.
+
+    Everything here is derived from the .txt files on demand. Nothing is cached,
+    because a dataset is a few hundred captions and a stale panel would be worse
+    than a recomputed one.
+    """
+    images = _dataset_images(d)
+    captions = [(p.name, _caption_of(p)) for p in images]
+    non_empty = [(n, c) for n, c in captions if c]
+
+    trigger = (trigger or "").strip()
+    if not trigger:
+        try:
+            trigger = str(json.loads((d / "dataset.json").read_text()).get("trigger_word") or "")
+        except (OSError, json.JSONDecodeError):
+            trigger = ""
+
+    # Substring, not token match: triggers are often deliberately unwordlike
+    # ("ohwx_style"), and a word-boundary test would miss them inside prose.
+    with_trigger = [n for n, c in captions if trigger and trigger.lower() in c.lower()]
+
+    lengths = sorted(len(c.split()) for _, c in non_empty)
+    median = lengths[len(lengths) // 2] if lengths else 0
+    # Short captions are weak signal; flag them relative to this dataset rather
+    # than an absolute cutoff, since a style set and a character set differ.
+    floor = max(4, median // 3)
+    thin = [n for n, c in non_empty if len(c.split()) < floor]
+
+    # Recurring phrases, longest-first.
+    #
+    # Two things make a naive n-gram count useless here. Overlapping shingles
+    # report one phenomenon three times ("a woman standing", "woman standing
+    # in", "standing in a"), and the trigger word recurs by construction, so
+    # counting it drowns everything worth seeing. So: trim stopwords off each
+    # candidate's edges, drop anything containing a trigger token, then keep
+    # only phrases that are maximal for the exact set of images they cover.
+    # Clauses bound the window. A phrase must not span a comma or full stop, or
+    # "a sunlit field, wearing a red jacket" emits "field wearing" — a phrase
+    # that appears in no caption. Commas are the right *boundary* here but the
+    # wrong *unit*: whole clauses repeat verbatim too rarely in prose to count,
+    # and "wearing a red jacket" vs "wearing a black coat" are the same skew
+    # while never matching as strings.
+    trigger_tokens = set(_WORD_RE.findall(trigger.lower())) if trigger else set()
+    MAX_GRAM = 6
+    # Two words minimum. On real 70-word captions a single-word count just
+    # ranks ordinary English about photographs — "dark", "white", "hair",
+    # "lighting" all cleared 50/80 on a fashion set and said nothing you could
+    # act on, while burying the finding that mattered (a third of the captions
+    # described a Polaroid border, which would have been baked into the LoRA).
+    # A repeated multi-word phrase is a property of *this* dataset; a repeated
+    # common adjective is a property of the language.
+    MIN_WORDS = 2
+
+    def _grams(words: list[str]):
+        """Every content-anchored n-gram in one clause, longest first."""
+        for n in range(min(MAX_GRAM, len(words)), 0, -1):
+            for i in range(len(words) - n + 1):
+                gram = words[i : i + n]
+                if trigger_tokens and any(w in trigger_tokens for w in gram):
+                    continue
+                # Anchor on content words so "wearing a" becomes "wearing" and
+                # "a woman standing in" becomes "woman standing".
+                while gram and gram[0] in _STOPWORDS:
+                    gram = gram[1:]
+                while gram and gram[-1] in _STOPWORDS:
+                    gram = gram[:-1]
+                if len(gram) >= MIN_WORDS:
+                    yield tuple(gram)
+
+    counts: dict[tuple[str, ...], set[str]] = {}
+    for name, caption in non_empty:
+        seen: set[tuple[str, ...]] = set()
+        for clause in _CLAUSE_RE.split(caption):
+            for key in _grams(_WORD_RE.findall(clause.lower())):
+                if key in seen:
+                    continue
+                seen.add(key)
+                counts.setdefault(key, set()).add(name)
+
+    repeated = {k: v for k, v in counts.items() if len(v) > 1}
+
+    def _contains(outer: tuple[str, ...], inner: tuple[str, ...]) -> bool:
+        n = len(inner)
+        return n < len(outer) and any(outer[i : i + n] == inner for i in range(len(outer) - n + 1))
+
+    # A shorter phrase inside a longer one is the same observation stated less
+    # precisely — but only if the longer one accounts for most of the shorter's
+    # images. Requiring identical image sets was too strict on real captions:
+    # "left corner" (21), "lower left corner" (16) and "vogue watermark in the
+    # lower left" (10) are one finding about a watermark, spread over slightly
+    # different images, and all four rows survived.
+    OVERLAP = 0.7
+    candidates = sorted(repeated.items(), key=lambda kv: (-len(kv[1]), -len(kv[0])))[:200]
+
+    maximal: list[tuple[tuple[str, ...], set[str]]] = []
+    for key, names in candidates:
+        covered = any(
+            _contains(bigger, key) and len(others & names) / len(names) >= OVERLAP
+            for bigger, others in candidates
+            if len(bigger) > len(key)
+        )
+        if not covered:
+            maximal.append((key, names))
+
+    total = len(non_empty) or 1
+    kept = sorted(
+        ({"phrase": " ".join(k), "count": len(names),
+          "share": round(len(names) / total, 3), "words": len(k)}
+         for k, names in maximal),
+        key=lambda r: (-r["count"], -r["words"], r["phrase"]),
+    )[:top]
+
+    return {
+        "images": len(images),
+        "captioned": len(non_empty),
+        "uncaptioned": len(images) - len(non_empty),
+        "trigger_word": trigger,
+        "with_trigger": len(with_trigger),
+        "missing_trigger": [n for n, c in captions if trigger and trigger.lower() not in c.lower()],
+        "median_words": median,
+        "thin": thin,
+        "phrases": kept,
+    }
 
 
 def _validate_loras(raw: Any) -> list[dict[str, Any]]:
@@ -1098,7 +1397,7 @@ def web():
         """
         volume.reload()
         tree: dict[str, Any] = {}
-        for d in (MODELS, LORAS, UPLOADS, OUTPUTS):
+        for d in (MODELS, LORAS, DATASETS, OUTPUTS):
             if d.is_dir():
                 tree[str(d)] = sorted(
                     f"{p.name} ({p.stat().st_size / 1e9:.2f} GB)" if p.is_file() else f"{p.name}/"
@@ -1209,12 +1508,19 @@ def web():
     async def _do_upload(request: Request) -> JSONResponse:
         form = await request.form()
 
-        # Appending must never be able to delete a dataset that already exists,
-        # so track whether this call created the directory.
-        existing = str(form.get("job_id") or "").strip()
-        appending = bool(existing) and bool(NAME_RE.match(existing)) and (UPLOADS / existing).is_dir()
-        job_id = existing if appending else f"ds{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        raw = UPLOADS / job_id
+        # Uploads always target a named dataset. Appending must never be able to
+        # delete one that already exists, so track whether this call created it.
+        # `dataset` is deliberately not reused as a loop variable below — an
+        # earlier version named both this and the per-file basename `name`, so
+        # the response reported the last uploaded filename as the dataset.
+        dataset = str(form.get("dataset") or "").strip()
+        if not dataset:
+            return JSONResponse({"error": "A dataset name is required."}, 400)
+        try:
+            raw = _dataset_dir(dataset)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, 400)
+        appending = raw.is_dir()
         raw.mkdir(parents=True, exist_ok=True)
 
         count, zips = 0, []
@@ -1222,11 +1528,11 @@ def web():
             filename = getattr(up, "filename", None)
             if not filename:
                 continue
-            name = Path(filename).name
-            suffix = Path(name).suffix.lower()
+            basename = Path(filename).name
+            suffix = Path(basename).suffix.lower()
             if suffix not in IMAGE_EXTS and suffix not in {".zip", ".txt"}:
                 continue
-            target = raw / name
+            target = raw / basename
             with open(target, "wb") as out:
                 while chunk := await up.read(1024 * 1024):
                     out.write(chunk)
@@ -1253,93 +1559,213 @@ def web():
         volume.commit()
         # Same-named files overwrite rather than duplicate, so re-dropping the
         # same folder is idempotent instead of doubling the dataset.
-        total = sum(1 for p in raw.iterdir() if p.suffix.lower() in IMAGE_EXTS)
-        return JSONResponse({"job_id": job_id, "added": count, "count": total})
+        return JSONResponse({"dataset": dataset, "added": count, **_dataset_stats(raw)})
 
-    @api.get("/api/dataset/{job_id}")
-    async def dataset(job_id: str) -> dict[str, Any]:
+    def _dataset_or_error(name: str):
+        """Resolve a dataset name, returning (dir, None) or (None, error dict)."""
+        try:
+            d = _dataset_dir(name)
+        except ValueError as exc:
+            return None, {"error": str(exc)}
+        if not d.is_dir():
+            return None, {"error": f"No dataset named {name!r}."}
+        return d, None
+
+    @api.get("/api/datasets")
+    async def list_datasets() -> dict[str, Any]:
+        volume.reload()
+        DATASETS.mkdir(parents=True, exist_ok=True)
+        out = [
+            _dataset_stats(d) for d in sorted(DATASETS.iterdir())
+            if d.is_dir() and not d.name.startswith(".")
+        ]
+        out.sort(key=lambda r: -r["modified"])
+        return {"datasets": out}
+
+    @api.post("/api/datasets")
+    async def create_dataset(payload: dict) -> dict[str, Any]:
+        name = str(payload.get("name") or "").strip()
+        try:
+            d = _dataset_dir(name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if d.exists():
+            return {"error": f"A dataset named {name!r} already exists."}
+        volume.reload()
+        d.mkdir(parents=True)
+        _write_dataset_meta(d, trigger_word=str(payload.get("trigger_word") or ""))
+        volume.commit()
+        return {"ok": True, **_dataset_stats(d)}
+
+    @api.get("/api/datasets/{name}")
+    async def dataset_detail(name: str) -> dict[str, Any]:
+        """
+        Image metadata only — thumbnails come from /api/thumb one at a time.
+
+        The previous version inlined every thumbnail as base64 in this response,
+        which put a 200-image dataset at ~6.6 MB before a single tile rendered
+        and rebuilt every thumbnail on every load.
+        """
+        volume.reload()
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+
         from PIL import Image
 
-        if not NAME_RE.match(job_id):
-            return {"error": "Invalid job_id."}
-        volume.reload()
-        src = UPLOADS / job_id
-        if not src.is_dir():
-            return {"error": "Dataset not found."}
-
-        thumbs = src / ".thumbs"
-        thumbs.mkdir(exist_ok=True)
         items = []
-        for img in sorted(p for p in src.iterdir() if p.suffix.lower() in IMAGE_EXTS):
-            cached = thumbs / (img.stem + ".jpg")
-            data = None
+        for img in _dataset_images(d):
             try:
-                if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
-                    with Image.open(img) as im:
-                        im = im.convert("RGB")
-                        im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
-                        buf = io.BytesIO()
-                        im.save(buf, "JPEG", quality=78, optimize=True)
-                        cached.write_bytes(buf.getvalue())
-                data = "data:image/jpeg;base64," + base64.b64encode(cached.read_bytes()).decode()
-            except Exception as exc:
-                print(f"[thumb] {img.name}: {exc}")
-            txt = img.with_suffix(".txt")
+                st = img.stat()
+            except OSError:
+                continue
+            # Pixel dimensions alongside filesize: together they are what
+            # actually informs a keep/cut call. PIL parses the header only, so
+            # this is a small read per file rather than a decode.
+            w = h = None
+            try:
+                with Image.open(img) as im:
+                    w, h = im.size
+            except Exception:
+                pass
             items.append({
                 "name": img.name,
-                "caption": txt.read_text().strip() if txt.exists() else "",
-                "thumb": data,
+                "caption": _caption_of(img),
+                "bytes": st.st_size,
+                "width": w, "height": h,
+                "mtime": st.st_mtime,
             })
-        volume.commit()
-        return {"job_id": job_id, "images": items}
+        return {**_dataset_stats(d), "images": items}
 
-    @api.post("/api/captions")
-    async def save_captions(payload: dict) -> dict[str, Any]:
-        job_id = str(payload.get("job_id") or "")
-        captions = payload.get("captions")
-        if not NAME_RE.match(job_id) or not isinstance(captions, dict):
-            return {"error": "Bad request."}
+    @api.post("/api/datasets/{name}/meta")
+    async def dataset_meta(name: str, payload: dict) -> dict[str, Any]:
         volume.reload()
-        src = UPLOADS / job_id
-        if not src.is_dir():
-            return {"error": "Dataset not found."}
-        saved = 0
-        for raw_name, caption in captions.items():
-            # Basename only — a client filename must not escape the directory.
-            img = src / Path(str(raw_name)).name
-            if img.exists() and img.suffix.lower() in IMAGE_EXTS:
-                img.with_suffix(".txt").write_text(str(caption).strip()[:MAX_CAPTION_CHARS])
-                saved += 1
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        _write_dataset_meta(d, trigger_word=str(payload.get("trigger_word") or ""))
         volume.commit()
-        return {"ok": True, "saved": saved}
+        return {"ok": True, **_dataset_stats(d)}
 
-    @api.post("/api/remove-image")
-    async def remove_image(payload: dict) -> dict[str, Any]:
-        """Drop one image from a staged dataset, with its caption and thumbnail."""
-        job_id = str(payload.get("job_id") or "")
-        if not NAME_RE.match(job_id):
-            return {"error": "Invalid job_id."}
+    @api.post("/api/datasets/{name}/delete")
+    async def delete_dataset(name: str) -> dict[str, Any]:
         volume.reload()
-        src = UPLOADS / job_id
-        if not src.is_dir():
-            return {"error": "Dataset not found."}
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        shutil.rmtree(d, ignore_errors=True)
+        volume.commit()
+        return {"ok": True}
 
-        # Basename only — a client-supplied name must not escape the directory.
-        name = Path(str(payload.get("name") or "")).name
-        img = src / name
-        if not name or img.suffix.lower() not in IMAGE_EXTS or not img.exists():
+    @api.get("/api/thumb/{name}/{filename}")
+    async def thumb(name: str, filename: str):
+        """
+        One thumbnail, cached beside the dataset, served with a long max-age.
+
+        Cached by mtime, so re-editing a caption never re-encodes the image and
+        replacing an image does invalidate it.
+        """
+        from fastapi.responses import Response
+        from PIL import Image
+
+        d, err = _dataset_or_error(name)
+        if err:
+            return JSONResponse(err, status_code=404)
+        img = d / Path(filename).name  # basename only — no directory escape
+        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
+            return JSONResponse({"error": "Image not found."}, status_code=404)
+
+        thumbs = d / THUMB_DIR
+        thumbs.mkdir(exist_ok=True)
+        cached = thumbs / (img.stem + ".jpg")
+        try:
+            if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
+                with Image.open(img) as im:
+                    im = im.convert("RGB")
+                    im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    im.save(buf, "JPEG", quality=78, optimize=True)
+                    cached.write_bytes(buf.getvalue())
+                # Deliberately no volume.commit() here. Thumbnails are derived
+                # data — if a container dies before the write is durable, the
+                # next request regenerates one. Committing per thumbnail turned
+                # a grid of 700 tiles into 700 volume commits.
+            data = cached.read_bytes()
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+    @api.get("/api/image/{name}/{filename}")
+    async def full_image(name: str, filename: str):
+        """The original file, for the full-size viewer. Never the thumbnail."""
+        from fastapi.responses import Response
+
+        d, err = _dataset_or_error(name)
+        if err:
+            return JSONResponse(err, status_code=404)
+        img = d / Path(filename).name
+        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
+            return JSONResponse({"error": "Image not found."}, status_code=404)
+        mime = {"png": "image/png", "webp": "image/webp"}.get(
+            img.suffix.lower().lstrip("."), "image/jpeg")
+        return Response(content=img.read_bytes(), media_type=mime,
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+    @api.post("/api/datasets/{name}/caption")
+    async def save_caption(name: str, payload: dict) -> dict[str, Any]:
+        """One caption, saved on blur. Bulk save was how edits went missing."""
+        volume.reload()
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        img = d / Path(str(payload.get("image") or "")).name
+        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
+            return {"error": "Image not found."}
+        img.with_suffix(".txt").write_text(
+            str(payload.get("caption") or "").strip()[:MAX_CAPTION_CHARS])
+        volume.commit()
+        return {"ok": True}
+
+    @api.post("/api/datasets/{name}/remove")
+    async def remove_image(name: str, payload: dict) -> dict[str, Any]:
+        """
+        Move an image and its caption into the dataset's .trash/.
+
+        Non-destructive by default: a mis-click during a cull costs a file move,
+        not the file. Nothing surfaces .trash/ yet — it is there so the bytes
+        still exist when someone asks for undo.
+        """
+        volume.reload()
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        img = d / Path(str(payload.get("image") or "")).name
+        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
             return {"error": "Image not found."}
 
-        img.unlink(missing_ok=True)
-        img.with_suffix(".txt").unlink(missing_ok=True)
-        (src / ".thumbs" / (img.stem + ".jpg")).unlink(missing_ok=True)
+        trash = d / TRASH_DIR
+        trash.mkdir(exist_ok=True)
+        stamp = time.strftime("%Y%m%d%H%M%S")
+        for part in (img, img.with_suffix(".txt")):
+            if part.is_file():
+                part.rename(trash / f"{stamp}-{part.name}")
+        (d / THUMB_DIR / (img.stem + ".jpg")).unlink(missing_ok=True)
 
         volume.commit()
-        remaining = sum(1 for p in src.iterdir() if p.suffix.lower() in IMAGE_EXTS)
-        return {"ok": True, "count": remaining}
+        return {"ok": True, **_dataset_stats(d)}
 
-    @api.post("/api/prepend-trigger")
-    async def prepend_trigger(payload: dict) -> dict[str, Any]:
+    @api.get("/api/datasets/{name}/insight")
+    async def dataset_insight(name: str, trigger: str = "") -> dict[str, Any]:
+        volume.reload()
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        return _caption_insight(d, trigger)
+
+    @api.post("/api/datasets/{name}/prepend-trigger")
+    async def prepend_trigger(name: str, payload: dict) -> dict[str, Any]:
         """
         Put the trigger word at the front of every caption that lacks it.
 
@@ -1351,20 +1777,17 @@ def web():
         test would false-positive on short triggers (a "cat" LoRA would skip
         "a cat sitting"), and running this twice must never double the prefix.
         """
-        job_id = str(payload.get("job_id") or "")
         trigger = str(payload.get("trigger_word") or "").strip()
-        if not NAME_RE.match(job_id):
-            return {"error": "Invalid job_id."}
         if not trigger:
             return {"error": "A trigger word is required."}
 
         volume.reload()
-        src = UPLOADS / job_id
-        if not src.is_dir():
-            return {"error": "Dataset not found."}
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
 
         changed = 0
-        for img in sorted(p for p in src.iterdir() if p.suffix.lower() in IMAGE_EXTS):
+        for img in _dataset_images(d):
             txt = img.with_suffix(".txt")
             cur = txt.read_text().strip() if txt.exists() else ""
             if not cur:
@@ -1376,17 +1799,23 @@ def web():
             txt.write_text(new[:MAX_CAPTION_CHARS])
             changed += 1
 
+        _write_dataset_meta(d, trigger_word=trigger)
         volume.commit()
         return {"ok": True, "changed": changed}
 
     @api.post("/api/caption")
     async def caption(payload: dict) -> dict[str, Any]:
-        job_id = str(payload.get("job_id") or "")
-        if not NAME_RE.match(job_id):
-            return {"error": "Invalid job_id."}
+        name = str(payload.get("dataset") or "")
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        trigger = str(payload.get("trigger_word") or "")
+        if trigger:
+            _write_dataset_meta(d, trigger_word=trigger)
+            volume.commit()
+        job_id = f"cap{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         caption_job.spawn(
-            job_id=job_id,
-            trigger_word=str(payload.get("trigger_word") or ""),
+            job_id=job_id, dataset=name, trigger_word=trigger,
             style=str(payload.get("style") or "descriptive"),
             length=str(payload.get("length") or "medium"),
             overwrite=bool(payload.get("overwrite")),
@@ -1395,15 +1824,19 @@ def web():
 
     @api.post("/api/train")
     async def train(payload: dict) -> dict[str, Any]:
-        job_id = str(payload.get("job_id") or "")
+        dataset = str(payload.get("dataset") or "")
         lora_name = str(payload.get("lora_name") or "").strip()
         trigger = str(payload.get("trigger_word") or "").strip()
-        if not NAME_RE.match(job_id):
-            return {"error": "Invalid job_id."}
+        d, err = _dataset_or_error(dataset)
+        if err:
+            return err
+        if not _dataset_images(d):
+            return {"error": f"{dataset!r} has no images."}
         if not NAME_RE.match(lora_name):
             return {"error": "LoRA name: letters, digits, - and _ only."}
         if not trigger:
             return {"error": "A trigger word is required."}
+        job_id = f"tr{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
 
         def num(k, d, cast):
             try:
@@ -1413,7 +1846,7 @@ def web():
                 return d
 
         train_job.spawn(
-            job_id=job_id, lora_name=lora_name, trigger_word=trigger,
+            job_id=job_id, dataset=dataset, lora_name=lora_name, trigger_word=trigger,
             resolution=num("resolution", 1024, int),
             batch_size=num("batch_size", 1, int),
             num_repeats=num("num_repeats", 1, int),
@@ -1519,9 +1952,9 @@ def web():
 
 
 @app.function(image=web_image, cpu=2.0, timeout=1800, volumes={"/workspace": volume})
-def stage_upload(job_id: str, files: list[tuple[str, bytes]]) -> int:
+def stage_upload(dataset: str, files: list[tuple[str, bytes]]) -> int:
     """Land locally-read files on the volume. Browser uploads use /api/upload."""
-    raw = UPLOADS / job_id
+    raw = _dataset_dir(dataset)
     raw.mkdir(parents=True, exist_ok=True)
     for name, blob in files:
         (raw / Path(name).name).write_bytes(blob)  # basename only
@@ -1534,6 +1967,7 @@ def main(
     images_dir: str,
     lora_name: str,
     trigger_word: str = "",
+    dataset_name: str = "",
     caption: bool = False,
     max_train_epochs: int = 30,
     network_dim: int = 32,
@@ -1554,19 +1988,25 @@ def main(
         raise SystemExit(f"No images in {src}")
 
     trigger = trigger_word or lora_name
-    # Underscores only — job_id must satisfy NAME_RE on the way back in.
-    job_id = f"ds_{time.strftime('%Y%m%d_%H%M%S')}_cli"
+    # The CLI names the dataset after the LoRA so a run started here is visible
+    # and reusable on the Datasets tab rather than being a one-shot upload.
+    dataset = dataset_name or lora_name
+    job_id = f"cli_{time.strftime('%Y%m%d_%H%M%S')}"
 
-    print(f"Uploading {n_images} images as {job_id}…")
-    stage_upload.remote(job_id, payload)
+    print(f"Uploading {n_images} images to dataset {dataset!r}…")
+    stage_upload.remote(dataset, payload)
 
     if caption:
         print("Captioning…")
-        print(json.dumps(caption_job.remote(job_id=job_id, trigger_word=trigger), indent=2))
+        print(json.dumps(
+            caption_job.remote(job_id=f"{job_id}_cap", dataset=dataset, trigger_word=trigger),
+            indent=2,
+        ))
 
     print(json.dumps(
         train_job.remote(
             job_id=job_id,
+            dataset=dataset,
             lora_name=lora_name,
             trigger_word=trigger,
             max_train_epochs=max_train_epochs,
@@ -1592,15 +2032,69 @@ UI_HTML = r"""<!doctype html>
 body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;-webkit-font-smoothing:antialiased}
 .app{display:flex;min-height:100dvh}
 aside{width:232px;flex:0 0 232px;border-right:1px solid rgba(255,255,255,.07);padding:16px 12px;display:flex;flex-direction:column;gap:2px}
-.brand{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:var(--panel);margin-bottom:18px}
-.dot{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,#8b5cf6,#3b82f6);display:grid;place-items:center;font-size:12px}
+/* Wordmark only. The gradient chip it replaces was decoration: with the label
+   right beside it, it carried no recognition the word did not already carry. */
+.brand{padding:4px 12px 20px;letter-spacing:-.01em}
 .seclabel{font-size:11px;color:var(--dim);padding:0 12px;margin-bottom:6px}
-nav button{display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:0;border-radius:9px;background:none;color:var(--mut);font:inherit;text-align:left;cursor:pointer}
-nav button:hover{background:rgba(255,255,255,.04);color:#ddd}
-nav button.on{background:rgba(255,255,255,.09);color:var(--fg)}
-nav .ic{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:11px;background:linear-gradient(135deg,#8b5cf6,#3b82f6)}
-nav .ic.g{background:linear-gradient(135deg,#38bdf8,#6366f1)}
-nav .ic.m{background:linear-gradient(135deg,#f59e0b,#ef4444)}
+/* State is carried by weight and a hairline, not by a filled pill. One accent
+   rule is the least ink that still says unambiguously which view you are in. */
+nav button{display:block;width:100%;padding:7px 12px;border:0;border-left:2px solid transparent;
+  background:none;color:var(--mut);font:inherit;text-align:left;cursor:pointer;transition:color .12s}
+nav button:hover{color:#c9c9c9}
+nav button.on{color:var(--fg);border-left-color:var(--fg)}
+
+/* Datasets ------------------------------------------------------------- */
+.ds-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.ds-card{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;overflow:hidden;cursor:pointer;text-align:left;padding:0;color:inherit;font:inherit}
+.ds-card:hover{border-color:rgba(255,255,255,.24)}
+.ds-cover{aspect-ratio:16/10;background:rgba(255,255,255,.045);display:block;width:100%;object-fit:contain}
+.ds-cover.empty{display:grid;place-items:center;color:var(--dim);font-size:22px}
+.ds-meta{padding:11px 13px}
+.ds-meta b{font-size:13px;font-weight:600}
+/* Tiles: object-fit contain so a portrait crop is never implied. */
+.tiles{display:grid;gap:10px}
+.tile{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.02);display:flex;flex-direction:column}
+.tile.sel{border-color:rgba(255,255,255,.5)}
+/* A true square cell with the whole image inside it, Bridge-style — you cannot
+   judge a crop you cannot see. The image is absolutely positioned: as a normal
+   flow child with height:100% it establishes the container's height itself, so
+   aspect-ratio never applies and the cell silently takes the image's ratio.
+   The cell is also lifted off the page background, because letterbox bars the
+   same colour as the page read as a cropped photo rather than a contained one. */
+.tile .ph{position:relative;background:rgba(255,255,255,.045);aspect-ratio:1}
+.tile .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;cursor:zoom-in}
+.tile .dim{position:absolute;left:6px;bottom:6px;font-size:10px;color:#ddd;background:rgba(0,0,0,.62);padding:2px 6px;border-radius:5px;pointer-events:none}
+.tile .rm{position:absolute;top:6px;right:6px;width:24px;height:24px;border:0;border-radius:50%;background:rgba(0,0,0,.62);color:#eee;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .12s}
+.tile:hover .rm{opacity:1}
+.tile textarea{border:0;border-top:1px solid var(--line);border-radius:0;background:none;resize:none;font-size:12px;padding:8px 9px;min-height:66px;line-height:1.45}
+.tile textarea.dirty{background:rgba(56,189,248,.08)}
+.tile.thin textarea{border-top-color:rgba(245,158,11,.5)}
+.tile.notrig textarea{border-top-color:rgba(239,68,68,.55)}
+/* Insight panel: bars are the readout, numbers confirm them. */
+.ins{position:sticky;top:16px}
+.ins .stat{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.ins .stat b{font-size:19px;font-weight:600;letter-spacing:-.01em}
+.ins .stat span{font-size:12px;color:var(--mut)}
+.meter{height:5px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden;margin:2px 0 14px}
+.meter i{display:block;height:100%;background:#34d399}
+.meter i.warn{background:#f59e0b}
+.meter i.bad{background:#ef4444}
+.ph-row{display:flex;align-items:center;gap:8px;margin-bottom:3px;cursor:pointer;border:0;background:none;padding:2px 0;width:100%;color:inherit;font:inherit;text-align:left}
+.ph-row:hover .ph-bar{outline:1px solid rgba(255,255,255,.3)}
+.ph-bar{position:relative;flex:1;min-width:0;height:20px;border-radius:5px;background:rgba(255,255,255,.06);overflow:hidden}
+/* Proportional fill only. An earlier version turned these red above 60% share,
+   which read as "this is wrong" — but a phrase recurring is information about
+   the set, not an error. A feature that is present and *not* captioned is the
+   actual hazard, since it has nowhere to attach except the trigger. Red is
+   reserved for trigger coverage, where a gap really is a defect. */
+.ph-bar i{position:absolute;inset:0;width:var(--w);background:rgba(255,255,255,.11)}
+.ph-bar i.hot{background:rgba(255,255,255,.2)}
+.ph-bar span{position:absolute;left:7px;top:0;line-height:20px;font-size:11px;color:#e8e8e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;right:7px}
+.ph-n{font-size:11px;color:var(--mut);width:26px;text-align:right;flex:none}
+/* Lightbox: original file, not the thumbnail. */
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:50;display:grid;place-items:center;padding:32px}
+.lb img{max-width:100%;max-height:100%;object-fit:contain}
+.lb .x{position:absolute;top:16px;right:20px;border:0;background:none;color:#bbb;font-size:26px;cursor:pointer}
 main{flex:1;min-width:0;padding:28px 32px 80px;max-width:980px}
 h1{font-size:19px;font-weight:600;margin-bottom:3px;letter-spacing:-.01em}
 .sub{color:var(--dim);font-size:13px;margin-bottom:22px}
@@ -1643,16 +2137,17 @@ button.s:disabled{opacity:.4;cursor:not-allowed}
 .lora-row input{width:70px;text-align:center}
 .lora-row button{padding:8px 10px}
 code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
-@media(max-width:760px){.app{flex-direction:column}aside{width:auto;flex:none;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid rgba(255,255,255,.07)}.brand,.seclabel{display:none}nav{display:flex;gap:4px}nav button{white-space:nowrap}main{padding:20px 16px 60px}.grid2{grid-template-columns:1fr}}
+@media(max-width:760px){.app{flex-direction:column}aside{width:auto;flex:none;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid rgba(255,255,255,.07)}.seclabel{display:none}.brand{padding:4px 10px 0}nav{display:flex;gap:4px}nav button{white-space:nowrap}main{padding:20px 16px 60px}.grid2{grid-template-columns:1fr}}
 </style></head><body>
 <div class="app">
 <aside>
-  <div class="brand"><span class="dot">✦</span><b style="font-size:14px">Visionary</b></div>
+  <div class="brand"><b style="font-size:15px;font-weight:600">Visionary</b></div>
   <div class="seclabel">Tools</div>
   <nav>
-    <button data-v="models" class="on"><span class="ic m">↓</span>Models</button>
-    <button data-v="train"><span class="ic">✦</span>Train LoRA</button>
-    <button data-v="generate"><span class="ic g">▦</span>Image</button>
+    <button data-v="models" class="on">Models</button>
+    <button data-v="datasets">Datasets</button>
+    <button data-v="train">Train LoRA</button>
+    <button data-v="generate">Image</button>
   </nav>
 </aside>
 <main>
@@ -1676,14 +2171,33 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
     <div id="models"></div>
   </section>
 
-  <!-- TRAIN -->
-  <section id="v-train" class="hide">
-    <h1>Train LoRA</h1>
-    <p class="sub">Krea 2 RAW · rank 32 · bf16</p>
-    <div id="train-err"></div>
+  <!-- DATASETS -->
+  <section id="v-datasets" class="hide">
+    <!-- List. Replaced wholesale by the editor rather than stacked, so there is
+         never a scroll position to lose track of. -->
+    <div id="ds-index">
+      <h1>Datasets</h1>
+      <p class="sub">Caption once. Train from it as many times as you like.</p>
+      <div id="ds-err"></div>
+      <div class="card">
+        <div class="row" style="gap:8px">
+          <input id="ds-new" class="grow" placeholder="New dataset name" spellcheck="false">
+          <button class="s" id="ds-create">Create</button>
+        </div>
+      </div>
+      <div class="ds-list" id="ds-list"></div>
+      <p class="muted" id="ds-empty" class="hide"></p>
+    </div>
 
-    <div id="step-build">
-      <!-- Dropzone stays put: it is how you start AND how you add more. -->
+    <!-- Editor -->
+    <div id="ds-editor" class="hide">
+      <div class="row" style="margin-bottom:14px">
+        <button class="s" id="ds-back">← Datasets</button>
+        <span class="grow"></span>
+        <span class="muted" id="ds-title"></span>
+      </div>
+      <div id="ds-edit-err"></div>
+
       <div class="drop" id="drop">
         <div style="font-size:22px;opacity:.35">↑</div>
         <div style="margin-top:6px" id="drop-title">Drop images or a .zip</div>
@@ -1692,25 +2206,59 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         <div id="up-prog" class="hide"><div class="bar"><i style="width:0%"></i></div></div>
       </div>
 
-      <!-- Everything below appears only once there is a dataset. -->
-      <div id="dataset" class="hide">
-        <div class="card" style="margin-top:12px">
-          <div class="row" style="gap:8px;flex-wrap:wrap">
-            <button class="s" id="do-caption">Auto-caption</button>
-            <select id="cap-style" style="width:auto"><option value="descriptive">Descriptive</option><option value="casual">Casual</option><option value="tags">Tags</option></select>
-            <select id="cap-len" style="width:auto"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
-            <label style="display:flex;align-items:center;gap:7px;margin:0;color:#ddd"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
-            <span class="grow"></span>
-            <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Prepend trigger</button>
+      <div class="card" style="margin-top:12px">
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <button class="s" id="do-caption">Auto-caption</button>
+          <select id="cap-style" style="width:auto"><option value="descriptive">Descriptive</option><option value="casual">Casual</option></select>
+          <select id="cap-len" style="width:auto"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
+          <label style="display:flex;align-items:center;gap:7px;margin:0;color:#ddd"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
+        </div>
+        <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
+      </div>
+
+      <div class="grid2" style="grid-template-columns:1fr 300px;align-items:start;gap:16px;margin-top:14px">
+        <div style="min-width:0">
+          <div class="row" style="margin:0 2px 8px;gap:10px;flex-wrap:wrap">
+            <span class="muted grow" id="ds-count"></span>
+            <button class="s" id="f-all" title="Show every image">All</button>
+            <button class="s" id="f-uncap" title="Only images with no caption">Uncaptioned</button>
+            <button class="s" id="f-notrig" title="Only captions missing the trigger word">No trigger</button>
+            <button class="s" id="dens-down" title="Smaller tiles">−</button>
+            <button class="s" id="dens-up" title="Larger tiles">+</button>
           </div>
-          <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
+          <div class="tiles" id="tiles"></div>
         </div>
 
-        <div class="row" style="margin:14px 2px 8px"><span class="muted" id="cap-count"></span></div>
-        <div id="tiles"></div>
+        <div class="ins">
+          <div class="card">
+            <label style="margin-bottom:10px">Trigger word</label>
+            <div class="row" style="gap:8px;margin-bottom:14px">
+              <input id="ds-trig" class="grow" placeholder="ohwx_style" spellcheck="false">
+              <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Fix</button>
+            </div>
+            <div id="ins-body"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 
+  <!-- TRAIN -->
+  <section id="v-train" class="hide">
+    <h1>Train LoRA</h1>
+    <p class="sub">Krea 2 RAW · rank 32 · bf16</p>
+    <div id="train-err"></div>
+
+    <div id="step-build">
+      <div class="card">
+        <label>Dataset</label>
+        <select id="t-dataset"></select>
+        <p class="muted" id="t-dsinfo" style="margin-top:8px"></p>
+      </div>
+
+      <div id="dataset" class="hide">
         <!-- Name and trigger sit here, next to the action that uses them. -->
-        <div class="card grid2" style="margin-top:14px">
+        <div class="card grid2">
           <div><label>LoRA name</label><input id="lname" placeholder="my_style" spellcheck="false"></div>
           <div><label>Trigger word</label><input id="ltrig" placeholder="ohwx_style" spellcheck="false"></div>
         </div>
@@ -1803,12 +2351,15 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const api=async(p,o)=>{const r=await fetch(p,o);return r.json()};
 const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
-let jobId=null, files=[], captions={}, saveT=null, poll=null;
+let files=[], poll=null;
 
 // nav
 $$('nav button').forEach(b=>b.onclick=()=>{
   $$('nav button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  ['models','train','generate'].forEach(v=>$('#v-'+v).classList.toggle('hide',v!==b.dataset.v));
+  ['models','datasets','train','generate'].forEach(v=>$('#v-'+v).classList.toggle('hide',v!==b.dataset.v));
+  // Both tabs read the dataset list, and either may have been changed by the
+  // other, so refresh on entry rather than trusting what was loaded at boot.
+  if(b.dataset.v==='datasets'||b.dataset.v==='train') loadDatasets();
 });
 
 // ---------- models ----------
@@ -1909,17 +2460,269 @@ drop.ondragleave=()=>drop.classList.remove('hot');
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');upload(e.dataTransfer.files)};
 fin.onchange=()=>{ upload(fin.files); fin.value=''; };   // reset so the same file can be re-picked
 
+// ==================== DATASETS ====================
+// A dataset is a named folder; the editor is a view onto it. Nothing here is
+// tied to a training run, which is the whole point of the section.
+
+let dsName=null, dsImages=[], dsInsight=null, dsFilter='all', dsDensity=3, capPoll=null;
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const errInto=(sel,msg)=>{ $(sel).innerHTML = msg ? '<div class="err-box">'+esc(msg)+'</div>' : ''; };
+
+async function loadDatasets(){
+  const r=await api('/api/datasets');
+  if(r.error){ errInto('#ds-err',r.error); return }
+  const list=r.datasets||[];
+  $('#ds-list').innerHTML=list.map(d=>`
+    <button class="ds-card" data-open="${esc(d.name)}">
+      ${d.cover
+        ? `<img class="ds-cover" loading="lazy" src="/api/thumb/${encodeURIComponent(d.name)}/${encodeURIComponent(d.cover)}" alt="">`
+        : '<div class="ds-cover empty">▤</div>'}
+      <div class="ds-meta">
+        <b>${esc(d.name)}</b>
+        <div class="muted" style="margin-top:3px;font-size:12px">
+          ${d.count} image${d.count===1?'':'s'}${d.uncaptioned?` · ${d.uncaptioned} uncaptioned`:''}
+        </div>
+      </div>
+    </button>`).join('');
+  $('#ds-empty').textContent = list.length ? '' : 'No datasets yet. Name one above to start.';
+  $$('#ds-list [data-open]').forEach(b=>b.onclick=()=>openDataset(b.dataset.open));
+  fillTrainDatasets(list);
+}
+
+$('#ds-create').onclick=async()=>{
+  const name=$('#ds-new').value.trim();
+  if(!name) return;
+  const r=await post('/api/datasets',{name});
+  if(r.error){ errInto('#ds-err',r.error); return }
+  errInto('#ds-err',''); $('#ds-new').value='';
+  await loadDatasets(); openDataset(name);
+};
+$('#ds-new').onkeydown=e=>{ if(e.key==='Enter') $('#ds-create').click() };
+$('#ds-back').onclick=()=>{ dsName=null; $('#ds-editor').classList.add('hide');
+  $('#ds-index').classList.remove('hide'); loadDatasets(); };
+
+async function openDataset(name){
+  dsName=name; dsFilter='all';
+  $('#ds-index').classList.add('hide');
+  $('#ds-editor').classList.remove('hide');
+  $('#ds-title').textContent=name;
+  errInto('#ds-edit-err','');
+  await loadTiles();
+}
+
+// ---------- grid ----------
+async function loadTiles(){
+  if(!dsName) return;
+  const d=await api('/api/datasets/'+encodeURIComponent(dsName));
+  if(d.error){ errInto('#ds-edit-err',d.error); return }
+  dsImages=d.images||[];
+  if(!$('#ds-trig').value) $('#ds-trig').value=d.trigger_word||'';
+  await loadInsight();
+  renderTiles();
+}
+
+async function loadInsight(){
+  const t=$('#ds-trig').value.trim();
+  const r=await api('/api/datasets/'+encodeURIComponent(dsName)+'/insight?trigger='+encodeURIComponent(t));
+  dsInsight = r.error ? null : r;
+  renderInsight();
+}
+
+function tileFlags(img){
+  const cap=(img.caption||'').trim();
+  const trig=$('#ds-trig').value.trim();
+  const noTrig = !!trig && !cap.toLowerCase().includes(trig.toLowerCase());
+  const thin = !!dsInsight && dsInsight.thin.includes(img.name);
+  return {cap, noTrig, thin};
+}
+
+function visibleImages(){
+  return dsImages.filter(i=>{
+    const f=tileFlags(i);
+    if(dsFilter==='uncap') return !f.cap;
+    if(dsFilter==='notrig') return f.noTrig;
+    return true;
+  });
+}
+
+function renderTiles(){
+  const cols=[6,5,4,3,2][Math.max(0,Math.min(4,dsDensity))];
+  $('#tiles').style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;
+  const vis=visibleImages();
+  $('#tiles').innerHTML=vis.map(i=>{
+    const f=tileFlags(i);
+    const cls=['tile', f.thin?'thin':'', f.noTrig?'notrig':''].filter(Boolean).join(' ');
+    const sz = i.bytes>=1048576 ? (i.bytes/1048576).toFixed(1)+' MB' : Math.round(i.bytes/1024)+' KB';
+    const px = i.width ? `${i.width}×${i.height} · ` : '';
+    return `<div class="${cls}" data-tile="${esc(i.name)}">
+      <div class="ph">
+        <img loading="lazy" src="/api/thumb/${encodeURIComponent(dsName)}/${encodeURIComponent(i.name)}"
+             alt="" data-full="${esc(i.name)}">
+        <div class="dim">${px}${sz}</div>
+        <button class="rm" data-rm="${esc(i.name)}" title="Move to .trash">×</button>
+      </div>
+      <textarea data-n="${esc(i.name)}" placeholder="No caption" spellcheck="false">${esc(i.caption)}</textarea>
+    </div>`;
+  }).join('');
+
+  // Autosave per caption on blur, with the pending state visible meanwhile.
+  $$('#tiles textarea').forEach(t=>{
+    const orig=t.value;
+    t.oninput=()=>t.classList.toggle('dirty', t.value!==t.defaultValue);
+    t.onblur=()=>saveCaption(t);
+    t.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); t.blur() } };
+  });
+  $$('#tiles [data-rm]').forEach(b=>b.onclick=()=>removeImage(b));
+  $$('#tiles [data-full]').forEach(im=>im.onclick=()=>lightbox(im.dataset.full));
+
+  const capd=dsImages.filter(i=>(i.caption||'').trim()).length;
+  const shown = vis.length===dsImages.length ? '' : ` · showing ${vis.length}`;
+  $('#ds-count').textContent=`${dsImages.length} image${dsImages.length===1?'':'s'} · ${capd} captioned${shown}`;
+  ['all','uncap','notrig'].forEach(k=>{
+    const b=$('#f-'+(k==='all'?'all':k==='uncap'?'uncap':'notrig'));
+    if(b) b.style.borderColor = dsFilter===k ? 'rgba(255,255,255,.45)' : '';
+  });
+  $('#drop-title').textContent = dsImages.length ? 'Drop more images' : 'Drop images or a .zip';
+}
+
+async function saveCaption(t){
+  const val=t.value.trim();
+  const rec=dsImages.find(i=>i.name===t.dataset.n);
+  if(rec && rec.caption===val){ t.classList.remove('dirty'); return }
+  const r=await post('/api/datasets/'+encodeURIComponent(dsName)+'/caption',
+    {image:t.dataset.n, caption:val});
+  if(r.error){ errInto('#ds-edit-err',r.error); return }
+  if(rec) rec.caption=val;
+  t.defaultValue=val; t.classList.remove('dirty');
+  loadInsight();
+}
+
+async function removeImage(b){
+  b.disabled=true;
+  const r=await post('/api/datasets/'+encodeURIComponent(dsName)+'/remove',{image:b.dataset.rm});
+  if(r.error){ errInto('#ds-edit-err',r.error); b.disabled=false; return }
+  dsImages=dsImages.filter(i=>i.name!==b.dataset.rm);
+  renderTiles(); loadInsight();
+}
+
+function lightbox(name){
+  const el=document.createElement('div');
+  el.className='lb';
+  el.innerHTML=`<button class="x">×</button><img src="/api/image/${encodeURIComponent(dsName)}/${encodeURIComponent(name)}" alt="">`;
+  const close=()=>{ el.remove(); document.removeEventListener('keydown',onKey) };
+  const onKey=e=>{ if(e.key==='Escape') close() };
+  el.onclick=close; document.addEventListener('keydown',onKey);
+  document.body.appendChild(el);
+}
+
+// ---------- insight ----------
+// The prose answer to "what is this dataset teaching the model?" — trigger
+// coverage first because a caption without it trains a LoRA you cannot summon.
+function renderInsight(){
+  const d=dsInsight;
+  if(!d){ $('#ins-body').innerHTML=''; return }
+  const pct=(n,t)=>t? Math.round(n/t*100) : 0;
+  const bar=(n,t,good)=>{
+    const p=pct(n,t);
+    const cls = p>=100 ? '' : (good ? (p>=80?'warn':'bad') : (p>=50?'warn':'bad'));
+    return `<div class="meter"><i class="${cls}" style="width:${p}%"></i></div>`;
+  };
+  let h='';
+  // Trigger coverage is a ratio over captions, so it says nothing until there
+  // are captions — "0/0 have the trigger" reads as a failure rather than a
+  // not-yet.
+  if(d.trigger_word && d.captioned){
+    h+=`<div class="stat"><b>${d.with_trigger}/${d.captioned}</b><span>have the trigger</span></div>`
+     + bar(d.with_trigger, d.captioned, true);
+  }
+  h+=`<div class="stat"><b>${d.captioned}/${d.images}</b><span>captioned</span></div>`
+   + bar(d.captioned, d.images, true);
+  if(d.median_words) h+=`<p class="muted" style="margin:-6px 0 14px;font-size:12px">median ${d.median_words} words`
+   + (d.thin.length?` · ${d.thin.length} thin`:'')+`</p>`;
+
+  if(d.phrases && d.phrases.length){
+    const max=d.phrases[0].count||1;
+    h+=`<label style="margin-top:4px">Recurring phrases</label>`;
+    h+=d.phrases.map(p=>{
+      const w=Math.round(p.count/max*100);
+      const hot=p.share>=0.6?' hot':'';
+      return `<button class="ph-row" data-phrase="${esc(p.phrase)}">
+        <span class="ph-bar"><i class="${hot.trim()}" style="--w:${w}%"></i><span>${esc(p.phrase)}</span></span>
+        <span class="ph-n">${p.count}</span>
+      </button>`;
+    }).join('');
+    h+=`<p class="muted" style="margin-top:8px;font-size:11px">Click a phrase to see where it repeats.</p>`;
+  }
+  $('#ins-body').innerHTML=h;
+  $$('#ins-body [data-phrase]').forEach(b=>b.onclick=()=>{
+    const ph=b.dataset.phrase.toLowerCase();
+    dsFilter='all';
+    const hits=dsImages.filter(i=>(i.caption||'').toLowerCase().includes(ph)).map(i=>i.name);
+    renderTiles();
+    $$('#tiles [data-tile]').forEach(t=>{
+      t.classList.toggle('sel', hits.includes(t.dataset.tile));
+      t.style.display = hits.includes(t.dataset.tile) ? '' : 'none';
+    });
+    $('#ds-count').textContent=`${hits.length} of ${dsImages.length} contain “${b.dataset.phrase}”`;
+  });
+}
+
+// ---------- toolbar ----------
+$('#f-all').onclick=()=>{ dsFilter='all'; renderTiles() };
+$('#f-uncap').onclick=()=>{ dsFilter='uncap'; renderTiles() };
+$('#f-notrig').onclick=()=>{ dsFilter='notrig'; renderTiles() };
+$('#dens-up').onclick=()=>{ dsDensity=Math.min(4,dsDensity+1); renderTiles() };
+$('#dens-down').onclick=()=>{ dsDensity=Math.max(0,dsDensity-1); renderTiles() };
+$('#ds-trig').oninput=()=>{ renderTiles() };
+$('#ds-trig').onblur=async()=>{
+  if(!dsName) return;
+  await post('/api/datasets/'+encodeURIComponent(dsName)+'/meta',{trigger_word:$('#ds-trig').value.trim()});
+  loadInsight();
+};
+
+$('#do-prepend').onclick=async()=>{
+  const trig=$('#ds-trig').value.trim();
+  if(!trig){ errInto('#ds-edit-err','Set a trigger word first.'); return }
+  const b=$('#do-prepend'); b.disabled=true; const was=b.textContent;
+  const r=await post('/api/datasets/'+encodeURIComponent(dsName)+'/prepend-trigger',{trigger_word:trig});
+  if(r.error){ errInto('#ds-edit-err',r.error) }
+  else{ b.textContent=r.changed?`${r.changed}`:'ok'; await loadTiles() }
+  setTimeout(()=>{ b.textContent=was; b.disabled=false },1600);
+};
+
+$('#do-caption').onclick=async()=>{
+  const btn=$('#do-caption'); btn.disabled=true;
+  const box=$('#cap-prog'); box.classList.remove('hide');
+  errInto('#ds-edit-err','');
+  const r=await post('/api/caption',{dataset:dsName,trigger_word:$('#ds-trig').value.trim(),
+    style:$('#cap-style').value,length:$('#cap-len').value,overwrite:$('#cap-over').checked});
+  if(r.error){ errInto('#ds-edit-err',r.error); btn.disabled=false; box.classList.add('hide'); return }
+  clearInterval(capPoll);
+  capPoll=setInterval(async()=>{
+    const s=await api('/api/status/'+r.job_id);
+    box.querySelector('i').style.width=(s.percent||0)+'%';
+    box.querySelector('p').textContent=s.step?`Captioning ${s.step}/${s.total_steps}`:'Loading captioner…';
+    // Refresh mid-run so captions land visibly rather than all at the end.
+    if(s.step&&s.step%5===0) loadTiles();
+    if(s.status==='completed'){ clearInterval(capPoll); box.classList.add('hide');
+      btn.disabled=false; loadTiles(); }
+    else if(s.status==='failed'){ clearInterval(capPoll); box.classList.add('hide');
+      btn.disabled=false; errInto('#ds-edit-err',s.error||'Captioning failed'); }
+  },2500);
+};
+
+// ---------- upload ----------
 function upload(list){
   const keep=[...list].filter(f=>/\.(png|jpe?g|webp|bmp|avif|zip|txt)$/i.test(f.name));
-  if(!keep.length||uploading) return;
-  uploading=true; $('#train-err').innerHTML='';
+  if(!keep.length||uploading||!dsName) return;
+  uploading=true; errInto('#ds-edit-err','');
   const box=$('#up-prog'); box.classList.remove('hide'); const bar=box.querySelector('i');
   $('#drop-title').textContent='Uploading…';
   $('#drop-sub').textContent=`${keep.length} file${keep.length>1?'s':''}`;
 
   const fd=new FormData();
   keep.forEach(f=>fd.append('files',f,f.name));
-  if(jobId) fd.append('job_id',jobId);          // append to the existing dataset
+  fd.append('dataset',dsName);
 
   // XHR, not fetch — fetch reports no upload progress.
   const x=new XMLHttpRequest();
@@ -1927,122 +2730,68 @@ function upload(list){
   x.upload.onprogress=e=>{ if(e.lengthComputable) bar.style.width=Math.round(e.loaded/e.total*100)+'%' };
   x.onload=async()=>{
     uploading=false; box.classList.add('hide'); bar.style.width='0%';
+    $('#drop-sub').textContent='or click to browse';
     let r={}; try{ r=JSON.parse(x.responseText) }catch{}
-    if(r.error||x.status>=400||!r.job_id){
-      // Show the status and any raw body — an opaque "failed" is not debuggable.
+    if(r.error||x.status>=400){
       const detail = r.error || (x.responseText||'').slice(0,300) || 'no response body';
-      $('#train-err').innerHTML='<div class="err-box">Upload failed ('+x.status+'): '+
-        detail.replace(/</g,'&lt;')+'</div>';
-      resetDropLabel(); return;
+      errInto('#ds-edit-err','Upload failed ('+x.status+'): '+detail);
+      renderTiles(); return;
     }
-    jobId=r.job_id;
-    $('#dataset').classList.remove('hide');
     await loadTiles();
   };
-  x.onerror=()=>{ uploading=false; box.classList.add('hide'); resetDropLabel();
-    $('#train-err').innerHTML='<div class="err-box">Network error during upload.</div>'; };
+  x.onerror=()=>{ uploading=false; box.classList.add('hide');
+    $('#drop-sub').textContent='or click to browse';
+    errInto('#ds-edit-err','Network error during upload.'); };
   x.send(fd);
-}
-function resetDropLabel(n){
-  $('#drop-title').textContent = jobId ? 'Drop more images' : 'Drop images or a .zip';
-  $('#drop-sub').textContent = 'or click to browse';
 }
 const show=s=>['build','run'].forEach(x=>$('#step-'+x).classList.toggle('hide',x!==s));
 
-// ---------- review ----------
-async function loadTiles(){
-  const d=await api('/api/dataset/'+jobId);
-  if(d.error){$('#train-err').innerHTML='<div class="err-box">'+d.error+'</div>';return}
-  captions={};
-  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-  $('#tiles').innerHTML=d.images.map(i=>`
-    <div class="tile" data-tile="${esc(i.name)}">
-      ${i.thumb?`<img src="${i.thumb}" alt="">`:'<div style="width:88px;height:88px;border-radius:10px;background:rgba(255,255,255,.05);flex:0 0 88px"></div>'}
-      <div class="grow">
-        <div class="row" style="gap:8px;margin-bottom:5px">
-          <code class="grow" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.name)}</code>
-          <button class="rm" data-rm="${esc(i.name)}" title="Remove from dataset">×</button>
-        </div>
-        <textarea data-n="${esc(i.name)}" placeholder="No caption">${esc(i.caption)}</textarea>
-      </div>
-    </div>`).join('');
-  $$('#tiles textarea').forEach(t=>t.oninput=()=>{
-    captions[t.dataset.n]=t.value;
-    clearTimeout(saveT); saveT=setTimeout(flush,1200);
-  });
-  $$('#tiles [data-rm]').forEach(b=>b.onclick=async()=>{
-    b.disabled=true;
-    const r=await post('/api/remove-image',{job_id:jobId,name:b.dataset.rm});
-    if(r.error){$('#train-err').innerHTML='<div class="err-box">'+r.error+'</div>';b.disabled=false;return}
-    delete captions[b.dataset.rm];
-    b.closest('[data-tile]').remove();
-    countTiles(r.count);
-    if(!r.count){ $('#dataset').classList.add('hide'); jobId=null; }
-    resetDropLabel();
-  });
-  countTiles(d.images.length, d.images.filter(i=>i.caption.trim()).length);
-  resetDropLabel();
+// ==================== TRAIN ====================
+// Train no longer owns a dataset; it picks one.
+let trainDatasets=[];
+function fillTrainDatasets(list){
+  trainDatasets=list;
+  const sel=$('#t-dataset'), cur=sel.value;
+  sel.innerHTML='<option value="">Choose a dataset…</option>'+
+    list.map(d=>`<option value="${esc(d.name)}"${d.count?'':' disabled'}>${esc(d.name)} · ${d.count} image${d.count===1?'':'s'}${d.count?'':' (empty)'}</option>`).join('');
+  if(cur) sel.value=cur;
+  syncTrainDataset();
+}
+function syncTrainDataset(){
+  const d=trainDatasets.find(x=>x.name===$('#t-dataset').value);
+  $('#dataset').classList.toggle('hide',!d);
+  if(!d){ $('#t-dsinfo').textContent=''; checkTrainReady(); return }
+  const warn = d.uncaptioned ? ` · ${d.uncaptioned} uncaptioned` : '';
+  $('#t-dsinfo').textContent=`${d.count} image${d.count===1?'':'s'}${warn}`;
+  if(d.trigger_word && !$('#ltrig').value) $('#ltrig').value=d.trigger_word;
+  if(!$('#lname').value) $('#lname').value=d.name;
   checkTrainReady();
 }
-function countTiles(total, done){
-  if(done===undefined) done=$$('#tiles textarea').filter(t=>t.value.trim()).length;
-  if(total===undefined) total=$$('#tiles [data-tile]').length;
-  $('#cap-count').textContent=`${total} image${total===1?'':'s'} · ${done} captioned`;
-  checkTrainReady();
-}
+$('#t-dataset').onchange=syncTrainDataset;
+
 function checkTrainReady(){
-  const n=$$('#tiles [data-tile]').length;
-  const ok=n>0&&$('#lname').value.trim()&&$('#ltrig').value.trim();
+  const ok=$('#t-dataset').value&&$('#lname').value.trim()&&$('#ltrig').value.trim();
   $('#go-train').disabled=!ok;
-  $('#train-hint').textContent = !n ? '' :
+  $('#train-hint').textContent = !$('#t-dataset').value ? '' :
     (!$('#lname').value.trim()||!$('#ltrig').value.trim()) ? 'Name it and set a trigger word to train' : '';
 }
 document.addEventListener('input',e=>{ if(e.target.id==='lname'||e.target.id==='ltrig') checkTrainReady() });
-async function flush(){
-  if(!Object.keys(captions).length) return;
-  const send={...captions}; captions={};
-  await post('/api/captions',{job_id:jobId,captions:send});
-}
-$('#do-prepend').onclick=async()=>{
-  const trig=$('#ltrig').value.trim();
-  if(!trig){$('#train-err').innerHTML='<div class="err-box">Set a trigger word first.</div>';return}
-  clearTimeout(saveT); await flush();          // never clobber unsaved edits
-  const b=$('#do-prepend'); b.disabled=true; const was=b.textContent;
-  const r=await post('/api/prepend-trigger',{job_id:jobId,trigger_word:trig});
-  if(r.error){$('#train-err').innerHTML='<div class="err-box">'+r.error+'</div>'}
-  else{ b.textContent=r.changed?`Updated ${r.changed}`:'Already set'; await loadTiles(); }
-  setTimeout(()=>{b.textContent=was;b.disabled=false},1800);
-};
-$('#do-caption').onclick=async()=>{
-  clearTimeout(saveT); await flush();
-  const btn=$('#do-caption'); btn.disabled=true;
-  const box=$('#cap-prog'); box.classList.remove('hide');
-  await post('/api/caption',{job_id:jobId,trigger_word:$('#ltrig').value.trim(),
-    style:$('#cap-style').value,length:$('#cap-len').value,overwrite:$('#cap-over').checked});
-  const t=setInterval(async()=>{
-    const s=await api('/api/status/'+jobId);
-    box.querySelector('i').style.width=(s.percent||0)+'%';
-    box.querySelector('p').textContent=s.step?`Captioning ${s.step}/${s.total_steps}`:'Loading captioner…';
-    if(s.status==='completed'){clearInterval(t);box.classList.add('hide');btn.disabled=false;loadTiles();}
-    else if(s.status==='failed'){clearInterval(t);btn.disabled=false;
-      $('#train-err').innerHTML='<div class="err-box">'+(s.error||'Captioning failed')+'</div>';}
-  },2500);
-};
 
 // ---------- train ----------
+let trainJob=null;
 $('#go-train').onclick=async()=>{
-  clearTimeout(saveT); await flush();
   $('#train-err').innerHTML='';
-  const r=await post('/api/train',{job_id:jobId,lora_name:$('#lname').value.trim(),
+  const r=await post('/api/train',{dataset:$('#t-dataset').value,lora_name:$('#lname').value.trim(),
     trigger_word:$('#ltrig').value.trim(),network_dim:$('#a-dim').value,network_alpha:$('#a-alpha').value,
     max_train_epochs:$('#a-epochs').value,learning_rate:$('#a-lr').value,resolution:$('#a-res').value,
     num_repeats:$('#a-rep').value,batch_size:$('#a-bs').value,seed:$('#a-seed').value});
   if(r.error){$('#train-err').innerHTML='<div class="err-box">'+r.error+'</div>';return}
+  trainJob=r.job_id;
   show('run'); $('#run-done').classList.add('hide');
   poll=setInterval(pollTrain,3000); pollTrain();
 };
 async function pollTrain(){
-  const s=await api('/api/status/'+jobId);
+  const s=await api('/api/status/'+trainJob);
   $('#run-phase').textContent=s.phase||'Working…';
   $('#run-pct').textContent=s.percent!=null?s.percent+'%':'';
   $('#run-bar').style.width=(s.percent||0)+'%';
@@ -2068,7 +2817,7 @@ async function pollTrain(){
     $('#train-err').innerHTML='<div class="err-box">'+(s.error||'Training failed')+'</div>';
   }
 }
-$('#do-stop').onclick=async()=>{ $('#do-stop').disabled=true; await post('/api/stop/'+jobId); };
+$('#do-stop').onclick=async()=>{ $('#do-stop').disabled=true; await post('/api/stop/'+trainJob); };
 
 // ---------- generate ----------
 function syncModelLine(){
@@ -2214,5 +2963,6 @@ $('#go-gen').onclick=async()=>{
 };
 
 loadState();
+loadDatasets();
 </script></body></html>
 """
