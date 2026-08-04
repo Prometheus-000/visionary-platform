@@ -3766,36 +3766,254 @@ def main(
 
 UI_HTML = r"""<!doctype html>
 <html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Visionary</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#000;--panel:rgba(255,255,255,.04);--line:rgba(255,255,255,.10);--fg:#f5f5f5;--mut:#8a8a8a;--dim:#5a5a5a}
-body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;-webkit-font-smoothing:antialiased}
-.app{display:flex;min-height:100dvh}
-aside{width:232px;flex:0 0 232px;border-right:1px solid rgba(255,255,255,.07);padding:16px 12px;display:flex;flex-direction:column;gap:2px}
-/* Wordmark only. The gradient chip it replaces was decoration: with the label
-   right beside it, it carried no recognition the word did not already carry. */
-.brand{padding:4px 12px 20px;letter-spacing:-.01em}
-.seclabel{font-size:11px;color:var(--dim);padding:0 12px;margin-bottom:6px}
-/* State is carried by weight and a hairline, not by a filled pill. One accent
-   rule is the least ink that still says unambiguously which view you are in. */
-nav button{display:block;width:100%;padding:7px 12px;border:0;border-left:2px solid transparent;
-  background:none;color:var(--mut);font:inherit;text-align:left;cursor:pointer;transition:color .12s}
-nav button:hover{color:#c9c9c9}
-nav button.on{color:var(--fg);border-left-color:var(--fg)}
+:root{--bg:#000;--panel:rgba(255,255,255,.04);--line:rgba(255,255,255,.10);--fg:#f5f5f5;
+      --mut:#8a8a8a;--dim:#5a5a5a;--drawer:320px}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+     -webkit-font-smoothing:antialiased;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+svg{width:100%;height:100%;display:block}
 
-/* Datasets ------------------------------------------------------------- */
-.ds-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.ds-card{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;overflow:hidden;cursor:pointer;text-align:left;padding:0;color:inherit;font:inherit}
+/* Chrome ---------------------------------------------------------------- */
+/* There is no navigation rail, and no two-up switcher up here either.
+   Generate and Train are not peers: one is where the machine is used, the
+   other is where it is changed, and a 50/50 toggle asserts a balance that
+   does not exist. So Generate is simply the page — it has no nav item because
+   it is not a place you go — and Train is a door on the right: one slot,
+   labelled with where it leads rather than with where you are. */
+.top{flex:0 0 56px;display:flex;align-items:center;gap:14px;padding:0 14px 0 18px;
+     border-bottom:1px solid rgba(255,255,255,.07)}
+.brand{border:0;background:none;color:var(--fg);font:600 15px/1 inherit;letter-spacing:-.01em;
+  padding:8px 2px;cursor:pointer}
+.grow{flex:1;min-width:0}
+
+/* The door, and the reason it is worth a permanent slot: a training run lasts
+   hours and you are meant to leave and keep generating while it goes. So the
+   way back to it is also the readout on it — progress on the control that
+   takes you there, rather than in a place you have to go to look. */
+.door{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);
+  background:rgba(255,255,255,.04);color:#ddd;border-radius:999px;padding:7px 14px 7px 11px;
+  font:500 13px/1 inherit;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.door:hover{background:rgba(255,255,255,.1);color:var(--fg);border-color:rgba(255,255,255,.22)}
+.door svg{width:15px;height:15px;flex:none}
+.door .ring circle{fill:none;stroke-width:3}
+.door .ring .bg{stroke:rgba(255,255,255,.2)}
+.door .ring .fg{stroke:currentColor;stroke-linecap:round;
+  transform:rotate(-90deg);transform-origin:50% 50%;transition:stroke-dashoffset .5s}
+.door.live{color:#fff;border-color:rgba(255,255,255,.3)}
+.sep{width:1px;height:22px;flex:none;background:rgba(255,255,255,.12)}
+
+/* The one black-on-white switcher left in the product: Training and Datasets,
+   which is the only pair in here that really is two equal halves of one thing. */
+.switch{display:inline-flex;background:rgba(255,255,255,.06);border-radius:11px;padding:3px;gap:2px}
+.switch button{border:0;background:none;color:var(--mut);padding:6px 15px;border-radius:9px;
+  font:500 13px/1.35 inherit;cursor:pointer;transition:color .12s,background .12s}
+.switch button:hover{color:#ddd}
+.switch button.on{background:#fff;color:#000}
+.ico{width:34px;height:34px;flex:none;border:0;border-radius:10px;background:none;color:var(--mut);
+  cursor:pointer;padding:8px;transition:background .12s,color .12s}
+.ico:hover{background:rgba(255,255,255,.08);color:var(--fg)}
+.ico.on{color:var(--fg);background:rgba(255,255,255,.1)}
+
+.views{flex:1;min-height:0;position:relative}
+.view{position:absolute;inset:0;display:flex;min-width:0}
+.view.scroll{display:block;overflow:auto}
+.hide{display:none !important}
+
+/* Generate -------------------------------------------------------------- */
+/* The canvas gets the width; the console gets the height.
+   A settings rail down the left costs the picture 384px of the one dimension
+   it cannot get back — an image is wide, a screen is wide, and a column of
+   dropdowns is neither. Vertical is the cheap axis: the console is a bar under
+   the canvas that grows downward when it has more to say and collapses when it
+   does not, so on a bare prompt the canvas has the whole room. */
+.stage{flex:1;min-width:0;display:flex;flex-direction:column}
+.canvas{flex:1;min-height:0;overflow:auto;padding:22px 28px;display:flex;flex-direction:column}
+/* Capped, so a console with everything open can never push the canvas out of
+   the frame — past the cap it scrolls itself instead. */
+.console{flex:none;max-height:54dvh;overflow:auto;padding:13px 28px 15px;
+  border-top:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.012)}
+.crow{display:flex;align-items:flex-end;gap:10px}
+.crow .field{flex:1;min-width:0}
+.crow button.b{flex:none;height:44px;padding:0 26px}
+.drawer{flex:0 0 var(--drawer);min-width:0;border-left:1px solid rgba(255,255,255,.07);overflow:auto}
+.drawer-in{width:var(--drawer);padding:12px 14px 40px}
+/* Collapsed by flex-basis rather than display:none so the canvas reflows
+   smoothly; the inner column keeps its width so nothing re-wraps on the way. */
+.studio.nodrawer .drawer{flex-basis:0;border-left:0;overflow:hidden}
+.drawer{transition:flex-basis .18s ease}
+.drawer-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-height:28px}
+
+/* Controls in a row, not a form. Each one shows its own value — "Krea 2
+   Turbo", "16:9", "720p", "5s" — so a label above it would only repeat what
+   the control already says. The two whose value means nothing on its own get
+   an icon instead of a word: a count and a seed. */
+.opts{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px}
+.opt{display:inline-flex;align-items:center;gap:5px;height:36px;padding:0 5px 0 9px;
+  background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
+.opt:focus-within{border-color:rgba(255,255,255,.28)}
+.opt>svg{width:14px;height:14px;flex:none;color:var(--dim)}
+.opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:34px;border-radius:8px}
+.opt input{width:76px}
+.opt.wide{flex:1;min-width:220px}
+.opt.wide input,.opt.wide textarea{flex:1;min-width:0;width:auto}
+.vr{width:1px;height:20px;flex:none;background:var(--line);margin:0 4px}
+/* Icon-only controls in the strip: same box, square, no value to show. */
+.opt.ib{padding:0;width:36px;justify-content:center;cursor:pointer;color:var(--mut);
+  transition:background .12s,color .12s}
+.opt.ib:hover{background:rgba(255,255,255,.1);color:var(--fg)}
+.opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
+.opt.ib>svg{width:16px;height:16px;color:inherit}
+.adv{margin-top:9px;padding-top:10px;border-top:1px solid var(--line)}
+
+/* The prompt field. The textarea and the Image/Video chip are one bordered
+   box, and the prompt itself is shared by both — switching mid-sentence keeps
+   the sentence. Image and video are not two workspaces to navigate between;
+   they are two things the same sentence can become, so the choice belongs
+   inside the field you are already typing in, at the smallest size that still
+   reads. Everything below the field is options for that choice. */
+.field{border:1px solid var(--line);background:rgba(255,255,255,.05);border-radius:13px;padding:2px 2px 0}
+.field:focus-within{border-color:rgba(255,255,255,.28)}
+.field textarea{border:0;background:none;border-radius:0;padding:9px 10px 2px}
+.field .bar2{display:flex;align-items:center;gap:8px;padding:2px 5px 5px}
+.kinds{display:inline-flex;gap:2px;background:rgba(255,255,255,.05);border-radius:999px;padding:2px}
+.kinds button{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--mut);
+  border-radius:999px;padding:4px 10px 4px 8px;font:500 12px/1 inherit;cursor:pointer;
+  transition:background .12s,color .12s}
+.kinds button svg{width:13px;height:13px;flex:none}
+.kinds button:hover{color:#ddd}
+.kinds button.on{background:rgba(255,255,255,.14);color:var(--fg)}
+
+.sec{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
+.sec:first-child{border-top:0;margin-top:0;padding-top:0}
+.sec>label:first-child{margin-bottom:8px}
+.f2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.f3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+
+h1{font-size:19px;font-weight:600;margin-bottom:3px;letter-spacing:-.01em}
+.sub{color:var(--dim);font-size:13px;margin-bottom:22px}
+.card{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:16px;padding:16px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:14px}
+label{display:block;font-size:12px;color:var(--mut);margin-bottom:6px}
+input,textarea,select{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--line);
+  border-radius:11px;padding:10px 12px;color:var(--fg);font:inherit;outline:none}
+input:focus,textarea:focus,select:focus{border-color:rgba(255,255,255,.28)}
+input:disabled,select:disabled{opacity:.45}
+textarea{resize:vertical}
+button.b{background:#fff;color:#000;border:0;border-radius:12px;padding:11px 18px;font:600 14px/1 inherit;cursor:pointer}
+button.b:disabled{background:rgba(255,255,255,.2);color:rgba(0,0,0,.4);cursor:not-allowed}
+button.s{background:rgba(255,255,255,.07);color:var(--fg);border:1px solid var(--line);
+  border-radius:11px;padding:9px 15px;font:500 13px/1 inherit;cursor:pointer}
+button.s:hover{background:rgba(255,255,255,.12)}
+button.s:disabled{opacity:.4;cursor:not-allowed}
+button.t{background:none;border:0;color:var(--mut);font:500 12px/1 inherit;cursor:pointer;padding:6px 2px}
+button.t:hover{color:var(--fg)}
+.pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:0;
+  border-radius:999px;padding:7px 13px;color:#ddd;font:13px inherit;cursor:pointer}
+.pill.on{background:#fff;color:#000}
+.bar{height:3px;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden;margin-top:10px}
+.bar>i{display:block;height:100%;background:#fff;border-radius:99px;transition:width .4s}
+.muted{color:var(--dim);font-size:12px}
+.ok{color:#4ade80}.warn{color:#fbbf24}.err{color:#f87171}
+.err-box{border:1px solid rgba(248,113,113,.25);background:rgba(248,113,113,.1);color:#fca5a5;
+  border-radius:12px;padding:11px 14px;font-size:13px;margin-bottom:12px}
+code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
+
+/* Canvas ---------------------------------------------------------------- */
+/* Not `.empty` — `.ds-cover.empty` already owned that name, and a bare `.empty`
+   carrying min-height:62vh landed on the dataset placeholder and inflated every
+   card in its grid row to 606px. */
+.blank{flex:1;min-height:200px;display:grid;place-items:center;color:var(--dim)}
+/* `.blank`, not `.empty` — the placeholder is `.blank`, so this rule matched
+   nothing and the global `svg{width:100%}` inflated the glyph to the width of
+   the canvas. A selector that misses is invisible in the CSS and enormous on
+   the page. */
+.blank .glyph{width:44px;height:44px;margin:0 auto 14px;opacity:.3}
+/* The figure hugs the image rather than the column: a portrait still in a 1fr
+   cell would otherwise sit inside letterbox bars it does not have, and the
+   border would describe the grid instead of the picture. --shot-h is set per
+   batch size so four images are a contact sheet you can see at once, not a
+   scroll. */
+.shots{display:grid;gap:16px;margin:0 auto}
+.shot{position:relative;width:fit-content;max-width:100%;justify-self:center;
+  border-radius:16px;overflow:hidden;border:1px solid var(--line);background:rgba(255,255,255,.02)}
+.shot img{display:block;max-width:100%;max-height:var(--shot-h,none);width:auto;height:auto}
+.shot .acts{position:absolute;right:10px;bottom:10px;display:flex;gap:6px;opacity:0;transition:opacity .12s}
+.shot:hover .acts{opacity:1}
+#vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
+  border:1px solid var(--line);background:#000}
+
+/* Cards ----------------------------------------------------------------- */
+/* One card, three homes: the drawer, the full gallery, the dataset index.
+   4/3 with contain, so nothing on the volume is shown as a crop it is not. */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:14px}
+.drawer .grid{grid-template-columns:1fr;gap:10px}
+.gal{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;overflow:hidden;position:relative}
+.gal:hover{border-color:rgba(255,255,255,.2)}
+.gal .media{aspect-ratio:4/3;background:rgba(255,255,255,.045);display:block;width:100%;object-fit:contain;cursor:zoom-in}
+/* Hover cluster on the media: the two verbs worth one click. Everything else
+   is one more click away in the overflow, which is the correct price for it. */
+.gal .quick{position:absolute;top:8px;right:8px;display:flex;gap:6px;opacity:0;transition:opacity .12s}
+.gal:hover .quick,.gal .quick:focus-within{opacity:1}
+.gal .quick button{width:28px;height:28px;flex:none;border:0;border-radius:999px;background:rgba(0,0,0,.66);
+  color:#eee;padding:7px;cursor:pointer;backdrop-filter:blur(8px)}
+.gal .quick button:hover{background:rgba(0,0,0,.9)}
+/* The footer is the label. A 24px photo or play glyph says what this is in
+   less space and less noise than the word "image" ever did. */
+.foot{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;border-top:1px solid var(--line);min-height:40px}
+.foot .kind{width:24px;height:24px;flex:none;color:var(--dim);padding:2px}
+.foot .when{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.foot .more{width:28px;height:28px;flex:none;border:0;border-radius:8px;background:none;color:var(--mut);
+  padding:5px;cursor:pointer}
+.foot .more:hover{background:rgba(255,255,255,.09);color:var(--fg)}
+
+/* Overflow menu --------------------------------------------------------- */
+.menu{position:fixed;z-index:80;min-width:196px;padding:5px;border-radius:13px;
+  border:1px solid rgba(255,255,255,.14);background:#111;box-shadow:0 18px 48px rgba(0,0,0,.6)}
+.menu button{display:block;width:100%;text-align:left;border:0;background:none;color:#e6e6e6;
+  font:13px/1 inherit;padding:9px 11px;border-radius:9px;cursor:pointer}
+.menu button:hover{background:rgba(255,255,255,.09)}
+.menu button.danger{color:#f87171}
+.menu button.danger:hover{background:rgba(248,113,113,.14)}
+.menu hr{border:0;border-top:1px solid rgba(255,255,255,.1);margin:5px 7px}
+
+/* Sheets: settings, metadata, lightbox ---------------------------------- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:60;display:grid;place-items:center;padding:32px}
+.sheet{width:100%;max-width:720px;max-height:100%;overflow:auto;background:#0b0b0b;
+  border:1px solid var(--line);border-radius:20px;padding:22px 24px 26px}
+.sheet-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px}
+/* Model families. A rule above each heading rather than a box around each
+   group: the cards already have edges, and nesting borders inside borders is
+   two frames for one idea. */
+.fam{margin-bottom:22px}
+.fam+.fam{border-top:1px solid var(--line);padding-top:18px}
+.fam-head{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px}
+.fam-head .muted{margin-left:auto;font-size:12px}
+.kv{display:grid;grid-template-columns:132px 1fr;gap:5px 14px;font-size:13px}
+.kv dt{color:var(--mut)}
+.kv dd{color:#e8e8e8;word-break:break-word}
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:70;display:grid;place-items:center;padding:34px}
+.lb img,.lb video{max-width:100%;max-height:100%;object-fit:contain}
+.lb .x{position:absolute;top:16px;right:20px;width:34px;height:34px;border:0;background:none;color:#bbb;padding:7px;cursor:pointer}
+
+/* Datasets -------------------------------------------------------------- */
+/* flex-column, not the default: a <button> centres its content vertically, so
+   once one card in the row is taller than another the covers float in the
+   middle of their cards with black above them. */
+.ds-card{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;overflow:hidden;
+  cursor:pointer;text-align:left;padding:0;color:inherit;font:inherit;
+  display:flex;flex-direction:column;align-items:stretch}
 .ds-card:hover{border-color:rgba(255,255,255,.24)}
-.ds-cover{aspect-ratio:16/10;background:rgba(255,255,255,.045);display:block;width:100%;object-fit:contain}
+.ds-cover{aspect-ratio:4/3;background:rgba(255,255,255,.045);display:block;width:100%;
+  flex:none;object-fit:contain}
 .ds-cover.empty{display:grid;place-items:center;color:var(--dim);font-size:22px}
 .ds-meta{padding:11px 13px}
 .ds-meta b{font-size:13px;font-weight:600}
-/* Tiles: object-fit contain so a portrait crop is never implied. */
 .tiles{display:grid;gap:10px}
-.tile{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.02);display:flex;flex-direction:column}
+.tile{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.02);
+  display:flex;flex-direction:column}
 .tile.sel{border-color:rgba(255,255,255,.5)}
 /* A true square cell with the whole image inside it, Bridge-style — you cannot
    judge a crop you cannot see. The image is absolutely positioned: as a normal
@@ -3805,15 +4023,18 @@ nav button.on{color:var(--fg);border-left-color:var(--fg)}
    same colour as the page read as a cropped photo rather than a contained one. */
 .tile .ph{position:relative;background:rgba(255,255,255,.045);aspect-ratio:1}
 .tile .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;cursor:zoom-in}
-.tile .dim{position:absolute;left:6px;bottom:6px;font-size:10px;color:#ddd;background:rgba(0,0,0,.62);padding:2px 6px;border-radius:5px;pointer-events:none}
-.tile .rm{position:absolute;top:6px;right:6px;width:24px;height:24px;border:0;border-radius:50%;background:rgba(0,0,0,.62);color:#eee;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .12s}
+.tile .dim{position:absolute;left:6px;bottom:6px;font-size:10px;color:#ddd;background:rgba(0,0,0,.62);
+  padding:2px 6px;border-radius:5px;pointer-events:none}
+.tile .rm{position:absolute;top:6px;right:6px;width:24px;height:24px;border:0;border-radius:50%;
+  background:rgba(0,0,0,.62);color:#eee;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .12s}
 .tile:hover .rm{opacity:1}
-.tile textarea{border:0;border-top:1px solid var(--line);border-radius:0;background:none;resize:none;font-size:12px;padding:8px 9px;min-height:66px;line-height:1.45}
+.tile textarea{border:0;border-top:1px solid var(--line);border-radius:0;background:none;resize:none;
+  font-size:12px;padding:8px 9px;min-height:66px;line-height:1.45}
 .tile textarea.dirty{background:rgba(56,189,248,.08)}
 .tile.thin textarea{border-top-color:rgba(245,158,11,.5)}
 .tile.notrig textarea{border-top-color:rgba(239,68,68,.55)}
 /* Insight panel: bars are the readout, numbers confirm them. */
-.ins{position:sticky;top:16px}
+.ins{position:sticky;top:0}
 .ins .stat{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
 .ins .stat b{font-size:19px;font-weight:600;letter-spacing:-.01em}
 .ins .stat span{font-size:12px;color:var(--mut)}
@@ -3821,7 +4042,8 @@ nav button.on{color:var(--fg);border-left-color:var(--fg)}
 .meter i{display:block;height:100%;background:#34d399}
 .meter i.warn{background:#f59e0b}
 .meter i.bad{background:#ef4444}
-.ph-row{display:flex;align-items:center;gap:8px;margin-bottom:3px;cursor:pointer;border:0;background:none;padding:2px 0;width:100%;color:inherit;font:inherit;text-align:left}
+.ph-row{display:flex;align-items:center;gap:8px;margin-bottom:3px;cursor:pointer;border:0;background:none;
+  padding:2px 0;width:100%;color:inherit;font:inherit;text-align:left}
 .ph-row:hover .ph-bar{outline:1px solid rgba(255,255,255,.3)}
 .ph-bar{position:relative;flex:1;min-width:0;height:20px;border-radius:5px;background:rgba(255,255,255,.06);overflow:hidden}
 /* Proportional fill only. An earlier version turned these red above 60% share,
@@ -3834,180 +4056,284 @@ nav button.on{color:var(--fg);border-left-color:var(--fg)}
 /* Only the two human-error rows are coloured, because only they are defects. */
 .ph-bar i.bad{background:rgba(239,68,68,.3)}
 .ph-bar i.warn{background:rgba(245,158,11,.28)}
-.ph-bar span{position:absolute;left:7px;top:0;line-height:20px;font-size:11px;color:#e8e8e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;right:7px}
+.ph-bar span{position:absolute;left:7px;top:0;line-height:20px;font-size:11px;color:#e8e8e8;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;right:7px}
 .ph-n{font-size:11px;color:var(--mut);width:26px;text-align:right;flex:none}
-/* Lightbox: original file, not the thumbnail. */
-.lb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:50;display:grid;place-items:center;padding:32px}
-.lb img{max-width:100%;max-height:100%;object-fit:contain}
-.lb .x{position:absolute;top:16px;right:20px;border:0;background:none;color:#bbb;font-size:26px;cursor:pointer}
-main{flex:1;min-width:0;padding:28px 32px 80px;max-width:980px}
-h1{font-size:19px;font-weight:600;margin-bottom:3px;letter-spacing:-.01em}
-.sub{color:var(--dim);font-size:13px;margin-bottom:22px}
-.card{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:16px;padding:16px;margin-bottom:12px}
-.row{display:flex;align-items:center;gap:14px}
-.grow{flex:1;min-width:0}
-label{display:block;font-size:12px;color:var(--mut);margin-bottom:6px}
-input,textarea,select{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px;padding:10px 12px;color:var(--fg);font:inherit;outline:none}
-input:focus,textarea:focus,select:focus{border-color:rgba(255,255,255,.28)}
-textarea{resize:vertical}
-button.b{background:#fff;color:#000;border:0;border-radius:12px;padding:11px 18px;font:600 14px/1 inherit;cursor:pointer}
-button.b:disabled{background:rgba(255,255,255,.2);color:rgba(0,0,0,.4);cursor:not-allowed}
-button.s{background:rgba(255,255,255,.07);color:var(--fg);border:1px solid var(--line);border-radius:11px;padding:9px 15px;font:500 13px/1 inherit;cursor:pointer}
-button.s:hover{background:rgba(255,255,255,.12)}
-button.s:disabled{opacity:.4;cursor:not-allowed}
-.pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:0;border-radius:999px;padding:7px 13px;color:#ddd;font:13px inherit;cursor:pointer}
-.pill.on{background:#fff;color:#000}
-.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-.grid4{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
-.bar{height:3px;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden;margin-top:10px}
-.bar>i{display:block;height:100%;background:#fff;border-radius:99px;transition:width .4s}
-.muted{color:var(--dim);font-size:12px}
-.ok{color:#4ade80}.warn{color:#fbbf24}.err{color:#f87171}
-.err-box{border:1px solid rgba(248,113,113,.25);background:rgba(248,113,113,.1);color:#fca5a5;border-radius:12px;padding:11px 14px;font-size:13px;margin-bottom:12px}
-.tile{border:1px solid var(--line);border-radius:14px;padding:11px;display:flex;gap:11px}
-.tile img{width:88px;height:88px;object-fit:cover;border-radius:10px;flex:0 0 88px}
-.tile textarea{font-size:12px;min-height:76px}
-.rm{background:none;border:0;color:var(--dim);font-size:17px;line-height:1;padding:2px 6px;border-radius:6px;cursor:pointer;flex:0 0 auto}
-.rm:hover{background:rgba(248,113,113,.15);color:#f87171}
-.rm:disabled{opacity:.3}
-#tiles{display:grid;gap:10px;grid-template-columns:1fr}
-@media(min-width:900px){#tiles{grid-template-columns:1fr 1fr}}
-.drop{border:1px dashed rgba(255,255,255,.2);border-radius:16px;padding:34px;text-align:center;cursor:pointer}
+.drop{border:1px dashed rgba(255,255,255,.2);border-radius:16px;text-align:center;cursor:pointer}
 .drop.hot{border-color:rgba(255,255,255,.45);background:rgba(255,255,255,.05)}
-.hide{display:none}
-.gen-out{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
-.gen-out img{width:100%;border-radius:14px;border:1px solid var(--line)}
-.lora-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
-.lora-row select{flex:1;min-width:0}
-.lora-row input{width:70px;text-align:center}
-.lora-row button{padding:8px 10px}
-code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
-@media(max-width:760px){.app{flex-direction:column}aside{width:auto;flex:none;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid rgba(255,255,255,.07)}.seclabel{display:none}.brand{padding:4px 10px 0}nav{display:flex;gap:4px}nav button{white-space:nowrap}main{padding:20px 16px 60px}.grid2{grid-template-columns:1fr}}
+.drop>span{display:block;padding:22px 12px;color:var(--dim);font-size:12px}
+.drop img{display:block;width:100%;max-height:150px;object-fit:contain;border-radius:15px}
+/* The strip's version: a 36px square that is a dashed outline when empty and
+   the frame itself once filled. The thumbnail is the label — a filled first
+   tile says "image-to-video" more directly than the words do. */
+.drop.mini{width:36px;height:36px;flex:none;padding:0;border-radius:10px;overflow:hidden;
+  background:rgba(255,255,255,.03);display:grid;place-items:center;color:var(--dim)}
+.drop.mini:hover{border-color:rgba(255,255,255,.4);color:var(--fg)}
+.drop.mini>span{padding:0;display:grid;place-items:center;width:16px;height:16px}
+.drop.mini img{width:100%;height:100%;max-height:none;object-fit:cover;border-radius:0}
+.drop.mini.set{border-style:solid;border-color:rgba(255,255,255,.28)}
+.pad{padding:26px}
+
+/* Reference chips. Numbered, because the number is the <Picture n> the prompt
+   refers to — it is data, not decoration. */
+.ref{position:relative;width:64px;height:64px;border-radius:11px;overflow:hidden;border:1px solid var(--line);
+  background:rgba(255,255,255,.04)}
+.ref img,.ref video{width:100%;height:100%;object-fit:cover;display:block}
+.ref b{position:absolute;left:4px;bottom:3px;font-size:10px;font-weight:600;color:#fff;
+  background:rgba(0,0,0,.7);padding:1px 5px;border-radius:4px}
+.ref button{position:absolute;top:3px;right:3px;width:19px;height:19px;border:0;border-radius:50%;
+  background:rgba(0,0,0,.66);color:#eee;font-size:11px;line-height:1;cursor:pointer}
+/* Stack rows wrap to two lines rather than compressing. The rail is 384px and
+   a LoRA path squeezed into 110px of select is a control you cannot read. */
+.stack-row,.region{margin-bottom:12px}
+.stack-row .nums{display:flex;gap:6px;margin-top:6px}
+.num{width:62px;text-align:center;padding:8px 4px}
+.stack-row button,.region button{padding:8px 10px;flex:none}
+.region .cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:6px}
+.region .cells input{padding:8px 2px;text-align:center;font-size:12px}
+.wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+/* Train ----------------------------------------------------------------- */
+.hold{padding:24px 28px 72px}
+.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+
+@media(max-width:1180px){:root{--drawer:284px}}
+@media(max-width:980px){
+  body{overflow:auto;height:auto}
+  .views{position:static}
+  .view{position:static;flex-direction:column}
+  .canvas{overflow:visible}
+  .console{max-height:none;padding:13px 16px 15px}
+  .drawer{flex:none;border-left:0;border-top:1px solid rgba(255,255,255,.07)}
+  .drawer-in{width:auto}
+  .drawer .grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+  .grid2{grid-template-columns:1fr}
+}
 </style></head><body>
-<div class="app">
-<aside>
-  <div class="brand"><b style="font-size:15px;font-weight:600">Visionary</b></div>
-  <div class="seclabel">Tools</div>
-  <nav>
-    <button data-v="models" class="on">Models</button>
-    <button data-v="datasets">Datasets</button>
-    <button data-v="train">Train LoRA</button>
-    <button data-v="generate">Image</button>
-  </nav>
-</aside>
-<main>
-  <!-- MODELS -->
-  <section id="v-models">
-    <h1>Models</h1>
-    <p class="sub">Nothing downloads until you ask for it.</p>
-    <div class="card">
-      <label>HuggingFace token</label>
-      <div class="row">
-        <input id="tok" type="password" class="grow" placeholder="hf_…" autocomplete="off">
-        <button class="s" id="tok-save">Save</button>
-        <button class="b" id="dl-all" style="padding:9px 16px;font-size:13px">Download missing</button>
-      </div>
-      <p class="muted" style="margin-top:8px">
-        Needed for Krea 2 RAW and Turbo, which are gated. Accept the licence at
-        huggingface.co/krea/Krea-2-Raw with the same account. <span id="tok-state"></span>
-      </p>
-      <div id="dl-all-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
-    </div>
-    <div id="models"></div>
-  </section>
 
-  <!-- DATASETS -->
-  <section id="v-datasets" class="hide">
-    <!-- List. Replaced wholesale by the editor rather than stacked, so there is
-         never a scroll position to lose track of. -->
-    <div id="ds-index">
-      <h1>Datasets</h1>
-      <p class="sub">Caption once. Train from it as many times as you like.</p>
-      <div id="ds-err"></div>
-      <div class="card">
-        <div class="row" style="gap:8px">
-          <input id="ds-new" class="grow" placeholder="New dataset name" spellcheck="false">
-          <button class="s" id="ds-create">Create</button>
+<header class="top">
+  <!-- The wordmark is the way home, which is the only reason Generate needs no
+       nav item: you are already there, or you are one click from it. -->
+  <button class="brand" id="go-home">Visionary</button>
+  <!-- Train's two halves. In Generate this slot is empty — Generate's own
+       switch lives down in the composer, beside the prompt it applies to. -->
+  <div class="switch hide" id="train-tabs">
+    <button data-tab="run" class="on">Training</button>
+    <button data-tab="data">Datasets</button>
+  </div>
+  <span class="grow"></span>
+  <button class="door" id="door"></button>
+  <span class="sep"></span>
+  <button class="ico on" id="t-drawer" title="Recent work"></button>
+  <button class="ico" id="t-settings" title="Settings"></button>
+</header>
+
+<div class="views">
+
+<!-- ============================ GENERATE ============================ -->
+<!-- Canvas first, console under it. Image and video are one place: which one
+     you get is a property of what you are making, not an address you navigate
+     to, so it sits inside the prompt field rather than in the chrome. -->
+<div class="view studio" id="v-generate">
+ <div class="stage">
+  <div class="canvas" id="canvas">
+    <!-- No copy. An empty frame above a focused prompt field is already the
+         whole instruction, and a sentence telling you to type is a sentence
+         that will be read on every visit forever to be useful once. -->
+    <div id="canvas-empty" class="blank"><div class="glyph" id="canvas-glyph"></div></div>
+    <div id="gen-out" class="shots hide"></div>
+    <p class="muted" id="gen-meta" style="margin:12px 2px"></p>
+    <div id="vid-out" class="hide"></div>
+    <p class="muted" id="vid-meta" style="margin:12px 2px"></p>
+  </div>
+
+  <div class="console">
+    <!-- One prompt for both. It is the same sentence either way, and losing it
+         to a mode switch is the fastest way to make two things that should
+         feel like one feel like two. -->
+    <div id="gen-err"></div>
+    <div id="vid-err"></div>
+    <div class="crow">
+      <div class="field">
+        <textarea id="prompt" rows="2" placeholder="Describe an image…"></textarea>
+        <div class="bar2">
+          <div class="kinds" id="kinds">
+            <button data-kind="image" class="on">Image</button>
+            <button data-kind="video">Video</button>
+          </div>
         </div>
       </div>
-      <div class="ds-list" id="ds-list"></div>
-      <p class="muted" id="ds-empty" class="hide"></p>
+      <button class="b" id="go-gen">Generate</button>
+      <button class="b hide" id="go-vid">Generate</button>
     </div>
+    <div id="gen-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
+    <div id="vid-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
+    <p class="muted warn" id="gen-note" style="margin:8px 2px 0"></p>
+    <p class="muted warn" id="vid-note" style="margin:8px 2px 0"></p>
 
-    <!-- Editor -->
-    <div id="ds-editor" class="hide">
-      <div class="row" style="margin-bottom:14px">
-        <button class="s" id="ds-back">← Datasets</button>
+    <!-- IMAGE -->
+    <div id="c-image">
+      <div class="opts">
+        <div class="opt"><select id="g-model"></select></div>
+        <div class="opt"><select id="g-aspect">
+          <option value="1024x1024">1:1</option><option value="1152x896">4:3</option>
+          <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
+          <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
+        </select></div>
+        <!-- A bare "1" and a bare number box say nothing on their own, so these
+             two are the only controls in the strip that get an icon. -->
+        <div class="opt" data-ico="copies"><select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+        <div class="opt" data-ico="dice"><input id="g-seed" placeholder="random" inputmode="numeric"></div>
+        <div class="opt"><select id="g-gpu"></select></div>
+        <span class="vr"></span>
+        <!-- Rows are added by hand; order is the order they patch in. -->
+        <button class="s" id="add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
         <span class="grow"></span>
-        <span class="muted" id="ds-title"></span>
+        <span class="muted" id="gen-model-line"></span>
+        <button class="opt ib" id="toggle-adv" data-ico="sliders" title="Advanced"></button>
       </div>
-      <div id="ds-edit-err"></div>
+      <div id="lora-stack" style="margin-top:9px"></div>
 
-      <div class="drop" id="drop">
-        <div style="font-size:22px;opacity:.35">↑</div>
-        <div style="margin-top:6px" id="drop-title">Drop images or a .zip</div>
-        <div class="muted" style="margin-top:3px" id="drop-sub">or click to browse</div>
-        <input type="file" id="files" multiple accept="image/*,.zip,.txt" class="hide">
-        <div id="up-prog" class="hide"><div class="bar"><i style="width:0%"></i></div></div>
-      </div>
-
-      <div class="card" style="margin-top:12px">
-        <div class="row" style="gap:8px;flex-wrap:wrap">
-          <button class="s" id="do-caption">Auto-caption</button>
-          <select id="cap-style" style="width:auto"><option value="descriptive">Descriptive</option><option value="casual">Casual</option></select>
-          <select id="cap-len" style="width:auto"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
-          <label style="display:flex;align-items:center;gap:7px;margin:0;color:#ddd"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
+      <div id="gen-adv" class="hide adv">
+        <textarea id="g-neg" rows="2" placeholder="Negative prompt"></textarea>
+        <div class="opts">
+          <div class="opt"><select id="g-sampler"></select></div>
+          <div class="opt"><select id="g-scheduler"></select></div>
+          <div class="opt" data-ico="steps"><input id="g-steps" placeholder="auto" inputmode="numeric"></div>
+          <div class="opt" data-ico="cfg"><input id="g-cfg" placeholder="CFG" inputmode="decimal"></div>
+          <div class="opt" data-ico="shift"><input id="g-shift" placeholder="shift 1.15" inputmode="decimal"></div>
+          <span class="vr"></span>
+          <label class="row" style="gap:7px;margin:0;color:#ddd;font-size:13px">
+            <input type="checkbox" id="g-regional" style="width:auto"> Regional</label>
+          <select id="g-region-dir" class="hide" style="width:auto;height:36px;padding:0 10px"><option value="columns">Columns</option><option value="rows">Rows</option></select>
+          <button class="s hide" id="add-region" style="height:36px;padding:0 13px">+ Region</button>
         </div>
-        <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
+        <div id="region-stack" class="hide" style="margin-top:9px"></div>
+      </div>
+    </div>
+
+    <!-- VIDEO -->
+    <div id="c-video" class="hide">
+      <!-- On H3 the shared prompt describes picture and sound together, which
+           it denoises from the same sequence — so what you do not describe
+           hearing, it invents. The placeholder says so for those models and
+           not for the silent ones, rather than asking every model for audio
+           only some of them render. -->
+      <div class="opts">
+        <!-- The model comes first because it decides what the rest of this
+             strip even offers: LoRAs, CFG and a negative prompt on Wan;
+             references and a soundtrack on H3. -->
+        <div class="opt"><select id="v-model"></select></div>
+        <div class="opt"><select id="v-aspect">
+          <option value="21:9">21:9</option><option value="16:9" selected>16:9</option>
+          <option value="4:3">4:3</option><option value="1:1">1:1</option>
+          <option value="3:4">3:4</option><option value="9:16">9:16</option>
+        </select></div>
+        <div class="opt"><select id="v-tier"></select></div>
+        <div class="opt"><select id="v-seconds"></select></div>
+        <div class="opt" data-ico="dice"><input id="v-seed" placeholder="random" inputmode="numeric"></div>
+        <div class="opt"><select id="v-gpu"></select></div>
+        <span class="vr"></span>
+        <!-- Keyframes are what make this image-to-video; with neither, the
+             same checkpoint runs text-to-video. Two tiles side by side, in the
+             order they play — a filled first tile is the whole explanation. -->
+        <button class="drop mini" id="v-drop-first" title="First frame">
+          <img id="v-thumb-first" class="hide" alt=""><span id="v-hint-first"></span>
+        </button>
+        <button class="drop mini hide" id="v-drop-last" title="Last frame">
+          <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
+        </button>
+        <!-- Wan only. Same idea as the image side's stack, plus the one thing
+             the A14B pair forces: which expert a row patches. -->
+        <button class="s hide" id="v-add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
+        <span class="grow"></span>
+        <span class="muted" id="v-model-line"></span>
+        <button class="opt ib" id="v-toggle-adv" data-ico="sliders" title="Advanced"></button>
+      </div>
+      <div id="v-lora-stack" style="margin-top:9px"></div>
+
+      <!-- References are the other way to condition a clip, and they exclude
+           keyframes because they load a different transformer. H3 only — Wan
+           has no reference checkpoint, so the row is not there at all. The
+           chips carry their own <Picture n> labels, which is the part the
+           prompt actually refers to and the only part worth spelling out. -->
+      <div class="opts" id="v-ref-sec">
+        <span class="wrap" id="v-refs"></span>
+        <button class="drop mini" id="v-add-ref" title="Add image reference"></button>
+        <button class="drop mini" id="v-add-vid" title="Add video reference"></button>
+        <div class="opt" id="v-ref-size-wrap"><select id="v-ref-size">
+          <option value="match">match canvas</option><option value="max">max detail</option>
+        </select></div>
+        <span class="muted" id="v-ref-max" hidden>9</span><span class="muted" id="v-vid-max" hidden>3</span>
       </div>
 
-      <div class="grid2" style="grid-template-columns:1fr 300px;align-items:start;gap:16px;margin-top:14px">
-        <div style="min-width:0">
-          <div class="row" style="margin:0 2px 8px;gap:10px;flex-wrap:wrap">
-            <span class="muted grow" id="ds-count"></span>
-            <button class="s" id="f-all" title="Show every image">All</button>
-            <button class="s" id="f-uncap" title="Only images with no caption">Uncaptioned</button>
-            <button class="s" id="f-notrig" title="Only captions missing the trigger word">No trigger</button>
-            <button class="s" id="dens-down" title="Smaller tiles">−</button>
-            <button class="s" id="dens-up" title="Larger tiles">+</button>
-          </div>
-          <div class="tiles" id="tiles"></div>
-        </div>
-
-        <div class="ins">
-          <div class="card">
-            <label style="margin-bottom:10px">Trigger word</label>
-            <div class="row" style="gap:8px;margin-bottom:14px">
-              <input id="ds-trig" class="grow" placeholder="ohwx_style" spellcheck="false">
-              <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Fix</button>
-            </div>
-            <div id="ins-body"></div>
-          </div>
+      <div id="vid-adv" class="hide adv">
+        <!-- Shown only for the models that read them. H3 is guidance-distilled,
+             so on H3 a negative prompt and a CFG dial would be controls the
+             model never looks at. -->
+        <textarea id="v-neg" rows="2" class="hide" placeholder="Negative prompt"></textarea>
+        <div class="opts">
+          <div class="opt"><select id="v-sampler"></select></div>
+          <div class="opt"><select id="v-scheduler"></select></div>
+          <div class="opt" data-ico="steps"><input id="v-steps" inputmode="numeric"></div>
+          <div class="opt hide" id="v-cfg-wrap" data-ico="cfg"><input id="v-cfg" placeholder="CFG" inputmode="decimal"></div>
+          <div class="opt hide" id="v-shift-wrap" data-ico="shift"><input id="v-shift" placeholder="shift" inputmode="decimal"></div>
+          <!-- Only the A14B pair has a handover to place. -->
+          <div class="opt hide" id="v-switch-wrap" data-ico="handover"><input id="v-switch" placeholder="switch at" inputmode="numeric"></div>
         </div>
       </div>
     </div>
-  </section>
+  </div>
+ </div>
 
-  <!-- TRAIN -->
-  <section id="v-train" class="hide">
-    <h1>Train LoRA</h1>
-    <p class="sub">Krea 2 RAW · rank 32 · bf16</p>
+  <!-- The gallery lives beside the canvas, because the thing you made an hour
+       ago is raw material for the thing you are making now — not a destination
+       you leave the studio to visit. -->
+  <aside class="drawer" id="drawer">
+    <div class="drawer-in">
+      <div class="drawer-head">
+        <span class="grow"></span>
+        <button class="ico" id="gal-expand" title="Open gallery"></button>
+      </div>
+      <div id="drawer-grid" class="grid"></div>
+      <p class="muted" id="drawer-empty" style="margin-top:6px"></p>
+    </div>
+  </aside>
+
+  <!-- Full gallery: the same drawer, given the whole room. Exits back to the
+       canvas rather than to a nav item, because that is where you came from. -->
+  <div id="gal-full" class="hide" style="position:absolute;inset:0;background:var(--bg);z-index:20;overflow:auto;padding:18px 28px 72px">
+    <div class="row" style="gap:10px;margin-bottom:18px;flex-wrap:wrap">
+      <button class="ico" id="gal-back" title="Back to canvas"></button>
+      <span class="grow"></span>
+      <button class="pill on" data-filter="all">All</button>
+      <button class="pill" data-filter="image">Images</button>
+      <button class="pill" data-filter="video">Video</button>
+      <button class="ico" id="gal-refresh" title="Refresh"></button>
+    </div>
+    <div id="gal-grid" class="grid"></div>
+    <p class="muted" id="gal-empty"></p>
+  </div>
+</div>
+
+<!-- ============================== TRAIN ============================== -->
+<div class="view scroll hide" id="v-train">
+  <!-- TRAINING -->
+  <div class="hold" id="t-run">
     <div id="train-err"></div>
-
-    <div id="step-build">
+    <div id="step-build" style="max-width:860px">
       <div class="card">
         <label>Dataset</label>
         <select id="t-dataset"></select>
         <p class="muted" id="t-dsinfo" style="margin-top:8px"></p>
       </div>
-
       <div id="dataset" class="hide">
         <!-- Name and trigger sit here, next to the action that uses them. -->
         <div class="card grid2">
           <div><label>LoRA name</label><input id="lname" placeholder="my_style" spellcheck="false"></div>
           <div><label>Trigger word</label><input id="ltrig" placeholder="ohwx_style" spellcheck="false"></div>
         </div>
-        <details class="card"><summary class="muted" style="cursor:pointer">Advanced</summary>
+        <details class="card"><summary class="muted" style="cursor:pointer">Advanced · Krea 2 RAW, rank 32, bf16</summary>
           <div class="grid2" style="margin-top:14px">
             <div><label>Rank (dim)</label><input id="a-dim" type="number" value="32"></div>
             <div><label>Alpha</label><input id="a-alpha" type="number" value="32"></div>
@@ -4024,7 +4350,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
       </div>
     </div>
 
-    <div id="step-run" class="hide">
+    <div id="step-run" class="hide" style="max-width:860px">
       <div class="card">
         <div class="row"><b id="run-phase" class="grow">Starting…</b><span class="muted" id="run-pct"></span></div>
         <div class="bar"><i id="run-bar" style="width:0%"></i></div>
@@ -4033,81 +4359,306 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
       </div>
       <div class="card hide" id="run-done"></div>
     </div>
-  </section>
+  </div>
 
-  <!-- GENERATE -->
-  <section id="v-generate" class="hide">
-    <h1>Image</h1>
-    <p class="sub" id="gen-model-line">Krea 2 Turbo · 8 steps</p>
-    <div id="gen-err"></div>
-    <p class="muted warn" id="gen-note" style="margin:-10px 2px 12px"></p>
-    <div class="card">
-      <textarea id="prompt" rows="3" placeholder="Describe an image…"></textarea>
-      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
-        <!-- populated from /api/state; models not on the volume are disabled -->
-        <select id="g-model" style="width:auto"></select>
-        <select id="g-aspect" style="width:auto">
-          <option value="1024x1024">1:1</option><option value="1152x896">4:3</option>
-          <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
-          <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
-        </select>
-        <select id="g-n" style="width:auto"><option>1</option><option>2</option><option>3</option><option>4</option></select>
-        <input id="g-seed" placeholder="seed" style="width:92px" inputmode="numeric">
-        <span class="grow"></span>
-        <button class="b" id="go-gen">Generate</button>
+  <!-- DATASETS -->
+  <div class="hold hide" id="t-data">
+    <!-- List. Replaced wholesale by the editor rather than stacked, so there is
+         never a scroll position to lose track of. -->
+    <div id="ds-index">
+      <div id="ds-err"></div>
+      <div class="row" style="gap:8px;margin-bottom:18px;max-width:520px">
+        <input id="ds-new" class="grow" placeholder="New dataset name" spellcheck="false">
+        <button class="s" id="ds-create">Create</button>
       </div>
-
-      <!-- LoRA stack. Rows are added by hand; order is the order they patch in. -->
-      <div id="lora-stack" style="margin-top:12px"></div>
-      <div class="row" style="gap:8px;margin-top:8px">
-        <button class="s" id="add-lora">Add LoRA</button>
-        <span class="grow"></span>
-        <button class="s" id="toggle-adv">Advanced</button>
-      </div>
-
-      <div id="gen-adv" class="hide" style="margin-top:12px">
-        <textarea id="g-neg" rows="2" placeholder="Negative prompt"></textarea>
-        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
-          <select id="g-sampler" style="width:auto"></select>
-          <select id="g-scheduler" style="width:auto"></select>
-          <input id="g-steps" placeholder="steps" style="width:78px" inputmode="numeric">
-          <input id="g-cfg" placeholder="CFG" style="width:78px" inputmode="decimal">
-          <input id="g-shift" placeholder="shift 1.15" style="width:96px" inputmode="decimal">
-        </div>
-        <div class="row" style="gap:8px;margin-top:12px">
-          <label class="row" style="gap:6px"><input type="checkbox" id="g-regional"> Regional</label>
-          <span class="grow"></span>
-          <select id="g-region-dir" class="hide" style="width:auto"><option value="columns">Columns</option><option value="rows">Rows</option></select>
-        </div>
-        <div id="region-stack" class="hide" style="margin-top:8px"></div>
-        <div class="row hide" id="region-add-row" style="gap:8px;margin-top:8px">
-          <button class="s" id="add-region">Add region</button>
-        </div>
-      </div>
-
-      <div id="gen-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
+      <div class="grid" id="ds-list"></div>
+      <p class="muted" id="ds-empty"></p>
     </div>
-    <div id="gen-out" class="gen-out"></div>
-    <p class="muted" id="gen-meta" style="margin:10px 2px"></p>
-  </section>
-</main>
+
+    <!-- Editor -->
+    <div id="ds-editor" class="hide">
+      <div class="row" style="margin-bottom:14px">
+        <button class="ico" id="ds-back" title="All datasets"></button>
+        <b id="ds-title" style="font-size:15px"></b>
+        <span class="grow"></span>
+        <span class="muted" id="ds-count"></span>
+      </div>
+      <div id="ds-edit-err"></div>
+
+      <div class="grid2" style="grid-template-columns:minmax(0,1fr) 320px;align-items:start;gap:20px">
+        <div style="min-width:0">
+          <!-- A short bar, not a hero. Uploading happens once per dataset and
+               the contact sheet below it is the thing you came to look at. -->
+          <div class="drop" id="drop">
+            <div class="row" style="justify-content:center;gap:9px;padding:15px">
+              <span id="drop-title" class="muted">Images or a .zip</span>
+              <span class="muted" id="drop-sub"></span>
+            </div>
+            <input type="file" id="files" multiple accept="image/*,.zip,.txt" class="hide">
+            <div id="up-prog" class="hide" style="padding:0 15px 13px"><div class="bar"><i style="width:0%"></i></div></div>
+          </div>
+          <div class="row" style="margin:14px 2px 10px;gap:8px;flex-wrap:wrap">
+            <button class="s" id="f-all" title="Show every image">All</button>
+            <button class="s" id="f-uncap" title="Only images with no caption">Uncaptioned</button>
+            <button class="s" id="f-notrig" title="Only captions missing the trigger word">No trigger</button>
+            <span class="grow"></span>
+            <button class="s" id="dens-down" title="Smaller tiles">−</button>
+            <button class="s" id="dens-up" title="Larger tiles">+</button>
+          </div>
+          <div class="tiles" id="tiles"></div>
+        </div>
+
+        <div class="ins">
+          <div class="card">
+            <label style="margin-bottom:10px">Trigger word</label>
+            <div class="row" style="gap:8px;margin-bottom:14px">
+              <input id="ds-trig" class="grow" placeholder="ohwx_style" spellcheck="false">
+              <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Fix</button>
+            </div>
+            <div id="ins-body"></div>
+          </div>
+          <div class="card">
+            <label>Auto-caption</label>
+            <div class="f2" style="margin-bottom:10px">
+              <select id="cap-style"><option value="descriptive">Descriptive</option><option value="casual">Casual</option></select>
+              <select id="cap-len"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
+            </div>
+            <label class="row" style="gap:7px;color:#ddd;margin-bottom:12px"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
+            <button class="s" id="do-caption" style="width:100%">Caption</button>
+            <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
+
+</div>
+
+<!-- ============================ SETTINGS ============================= -->
+<!-- Models are plumbing: chosen once, then never thought about again. That is
+     what a gear is for, and it is why this is not a place you can be lost in. -->
+<div id="settings" class="scrim hide">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h1 class="grow">Settings</h1>
+      <button class="ico" id="settings-x"></button>
+    </div>
+    <div class="card">
+      <label>HuggingFace token</label>
+      <div class="row">
+        <input id="tok" type="password" class="grow" placeholder="hf_…" autocomplete="off">
+        <button class="s" id="tok-save">Save</button>
+        <button class="b" id="dl-all" style="padding:9px 16px;font-size:13px">Download missing</button>
+      </div>
+      <p class="muted" style="margin-top:8px">
+        Needed for Krea 2 RAW and Turbo, which are gated. Accept the licence at
+        huggingface.co/krea/Krea-2-Raw with the same account. <span id="tok-state"></span>
+      </p>
+      <div id="dl-all-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
+    </div>
+    <div id="models"></div>
+  </div>
+</div>
+
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const api=async(p,o)=>{const r=await fetch(p,o);return r.json()};
 const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
-let files=[], poll=null;
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const errInto=(sel,msg)=>{ $(sel).innerHTML = msg ? '<div class="err-box">'+esc(msg)+'</div>' : ''; };
+let poll=null;
 
-// nav
-$$('nav button').forEach(b=>b.onclick=()=>{
-  $$('nav button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  ['models','datasets','train','generate'].forEach(v=>$('#v-'+v).classList.toggle('hide',v!==b.dataset.v));
-  // Both tabs read the dataset list, and either may have been changed by the
-  // other, so refresh on entry rather than trusting what was loaded at boot.
-  if(b.dataset.v==='datasets'||b.dataset.v==='train') loadDatasets();
+// Icons are inline because a sprite sheet or an icon font would be a second
+// asset for a single-file app to serve, and there are six of them.
+const ICON={
+  photo:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="3.5"/><circle cx="8.6" cy="10" r="1.5"/><path d="M3.6 17.4l4.2-4.2a1.9 1.9 0 0 1 2.7 0l3.3 3.3"/><path d="M13.9 14.6l1.6-1.6a1.9 1.9 0 0 1 2.7 0l2.2 2.2"/></svg>',
+  play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 5.6a1.8 1.8 0 0 0-2.8 1.5v9.8A1.8 1.8 0 0 0 9 18.4l7.9-4.9a1.8 1.8 0 0 0 0-3z"/></svg>',
+  download:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>',
+  close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  more:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.2 14.4a1.5 1.5 0 0 0 .3 1.65l.06.06a1.8 1.8 0 1 1-2.55 2.55l-.06-.06a1.5 1.5 0 0 0-1.65-.3 1.5 1.5 0 0 0-.9 1.37V20a1.8 1.8 0 1 1-3.6 0v-.1a1.5 1.5 0 0 0-.98-1.37 1.5 1.5 0 0 0-1.65.3l-.06.06A1.8 1.8 0 1 1 5.55 16.3l.06-.06a1.5 1.5 0 0 0 .3-1.65 1.5 1.5 0 0 0-1.37-.9H4a1.8 1.8 0 1 1 0-3.6h.1a1.5 1.5 0 0 0 1.37-.98 1.5 1.5 0 0 0-.3-1.65l-.06-.06A1.8 1.8 0 1 1 7.66 4.85l.06.06a1.5 1.5 0 0 0 1.65.3H9.5a1.5 1.5 0 0 0 .9-1.37V4a1.8 1.8 0 1 1 3.6 0v.1a1.5 1.5 0 0 0 .9 1.37 1.5 1.5 0 0 0 1.65-.3l.06-.06a1.8 1.8 0 1 1 2.55 2.55l-.06.06a1.5 1.5 0 0 0-.3 1.65v.08a1.5 1.5 0 0 0 1.37.9H20a1.8 1.8 0 1 1 0 3.6h-.1a1.5 1.5 0 0 0-1.37.9z"/></svg>',
+  panel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M15 4.5v15"/></svg>',
+  train:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 19V11"/><path d="M10 19V5"/><path d="M16 19v-5"/><path d="M22 19V8"/></svg>',
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>',
+  // Strip icons. Only for the controls whose own value is not self-describing:
+  // a bare "2" and a bare number box could be anything.
+  copies:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="8.5" y="3.5" width="12" height="12" rx="2.5"/><path d="M15.5 20.5h-10a2 2 0 0 1-2-2v-10"/></svg>',
+  dice:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>',
+  sliders:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
+  steps:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h4v-5h5v-5h5V5h4"/></svg>',
+  cfg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3v2M12 19v2M4.2 7.5l1.7 1M18.1 15.5l1.7 1M4.2 16.5l1.7-1M18.1 8.5l1.7-1"/><circle cx="12" cy="12" r="4"/></svg>',
+  shift:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16c4 0 5-8 9-8s5 8 9 8"/></svg>',
+  handover:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h7l3 6h8"/><path d="M17 11l3-2-3-2"/></svg>',
+  refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.7 4.3"/><path d="M20 4.5V11h-6.5"/></svg>',
+  expand:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5H4.5v5"/><path d="M14.5 19.5h5v-5"/><path d="M4.5 4.5l6 6"/><path d="M19.5 19.5l-6-6"/></svg>',
+  first:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="3.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
+  last:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="15.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>',
+  film:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M8 5.5v13M16 5.5v13"/></svg>',
+};
+// Every control that asked for an icon instead of a label gets it here, so the
+// markup names the idea ("dice") and only this table knows the path data.
+$$('[data-ico]').forEach(el=>el.insertAdjacentHTML('afterbegin',ICON[el.dataset.ico]));
+$('#v-add-ref').innerHTML='<span>'+ICON.photo+'</span>';
+$('#v-add-vid').innerHTML='<span>'+ICON.film+'</span>';
+$('#gal-back').innerHTML=ICON.back;
+$('#ds-back').innerHTML=ICON.back;
+$('#gal-refresh').innerHTML=ICON.refresh;
+$('#gal-expand').innerHTML=ICON.expand;
+$('#t-settings').innerHTML=ICON.gear;
+$('#t-drawer').innerHTML=ICON.panel;
+$('#settings-x').innerHTML=ICON.close;
+
+// ==================== SHELL ====================
+// Generate is the page, not a destination — so it has no nav item, and the
+// wordmark is how you get back to it. Train is the one door, on the right.
+let mode='generate', kind='image', trainPct=null;
+
+function setMode(m){
+  mode=m;
+  $('#v-generate').classList.toggle('hide',m!=='generate');
+  $('#v-train').classList.toggle('hide',m!=='train');
+  $('#train-tabs').classList.toggle('hide',m!=='train');
+  // The drawer toggle is a Generate control; it has nothing to say in Train.
+  $('#t-drawer').classList.toggle('hide',m!=='generate');
+  drawDoor();
+  if(m==='train') loadDatasets();
+  if(m==='generate') loadGallery();
+}
+
+// The door names where it goes, never where you are — so there is one button
+// instead of two, and no moment where both look equally selectable. In
+// Generate it doubles as the training readout: a run outlives the visit that
+// started it, and the control that takes you back is the honest place to say
+// how far along it is.
+function drawDoor(){
+  const d=$('#door');
+  if(mode==='train'){ d.className='door'; d.innerHTML=ICON.back+'Generate'; return }
+  if(trainPct==null){ d.className='door'; d.innerHTML=ICON.train+'Train'; return }
+  const c=2*Math.PI*6;
+  d.className='door live';
+  d.innerHTML='<svg class="ring" viewBox="0 0 16 16">'
+    +'<circle class="bg" cx="8" cy="8" r="6"/>'
+    +`<circle class="fg" cx="8" cy="8" r="6" stroke-dasharray="${c.toFixed(2)}" `
+    +`stroke-dashoffset="${(c*(1-trainPct/100)).toFixed(2)}"/></svg>Training ${trainPct}%`;
+}
+$('#door').onclick=()=>setMode(mode==='train'?'generate':'train');
+$('#go-home').onclick=()=>{ closeGallery(); setMode('generate') };
+
+// Image or video is a property of the sentence, not an address. The prompt,
+// the canvas and the gallery are shared; only the options below the field
+// change, so switching mid-thought costs nothing you typed.
+function setKind(k){
+  kind=k;
+  $$('#kinds button').forEach(b=>b.classList.toggle('on',b.dataset.kind===k));
+  $('#c-image').classList.toggle('hide',k!=='image');
+  $('#c-video').classList.toggle('hide',k!=='video');
+  $('#gen-note').classList.toggle('hide',k!=='image');
+  $('#vid-note').classList.toggle('hide',k!=='video');
+  $('#gen-err').classList.toggle('hide',k!=='image');
+  $('#vid-err').classList.toggle('hide',k!=='video');
+  $('#go-gen').classList.toggle('hide',k!=='image');
+  $('#go-vid').classList.toggle('hide',k!=='video');
+  syncPromptHint();
+  syncCanvasView();
+}
+$$('#kinds button').forEach(b=>{
+  b.insertAdjacentHTML('afterbegin',b.dataset.kind==='image'?ICON.photo:ICON.play);
+  b.onclick=()=>setKind(b.dataset.kind);
 });
 
-// ---------- models ----------
+// One placeholder, three states: it has to name the kind, and on the H3
+// checkpoints it also has to ask for the soundtrack, which is denoised from
+// the same sequence and invented when you leave it out.
+function syncPromptHint(){
+  if(kind==='image'){ $('#prompt').placeholder='Describe an image…'; return }
+  const sup=(typeof videoModel==='function'&&videoModel()||{supports:{}}).supports;
+  $('#prompt').placeholder = sup.audio
+    ? 'Describe the shot, the motion — and the audio: dialogue, effects, music…'
+    : 'Describe the shot and the motion…';
+}
+
+function syncCanvasView(){
+  const img=kind==='image';
+  const n=(img?$('#gen-out'):$('#vid-out')).children.length;
+  $('#gen-out').classList.toggle('hide',!img||!$('#gen-out').children.length);
+  $('#vid-out').classList.toggle('hide',img||!$('#vid-out').children.length);
+  $('#gen-meta').classList.toggle('hide',!img);
+  $('#vid-meta').classList.toggle('hide',img);
+  $('#canvas-empty').classList.toggle('hide',!!n);
+  $('#canvas-glyph').innerHTML=img?ICON.photo:ICON.play;
+}
+
+$('#t-drawer').onclick=()=>{
+  const off=$('#v-generate').classList.toggle('nodrawer');
+  $('#t-drawer').classList.toggle('on',!off);
+};
+$('#t-settings').onclick=()=>{ $('#settings').classList.remove('hide'); loadState(); };
+$('#settings-x').onclick=()=>$('#settings').classList.add('hide');
+$('#settings').onclick=e=>{ if(e.target.id==='settings') $('#settings').classList.add('hide') };
+
+$$('#train-tabs button').forEach(b=>b.onclick=()=>{
+  $$('#train-tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  $('#t-run').classList.toggle('hide',b.dataset.tab!=='run');
+  $('#t-data').classList.toggle('hide',b.dataset.tab!=='data');
+  loadDatasets();
+});
+
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape') return;
+  if(!$('#settings').classList.contains('hide')) $('#settings').classList.add('hide');
+  closeMenu();
+});
+
+// ---------- overflow menu ----------
+// One floating menu, moved and refilled. Rendering a menu inside every card
+// would put a hundred hidden subtrees in a grid that is already a hundred
+// images, and only one of them can ever be open.
+let menuEl=null;
+function closeMenu(){ if(menuEl){ menuEl.remove(); menuEl=null } }
+document.addEventListener('mousedown',e=>{ if(menuEl&&!menuEl.contains(e.target)) closeMenu() },true);
+window.addEventListener('resize',closeMenu);
+document.addEventListener('scroll',closeMenu,true);
+
+function openMenu(btn,items){
+  closeMenu();
+  const m=document.createElement('div'); m.className='menu';
+  m.innerHTML=items.map((it,i)=>it.sep?'<hr>':
+    `<button data-i="${i}"${it.danger?' class="danger"':''}>${esc(it.label)}</button>`).join('');
+  document.body.appendChild(m);
+  const r=btn.getBoundingClientRect(), w=m.offsetWidth, h=m.offsetHeight;
+  m.style.left=Math.max(8,Math.min(r.right-w,innerWidth-w-8))+'px';
+  m.style.top=(r.bottom+h+10>innerHeight ? r.top-h-6 : r.bottom+6)+'px';
+  m.querySelectorAll('button').forEach(b=>b.onclick=()=>{ const it=items[+b.dataset.i]; closeMenu(); it.run() });
+  menuEl=m;
+}
+
+// ---------- sheets ----------
+function sheet(html){
+  const el=document.createElement('div'); el.className='scrim';
+  el.innerHTML=`<div class="sheet">${html}</div>`;
+  const close=()=>{ el.remove(); document.removeEventListener('keydown',onKey) };
+  const onKey=e=>{ if(e.key==='Escape') close() };
+  el.onclick=e=>{ if(e.target===el) close() };
+  document.addEventListener('keydown',onKey);
+  document.body.appendChild(el);
+  el.querySelectorAll('[data-close]').forEach(b=>b.onclick=close);
+  return el;
+}
+
+function lightbox(src,video){
+  const el=document.createElement('div'); el.className='lb';
+  el.innerHTML=`<button class="x">${ICON.close}</button>`+
+    (video?`<video src="${src}" controls autoplay loop playsinline></video>`:`<img src="${src}" alt="">`);
+  const close=()=>{ el.remove(); document.removeEventListener('keydown',onKey) };
+  const onKey=e=>{ if(e.key==='Escape') close() };
+  el.onclick=e=>{ if(e.target===el||e.target.closest('.x')) close() };
+  document.addEventListener('keydown',onKey);
+  document.body.appendChild(el);
+}
+
+// ==================== MODELS (settings) ====================
 async function loadState(){
   const s=await api('/api/state');
   $('#tok-state').innerHTML = s.hf_token_set?'<span class="ok">Token saved.</span>':'<span class="warn">No token saved.</span>';
@@ -4117,47 +4668,91 @@ async function loadState(){
   const dlAll=$('#dl-all');
   dlAll.disabled=!miss.length;
   dlAll.textContent=miss.length?`Download ${miss.length} missing · ${gb.toFixed(1)} GB`:'All models present';
-  $('#models').innerHTML = s.models.map(m=>`
-    <div class="card row">
-      <div class="grow">
-        <b>${m.label}</b> <span class="muted">${m.note}</span>
-        ${m.gated?'<span class="warn" style="font-size:12px"> · gated</span>':''}
-        <div class="muted" style="margin-top:3px"><code>${m.repo_id}</code></div>
+  // Grouped by family, in catalogue order. Twenty-odd flat cards is a wall you
+  // scroll rather than a list you read, and the groups are the unit you
+  // actually decide in: you want the Wan stack or you do not.
+  const fams=[];
+  s.models.forEach(m=>{
+    const g=fams.find(f=>f.name===m.family);
+    (g||fams[fams.push({name:m.family,items:[]})-1]).items.push(m);
+  });
+  $('#models').innerHTML = fams.map(f=>{
+    const left=f.items.filter(m=>!m.present);
+    const size=left.reduce((a,m)=>a+m.approx_gb,0);
+    return `
+    <div class="fam">
+      <div class="fam-head">
+        <b>${esc(f.name)}</b>
+        <span class="muted">${left.length?`${left.length} missing · ${size.toFixed(1)} GB`:'complete'}</span>
       </div>
-      <div style="text-align:right">
-        ${m.present
-          ? `<span class="ok">✓ ${m.size_gb} GB</span>`
-          : `<button class="s" data-dl="${m.key}">Download ${m.approx_gb} GB</button>`}
-        <div class="muted dl-state" id="dl-${m.key}"></div>
-      </div>
-    </div>`).join('');
+      ${f.items.map(m=>`
+      <div class="card row">
+        <div class="grow">
+          <b>${m.label}</b> <span class="muted">${m.note}</span>
+          ${m.gated?'<span class="warn" style="font-size:12px"> · gated</span>':''}
+          <div class="muted" style="margin-top:3px"><code>${m.repo_id}</code></div>
+        </div>
+        <div style="text-align:right">
+          ${m.present
+            ? `<span class="ok">✓ ${m.size_gb} GB</span>`
+            : `<button class="s" data-dl="${m.key}">Download ${m.approx_gb} GB</button>`}
+          <div class="muted dl-state" id="dl-${m.key}"></div>
+        </div>
+      </div>`).join('')}
+    </div>`;
+  }).join('');
   $$('[data-dl]').forEach(b=>b.onclick=()=>startDownload(b.dataset.dl,b));
 
   // Options for every LoRA row, existing and future. Rebuilt on each poll so a
   // freshly trained LoRA appears without a reload; current picks are kept.
   window.MAX_LORAS=s.max_loras||6;
+  window.WAN_EXPERTS=s.wan_experts||['both','high','low'];
   loraOpts=s.loras.map(l=>l.files.map(f=>
     `<option value="${f.path}" data-t="${l.trigger_word||''}">${l.name} · ${f.name}</option>`).join('')).join('');
-  $$('#lora-stack [data-f=path]').forEach(el=>{const v=el.value; el.innerHTML=loraOpts; el.value=v;});
+  ['#lora-stack','#v-lora-stack'].forEach(sel=>
+    $$(sel+' [data-f=path]').forEach(el=>{const v=el.value; el.innerHTML=loraOpts; el.value=v;}));
   $('#add-lora').disabled=!s.loras.length;
+  $('#v-add-lora').disabled=!s.loras.length;
 
   if(s.samplers&&!$('#g-sampler').options.length){
     $('#g-sampler').innerHTML=s.samplers.map(x=>`<option>${x}</option>`).join('');
     $('#g-scheduler').innerHTML=s.schedulers.map(x=>`<option>${x}</option>`).join('');
   }
 
+  // Built once. Rebuilding on every poll would reset a card the user picked
+  // between two polls, and the list itself only changes on redeploy.
+  if(s.gpus&&!$('#g-gpu').options.length){
+    wireGpu('#g-gpu', s.gpus.image);
+    wireGpu('#v-gpu', s.gpus.video);
+  }
+  if(s.max_refs) $('#v-ref-max').textContent=s.max_refs;
+  if(s.max_ref_videos) $('#v-vid-max').textContent=s.max_ref_videos;
+
+  // The video composer builds itself from what the deployment says each model
+  // takes, so a model that reads no CFG has no CFG box rather than a dead one.
+  // Kept across polls: only the picker's own labels are rewritten, and
+  // syncVideoModel() re-runs against whatever is still selected.
+  vidModels=s.video_models||[];
+  const vs=$('#v-model'), vprev=vs.value;
+  vs.innerHTML=vidModels.map(m=>
+    `<option value="${m.key}" ${m.ready?'':'disabled'}>${esc(m.label)}${m.ready?'':' — missing'}</option>`).join('');
+  const vavail=vidModels.filter(m=>m.ready).map(m=>m.key);
+  vs.value = vavail.includes(vprev) ? vprev : (vavail[0]||(vidModels[0]||{}).key||'');
+  syncVideoModel();
+
   // Model picker reflects the volume rather than being hardcoded — otherwise it
   // claims both models are available even when neither is downloaded.
   const ms=$('#g-model'), prev=ms.value;
   const pick=s.models.filter(m=>m.key==='turbo'||m.key==='raw');
   ms.innerHTML=pick.map(m=>
-    `<option value="${m.key}" ${m.present?'':'disabled'}>${m.label}${m.present?'':' — not downloaded'}</option>`).join('');
+    `<option value="${m.key}" ${m.present?'':'disabled'}>${m.label}${m.present?'':' — missing'}</option>`).join('');
   const avail=pick.filter(m=>m.present).map(m=>m.key);
   ms.value = avail.includes(prev) ? prev : (avail[0]||'');
   const missing=pick.filter(m=>!m.present).length===pick.length;
   $('#go-gen').disabled=missing;
+  // The gear is the only route to the fix, so the note names it.
   $('#gen-note').textContent = missing
-    ? 'No DiT on the volume — download Krea 2 Turbo on the Models tab.'
+    ? 'No DiT on the volume — download Krea 2 Turbo under Settings.'
     : (s.models.find(m=>m.key==='vae')?.present && s.models.find(m=>m.key==='text_encoder')?.present
         ? '' : 'The VAE and text encoder are also required.');
   syncModelLine();
@@ -4196,22 +4791,10 @@ async function startDownload(key,btn){
   },3000);
 }
 
-// ---------- upload (fires immediately on drop; no prerequisites) ----------
-const drop=$('#drop'), fin=$('#files');
-let uploading=false;
-drop.onclick=()=>{ if(!uploading) fin.click() };
-drop.ondragover=e=>{e.preventDefault();drop.classList.add('hot')};
-drop.ondragleave=()=>drop.classList.remove('hot');
-drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');upload(e.dataTransfer.files)};
-fin.onchange=()=>{ upload(fin.files); fin.value=''; };   // reset so the same file can be re-picked
-
 // ==================== DATASETS ====================
 // A dataset is a named folder; the editor is a view onto it. Nothing here is
 // tied to a training run, which is the whole point of the section.
-
-let dsName=null, dsImages=[], dsInsight=null, dsFilter='all', dsDensity=3, capPoll=null;
-const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-const errInto=(sel,msg)=>{ $(sel).innerHTML = msg ? '<div class="err-box">'+esc(msg)+'</div>' : ''; };
+let dsName=null, dsImages=[], dsInsight=null, dsFilter='all', dsDensity=2, capPoll=null;
 
 async function loadDatasets(){
   const r=await api('/api/datasets');
@@ -4255,7 +4838,6 @@ async function openDataset(name){
   await loadTiles();
 }
 
-// ---------- grid ----------
 async function loadTiles(){
   if(!dsName) return;
   const d=await api('/api/datasets/'+encodeURIComponent(dsName));
@@ -4291,7 +4873,9 @@ function visibleImages(){
 }
 
 function renderTiles(){
-  const cols=[6,5,4,3,2][Math.max(0,Math.min(4,dsDensity))];
+  // Wider than it was, because the editor now has the whole window: the point
+  // of a contact sheet is seeing the set at once, and eight across does that.
+  const cols=[10,8,6,5,3][Math.max(0,Math.min(4,dsDensity))];
   $('#tiles').style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;
   const vis=visibleImages();
   $('#tiles').innerHTML=vis.map(i=>{
@@ -4312,22 +4896,22 @@ function renderTiles(){
 
   // Autosave per caption on blur, with the pending state visible meanwhile.
   $$('#tiles textarea').forEach(t=>{
-    const orig=t.value;
     t.oninput=()=>t.classList.toggle('dirty', t.value!==t.defaultValue);
     t.onblur=()=>saveCaption(t);
     t.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); t.blur() } };
   });
   $$('#tiles [data-rm]').forEach(b=>b.onclick=()=>removeImage(b));
-  $$('#tiles [data-full]').forEach(im=>im.onclick=()=>lightbox(im.dataset.full));
+  $$('#tiles [data-full]').forEach(im=>im.onclick=()=>
+    lightbox('/api/image/'+encodeURIComponent(dsName)+'/'+encodeURIComponent(im.dataset.full)));
 
   const capd=dsImages.filter(i=>(i.caption||'').trim()).length;
   const shown = vis.length===dsImages.length ? '' : ` · showing ${vis.length}`;
   $('#ds-count').textContent=`${dsImages.length} image${dsImages.length===1?'':'s'} · ${capd} captioned${shown}`;
   ['all','uncap','notrig'].forEach(k=>{
-    const b=$('#f-'+(k==='all'?'all':k==='uncap'?'uncap':'notrig'));
+    const b=$('#f-'+k);
     if(b) b.style.borderColor = dsFilter===k ? 'rgba(255,255,255,.45)' : '';
   });
-  $('#drop-title').textContent = dsImages.length ? 'Drop more images' : 'Drop images or a .zip';
+  $('#drop-title').textContent = dsImages.length ? 'More images' : 'Images or a .zip';
 }
 
 async function saveCaption(t){
@@ -4348,16 +4932,6 @@ async function removeImage(b){
   if(r.error){ errInto('#ds-edit-err',r.error); b.disabled=false; return }
   dsImages=dsImages.filter(i=>i.name!==b.dataset.rm);
   renderTiles(); loadInsight();
-}
-
-function lightbox(name){
-  const el=document.createElement('div');
-  el.className='lb';
-  el.innerHTML=`<button class="x">×</button><img src="/api/image/${encodeURIComponent(dsName)}/${encodeURIComponent(name)}" alt="">`;
-  const close=()=>{ el.remove(); document.removeEventListener('keydown',onKey) };
-  const onKey=e=>{ if(e.key==='Escape') close() };
-  el.onclick=close; document.addEventListener('keydown',onKey);
-  document.body.appendChild(el);
 }
 
 // ---------- insight ----------
@@ -4419,7 +4993,7 @@ function renderInsight(){
   $$('#ins-body [data-phrase]').forEach(b=>b.onclick=()=>{
     const ph=b.dataset.phrase.toLowerCase();
     const hits=dsImages.filter(i=>(i.caption||'').toLowerCase().includes(ph)).map(i=>i.name);
-    isolate(hits, '\u201c'+b.dataset.phrase+'\u201d');
+    isolate(hits, '“'+b.dataset.phrase+'”');
   });
 }
 
@@ -4435,7 +5009,6 @@ function isolate(names, label){
   $('#ds-count').textContent=`${names.length} of ${dsImages.length} · ${label}`;
 }
 
-// ---------- toolbar ----------
 $('#f-all').onclick=()=>{ dsFilter='all'; renderTiles() };
 $('#f-uncap').onclick=()=>{ dsFilter='uncap'; renderTiles() };
 $('#f-notrig').onclick=()=>{ dsFilter='notrig'; renderTiles() };
@@ -4479,7 +5052,15 @@ $('#do-caption').onclick=async()=>{
   },2500);
 };
 
-// ---------- upload ----------
+// ---------- upload (fires immediately on drop; no prerequisites) ----------
+const drop=$('#drop'), fin=$('#files');
+let uploading=false;
+drop.onclick=()=>{ if(!uploading) fin.click() };
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('hot')};
+drop.ondragleave=()=>drop.classList.remove('hot');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');upload(e.dataTransfer.files)};
+fin.onchange=()=>{ upload(fin.files); fin.value=''; };   // reset so the same file can be re-picked
+
 function upload(list){
   const keep=[...list].filter(f=>/\.(png|jpe?g|webp|bmp|avif|zip|txt)$/i.test(f.name));
   if(!keep.length||uploading||!dsName) return;
@@ -4498,7 +5079,7 @@ function upload(list){
   x.upload.onprogress=e=>{ if(e.lengthComputable) bar.style.width=Math.round(e.loaded/e.total*100)+'%' };
   x.onload=async()=>{
     uploading=false; box.classList.add('hide'); bar.style.width='0%';
-    $('#drop-sub').textContent='or click to browse';
+    $('#drop-sub').textContent='';
     let r={}; try{ r=JSON.parse(x.responseText) }catch{}
     if(r.error||x.status>=400){
       const detail = r.error || (x.responseText||'').slice(0,300) || 'no response body';
@@ -4508,14 +5089,14 @@ function upload(list){
     await loadTiles();
   };
   x.onerror=()=>{ uploading=false; box.classList.add('hide');
-    $('#drop-sub').textContent='or click to browse';
+    $('#drop-sub').textContent='';
     errInto('#ds-edit-err','Network error during upload.'); };
   x.send(fd);
 }
-const show=s=>['build','run'].forEach(x=>$('#step-'+x).classList.toggle('hide',x!==s));
 
 // ==================== TRAIN ====================
 // Train no longer owns a dataset; it picks one.
+const show=s=>['build','run'].forEach(x=>$('#step-'+x).classList.toggle('hide',x!==s));
 let trainDatasets=[];
 function fillTrainDatasets(list){
   trainDatasets=list;
@@ -4545,7 +5126,6 @@ function checkTrainReady(){
 }
 document.addEventListener('input',e=>{ if(e.target.id==='lname'||e.target.id==='ltrig') checkTrainReady() });
 
-// ---------- train ----------
 let trainJob=null;
 $('#go-train').onclick=async()=>{
   $('#train-err').innerHTML='';
@@ -4563,6 +5143,7 @@ async function pollTrain(){
   $('#run-phase').textContent=s.phase||'Working…';
   $('#run-pct').textContent=s.percent!=null?s.percent+'%':'';
   $('#run-bar').style.width=(s.percent||0)+'%';
+  trainPct=s.percent||0; drawDoor();
   const bits=[];
   if(s.step)bits.push(`step ${s.step}/${s.total_steps}`);
   if(s.epoch)bits.push(`epoch ${s.epoch}/${s.total_epochs}`);
@@ -4574,6 +5155,9 @@ async function pollTrain(){
     clearInterval(poll);
     $('#run-phase').textContent=s.status==='stopped'?'Stopped':'Done';
     $('#run-bar').style.width='100%';
+    // The door goes back to being a door. A finished run left at 100% would
+    // read as one still going, and the result is on the Train side anyway.
+    trainPct=null; drawDoor();
     $('#run-done').classList.remove('hide');
     $('#run-done').innerHTML=`<b>${s.status==='stopped'?'Stopped':'Training complete'}</b>
       <p class="muted" style="margin-top:7px">${s.note||''}</p>
@@ -4582,20 +5166,25 @@ async function pollTrain(){
     loadState();
   } else if(s.status==='failed'){
     clearInterval(poll);
+    trainPct=null; drawDoor();
     $('#train-err').innerHTML='<div class="err-box">'+(s.error||'Training failed')+'</div>';
   }
 }
 $('#do-stop').onclick=async()=>{ $('#do-stop').disabled=true; await post('/api/stop/'+trainJob); };
 
-// ---------- generate ----------
+// ==================== IMAGE ====================
+// What the model implies, not what it is called — its name is already in the
+// select two controls to the left, and printing it twice is the sentence
+// telling you what you can see.
 function syncModelLine(){
   const v=$('#g-model').value;
   $('#gen-model-line').textContent = !v ? 'No model downloaded'
-    : v==='turbo' ? 'Krea 2 Turbo · 8 steps · CFG 1.0'
-    : 'Krea 2 RAW · 28 steps · CFG 5.5';
+    : v==='turbo' ? '8 steps · CFG 1.0' : '28 steps · CFG 5.5';
 }
 $('#g-model').onchange=syncModelLine;
-$('#toggle-adv').onclick=()=>$('#gen-adv').classList.toggle('hide');
+$('#toggle-adv').onclick=()=>{
+  $('#toggle-adv').classList.toggle('on',!$('#gen-adv').classList.toggle('hide'));
+};
 
 // ---------- LoRA stack ----------
 // One row per LoRA. Two weights each, the way Forge splits them: the first
@@ -4604,14 +5193,17 @@ $('#toggle-adv').onclick=()=>$('#gen-adv').classList.toggle('hide');
 let loraOpts='';
 function loraRow(sel,unet,te){
   const row=document.createElement('div');
-  row.className='lora-row'; row.dataset.lora='1';
+  row.className='stack-row'; row.dataset.lora='1';
   row.innerHTML=`
     <select data-f="path">${loraOpts}</select>
-    <input data-f="unet" inputmode="decimal" value="${unet??1}" title="UNet weight">
-    <input data-f="te" inputmode="decimal" value="${te??1}" title="Text encoder weight">
-    <button class="s" data-f="up">↑</button>
-    <button class="s" data-f="down">↓</button>
-    <button class="s" data-f="rm">✕</button>`;
+    <div class="nums">
+      <input class="num" data-f="unet" inputmode="decimal" value="${unet??1}" title="UNet weight">
+      <input class="num" data-f="te" inputmode="decimal" value="${te??1}" title="Text encoder weight">
+      <span class="grow"></span>
+      <button class="s" data-f="up" title="Move up">↑</button>
+      <button class="s" data-f="down" title="Move down">↓</button>
+      <button class="s" data-f="rm" title="Remove">✕</button>
+    </div>`;
   if(sel) row.querySelector('[data-f=path]').value=sel;
   const q=f=>row.querySelector('[data-f='+f+']');
   q('rm').onclick=()=>row.remove();
@@ -4642,15 +5234,19 @@ function readLoras(){
 // automatically; the x/y/w/h fields are there when a strip is not what you want.
 function regionRow(prompt){
   const row=document.createElement('div');
-  row.className='lora-row'; row.dataset.region='1';
+  row.className='region'; row.dataset.region='1';
   row.innerHTML=`
-    <input data-f="prompt" placeholder="Region prompt" value="${prompt||''}" style="flex:1">
-    <input data-f="x" inputmode="decimal" placeholder="x" style="width:62px">
-    <input data-f="y" inputmode="decimal" placeholder="y" style="width:62px">
-    <input data-f="width" inputmode="decimal" placeholder="w" style="width:62px">
-    <input data-f="height" inputmode="decimal" placeholder="h" style="width:62px">
-    <input data-f="weight" inputmode="decimal" value="1" style="width:62px" title="Weight">
-    <button class="s" data-f="rm">✕</button>`;
+    <div class="row" style="gap:6px">
+      <input class="grow" data-f="prompt" placeholder="Region prompt" value="${esc(prompt||'')}">
+      <button class="s" data-f="rm" title="Remove">✕</button>
+    </div>
+    <div class="cells">
+      <input data-f="x" inputmode="decimal" placeholder="x" title="x">
+      <input data-f="y" inputmode="decimal" placeholder="y" title="y">
+      <input data-f="width" inputmode="decimal" placeholder="w" title="width">
+      <input data-f="height" inputmode="decimal" placeholder="h" title="height">
+      <input data-f="weight" inputmode="decimal" value="1" title="weight">
+    </div>`;
   row.querySelector('[data-f=rm]').onclick=()=>{row.remove();autoLayout()};
   return row;
 }
@@ -4671,7 +5267,7 @@ $('#add-region').onclick=()=>{ $('#region-stack').appendChild(regionRow()); auto
 $('#g-region-dir').onchange=autoLayout;
 $('#g-regional').onchange=()=>{
   const on=$('#g-regional').checked;
-  ['#region-stack','#region-add-row','#g-region-dir'].forEach(s=>$(s).classList.toggle('hide',!on));
+  ['#region-stack','#add-region','#g-region-dir'].forEach(s=>$(s).classList.toggle('hide',!on));
   if(on&&!$$('#region-stack [data-region]').length){
     $('#region-stack').appendChild(regionRow());
     $('#region-stack').appendChild(regionRow());
@@ -4688,6 +5284,26 @@ function readRegions(){
   }).filter(r=>r.prompt.trim());
 }
 
+// One image gets the room to be looked at; a batch gets two columns, because
+// four stills side by side are thumbnails and you cannot judge a thumbnail.
+function layoutShots(n){
+  const g=$('#gen-out');
+  g.style.gridTemplateColumns = n<=1 ? 'minmax(0,1fr)' : 'repeat(2,minmax(0,1fr))';
+  g.style.maxWidth = n<=1 ? '920px' : '1320px';
+  // Measured off the canvas, not the viewport: the console under it grows and
+  // shrinks with what is open, so a dvh sum would be wrong the moment anyone
+  // opened Advanced — the stills would run under the bar instead of fitting
+  // above it. A batch has to fit to be compared; a single still gets it all.
+  const h=$('#canvas').clientHeight-44;
+  g.style.setProperty('--shot-h', (n<=2 ? h : h/2-16)+'px');
+}
+// The canvas changes height whenever the console does, so the fit is recomputed
+// rather than set once at generation time.
+new ResizeObserver(()=>{
+  const n=$('#gen-out').children.length;
+  if(n) layoutShots(n);
+}).observe(document.querySelector('#canvas'));
+
 $('#go-gen').onclick=async()=>{
   const p=$('#prompt').value.trim(), regions=readRegions();
   if(!p&&!regions.length)return;
@@ -4701,6 +5317,7 @@ $('#go-gen').onclick=async()=>{
     width:w, height:h, num_images:$('#g-n').value, seed:$('#g-seed').value,
     sampler:$('#g-sampler').value, scheduler:$('#g-scheduler').value,
     steps:$('#g-steps').value, cfg_scale:$('#g-cfg').value, shift:$('#g-shift').value,
+    gpu:$('#g-gpu').value,
   });
   if(r.error){$('#gen-err').innerHTML='<div class="err-box">'+r.error+'</div>';btn.disabled=false;box.classList.add('hide');return}
   const t=setInterval(async()=>{
@@ -4710,8 +5327,18 @@ $('#go-gen').onclick=async()=>{
     if(s.status==='completed'){
       clearInterval(t); btn.disabled=false; box.classList.add('hide');
       const out=await api('/api/outputs/'+r.job_id);
-      $('#gen-out').innerHTML=(out.images||[]).map(i=>`<img src="${i.data}" alt="">`).join('')
+      // Each still carries its own way into video. Two, because they are
+      // genuinely different jobs: a first frame is the shot the clip starts on,
+      // a reference is a subject the clip is about.
+      const imgs=out.images||[];
+      layoutShots(imgs.length);
+      $('#gen-out').innerHTML=imgs.map((i,n)=>
+        `<figure class="shot"><img src="${i.data}" alt="">`+
+        `<span class="acts"><button class="s" data-n="${n}" data-as="first">Animate</button>`+
+        `<button class="s" data-n="${n}" data-as="reference">As reference</button></span></figure>`).join('')
         || '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
+      $$('#gen-out .acts button').forEach(b=>b.onclick=()=>
+        toVideo(imgs[+b.dataset.n].data.split(',')[1], b.dataset.as));
       // Surface which LoRAs actually matched — a stack that silently no-ops
       // looks identical to a stack that had no effect.
       const skipped=(s.loras||[]).filter(l=>!l.applied);
@@ -4721,6 +5348,7 @@ $('#go-gen').onclick=async()=>{
         s.duration_s&&`${s.duration_s}s`,
         skipped.length&&('not applied: '+skipped.map(l=>l.name+(l.reason?` (${l.reason})`:'')).join(', ')),
       ].filter(Boolean).join(' · ');
+      syncCanvasView(); loadGallery();
     } else if(s.status==='stopped'){
       clearInterval(t); btn.disabled=false; box.classList.add('hide');
     } else if(s.status==='failed'){
@@ -4730,6 +5358,595 @@ $('#go-gen').onclick=async()=>{
   },2000);
 };
 
+// ---------- gpu ----------
+// One warning, once per card, and only when you actually change it. Switching
+// starts a container that does not exist yet — on the video side that is 42.5 GB
+// of weights, so the cost is worth a sentence before it is spent rather than a
+// progress bar that sits still for minutes afterwards.
+function wireGpu(sel, spec){
+  const el=$(sel);
+  el.innerHTML=spec.options.map(g=>
+    `<option value="${g}"${g===spec.default?' selected':''}>${g}</option>`).join('');
+  let last=spec.default;
+  el.onchange=()=>{
+    if(el.value===last) return;
+    if(el.value===spec.default ||
+       confirm(`Switch to ${el.value}?\n\nThis card has no warm container, so the next run pays a cold start while the model loads. Runs after it are warm.`)){
+      last=el.value;
+    } else {
+      el.value=last;
+    }
+  };
+}
+
+// ==================== VIDEO ====================
+// Keyframes and references are held here as bare base64, the shape /api/video
+// wants, so the submit handler never has to go back to the file for them.
+const keyframe={first:null,last:null};
+let refs=[], refVids=[];
+
+// ---------- the model, and what it makes the panel look like ----------
+// Two video families that genuinely differ: H3 carries a soundtrack and takes
+// references but no LoRAs and no guidance; Wan takes LoRAs, CFG and a negative
+// prompt but is silent. Rather than one panel with half its controls quietly
+// inert, the composer is rebuilt from what the chosen model says it reads.
+let vidModels=[];
+const videoModel=()=>vidModels.find(m=>m.key===$('#v-model').value)||null;
+
+// A value you chose is yours and survives a model change; a value that is only
+// the previous model's default is not. Without the distinction, switching from
+// H3 to Wan kept res_multistep — a sampler nobody picked, quietly overriding
+// the euler that Wan's own templates use — because it happened to be in both
+// lists. Same idiom as the region fields below.
+// Assigning .value fires no change event, so only a real interaction lands
+// here — reuse() is the one other thing that sets the flag, deliberately.
+document.addEventListener('change',e=>{
+  if(e.target.matches('#v-tier,#v-seconds,#v-sampler,#v-scheduler'))
+    e.target.dataset.touched='1';
+});
+function fillSelect(sel,opts,value){
+  const el=$(sel), prev=el.dataset.touched?el.value:null;
+  el.innerHTML=opts.map(o=>`<option value="${o[0]}">${esc(o[1])}</option>`).join('');
+  const keys=opts.map(o=>String(o[0]));
+  el.value = keys.includes(prev) ? prev : (keys.includes(String(value))?String(value):keys[0]);
+}
+
+function syncVideoModel(){
+  const m=videoModel();
+  if(!m) return;
+  const sup=m.supports, d=m.defaults;
+
+  fillSelect('#v-tier', Object.entries(m.tiers), d.tier);
+  fillSelect('#v-seconds', m.lengths.map(n=>[n,n+'s']), d.seconds);
+  fillSelect('#v-sampler', m.samplers.map(x=>[x,x]), d.sampler);
+  fillSelect('#v-scheduler', m.schedulers.map(x=>[x,x]), d.scheduler);
+  // Placeholders, not values: an empty box means "the model's default", which
+  // stays right when the default changes under it.
+  $('#v-steps').placeholder=String(d.steps);
+  $('#v-cfg').placeholder=String(d.cfg??'');
+  $('#v-shift').placeholder=String(d.shift??'');
+
+  $('#v-add-lora').classList.toggle('hide',!sup.loras);
+  $('#v-ref-sec').classList.toggle('hide',!sup.references);
+  $('#v-neg').classList.toggle('hide',!sup.negative);
+  $('#v-cfg-wrap').classList.toggle('hide',!sup.cfg);
+  $('#v-shift-wrap').classList.toggle('hide',!sup.cfg);
+  $('#v-switch-wrap').classList.toggle('hide',!sup.experts);
+  $('#v-drop-last').classList.toggle('hide',!sup.last_frame);
+  $$('#v-lora-stack [data-f=expert]').forEach(el=>el.classList.toggle('hide',!sup.experts));
+
+  // A model that cannot take what is already attached would fail at submit.
+  // Dropping it here, where the section it came from is visibly gone, is the
+  // only version of this that does not look like the request lost it.
+  if(!sup.references&&(refs.length||refVids.length)){ refs=[]; refVids=[]; }
+  if(!sup.last_frame&&keyframe.last){
+    clearFrame('last');
+  }
+  if(kind==='video') syncPromptHint();
+
+  // What this model needs that is not on the volume, per task — so a t2v run
+  // is never told to download the 28.6 GB i2v pair it will not load.
+  const task = sup.references&&(refs.length||refVids.length) ? 'ref2va'
+             : (m.key==='h3' ? 'fl2va' : (keyframe.first||keyframe.last?'i2v':'t2v'));
+  const t=m.tasks[task]||{ready:true,missing:[]};
+  $('#go-vid').disabled=!t.ready;
+  $('#v-model-line').textContent = t.ready ? m.note
+    : 'Not downloaded: '+t.missing.join(', ')+' — get them under Settings.';
+  drawRefs();
+}
+$('#v-model').onchange=syncVideoModel;
+
+// ---------- video LoRA stack ----------
+// The image stack's two weights do not carry over: ComfyUI's model-only loader
+// patches the DiT and umT5 is loaded separately, so there is one strength. What
+// replaces the second field is the expert, which the A14B pair forces — it is
+// two checkpoints, and a row has to say which one it patches.
+function vidLoraRow(sel,unet,expert){
+  const sup=(videoModel()||{supports:{}}).supports;
+  const row=document.createElement('div');
+  row.className='stack-row'; row.dataset.lora='1';
+  row.innerHTML=`
+    <select data-f="path">${loraOpts}</select>
+    <div class="nums">
+      <input class="num" data-f="unet" inputmode="decimal" value="${unet??1}" title="Strength">
+      <select data-f="expert" class="${sup.experts?'':'hide'}" title="Which expert this patches">
+        ${(window.WAN_EXPERTS||['both','high','low']).map(e=>
+          `<option value="${e}">${e==='both'?'both experts':e+' noise'}</option>`).join('')}
+      </select>
+      <span class="grow"></span>
+      <button class="s" data-f="up" title="Move up">↑</button>
+      <button class="s" data-f="down" title="Move down">↓</button>
+      <button class="s" data-f="rm" title="Remove">✕</button>
+    </div>`;
+  const q=f=>row.querySelector('[data-f='+f+']');
+  if(sel) q('path').value=sel;
+  if(expert) q('expert').value=expert;
+  q('rm').onclick=()=>row.remove();
+  q('up').onclick=()=>row.previousElementSibling&&row.parentNode.insertBefore(row,row.previousElementSibling);
+  q('down').onclick=()=>row.nextElementSibling&&row.parentNode.insertBefore(row.nextElementSibling,row);
+  // The paired speed LoRAs are named `high` and `low` inside one folder, so the
+  // file already says which expert it belongs to. Reading it beats making you
+  // set the same fact twice and beats the silent quality loss of crossing them.
+  q('path').onchange=()=>{
+    const n=(q('path').value.split('/').pop()||'').toLowerCase();
+    if(n.startsWith('high')||n.includes('high_noise')) q('expert').value='high';
+    else if(n.startsWith('low')||n.includes('low_noise')) q('expert').value='low';
+  };
+  return row;
+}
+$('#v-add-lora').onclick=()=>{
+  const stack=$('#v-lora-stack');
+  if(stack.children.length>=(window.MAX_LORAS||6)) return;
+  stack.appendChild(vidLoraRow());
+};
+function readVidLoras(){
+  if(!(videoModel()||{supports:{}}).supports.loras) return [];
+  return $$('#v-lora-stack [data-lora]').map(r=>({
+    path:r.querySelector('[data-f=path]').value,
+    unet:parseFloat(r.querySelector('[data-f=unet]').value)||0,
+    expert:r.querySelector('[data-f=expert]').value||'both',
+  })).filter(l=>l.path);
+}
+
+// Reading a File to base64 is needed by four different entry points — the two
+// keyframe drops, the reference picker, and the hand-off from finished work —
+// so it lives here rather than four times over.
+const toB64=f=>new Promise(res=>{
+  const r=new FileReader();
+  r.onload=()=>res(r.result.split(',')[1]);
+  r.readAsDataURL(f);
+});
+
+function drawRefs(){
+  // Images are labelled with the <Picture n> the prompt will use, videos with
+  // <Video n> — the label is the thing you type, so it is worth showing.
+  const img=refs.map((b,i)=>
+    `<div class="ref"><img src="data:image/png;base64,${b}" alt="">`+
+    `<b>P${i+1}</b><button data-k="img" data-i="${i}" title="Remove">×</button></div>`).join('');
+  const vid=refVids.map((b,i)=>
+    `<div class="ref"><video src="data:video/mp4;base64,${b}" muted></video>`+
+    `<b>V${i+1}</b><button data-k="vid" data-i="${i}" title="Remove">×</button></div>`).join('');
+  $('#v-refs').innerHTML=img+vid;
+  $$('#v-refs button').forEach(b=>b.onclick=()=>{
+    (b.dataset.k==='img'?refs:refVids).splice(+b.dataset.i,1); drawRefs();
+  });
+  // On H3 references and keyframes load different transformers, so saying
+  // which one is going to run beats letting the two sections look
+  // simultaneously active. On Wan the same sentence has a different job: a
+  // first frame is what makes it an i2v run, on a different 28.6 GB pair.
+  const n=refs.length+refVids.length;
+  const sup=(videoModel()||{supports:{}}).supports;
+  $('#vid-note').textContent = n
+    ? `${n} reference${n>1?'s':''} — keyframes are ignored for this run.`
+    : (keyframe.first
+        ? (sup.references?'':'Image-to-video. ')+'Canvas follows the first frame’s aspect ratio.'
+        : '');
+}
+
+function pickRefs(kindOf){
+  const isImg=kindOf==='img';
+  const bucket=isImg?refs:refVids;
+  const max=+$(isImg?'#v-ref-max':'#v-vid-max').textContent;
+  if(bucket.length>=max){
+    alert(`${max} ${isImg?'image':'video'} references is the model's limit.`); return;
+  }
+  const input=document.createElement('input');
+  input.type='file'; input.accept=isImg?'image/*':'video/*'; input.multiple=true;
+  input.onchange=async e=>{
+    for(const f of [...e.target.files].slice(0,max-bucket.length)) bucket.push(await toB64(f));
+    drawRefs();
+  };
+  input.click();
+}
+$('#v-add-ref').onclick=()=>pickRefs('img');
+$('#v-add-vid').onclick=()=>pickRefs('vid');
+
+function wireDrop(slot){
+  const box=$('#v-drop-'+slot), img=$('#v-thumb-'+slot), hint=$('#v-hint-'+slot);
+  hint.innerHTML=ICON[slot];
+  const input=document.createElement('input');
+  input.type='file'; input.accept='image/*'; input.className='hide';
+  box.appendChild(input);
+
+  const take=async f=>{
+    if(!f||!f.type.startsWith('image/'))return;
+    setFrame(slot, await toB64(f));
+  };
+  box.onclick=()=>input.click();
+  input.onchange=e=>take(e.target.files[0]);
+  box.ondragover=e=>{e.preventDefault();box.classList.add('hot')};
+  box.ondragleave=()=>box.classList.remove('hot');
+  box.ondrop=e=>{e.preventDefault();box.classList.remove('hot');take(e.dataTransfer.files[0])};
+}
+function clearFrame(slot){
+  keyframe[slot]=null;
+  $('#v-thumb-'+slot).classList.add('hide');
+  $('#v-hint-'+slot).classList.remove('hide');
+  $('#v-drop-'+slot).classList.remove('set');
+}
+function setFrame(slot,b64){
+  keyframe[slot]=b64;
+  $('#v-thumb-'+slot).src='data:image/png;base64,'+b64;
+  $('#v-thumb-'+slot).classList.remove('hide');
+  $('#v-hint-'+slot).classList.add('hide');
+  $('#v-drop-'+slot).classList.add('set');
+  if(slot==='first') syncFrameCanvas();
+}
+wireDrop('first'); wireDrop('last');
+
+// A first frame anchors the geometry — the canvas follows the image, so the
+// aspect picker stops being the thing that decides it. Disabling it and saying
+// why beats leaving a control that looks live and is quietly ignored.
+//
+// It also changes which weights the run needs on Wan (t2v and i2v are separate
+// checkpoints), which is why this re-runs the whole model sync rather than just
+// redrawing the references.
+function syncFrameCanvas(){
+  $('#v-aspect').disabled=!!keyframe.first;
+  syncVideoModel();
+}
+
+// The hand-off. A still you just made becomes the thing the next clip animates,
+// without a download and a re-upload — which is the whole point of image and
+// video sharing one workspace.
+function toVideo(b64, as){
+  if(as==='reference'||as==='refvideo'){
+    // Only one family has a reference checkpoint. Moving to it is the useful
+    // reading of the button — the alternative is accepting the image and then
+    // dropping it the moment the panel redraws.
+    if(!(videoModel()||{supports:{}}).supports.references){
+      const m=vidModels.find(x=>x.supports.references&&x.ready);
+      if(!m){alert('References need MiniMax-H3 — download it under Settings.');return}
+      $('#v-model').value=m.key; syncVideoModel();
+    }
+    const img=as==='reference';
+    const max=+$(img?'#v-ref-max':'#v-vid-max').textContent;
+    const bucket=img?refs:refVids;
+    if(bucket.length>=max){alert(`${max} references is the model's limit.`);return}
+    bucket.push(b64);
+  } else {
+    setFrame('first', b64);
+  }
+  syncFrameCanvas();
+  setKind('video');
+  closeGallery();
+  $('#prompt').focus();
+}
+
+$('#v-toggle-adv').onclick=()=>{
+  $('#v-toggle-adv').classList.toggle('on',!$('#vid-adv').classList.toggle('hide'));
+};
+
+$('#go-vid').onclick=async()=>{
+  const p=$('#prompt').value.trim();
+  if(!p)return;
+  $('#vid-err').innerHTML=''; $('#vid-meta').textContent='';
+  const btn=$('#go-vid'); btn.disabled=true;
+  const box=$('#vid-prog'); box.classList.remove('hide');
+  box.querySelector('i').style.width='0%';
+  box.querySelector('p').textContent='Queued…';
+
+  const r=await post('/api/video',{
+    model:$('#v-model').value,
+    prompt:p, negative_prompt:$('#v-neg').value,
+    aspect:$('#v-aspect').value, tier:$('#v-tier').value,
+    seconds:$('#v-seconds').value, steps:$('#v-steps').value, seed:$('#v-seed').value,
+    cfg:$('#v-cfg').value, shift:$('#v-shift').value, switch_at:$('#v-switch').value,
+    sampler:$('#v-sampler').value, scheduler:$('#v-scheduler').value,
+    loras:readVidLoras(),
+    first_frame:keyframe.first, last_frame:keyframe.last,
+    references:refs, ref_videos:refVids,
+    ref_size:$('#v-ref-size').value, gpu:$('#v-gpu').value,
+  });
+  if(r.error){
+    $('#vid-err').innerHTML='<div class="err-box">'+r.error+'</div>';
+    btn.disabled=false; box.classList.add('hide'); return;
+  }
+
+  const t=setInterval(async()=>{
+    const s=await api('/api/status/'+r.job_id);
+    box.querySelector('i').style.width=(s.percent||0)+'%';
+    // The first minutes are 42.5 GB loading onto the card, with no step count
+    // to show yet. Naming that beats a bar that sits at zero looking stuck.
+    box.querySelector('p').textContent = s.step
+      ? `Step ${s.step}/${s.total_steps}${s.eta?' · '+s.eta+' left':''}`
+      : (s.phase==='loading'?'Loading the model…':(s.phase||'Working…'));
+    // syncVideoModel() rather than a bare re-enable: the button's state is
+    // "this model can run", and a run finishing is not a reason to override it.
+    if(s.status==='completed'){
+      clearInterval(t); syncVideoModel(); box.classList.add('hide');
+      const f=(s.files||[])[0];
+      $('#vid-out').innerHTML=f
+        ? `<video controls autoplay loop playsinline src="/api/file/${r.job_id}/${f}"></video>`
+        : '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
+      const stack=readVidLoras();
+      $('#vid-meta').textContent=[
+        s.width&&`${s.width}×${s.height}`,
+        s.seconds&&`${s.seconds}s · ${s.frames} frames · ${s.fps} fps`,
+        s.seed!=null&&`seed ${s.seed}`,
+        s.steps&&`${s.steps} steps`,
+        stack.length&&`${stack.length} LoRA${stack.length>1?'s':''}`,
+        s.duration_s&&`${s.duration_s}s`,
+      ].filter(Boolean).join(' · ');
+      syncCanvasView(); loadGallery();
+    } else if(s.status==='stopped'){
+      clearInterval(t); syncVideoModel(); box.classList.add('hide');
+    } else if(s.status==='failed'){
+      clearInterval(t); syncVideoModel(); box.classList.add('hide');
+      $('#vid-err').innerHTML='<div class="err-box">'+(s.error||'Generation failed')+'</div>';
+    }
+  },2000);
+};
+
+// ==================== GALLERY ====================
+// Reads the volume, not a job id. Anything generated is here after a reload,
+// a redeploy, or a job record that expired — the folder is the record.
+//
+// A card shows the work and nothing else. Prompts here run past two hundred
+// tokens and two clamped lines of one are neither readable nor identifiable;
+// the only time the settings matter is when you want to run them again, and
+// that is what the overflow menu is for.
+let galItems=[], galFilter='all';
+
+const ago=t=>{
+  if(!t) return '';
+  const s=Math.max(0,Date.now()/1000-t);
+  if(s<90) return 'just now';
+  if(s<5400) return Math.round(s/60)+'m ago';
+  if(s<172800) return Math.round(s/3600)+'h ago';
+  return Math.round(s/86400)+'d ago';
+};
+
+async function loadGallery(){
+  const r=await api('/api/gallery');
+  galItems=r.items||[];
+  drawDrawer();
+  if(!$('#gal-full').classList.contains('hide')) drawGallery();
+}
+
+function galCard(it,i){
+  const src=`/api/file/${it.job_id}/${it.files[0]}`;
+  // A poster frame would be a second request per card, so the video element
+  // loads metadata only — enough for a first frame, not the whole clip.
+  const media=it.kind==='video'
+    ? `<video class="media" src="${src}" preload="metadata" muted playsinline data-open></video>`
+    : `<img class="media" src="${src}" alt="" loading="lazy" data-open>`;
+  const n=it.files.length>1?` · ${it.files.length}`:'';
+  return `<div class="gal" data-i="${i}">${media}
+    <div class="quick">
+      <button data-act="download" title="Download">${ICON.download}</button>
+      <button data-act="del" title="Move to trash">${ICON.close}</button>
+    </div>
+    <div class="foot">
+      <span class="kind">${it.kind==='video'?ICON.play:ICON.photo}</span>
+      <span class="when">${ago(it.created||it.modified)}${n}</span>
+      <span class="grow"></span>
+      <button class="more" data-act="menu" title="More">${ICON.more}</button>
+    </div>
+  </div>`;
+}
+
+function wireCards(root,rows){
+  root.querySelectorAll('.gal').forEach(card=>{
+    const it=rows[+card.dataset.i];
+    card.querySelector('[data-open]').onclick=()=>
+      lightbox(`/api/file/${it.job_id}/${it.files[0]}`, it.kind==='video');
+    card.querySelectorAll('[data-act]').forEach(b=>b.onclick=e=>{
+      e.stopPropagation();
+      if(b.dataset.act==='download') return download(it);
+      if(b.dataset.act==='del') return remove(it);
+      openMenu(b, menuFor(it));
+    });
+  });
+}
+
+function drawDrawer(){
+  const rows=galItems.slice(0,24);
+  $('#drawer-grid').innerHTML=rows.map(galCard).join('');
+  $('#drawer-empty').textContent=rows.length?'':'Nothing generated yet.';
+  wireCards($('#drawer-grid'),rows);
+}
+
+function drawGallery(){
+  const rows=galItems.filter(i=>galFilter==='all'||i.kind===galFilter);
+  $('#gal-empty').textContent=rows.length?'':
+    (galItems.length?'Nothing of that kind yet.':'Nothing generated yet.');
+  $('#gal-grid').innerHTML=rows.map(galCard).join('');
+  wireCards($('#gal-grid'),rows);
+}
+
+function openGallery(){ $('#gal-full').classList.remove('hide'); drawGallery() }
+function closeGallery(){ $('#gal-full').classList.add('hide') }
+$('#gal-expand').onclick=openGallery;
+$('#gal-back').onclick=closeGallery;
+$('#gal-refresh').onclick=loadGallery;
+$$('#gal-full [data-filter]').forEach(b=>b.onclick=()=>{
+  galFilter=b.dataset.filter;
+  $$('#gal-full [data-filter]').forEach(x=>x.classList.toggle('on',x===b));
+  drawGallery();
+});
+
+// ---------- card actions ----------
+function download(it){
+  it.files.forEach(f=>{
+    const a=document.createElement('a');
+    a.href=`/api/file/${it.job_id}/${f}`; a.download=f;
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+}
+
+async function remove(it){
+  if(!confirm('Move this result to the trash?')) return;
+  await post(`/api/outputs/${it.job_id}/delete`);
+  loadGallery();
+}
+
+// Fetch the bytes rather than reusing a data URL: the card is a streamed
+// <img src>, so the base64 the video side needs does not exist client-side.
+async function handoff(it,as){
+  const blob=await (await fetch(`/api/file/${it.job_id}/${it.files[0]}`)).blob();
+  toVideo(await toB64(blob), as);
+}
+
+function menuFor(it){
+  const m=[{label:'Reuse prompt & settings',run:()=>reuse(it)}];
+  if(it.kind==='image'){
+    m.push({label:'Animate from this frame',run:()=>handoff(it,'first')});
+    m.push({label:'Use as reference',run:()=>handoff(it,'reference')});
+  } else {
+    m.push({label:'Use as video reference',run:()=>handoff(it,'refvideo')});
+  }
+  m.push({sep:true});
+  m.push({label:'View metadata',run:()=>metaSheet(it)});
+  m.push({label:it.files.length>1?`Download ${it.files.length} files`:'Download',run:()=>download(it)});
+  m.push({label:'Delete',danger:true,run:()=>remove(it)});
+  return m;
+}
+
+// The point of keeping the sidecar: everything below reproduces the result, so
+// putting it back in the composer is a read of a file, not a re-typed prompt.
+function reuse(it){
+  closeGallery();
+  const set=(sel,v)=>{ if(v!=null&&v!=='') $(sel).value=v };
+  if(it.kind==='image'){
+    setKind('image');
+    set('#prompt',it.prompt); set('#g-neg',it.negative_prompt);
+    if(it.model) $('#g-model').value=it.model;
+    const size=`${it.width}x${it.height}`;
+    if([...$('#g-aspect').options].some(o=>o.value===size)) $('#g-aspect').value=size;
+    set('#g-seed',(it.seeds||[])[0]);
+    set('#g-sampler',it.sampler); set('#g-scheduler',it.scheduler);
+    set('#g-steps',it.steps); set('#g-cfg',it.cfg_scale); set('#g-shift',it.shift);
+    // The stack is reported by name, not path, so rows are matched against the
+    // filename each option carries. A LoRA since deleted simply does not return.
+    const stack=$('#lora-stack'); stack.innerHTML='';
+    (it.loras||[]).forEach(l=>{
+      const row=loraRow(); stack.appendChild(row);
+      const sel=row.querySelector('[data-f=path]');
+      const hit=[...sel.options].find(o=>
+        o.value.split('/').pop().replace(/\.safetensors$/i,'')===l.name);
+      if(hit) sel.value=hit.value; else row.remove();
+      if(hit){
+        row.querySelector('[data-f=unet]').value=l.unet??1;
+        row.querySelector('[data-f=te]').value=l.text_encoder??1;
+      }
+    });
+    syncModelLine();
+    if(it.negative_prompt||it.steps) $('#gen-adv').classList.remove('hide');
+    $('#prompt').focus();
+  } else {
+    setKind('video');
+    // The model first, and re-sync before anything else: it decides which
+    // controls exist, so restoring a CFG into a panel that has not been rebuilt
+    // yet writes to a box the next redraw hides.
+    if(it.model&&[...$('#v-model').options].some(o=>o.value===it.model&&!o.disabled)){
+      $('#v-model').value=it.model;
+    }
+    syncVideoModel();
+    set('#prompt',it.prompt); set('#v-neg',it.negative_prompt);
+    set('#v-seed',it.seed); set('#v-steps',it.steps);
+    set('#v-cfg',it.cfg_scale); set('#v-shift',it.shift); set('#v-switch',it.switch_at);
+    // Marked as chosen, not defaulted: restoring a clip's settings and then
+    // attaching a frame must not quietly hand them back to the model's defaults.
+    const pick=(sel,v)=>{
+      const el=$(sel);
+      if(v!=null&&v!==''&&[...el.options].some(o=>o.value===String(v))){
+        el.value=String(v); el.dataset.touched='1';
+      }
+    };
+    pick('#v-sampler',it.sampler); pick('#v-scheduler',it.scheduler);
+    if(it.seconds) pick('#v-seconds',Math.round(it.seconds));
+    if(it.width&&it.height&&!keyframe.first){
+      const r=it.width/it.height;
+      const near=[...$('#v-aspect').options].map(o=>{
+        const [a,b]=o.value.split(':').map(Number);
+        return {v:o.value,d:Math.abs(a/b-r)};
+      }).sort((x,y)=>x.d-y.d)[0];
+      if(near) $('#v-aspect').value=near.v;
+    }
+    // Matched on the full name under loras/, not the stem: `high.safetensors`
+    // is the filename of both speed pairs, so a stem match would restore the
+    // t2v LoRA into an i2v run without a word about it.
+    const stack=$('#v-lora-stack'); stack.innerHTML='';
+    (it.loras||[]).forEach(l=>{
+      const row=vidLoraRow(); stack.appendChild(row);
+      const sel=row.querySelector('[data-f=path]');
+      const hit=[...sel.options].find(o=>o.value.endsWith('/'+l.name));
+      if(!hit){ row.remove(); return }
+      sel.value=hit.value;
+      row.querySelector('[data-f=unet]').value=l.unet??1;
+      row.querySelector('[data-f=expert]').value=l.expert||'both';
+    });
+    if(it.negative_prompt||it.steps||it.cfg_scale) $('#vid-adv').classList.remove('hide');
+    $('#prompt').focus();
+  }
+}
+
+function metaSheet(it){
+  const rows=[
+    ['Kind',it.kind], ['Model',it.model], ['Job',it.job_id],
+    ['Size',it.width&&`${it.width}×${it.height}`],
+    ['Seed',(it.seeds||[]).join(', ')||it.seed],
+    ['Steps',it.steps], ['Sampler',it.sampler], ['Scheduler',it.scheduler],
+    ['CFG',it.cfg_scale], ['Shift',it.shift],
+    ['Expert switch',it.switch_at&&`step ${it.switch_at}`],
+    ['Length',it.seconds&&`${it.seconds}s · ${it.frames} frames · ${it.fps} fps`],
+    ['References',it.references||it.ref_videos ? `${it.references||0} image, ${it.ref_videos||0} video` : ''],
+    // `expert` only exists on the video stack, `applied` only on the image one.
+    ['LoRAs',(it.loras||[]).map(l=>`${l.name} @ ${l.unet}`
+      +(l.expert&&l.expert!=='both'?` (${l.expert} noise)`:'')
+      +(l.applied===false?' (not applied)':'')).join(', ')],
+    ['Regions',(it.regions||[]).map(r=>r.prompt).join(' | ')],
+    ['Files',it.files.join(', ')],
+    ['Created',it.created?new Date(it.created*1000).toLocaleString():''],
+  ].filter(r=>r[1]!==undefined&&r[1]!==null&&r[1]!=='');
+  const el=sheet(`
+    <div class="sheet-head">
+      <h1 class="grow">Metadata</h1>
+      <button class="ico" data-close>${ICON.close}</button>
+    </div>
+    <label>Prompt</label>
+    <textarea id="m-prompt" rows="5" readonly>${esc(it.prompt||'')}</textarea>
+    ${it.negative_prompt?`<label style="margin-top:12px">Negative</label>
+      <textarea rows="2" readonly>${esc(it.negative_prompt)}</textarea>`:''}
+    <dl class="kv" style="margin-top:18px">
+      ${rows.map(r=>`<dt>${esc(r[0])}</dt><dd>${esc(r[1])}</dd>`).join('')}
+    </dl>
+    <div class="row" style="gap:8px;margin-top:20px">
+      <button class="s" id="m-copy">Copy prompt</button>
+      <button class="s" id="m-reuse">Reuse settings</button>
+      <span class="grow"></span>
+      <button class="s" data-close>Close</button>
+    </div>`);
+  el.querySelector('#m-copy').onclick=async e=>{
+    await navigator.clipboard.writeText(it.prompt||'');
+    e.target.textContent='Copied';
+  };
+  el.querySelector('#m-reuse').onclick=()=>{ el.remove(); reuse(it) };
+}
+
+setKind('image');
+setMode('generate');
 loadState();
 loadDatasets();
 </script></body></html>

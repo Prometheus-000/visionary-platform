@@ -1,0 +1,302 @@
+"""
+Serve UI_HTML on localhost with a stubbed API, so the frontend can be looked at
+without a deploy.
+
+The real UI is a @modal.asgi_app(): reaching it means building a remote image,
+mounting the volume, and paying a cold start — minutes, for a CSS change. But
+UI_HTML is one self-contained string with no build step, so the whole frontend
+can be exercised locally against fake JSON. This is the dev server the project
+does not otherwise have.
+
+    python3 tools/preview_ui.py [port]
+
+Two deliberate choices:
+
+- **app.py is re-read on every request.** Caching it at import meant editing
+  UI_HTML and reloading showed the old page, which reads as "my change did not
+  work" rather than "the server is stale". Reload is the edit loop, so reload
+  has to be honest.
+- **Threaded.** A gallery is a grid, so opening it fires a dozen concurrent
+  media requests. The single-threaded version dropped most of them and the
+  covers came back blank — a layout bug that was not in the layout.
+
+Stdlib only, and never imported by app.py: this must run on a laptop with no
+torch, no modal, and no credentials.
+"""
+
+import json
+import re
+import sys
+import time
+from html import escape
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+APP = Path(__file__).resolve().parent.parent / "app.py"
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8777
+
+
+def ui_html() -> str:
+    """Pull UI_HTML back out of app.py. Split, not import — importing app.py
+    pulls in modal and builds image definitions at module scope."""
+    src = APP.read_text()
+    return src.split('UI_HTML = r"""', 1)[1].rsplit('"""', 1)[0]
+
+
+# --------------------------------------------------------------------------
+# Stub payloads
+#
+# Shaped to exercise the states worth looking at, not the happy path only: a
+# model that is missing, a dataset with uncaptioned images, a caption written
+# as tags, a prompt long enough to prove the gallery is right not to show it.
+# --------------------------------------------------------------------------
+
+SIZES = [(1024, 1024), (1344, 768), (768, 1344), (1216, 832)]
+LONG_PROMPT = (
+    "ohwx_style a wide cinematic photograph of a lone figure walking a wet "
+    "street at dusk, neon signage reflected in the puddles, shallow depth of "
+    "field, 35mm, the light falling from a shopfront on the left, steam rising "
+    "from a grate behind them, muted teal and amber grade, film grain"
+) * 3
+
+GALLERY = [
+    {
+        "job_id": f"job{i:03d}",
+        "kind": "video" if i % 5 == 3 else "image",
+        "files": [f"{i:02d}.mp4" if i % 5 == 3 else f"{i:02d}.png"],
+        "created": time.time() - i * 3600,
+        "modified": time.time() - i * 3600,
+        "prompt": LONG_PROMPT,
+        "negative_prompt": "blurry, low quality, watermark",
+        "width": SIZES[i % 4][0],
+        "height": SIZES[i % 4][1],
+        **(
+            {"seconds": 5, "frames": 120, "fps": 24, "seed": 4000 + i,
+             "steps": 20, "sampler": "res_multistep", "scheduler": "simple",
+             "references": 0, "ref_videos": 0}
+            if i % 5 == 3 else
+            {"model": "turbo", "seeds": [4000 + i], "steps": 8, "cfg_scale": 1.0,
+             "shift": 1.15, "sampler": "Euler", "scheduler": "Simple",
+             "loras": [{"name": "my_style", "unet": 0.8, "text_encoder": 0.8,
+                        "applied": True}],
+             "regions": []}
+        ),
+    }
+    for i in range(14)
+]
+
+DATASETS = [
+    {"name": "studio_portraits", "count": 24, "uncaptioned": 0, "cover": "0.png",
+     "trigger_word": "ohwx_style"},
+    {"name": "street_night", "count": 41, "uncaptioned": 7, "cover": "0.png",
+     "trigger_word": "ohwx_night"},
+    {"name": "product_flatlay", "count": 18, "uncaptioned": 18, "cover": "0.png",
+     "trigger_word": ""},
+    {"name": "empty_set", "count": 0, "uncaptioned": 0, "cover": None,
+     "trigger_word": ""},
+]
+
+STATE = {
+    "hf_token_set": True,
+    "models": [
+        {"key": "turbo", "label": "Krea 2 Turbo", "note": "8 steps, distilled",
+         "family": "Krea 2 — images", "repo_id": "krea/Krea-2-Turbo", "present": True, "size_gb": 17.2,
+         "approx_gb": 17.2, "gated": True},
+        {"key": "raw", "label": "Krea 2 RAW", "note": "28 steps",
+         "family": "Krea 2 — images", "repo_id": "krea/Krea-2-Raw", "present": False, "approx_gb": 17.2,
+         "gated": True},
+        {"key": "vae", "label": "VAE", "note": "", "family": "Krea 2 — images", "repo_id": "krea/Krea-2-VAE",
+         "present": True, "size_gb": 0.3, "approx_gb": 0.3, "gated": False},
+        {"key": "text_encoder", "label": "Text encoder", "note": "Qwen2.5-VL",
+         "family": "Krea 2 — images", "repo_id": "krea/Krea-2-TE", "present": True, "size_gb": 9.1,
+         "approx_gb": 9.1, "gated": False},
+    ],
+    "loras": [
+        {"name": "my_style", "trigger_word": "ohwx_style", "files": [
+            {"path": "/workspace/loras/my_style/my_style.safetensors",
+             "name": "my_style"},
+            {"path": "/workspace/loras/my_style/my_style-000020.safetensors",
+             "name": "my_style-000020"}]},
+    ],
+    # One of each shape the composer has to redraw for: audio + references and
+    # no CFG (H3), the two-expert pair (A14B), and the single-expert 5B. A stub
+    # with only one of them cannot catch a control that fails to appear.
+    "video_models": [
+        {"key": "h3", "label": "MiniMax-H3",
+         "note": "Sound and picture in one pass",
+         "tiers": {"full": "768p", "draft": "544p draft"},
+         "lengths": [5, 6, 8, 10, 12, 14],
+         "samplers": ["res_multistep", "euler", "dpmpp_2m"],
+         "schedulers": ["simple", "normal", "beta"],
+         "defaults": {"steps": 20, "sampler": "res_multistep",
+                      "scheduler": "simple", "tier": "full", "seconds": 5},
+         "supports": {"loras": False, "experts": False, "cfg": False,
+                      "negative": False, "references": True,
+                      "last_frame": True, "audio": True},
+         "tasks": {"fl2va": {"ready": True, "missing": []},
+                   "ref2va": {"ready": True, "missing": []}},
+         "ready": True},
+        {"key": "wan14b", "label": "Wan 2.2 A14B",
+         "note": "Two experts · silent",
+         "tiers": {"full": "720p", "draft": "480p draft"},
+         "lengths": [2, 3, 4, 5],
+         "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
+         "schedulers": ["simple", "normal", "beta"],
+         "defaults": {"steps": 20, "cfg": 3.5, "shift": 8.0, "sampler": "euler",
+                      "scheduler": "simple", "tier": "full", "seconds": 5},
+         "supports": {"loras": True, "experts": True, "cfg": True,
+                      "negative": True, "references": False,
+                      "last_frame": True, "audio": False},
+         # i2v deliberately not downloaded: attaching a first frame here should
+         # disable Generate and name the missing pair, which is the state most
+         # worth being able to look at.
+         "tasks": {"t2v": {"ready": True, "missing": []},
+                   "i2v": {"ready": False,
+                           "missing": ["Wan 2.2 I2V · high noise",
+                                       "Wan 2.2 I2V · low noise"]}},
+         "ready": True},
+        {"key": "wan5b", "label": "Wan 2.2 TI2V 5B",
+         "note": "24 fps · silent",
+         "tiers": {"full": "704p", "draft": "480p draft"},
+         "lengths": [2, 3, 4, 5],
+         "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
+         "schedulers": ["simple", "normal", "beta"],
+         "defaults": {"steps": 30, "cfg": 5.0, "shift": 8.0, "sampler": "euler",
+                      "scheduler": "simple", "tier": "full", "seconds": 5},
+         "supports": {"loras": True, "experts": False, "cfg": True,
+                      "negative": True, "references": False,
+                      "last_frame": False, "audio": False},
+         "tasks": {"t2v": {"ready": True, "missing": []},
+                   "i2v": {"ready": True, "missing": []}},
+         "ready": True},
+    ],
+    "wan_experts": ["both", "high", "low"],
+    "max_loras": 6, "max_refs": 9, "max_ref_videos": 3,
+    "samplers": ["Euler", "DPM++ 2M", "DPM++ SDE", "Heun"],
+    "schedulers": ["Simple", "Beta", "Normal", "Karras"],
+    "gpus": {"image": {"options": ["L40S", "A100-40GB", "H100"], "default": "L40S"},
+             "video": {"options": ["H100", "H200", "B200"], "default": "H100"}},
+}
+
+CAPTIONS = [
+    "ohwx_style a photograph of a person seated by a window in soft daylight.",
+    "ohwx_style a close portrait of a person against a plain grey backdrop.",
+    "portrait, studio, grey backdrop, soft light, 85mm",          # tag-style
+    "",                                                            # uncaptioned
+    "a photograph of a person standing in a field.",               # no trigger
+]
+
+
+def images(n: int = 24) -> list:
+    return [
+        {"name": f"{i}.png", "caption": CAPTIONS[i % len(CAPTIONS)],
+         "bytes": 780_000 + i * 4_100, "width": 1024, "height": 1024}
+        for i in range(n)
+    ]
+
+
+INSIGHT = {
+    "images": 24, "captioned": 19, "with_trigger": 14,
+    "trigger_word": "ohwx_style", "median_words": 14, "thin": ["7.png", "12.png"],
+    "duplicates": [{"images": ["3.png", "8.png", "13.png"]}],
+    "tag_style": ["2.png", "17.png"],
+    "phrases": [
+        {"phrase": "soft daylight", "count": 11, "share": 0.61},
+        {"phrase": "grey backdrop", "count": 7, "share": 0.37},
+        {"phrase": "seated by a window", "count": 4, "share": 0.21},
+    ],
+}
+
+
+def swatch(w: int, h: int, label: str, seed: int) -> bytes:
+    """An SVG placeholder, so the tool needs no Pillow. Colour varies by seed
+    because a grid of identical grey rectangles hides exactly the alignment and
+    aspect-ratio bugs this server exists to catch."""
+    hue = (seed * 47) % 360
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+        f'viewBox="0 0 {w} {h}">'
+        f'<rect width="100%" height="100%" fill="hsl({hue} 26% 33%)"/>'
+        f'<rect x="8" y="8" width="{w - 16}" height="{h - 16}" fill="none" '
+        f'stroke="#ffffff33" stroke-width="3"/>'
+        f'<text x="20" y="40" font-family="ui-monospace,monospace" '
+        f'font-size="22" fill="#e9e9e9">{escape(label)}</text>'
+        f'<text x="20" y="70" font-family="ui-monospace,monospace" '
+        f'font-size="16" fill="#ffffff88">{w}×{h}</text>'
+        f'</svg>'
+    ).encode()
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):  # one line per media file is pure noise
+        pass
+
+    def reply(self, body, ctype="application/json", code=200):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body)
+        if isinstance(body, str):
+            body = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        # No job ids: a stub that starts jobs it cannot finish leaves the UI
+        # polling a status that never lands, which looks like a hung backend.
+        self.reply({"ok": True, "note": "preview server — no backend attached."})
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+
+        if path == "/":
+            return self.reply(ui_html(), "text/html; charset=utf-8")
+        if path == "/api/state":
+            return self.reply(STATE)
+        if path == "/api/gallery":
+            return self.reply({"items": GALLERY})
+        if path == "/api/datasets":
+            return self.reply({"datasets": DATASETS})
+
+        if path.endswith("/insight"):
+            return self.reply(INSIGHT)
+        m = re.match(r"/api/datasets/([^/]+)$", path)
+        if m:
+            name = m.group(1)
+            row = next((d for d in DATASETS if d["name"] == name), None)
+            return self.reply({
+                "trigger_word": (row or {}).get("trigger_word", ""),
+                "images": images((row or {}).get("count", 0)),
+            })
+
+        m = re.match(r"/api/(?:thumb|image)/[^/]+/(.+)$", path)
+        if m:
+            return self.reply(swatch(640, 640, m.group(1), hash(m.group(1))),
+                              "image/svg+xml")
+        m = re.match(r"/api/file/(job\d+)/(.+)$", path)
+        if m:
+            item = next((i for i in GALLERY if i["job_id"] == m.group(1)), None)
+            w, h = (item["width"], item["height"]) if item else (1024, 1024)
+            # Videos get a still too. A stub cannot mux a real clip, and a card
+            # that renders is worth more here than a card that is honest about
+            # being empty — the video path itself is only reachable on Modal.
+            return self.reply(swatch(w, h, m.group(1), hash(m.group(1))),
+                              "image/svg+xml")
+
+        if path.startswith("/api/status/"):
+            return self.reply({"status": "completed", "percent": 100})
+        if path.startswith("/api/outputs/"):
+            return self.reply({"images": []})
+
+        self.reply({"error": f"No stub for {path}"}, code=404)
+
+
+if __name__ == "__main__":
+    print(f"Visionary UI preview  ->  http://127.0.0.1:{PORT}")
+    print(f"Serving UI_HTML from {APP}, re-read on every reload.")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

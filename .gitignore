@@ -15,3 +15,11 @@ sd-webui-forge-classic/
 # principles it follows. Neither is imported or built against.
 ai-toolkit/
 visionary-app/
+
+# Reference footage for the video work — 22 MB of clips and stills that
+# informed the composer, not an input to anything that builds.
+phase 3 video/
+
+# Per-machine Claude Code settings. launch.json is committed because the
+# preview server is a fact about the project; the permission list is not.
+.claude/settings.local.json
