@@ -203,7 +203,7 @@ uncaptioned dataset, a prompt too long to belong in a gallery card.
 ```
 app.py     the whole application — images, jobs, API, and the UI
 forge/     vendored sd-webui-forge-classic backend (see forge/VENDOR.md)
-tools/     smoke tests, volume migration, the local UI preview
+tools/     smoke tests and the local UI preview server
 CLAUDE.md  the design rationale — why the code is shaped the way it is
 ```
 

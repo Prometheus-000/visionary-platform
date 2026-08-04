@@ -69,7 +69,7 @@ in for free.
     app.py              the whole application — images, jobs, API, and UI_HTML
     forge/              vendored sd-webui-forge-classic backend (see VENDOR.md)
     ai-toolkit/         training reference
-    tools/              volume migration, smoke tests, the local UI preview
+    tools/              smoke tests, the local UI preview
 
 `app.py` is deliberately one file. It is long, but the alternative — a package
 whose modules are imported by Modal image builds — trades one long file for a
