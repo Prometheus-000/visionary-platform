@@ -1034,16 +1034,8 @@ def _write_dataset_meta(d: Path, **fields: Any) -> dict[str, Any]:
     return info
 
 
-# Words too common to carry signal. Deliberately short: this is not NLP, it is
-# "stop showing me `the`" — an aggressive list would hide the very phrasing
-# ("a woman standing in") that the panel exists to surface.
-_STOPWORDS = frozenset("""
-a an the and or but of in on at to for with from by is are was were be been being
-this that these those it its as into over under near very quite there their his her
-""".split())
-
-_WORD_RE = re.compile(r"[a-z0-9']+")
-# Clause boundaries: a recurring phrase should never straddle one.
+# Clause boundaries. Humans write captions as comma-delimited clauses, so this
+# is what a hand-edited caption divides into.
 _CLAUSE_RE = re.compile(r"[,.;:!?\n]+")
 
 
@@ -1086,89 +1078,60 @@ def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any
     floor = max(4, median // 3)
     thin = [n for n, c in non_empty if len(c.split()) < floor]
 
-    # Recurring phrases, longest-first.
+    # Comma-delimited clauses, counted whole.
     #
-    # Two things make a naive n-gram count useless here. Overlapping shingles
-    # report one phenomenon three times ("a woman standing", "woman standing
-    # in", "standing in a"), and the trigger word recurs by construction, so
-    # counting it drowns everything worth seeing. So: trim stopwords off each
-    # candidate's edges, drop anything containing a trigger token, then keep
-    # only phrases that are maximal for the exact set of images they cover.
-    # Clauses bound the window. A phrase must not span a comma or full stop, or
-    # "a sunlit field, wearing a red jacket" emits "field wearing" — a phrase
-    # that appears in no caption. Commas are the right *boundary* here but the
-    # wrong *unit*: whole clauses repeat verbatim too rarely in prose to count,
-    # and "wearing a red jacket" vs "wearing a black coat" are the same skew
-    # while never matching as strings.
-    trigger_tokens = set(_WORD_RE.findall(trigger.lower())) if trigger else set()
-    MAX_GRAM = 6
-    # Two words minimum. On real 70-word captions a single-word count just
-    # ranks ordinary English about photographs — "dark", "white", "hair",
-    # "lighting" all cleared 50/80 on a fashion set and said nothing you could
-    # act on, while burying the finding that mattered (a third of the captions
-    # described a Polaroid border, which would have been baked into the LoRA).
-    # A repeated multi-word phrase is a property of *this* dataset; a repeated
-    # common adjective is a property of the language.
-    MIN_WORDS = 2
+    # This watches hand-written and hand-edited captions, not generated ones.
+    # A VLM varies its phrasing, so counting sub-phrases of its output just
+    # splits one idea across rows — "she wears" and "she is wearing" are the
+    # same statement and neither count means anything alone. People are the
+    # ones who make caption mistakes, and people write in clauses: they paste a
+    # description across a batch, they leave tag-era fragments in a prose set,
+    # they duplicate a caption while editing. A whole clause repeating verbatim
+    # is copy-paste, not coincidence, which is why the comma is the right unit
+    # here even though it was the wrong one for n-grams.
+    #
+    # On clean generated captions this panel stays quiet. That is the correct
+    # reading, not a failure to find anything.
+    def _clauses(text: str) -> list[str]:
+        out = []
+        for raw in _CLAUSE_RE.split(text):
+            c = " ".join(raw.split()).strip().lower()
+            if c and (not trigger or c != trigger.lower()):
+                out.append(c)
+        return out
 
-    def _grams(words: list[str]):
-        """Every content-anchored n-gram in one clause, longest first."""
-        for n in range(min(MAX_GRAM, len(words)), 0, -1):
-            for i in range(len(words) - n + 1):
-                gram = words[i : i + n]
-                if trigger_tokens and any(w in trigger_tokens for w in gram):
-                    continue
-                # Anchor on content words so "wearing a" becomes "wearing" and
-                # "a woman standing in" becomes "woman standing".
-                while gram and gram[0] in _STOPWORDS:
-                    gram = gram[1:]
-                while gram and gram[-1] in _STOPWORDS:
-                    gram = gram[:-1]
-                if len(gram) >= MIN_WORDS:
-                    yield tuple(gram)
-
-    counts: dict[tuple[str, ...], set[str]] = {}
+    # Whole captions that are byte-identical after normalising — almost always
+    # a paste that was never edited.
+    whole: dict[str, list[str]] = {}
     for name, caption in non_empty:
-        seen: set[tuple[str, ...]] = set()
-        for clause in _CLAUSE_RE.split(caption):
-            for key in _grams(_WORD_RE.findall(clause.lower())):
-                if key in seen:
-                    continue
-                seen.add(key)
-                counts.setdefault(key, set()).add(name)
+        whole.setdefault(" ".join(caption.split()).strip().lower(), []).append(name)
+    duplicates = sorted(
+        ({"caption": text[:180], "images": names, "count": len(names)}
+         for text, names in whole.items() if len(names) > 1),
+        key=lambda r: -r["count"],
+    )
 
-    repeated = {k: v for k, v in counts.items() if len(v) > 1}
-
-    def _contains(outer: tuple[str, ...], inner: tuple[str, ...]) -> bool:
-        n = len(inner)
-        return n < len(outer) and any(outer[i : i + n] == inner for i in range(len(outer) - n + 1))
-
-    # A shorter phrase inside a longer one is the same observation stated less
-    # precisely — but only if the longer one accounts for most of the shorter's
-    # images. Requiring identical image sets was too strict on real captions:
-    # "left corner" (21), "lower left corner" (16) and "vogue watermark in the
-    # lower left" (10) are one finding about a watermark, spread over slightly
-    # different images, and all four rows survived.
-    OVERLAP = 0.7
-    candidates = sorted(repeated.items(), key=lambda kv: (-len(kv[1]), -len(kv[0])))[:200]
-
-    maximal: list[tuple[tuple[str, ...], set[str]]] = []
-    for key, names in candidates:
-        covered = any(
-            _contains(bigger, key) and len(others & names) / len(names) >= OVERLAP
-            for bigger, others in candidates
-            if len(bigger) > len(key)
-        )
-        if not covered:
-            maximal.append((key, names))
+    clause_use: dict[str, set[str]] = {}
+    for name, caption in non_empty:
+        for c in set(_clauses(caption)):
+            clause_use.setdefault(c, set()).add(name)
 
     total = len(non_empty) or 1
-    kept = sorted(
-        ({"phrase": " ".join(k), "count": len(names),
-          "share": round(len(names) / total, 3), "words": len(k)}
-         for k, names in maximal),
+    repeated_clauses = sorted(
+        ({"phrase": c, "count": len(names), "share": round(len(names) / total, 3),
+          "words": len(c.split())}
+         for c, names in clause_use.items() if len(names) > 1),
         key=lambda r: (-r["count"], -r["words"], r["phrase"]),
     )[:top]
+
+    # Tag-era leftovers: a caption of many short comma fragments in a set that
+    # is otherwise prose. Krea 2 reads grammar, so a fragment list is a real
+    # mistake now rather than a style choice.
+    tag_style = []
+    for name, caption in non_empty:
+        cl = _clauses(caption)
+        if len(cl) >= 4 and sum(len(c.split()) for c in cl) / len(cl) <= 2.5:
+            tag_style.append(name)
 
     return {
         "images": len(images),
@@ -1179,7 +1142,9 @@ def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any
         "missing_trigger": [n for n, c in captions if trigger and trigger.lower() not in c.lower()],
         "median_words": median,
         "thin": thin,
-        "phrases": kept,
+        "duplicates": duplicates,
+        "tag_style": tag_style,
+        "phrases": repeated_clauses,
     }
 
 
@@ -2089,6 +2054,9 @@ nav button.on{color:var(--fg);border-left-color:var(--fg)}
    reserved for trigger coverage, where a gap really is a defect. */
 .ph-bar i{position:absolute;inset:0;width:var(--w);background:rgba(255,255,255,.11)}
 .ph-bar i.hot{background:rgba(255,255,255,.2)}
+/* Only the two human-error rows are coloured, because only they are defects. */
+.ph-bar i.bad{background:rgba(239,68,68,.3)}
+.ph-bar i.warn{background:rgba(245,158,11,.28)}
 .ph-bar span{position:absolute;left:7px;top:0;line-height:20px;font-size:11px;color:#e8e8e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;right:7px}
 .ph-n{font-size:11px;color:var(--mut);width:26px;text-align:right;flex:none}
 /* Lightbox: original file, not the thumbnail. */
@@ -2640,9 +2608,22 @@ function renderInsight(){
   if(d.median_words) h+=`<p class="muted" style="margin:-6px 0 14px;font-size:12px">median ${d.median_words} words`
    + (d.thin.length?` · ${d.thin.length} thin`:'')+`</p>`;
 
+  // Human-error checks first. These are defects; the clause list below is not.
+  const dupImgs=(d.duplicates||[]).flatMap(x=>x.images);
+  if(dupImgs.length){
+    h+=`<button class="ph-row" data-names="${esc(dupImgs.join('|'))}" style="margin-bottom:6px">
+      <span class="ph-bar"><i class="bad" style="--w:100%"></i><span>${dupImgs.length} identical captions</span></span>
+    </button>`;
+  }
+  if((d.tag_style||[]).length){
+    h+=`<button class="ph-row" data-names="${esc(d.tag_style.join('|'))}" style="margin-bottom:6px">
+      <span class="ph-bar"><i class="warn" style="--w:100%"></i><span>${d.tag_style.length} written as tags</span></span>
+    </button>`;
+  }
+
   if(d.phrases && d.phrases.length){
     const max=d.phrases[0].count||1;
-    h+=`<label style="margin-top:4px">Recurring phrases</label>`;
+    h+=`<label style="margin-top:4px">Repeated clauses</label>`;
     h+=d.phrases.map(p=>{
       const w=Math.round(p.count/max*100);
       const hot=p.share>=0.6?' hot':'';
@@ -2651,20 +2632,30 @@ function renderInsight(){
         <span class="ph-n">${p.count}</span>
       </button>`;
     }).join('');
-    h+=`<p class="muted" style="margin-top:8px;font-size:11px">Click a phrase to see where it repeats.</p>`;
+    h+=`<p class="muted" style="margin-top:8px;font-size:11px">Click to see where it repeats.</p>`;
   }
+  if(!h) h='<p class="muted" style="font-size:12px">Nothing to flag.</p>';
   $('#ins-body').innerHTML=h;
+  $$('#ins-body [data-names]').forEach(b=>b.onclick=()=>{
+    isolate(b.dataset.names.split('|'), b.querySelector('span span').textContent);
+  });
   $$('#ins-body [data-phrase]').forEach(b=>b.onclick=()=>{
     const ph=b.dataset.phrase.toLowerCase();
-    dsFilter='all';
     const hits=dsImages.filter(i=>(i.caption||'').toLowerCase().includes(ph)).map(i=>i.name);
-    renderTiles();
-    $$('#tiles [data-tile]').forEach(t=>{
-      t.classList.toggle('sel', hits.includes(t.dataset.tile));
-      t.style.display = hits.includes(t.dataset.tile) ? '' : 'none';
-    });
-    $('#ds-count').textContent=`${hits.length} of ${dsImages.length} contain “${b.dataset.phrase}”`;
+    isolate(hits, '\u201c'+b.dataset.phrase+'\u201d');
   });
+}
+
+// Show only the named images. Any filter button clears it.
+function isolate(names, label){
+  dsFilter='all';
+  renderTiles();
+  $$('#tiles [data-tile]').forEach(t=>{
+    const hit=names.includes(t.dataset.tile);
+    t.classList.toggle('sel', hit);
+    t.style.display = hit ? '' : 'none';
+  });
+  $('#ds-count').textContent=`${names.length} of ${dsImages.length} · ${label}`;
 }
 
 // ---------- toolbar ----------
