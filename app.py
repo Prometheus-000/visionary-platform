@@ -2868,7 +2868,7 @@ class VideoGenerator:
         }
 
     def _await(self, job_id: str, prompt_id: str) -> str:
-        """Poll until the graph finishes; return the saved file's basename."""
+        """Poll until the graph finishes; return the saved file's path in output/."""
         while True:
             if _stop_requested(job_id):
                 # ComfyUI unwinds the sampler itself and stays warm, which a
@@ -2883,8 +2883,25 @@ class VideoGenerator:
                 if status.get("status_str") == "error" or not status.get("completed", True):
                     raise RuntimeError(self._why_failed(status))
                 for out in entry.get("outputs", {}).values():
-                    for item in (out.get("videos") or []) + (out.get("gifs") or []):
-                        return item["filename"]
+                    # "images" is the one that actually fires: SaveVideo returns
+                    # ui.PreviewVideo, whose as_dict() is {"images": [...],
+                    # "animated": (True,)} — a video is reported through the
+                    # image channel, flagged rather than separately named. The
+                    # other two are what the older save nodes emit and cost a
+                    # tuple to keep, and getting this wrong is expensive in a
+                    # specific way: the clip renders, saves, and is then thrown
+                    # away by a job that says it saved nothing.
+                    for key in ("images", "videos", "gifs"):
+                        for item in out.get(key) or []:
+                            name = item.get("filename")
+                            if not name:
+                                continue
+                            # Honour the subfolder rather than assuming the flat
+                            # case our filename_prefix happens to produce: the
+                            # prefix is split on a path separator, so the day one
+                            # gains a slash this stops silently copying the
+                            # wrong path.
+                            return str(Path(item.get("subfolder") or "") / name)
                 raise RuntimeError(
                     "ComfyUI reported success but saved no video.\n"
                     + "\n".join(list(self._log)[-25:])
