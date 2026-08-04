@@ -219,15 +219,20 @@ you know what they are avoiding.
 
 ## Licensing
 
-**Read this before you publish a fork or offer this as a service.**
+**[AGPL-3.0](LICENSE).** Not a preference — an inheritance, and worth
+understanding before you fork this or run it for anyone but yourself.
 
 `forge/` is a vendored slice of
 [sd-webui-forge-classic](https://github.com/Haoming02/sd-webui-forge-classic),
-which is **AGPL-3.0**. It is imported and executed as part of the image
-generation path. AGPL-3.0 is strong copyleft with a network-use clause: running
-a modified version as a network service normally obliges you to offer users the
-corresponding source. `forge/modules_forge/packages/comfy/` carries GPL-3.0 on
-top of that.
+which is AGPL-3.0, and it is imported and executed as part of the image
+generation path rather than sitting there unused. AGPL-3.0 is strong copyleft
+with a network-use clause: section 13 means that if you modify this and let
+other people use it over a network, you owe those users the corresponding
+source — deploying rather than distributing is not the loophole it is under
+the GPL. `forge/modules_forge/packages/comfy/` carries GPL-3.0 on top of that.
+
+Since this deploys as a web application by design, that clause is the normal
+case here, not an edge one. Running your own private instance triggers nothing.
 
 `forge/VENDOR.md` records the exact upstream commit and every local change, so
 a sync is a diff rather than an archaeology exercise.
