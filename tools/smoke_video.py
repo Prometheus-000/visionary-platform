@@ -21,11 +21,15 @@ boundary of what it proves:
 
 - It DOES catch a wrong node name, a wrong or misspelled input, a dangling
   link, and a required input the builder forgot.
+- It DOES catch a wrong value in a fixed combo — `CLIPLoader.type` having to be
+  "minimax" or "wan", a sampler or scheduler this deployment offers that
+  ComfyUI does not have, `ref_image_size`, the two-expert noise flags. Those
+  lists are compiled in, so they are populated with no weights present.
 - It does NOT catch a filename that is not on the volume. Loader nodes take a
-  combo whose options are the files ComfyUI can see, and with no weights
-  present every one of those lists is empty — so combo *values* are
-  deliberately not checked here. `_require_models()` is what covers that, and
-  it covers it before the GPU is rented.
+  combo too, but one whose options are the files ComfyUI can see, and with no
+  weights present every one of those lists is empty. Emptiness is what
+  separates the two cases, and it is what this skips on: `_require_models()`
+  covers the file combos, and it covers them before the GPU is rented.
 - It does not run a sampler, so it says nothing about whether a clip looks
   right. The two-expert handover flags in particular (`add_noise`,
   `return_with_leftover_noise`) are structurally valid whatever they are set
@@ -41,6 +45,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import modal
 
@@ -131,6 +136,68 @@ def _variants() -> list[tuple[str, dict]]:
     return out
 
 
+# Inputs whose options are whatever this container can see, rather than a menu
+# compiled into the node. Their contents are a property of the volume, and this
+# runs without one — `vae_name` here answers `["pixel_space"]` and `image`
+# answers `["example.png"]`, so checking a value against them would fail every
+# real filename for the wrong reason.
+#
+# Named rather than detected: the tempting rule is "skip the empty lists", and
+# it is wrong in both directions — these two are non-empty, and `LoadVideo.file`
+# is empty. A list is what the code can be honest about.
+VOLUME_BACKED = {"vae_name", "unet_name", "clip_name", "lora_name", "image", "file"}
+
+
+def _combo(spec: Any) -> list | None:
+    """
+    The option list of a combo input, or None if this input is not one.
+
+    Two encodings are live in this ComfyUI at once, and the video graphs touch
+    both: the legacy `[[...options...], {...}]` that VAELoader and
+    `CLIPLoader.type` still use, and the V3 `["COMBO", {"options": [...]}]` that
+    `sampler_name`, `scheduler` and `ref_image_size` moved to. Reading only the
+    first form is not a partial check — it silently reports every V3 menu as
+    empty, which reads as "this sampler does not exist" for samplers that do.
+    """
+    if not isinstance(spec, list) or not spec:
+        return None
+    if isinstance(spec[0], list):
+        return spec[0]
+    if spec[0] == "COMBO" and len(spec) > 1 and isinstance(spec[1], dict):
+        return spec[1].get("options")
+    # COMFY_DYNAMICCOMBO_V3 (SaveVideo.codec) nests its options as dicts with
+    # their own sub-inputs. Its keys are checkable, its shape is not this one.
+    return None
+
+
+def _check_menus(schema: dict) -> list[str]:
+    """
+    Every sampler and scheduler `VIDEO_MODELS` offers, against what exists.
+
+    The graph variants only build one of each, but the page renders the whole
+    list — so an entry that ComfyUI dropped is a menu item that raises on
+    selection, hours after this passed. Checked against the sampler node each
+    family actually uses, because the two are not guaranteed to agree.
+    """
+    bad: list[str] = []
+    for key, spec in VIDEO_MODELS.items():
+        # H3 picks its sampler through KSamplerSelect and its scheduler through
+        # BasicScheduler; Wan takes both as widgets on KSamplerAdvanced.
+        where = {"sampler": ("KSamplerSelect", "sampler_name"),
+                 "scheduler": ("BasicScheduler", "scheduler")} if key == "h3" else {
+                 "sampler": ("KSamplerAdvanced", "sampler_name"),
+                 "scheduler": ("KSamplerAdvanced", "scheduler")}
+        for field, (cls, inp) in where.items():
+            options = _combo(
+                (schema.get(cls, {}).get("input", {}).get("required", {}) or {}).get(inp)
+            ) or []
+            for offered in spec[f"{field}s"]:
+                if offered not in options:
+                    bad.append(f"VIDEO_MODELS[{key!r}] offers {field} {offered!r}, "
+                               f"which {cls}.{inp} does not have")
+    return bad
+
+
 def _check(name: str, graph: dict, schema: dict) -> list[str]:
     """Structural errors in one graph, as lines ready to print."""
     bad: list[str] = []
@@ -146,6 +213,11 @@ def _check(name: str, graph: dict, schema: dict) -> list[str]:
         known = set(req) | set(opt)
 
         for key, val in (node.get("inputs") or {}).items():
+            options = None if key in VOLUME_BACKED else _combo(req.get(key)
+                                                               or opt.get(key))
+            if options and not isinstance(val, list) and val not in options:
+                bad.append(f"{name}: {cls}.{key} = {val!r} is not one of "
+                           f"{', '.join(map(str, options))}")
             # Autogrow inputs ("ref_images.ref_image_0") are named by their
             # group, which is what the schema carries — so the group is the
             # part worth checking, and a typo in it is the bug that makes
@@ -213,6 +285,11 @@ def main() -> None:
             nodes = len(graph)
             print(f"  {'FAIL' if bad else ' ok '}  {name}  ({nodes} nodes)", flush=True)
             failures += bad
+
+        menus = _check_menus(schema)
+        print(f"  {'FAIL' if menus else ' ok '}  the sampler and scheduler menus",
+              flush=True)
+        failures += menus
     finally:
         proc.terminate()
 
