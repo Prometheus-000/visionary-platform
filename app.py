@@ -857,7 +857,9 @@ def _require_models(*keys: str) -> None:
     listing distinguishes the three real causes at a glance: an empty volume
     (wrong Modal profile), a filename or case mismatch, or a partial download.
     """
-    missing = [MODEL_CATALOGUE[k] for k in keys if not MODEL_CATALOGUE[k]["dest"].exists()]
+    sizes = _sizes_on_disk(MODEL_CATALOGUE[k]["dest"] for k in keys)
+    missing = [MODEL_CATALOGUE[k] for k in keys
+               if not sizes[MODEL_CATALOGUE[k]["dest"]]]
     if not missing:
         return
 
@@ -888,11 +890,47 @@ def _require_models(*keys: str) -> None:
     raise RuntimeError("\n".join(lines))
 
 
+def _sizes_on_disk(dests: Any) -> dict[Path, int]:
+    """
+    {dest: size in bytes} for a set of weight paths, 0 when absent.
+
+    One readdir per directory, deliberately, rather than a stat per file.
+
+    A container that asked for a weight *before* it was downloaded could keep
+    answering "not there" long after it landed: the failed lookup is cached
+    below us, and `volume.reload()` brings the volume forward without
+    invalidating a name we have already asked about. That is exactly why Krea 2
+    was always reported correctly and the video weights were not — the Krea
+    files were on the volume before any of these containers started, so nothing
+    negative was ever cached for them, while Wan and H3 were downloaded into a
+    deployment that had already been asked whether they were there. The symptom
+    was being told to download 18 GB that were sitting on the volume.
+
+    Reading the parent directory sidesteps it: readdir reports what the
+    directory holds now, so a file that has appeared is a file we see. It is
+    also fewer syscalls than statting twenty-one paths one at a time.
+    """
+    listings: dict[Path, dict[str, int]] = {}
+    out: dict[Path, int] = {}
+    for dest in dests:
+        entries = listings.get(dest.parent)
+        if entries is None:
+            try:
+                entries = {e.name: e.stat().st_size
+                           for e in os.scandir(dest.parent) if e.is_file()}
+            except (FileNotFoundError, NotADirectoryError):
+                entries = {}
+            listings[dest.parent] = entries
+        out[dest] = entries.get(dest.name, 0)
+    return out
+
+
 def _model_status() -> list[dict[str, Any]]:
+    sizes = _sizes_on_disk(spec["dest"] for spec in MODEL_CATALOGUE.values())
     out = []
     for key, spec in MODEL_CATALOGUE.items():
         dest: Path = spec["dest"]
-        present = dest.exists() and dest.stat().st_size > 0
+        present = sizes[dest] > 0
         out.append(
             {
                 "key": key,
@@ -906,7 +944,7 @@ def _model_status() -> list[dict[str, Any]]:
                 "gated": spec["gated"],
                 "approx_gb": spec["approx_gb"],
                 "present": present,
-                "size_gb": round(dest.stat().st_size / 1e9, 2) if present else 0,
+                "size_gb": round(sizes[dest] / 1e9, 2) if present else 0,
                 "path": str(dest),
             }
         )
@@ -1703,7 +1741,11 @@ def _lora_path(raw_path: Any) -> Path:
     path = Path(str(raw_path or "")).resolve()
     if LORAS.resolve() not in path.parents:
         raise ValueError(f"LoRA must be under loras/: {str(raw_path)!r}")
-    if not path.is_file():
+    # Via the parent listing, not is_file(), for the same reason the weight
+    # catalogue is — see _sizes_on_disk. A LoRA trained minutes ago into a
+    # container that had already asked for that name would otherwise be
+    # rejected as deleted.
+    if not _sizes_on_disk([path])[path]:
         raise ValueError(
             f"No such LoRA: {path.relative_to(LORAS.resolve()).as_posix()}. "
             "It may have been deleted — reload to refresh the list."
@@ -2270,12 +2312,18 @@ def _video_model_status() -> list[dict[str, Any]]:
     different 28.6 GB pairs — reporting one "Wan 2.2: missing" would send you to
     download 57 GB when the run you are composing needs half of it.
     """
+    sizes = _sizes_on_disk(
+        MODEL_CATALOGUE[k]["dest"]
+        for spec in VIDEO_MODELS.values()
+        for keys in spec["requires"].values()
+        for k in keys
+    )
     out = []
     for key, spec in VIDEO_MODELS.items():
         tasks = {}
         for task, keys in spec["requires"].items():
             missing = [MODEL_CATALOGUE[k]["label"] for k in keys
-                       if not MODEL_CATALOGUE[k]["dest"].exists()]
+                       if not sizes[MODEL_CATALOGUE[k]["dest"]]]
             tasks[task] = {"ready": not missing, "missing": missing}
         out.append({
             "key": key, "label": spec["label"], "note": spec["note"],
@@ -3583,8 +3631,10 @@ def web():
 
         # Named per task, so "download 57 GB" is never the answer to a run that
         # needs 28.6 of it.
+        sizes = _sizes_on_disk(MODEL_CATALOGUE[k]["dest"]
+                               for k in spec["requires"][task])
         missing = [MODEL_CATALOGUE[k]["label"] for k in spec["requires"][task]
-                   if not MODEL_CATALOGUE[k]["dest"].exists()]
+                   if not sizes[MODEL_CATALOGUE[k]["dest"]]]
         if missing:
             return {"error": f"Not downloaded: {', '.join(missing)}. "
                              "Get them under Settings."}
