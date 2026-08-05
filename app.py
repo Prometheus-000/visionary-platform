@@ -3877,6 +3877,17 @@ svg{width:100%;height:100%;display:block}
 /* Collapsed by flex-basis rather than display:none so the canvas reflows
    smoothly; the inner column keeps its width so nothing re-wraps on the way. */
 .studio.nodrawer .drawer{flex-basis:0;border-left:0;overflow:hidden}
+#v-train .drawer{flex-basis:var(--drawer)}
+/* The sheet's own toolbar sticks for the same reason the console is pinned:
+   the filters are how you find the six bad captions in eighty images, and
+   scrolling to look for them is exactly when they must not scroll away. */
+#ds-sheet .sheet-bar{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
+  padding:22px 28px 10px;background:var(--bg)}
+#ds-list{gap:8px}
+#ds-list .ds-card{flex-direction:row;align-items:center;gap:11px;padding:8px}
+#ds-list .ds-cover{width:56px;height:56px;flex:none;aspect-ratio:auto;border-radius:9px;object-fit:cover}
+#ds-list .ds-meta{padding:0;min-width:0}
+#ds-list .ds-meta b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .drawer{transition:flex-basis .18s ease}
 .drawer-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-height:28px}
 
@@ -3891,6 +3902,7 @@ svg{width:100%;height:100%;display:block}
 .opt>svg{width:14px;height:14px;flex:none;color:var(--dim)}
 .opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:34px;border-radius:8px}
 .opt input{width:76px}
+.opt.mid input{width:136px}
 .opt.wide{flex:1;min-width:220px}
 .opt.wide input,.opt.wide textarea{flex:1;min-width:0;width:auto}
 .vr{width:1px;height:20px;flex:none;background:var(--line);margin:0 4px}
@@ -4040,6 +4052,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   cursor:pointer;text-align:left;padding:0;color:inherit;font:inherit;
   display:flex;flex-direction:column;align-items:stretch}
 .ds-card:hover{border-color:rgba(255,255,255,.24)}
+/* The set you are looking at, and the one Start training will use. */
+.ds-card.sel{border-color:rgba(255,255,255,.55)}
 .ds-cover{aspect-ratio:4/3;background:rgba(255,255,255,.045);display:block;width:100%;
   flex:none;object-fit:contain}
 .ds-cover.empty{display:grid;place-items:center;color:var(--dim);font-size:22px}
@@ -4100,6 +4114,14 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* The strip's version: a 36px square that is a dashed outline when empty and
    the frame itself once filled. The thumbnail is the label — a filled first
    tile says "image-to-video" more directly than the words do. */
+/* The way most sets begin, so it is the size of that fact: the whole canvas
+   when nothing is chosen, and a target you can hit without aiming. */
+.drop.hero{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;border-radius:20px;padding:34px}
+.drop.hero .drop-face{text-align:center;pointer-events:none}
+.drop.hero .drop-face input{pointer-events:auto}
+.drop.hero .glyph{width:40px;height:40px;margin:0 auto 16px;opacity:.4}
+.drop.hero b{font-size:15px;font-weight:600}
 .drop.mini{width:36px;height:36px;flex:none;padding:0;border-radius:10px;overflow:hidden;
   background:rgba(255,255,255,.03);display:grid;place-items:center;color:var(--dim)}
 .drop.mini:hover{border-color:rgba(255,255,255,.4);color:var(--fg)}
@@ -4128,7 +4150,6 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
 /* Train ----------------------------------------------------------------- */
-.hold{padding:24px 28px 72px}
 .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
 
 @media(max-width:1180px){:root{--drawer:284px}}
@@ -4151,10 +4172,6 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   <button class="brand" id="go-home">Visionary</button>
   <!-- Train's two halves. In Generate this slot is empty — Generate's own
        switch lives down in the composer, beside the prompt it applies to. -->
-  <div class="switch hide" id="train-tabs">
-    <button data-tab="run" class="on">Training</button>
-    <button data-tab="data">Datasets</button>
-  </div>
   <span class="grow"></span>
   <button class="door" id="door"></button>
   <span class="sep"></span>
@@ -4351,122 +4368,122 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 </div>
 
 <!-- ============================== TRAIN ============================== -->
-<div class="view scroll hide" id="v-train">
-  <!-- TRAINING -->
-  <div class="hold" id="t-run">
+<!-- ============================== TRAIN ============================== -->
+<!-- Same shape as Generate, for the same reason: subject in the middle, your
+     library on the right, the console pinned along the bottom. The console is
+     what makes this layout work here — a set of eighty images is a long scroll,
+     and the controls that start the run must not be somewhere down inside it. -->
+<div class="view studio hide" id="v-train">
+ <div class="stage">
+  <div class="canvas" id="t-canvas">
     <div id="train-err"></div>
-    <div id="step-build" style="max-width:860px">
-      <div class="card">
-        <label>Dataset</label>
-        <select id="t-dataset"></select>
-        <p class="muted" id="t-dsinfo" style="margin-top:8px"></p>
+    <div id="ds-edit-err"></div>
+
+    <!-- There are two ways to get a set, and they are not equal: mostly you
+         drag one in. So the drop target is the screen when nothing is chosen,
+         rather than a bar you find after creating something to put it in. -->
+    <div class="drop hero" id="drop">
+      <input type="file" id="files" multiple accept="image/*,.zip,.txt" class="hide">
+      <div class="drop-face">
+        <div class="glyph" id="drop-glyph"></div>
+        <b id="drop-title">Drop images or a .zip</b>
+        <div class="muted" id="drop-sub" style="margin-top:7px"></div>
+        <input id="ds-new" placeholder="name this set" spellcheck="false"
+               style="width:230px;margin-top:16px;text-align:center">
       </div>
-      <div id="dataset" class="hide">
-        <!-- Name and trigger sit here, next to the action that uses them. -->
-        <div class="card grid2">
-          <div><label>LoRA name</label><input id="lname" placeholder="my_style" spellcheck="false"></div>
-          <div><label>Trigger word</label><input id="ltrig" placeholder="ohwx_style" spellcheck="false"></div>
-        </div>
-        <details class="card"><summary class="muted" style="cursor:pointer">Advanced · Krea 2 RAW, rank 32, bf16</summary>
-          <div class="grid2" style="margin-top:14px">
-            <div><label>Rank (dim)</label><input id="a-dim" type="number" value="32"></div>
-            <div><label>Alpha</label><input id="a-alpha" type="number" value="32"></div>
-            <div><label>Epochs</label><input id="a-epochs" type="number" value="30"></div>
-            <div><label>Learning rate</label><input id="a-lr" type="number" step="0.00001" value="0.0001"></div>
-            <div><label>Resolution</label><input id="a-res" type="number" step="64" value="1024"></div>
-            <div><label>Repeats</label><input id="a-rep" type="number" value="1"></div>
-            <div><label>Batch size</label><input id="a-bs" type="number" value="1"></div>
-            <div><label>Seed</label><input id="a-seed" type="number" value="42"></div>
-          </div>
-        </details>
-        <button class="b" id="go-train" disabled style="width:100%">Start training</button>
-        <p class="muted" id="train-hint" style="text-align:center;margin-top:8px;height:16px"></p>
+      <div id="up-prog" class="hide" style="margin-top:18px;width:min(420px,70%)">
+        <div class="bar"><i style="width:0%"></i></div>
       </div>
     </div>
 
-    <div id="step-run" class="hide" style="max-width:860px">
-      <div class="card">
-        <div class="row"><b id="run-phase" class="grow">Starting…</b><span class="muted" id="run-pct"></span></div>
-        <div class="bar"><i id="run-bar" style="width:0%"></i></div>
-        <p class="muted" id="run-meta" style="margin-top:9px"></p>
-        <div class="row" style="margin-top:14px"><button class="s" id="do-stop">Stop &amp; keep checkpoints</button></div>
-      </div>
-      <div class="card hide" id="run-done"></div>
-    </div>
-  </div>
-
-  <!-- DATASETS -->
-  <div class="hold hide" id="t-data">
-    <!-- List. Replaced wholesale by the editor rather than stacked, so there is
-         never a scroll position to lose track of. -->
-    <div id="ds-index">
-      <div id="ds-err"></div>
-      <div class="row" style="gap:8px;margin-bottom:18px;max-width:520px">
-        <input id="ds-new" class="grow" placeholder="New dataset name" spellcheck="false">
-        <button class="s" id="ds-create">Create</button>
-      </div>
-      <div class="grid" id="ds-list"></div>
-      <p class="muted" id="ds-empty"></p>
-    </div>
-
-    <!-- Editor -->
-    <div id="ds-editor" class="hide">
-      <div class="row" style="margin-bottom:14px">
-        <button class="ico" id="ds-back" title="All datasets"></button>
-        <b id="ds-title" style="font-size:15px"></b>
-        <span class="grow"></span>
+    <!-- A set is chosen: its contact sheet, which is the thing that scrolls. -->
+    <div id="ds-sheet" class="hide">
+      <div class="opts sheet-bar">
+        <b id="ds-title" style="font-size:14px"></b>
         <span class="muted" id="ds-count"></span>
+        <span class="vr"></span>
+        <button class="s" id="f-all" title="Show every image">All</button>
+        <button class="s" id="f-uncap" title="Only images with no caption">Uncaptioned</button>
+        <button class="s" id="f-notrig" title="Only captions missing the trigger word">No trigger</button>
+        <span class="vr"></span>
+        <button class="s" id="dens-down" title="Smaller tiles">−</button>
+        <button class="s" id="dens-up" title="Larger tiles">+</button>
+        <span class="actions">
+          <span class="muted" id="ins-summary"></span>
+          <button class="opt ib" id="ins-toggle" data-ico="sliders" title="Captions"></button>
+          <button class="s" id="ds-add">+ Images</button>
+        </span>
       </div>
-      <div id="ds-edit-err"></div>
 
-      <div class="grid2" style="grid-template-columns:minmax(0,1fr) 320px;align-items:start;gap:20px">
-        <div style="min-width:0">
-          <!-- A short bar, not a hero. Uploading happens once per dataset and
-               the contact sheet below it is the thing you came to look at. -->
-          <div class="drop" id="drop">
-            <div class="row" style="justify-content:center;gap:9px;padding:15px">
-              <span id="drop-title" class="muted">Images or a .zip</span>
-              <span class="muted" id="drop-sub"></span>
-            </div>
-            <input type="file" id="files" multiple accept="image/*,.zip,.txt" class="hide">
-            <div id="up-prog" class="hide" style="padding:0 15px 13px"><div class="bar"><i style="width:0%"></i></div></div>
-          </div>
-          <div class="row" style="margin:14px 2px 10px;gap:8px;flex-wrap:wrap">
-            <button class="s" id="f-all" title="Show every image">All</button>
-            <button class="s" id="f-uncap" title="Only images with no caption">Uncaptioned</button>
-            <button class="s" id="f-notrig" title="Only captions missing the trigger word">No trigger</button>
-            <span class="grow"></span>
-            <button class="s" id="dens-down" title="Smaller tiles">−</button>
-            <button class="s" id="dens-up" title="Larger tiles">+</button>
-          </div>
-          <div class="tiles" id="tiles"></div>
+      <!-- Captioning is an action on these images, so it lives with them
+           rather than in the training console below. -->
+      <div id="ins-panel" class="hide adv" style="margin:0 0 14px">
+        <div class="opts" style="margin-top:0">
+          <div class="opt mid" data-ico="tag"><input id="ds-trig" placeholder="trigger word" spellcheck="false"></div>
+          <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Fix</button>
+          <span class="vr"></span>
+          <div class="opt"><select id="cap-style"><option value="descriptive">Descriptive</option><option value="casual">Casual</option></select></div>
+          <div class="opt"><select id="cap-len"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select></div>
+          <label class="row" style="gap:7px;margin:0;color:#ddd;font-size:13px"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
+          <span class="actions"><button class="s" id="do-caption">Caption</button></span>
         </div>
-
-        <div class="ins">
-          <div class="card">
-            <label style="margin-bottom:10px">Trigger word</label>
-            <div class="row" style="gap:8px;margin-bottom:14px">
-              <input id="ds-trig" class="grow" placeholder="ohwx_style" spellcheck="false">
-              <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Fix</button>
-            </div>
-            <div id="ins-body"></div>
-          </div>
-          <div class="card">
-            <label>Auto-caption</label>
-            <div class="f2" style="margin-bottom:10px">
-              <select id="cap-style"><option value="descriptive">Descriptive</option><option value="casual">Casual</option></select>
-              <select id="cap-len"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select>
-            </div>
-            <label class="row" style="gap:7px;color:#ddd;margin-bottom:12px"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
-            <button class="s" id="do-caption" style="width:100%">Caption</button>
-            <div id="cap-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
-          </div>
-        </div>
+        <div id="cap-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
+        <div id="ins-body" style="margin-top:13px"></div>
       </div>
+
+      <div class="tiles" id="tiles"></div>
     </div>
   </div>
-</div>
 
+  <!-- The training console. Pinned, so eighty images cannot push it off. -->
+  <div class="console" id="t-console">
+    <div class="opts" style="margin-top:0">
+      <div class="opt wide" data-ico="tag"><input id="lname" placeholder="LoRA name" spellcheck="false"></div>
+      <div class="opt mid" data-ico="trigger"><input id="ltrig" placeholder="trigger word" spellcheck="false"></div>
+      <span class="vr"></span>
+      <div class="opt" data-ico="rank"><input id="a-dim" type="number" value="32" title="Rank"></div>
+      <div class="opt" data-ico="steps"><input id="a-epochs" type="number" value="30" title="Epochs"></div>
+      <div class="opt" data-ico="cfg"><input id="a-lr" type="number" step="0.00001" value="0.0001" title="Learning rate"></div>
+      <span class="actions">
+        <span class="muted" id="train-hint"></span>
+        <button class="opt ib" id="t-toggle-adv" data-ico="sliders" title="Advanced"></button>
+        <button class="b" id="go-train" disabled>Start training</button>
+      </span>
+    </div>
+    <div id="train-adv" class="hide adv">
+      <div class="opts" style="margin-top:0">
+        <div class="opt" data-ico="rank"><input id="a-alpha" type="number" value="32" title="Alpha"></div>
+        <div class="opt" data-ico="frame"><input id="a-res" type="number" step="64" value="1024" title="Resolution"></div>
+        <div class="opt" data-ico="copies"><input id="a-rep" type="number" value="1" title="Repeats"></div>
+        <div class="opt" data-ico="batch"><input id="a-bs" type="number" value="1" title="Batch size"></div>
+        <div class="opt" data-ico="dice"><input id="a-seed" type="number" value="42" title="Seed"></div>
+        <span class="actions"><span class="muted">Krea 2 RAW · bf16</span></span>
+      </div>
+    </div>
+    <div id="step-run" class="hide" style="margin-top:11px">
+      <div class="row"><b id="run-phase" class="grow">Starting…</b><span class="muted" id="run-pct"></span></div>
+      <div class="bar"><i id="run-bar" style="width:0%"></i></div>
+      <div class="row" style="margin-top:9px">
+        <span class="muted grow" id="run-meta"></span>
+        <button class="s" id="do-stop">Stop &amp; keep checkpoints</button>
+      </div>
+      <div id="run-done" class="hide" style="margin-top:11px"></div>
+    </div>
+  </div>
+ </div>
+
+ <!-- Every set you already have, always open. The second way in. -->
+ <aside class="drawer" id="ds-drawer">
+   <div class="drawer-in">
+     <div class="drawer-head">
+       <span class="grow"></span>
+       <button class="s" id="ds-fresh">+ New set</button>
+     </div>
+     <div id="ds-err"></div>
+     <div id="ds-list" class="grid"></div>
+     <p class="muted" id="ds-empty" style="margin-top:6px"></p>
+   </div>
+ </aside>
 </div>
 
 <!-- ============================ SETTINGS ============================= -->
@@ -4528,16 +4545,22 @@ const ICON={
   expand:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5H4.5v5"/><path d="M14.5 19.5h5v-5"/><path d="M4.5 4.5l6 6"/><path d="M19.5 19.5l-6-6"/></svg>',
   first:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="3.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
   last:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="15.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
+  tag:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3.5 11V4.5H10L20.5 15 15 20.5 3.5 11z"/><circle cx="7.5" cy="8" r="1.3" fill="currentColor" stroke="none"/></svg>',
+  trigger:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 12h6"/><path d="M14 12h6"/><circle cx="12" cy="12" r="2.2"/></svg>',
+  rank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 19V5"/><path d="M9 19v-7"/><path d="M14 19V9"/><path d="M19 19v-4"/></svg>',
+  batch:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>',
+  frame:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M3.5 15l4.5-4 3.5 3 3-2.5 6 5"/></svg>',
+  upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>',
   plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>',
   film:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M8 5.5v13M16 5.5v13"/></svg>',
 };
 // Every control that asked for an icon instead of a label gets it here, so the
 // markup names the idea ("dice") and only this table knows the path data.
 $$('[data-ico]').forEach(el=>el.insertAdjacentHTML('afterbegin',ICON[el.dataset.ico]));
+$('#drop-glyph').innerHTML=ICON.upload;
 $('#v-add-ref').innerHTML='<span>'+ICON.photo+'</span>';
 $('#v-add-vid').innerHTML='<span>'+ICON.film+'</span>';
 $('#gal-back').innerHTML=ICON.back;
-$('#ds-back').innerHTML=ICON.back;
 $('#gal-refresh').innerHTML=ICON.refresh;
 $('#gal-expand').innerHTML=ICON.expand;
 $('#t-settings').innerHTML=ICON.gear;
@@ -4553,7 +4576,6 @@ function setMode(m){
   mode=m;
   $('#v-generate').classList.toggle('hide',m!=='generate');
   $('#v-train').classList.toggle('hide',m!=='train');
-  $('#train-tabs').classList.toggle('hide',m!=='train');
   // The drawer toggle is a Generate control; it has nothing to say in Train.
   $('#t-drawer').classList.toggle('hide',m!=='generate');
   drawDoor();
@@ -4630,12 +4652,6 @@ $('#t-settings').onclick=()=>{ $('#settings').classList.remove('hide'); loadStat
 $('#settings-x').onclick=()=>$('#settings').classList.add('hide');
 $('#settings').onclick=e=>{ if(e.target.id==='settings') $('#settings').classList.add('hide') };
 
-$$('#train-tabs button').forEach(b=>b.onclick=()=>{
-  $$('#train-tabs button').forEach(x=>x.classList.toggle('on',x===b));
-  $('#t-run').classList.toggle('hide',b.dataset.tab!=='run');
-  $('#t-data').classList.toggle('hide',b.dataset.tab!=='data');
-  loadDatasets();
-});
 
 document.addEventListener('keydown',e=>{
   if(e.key!=='Escape') return;
@@ -4833,7 +4849,7 @@ async function loadDatasets(){
   if(r.error){ errInto('#ds-err',r.error); return }
   const list=r.datasets||[];
   $('#ds-list').innerHTML=list.map(d=>`
-    <button class="ds-card" data-open="${esc(d.name)}">
+    <button class="ds-card${d.name===dsName?' sel':''}" data-open="${esc(d.name)}">
       ${d.cover
         ? `<img class="ds-cover" loading="lazy" src="/api/thumb/${encodeURIComponent(d.name)}/${encodeURIComponent(d.cover)}" alt="">`
         : '<div class="ds-cover empty">▤</div>'}
@@ -4844,29 +4860,40 @@ async function loadDatasets(){
         </div>
       </div>
     </button>`).join('');
-  $('#ds-empty').textContent = list.length ? '' : 'No datasets yet. Name one above to start.';
+  $('#ds-empty').textContent = list.length ? '' : '';
   $$('#ds-list [data-open]').forEach(b=>b.onclick=()=>openDataset(b.dataset.open));
-  fillTrainDatasets(list);
+  trainDatasets=list;
+  syncTrainDataset();
 }
 
-$('#ds-create').onclick=async()=>{
-  const name=$('#ds-new').value.trim();
-  if(!name) return;
-  const r=await post('/api/datasets',{name});
-  if(r.error){ errInto('#ds-err',r.error); return }
-  errInto('#ds-err',''); $('#ds-new').value='';
-  await loadDatasets(); openDataset(name);
-};
-$('#ds-new').onkeydown=e=>{ if(e.key==='Enter') $('#ds-create').click() };
-$('#ds-back').onclick=()=>{ dsName=null; $('#ds-editor').classList.add('hide');
-  $('#ds-index').classList.remove('hide'); loadDatasets(); };
+// Back to the drop target. Nothing is destroyed — the set stays in the rail.
+$('#ds-fresh').onclick=()=>{ dsName=null; showSheet(false); loadDatasets(); $('#ds-new').focus() };
+$('#ds-add').onclick=()=>$('#files').click();
+
+function showSheet(on){
+  $('#ds-sheet').classList.toggle('hide',!on);
+  $('#drop').classList.toggle('hide',on);
+  syncTrainDataset();
+}
+
+// A name that is free to use, so dropping never stops to ask for one. A zip
+// carries a name worth keeping; loose images do not, so they get a numbered
+// one you can type over before you drop.
+function suggestName(files){
+  const zip=[...(files||[])].find(f=>/\.zip$/i.test(f.name));
+  const raw=zip ? zip.name.replace(/\.zip$/i,'') : '';
+  const clean=raw.replace(/[^A-Za-z0-9_-]/g,'_').slice(0,64);
+  if(clean && !trainDatasets.some(d=>d.name===clean)) return clean;
+  let n=1; while(trainDatasets.some(d=>d.name==='set_'+n)) n++;
+  return 'set_'+n;
+}
 
 async function openDataset(name){
   dsName=name; dsFilter='all';
-  $('#ds-index').classList.add('hide');
-  $('#ds-editor').classList.remove('hide');
+  showSheet(true);
   $('#ds-title').textContent=name;
   errInto('#ds-edit-err','');
+  $$('#ds-list [data-open]').forEach(b=>b.classList.toggle('sel',b.dataset.open===name));
   await loadTiles();
 }
 
@@ -4971,7 +4998,10 @@ async function removeImage(b){
 // coverage first because a caption without it trains a LoRA you cannot summon.
 function renderInsight(){
   const d=dsInsight;
-  if(!d){ $('#ins-body').innerHTML=''; return }
+  if(!d){ $('#ins-body').innerHTML=''; $('#ins-summary').textContent=''; return }
+  $('#ins-summary').textContent =
+    (d.trigger_word && d.captioned ? `${d.with_trigger}/${d.captioned} trigger · ` : '')
+    + `${d.captioned}/${d.images} captioned`;
   const pct=(n,t)=>t? Math.round(n/t*100) : 0;
   const bar=(n,t,good)=>{
     const p=pct(n,t);
@@ -5093,9 +5123,19 @@ drop.ondragleave=()=>drop.classList.remove('hot');
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');upload(e.dataTransfer.files)};
 fin.onchange=()=>{ upload(fin.files); fin.value=''; };   // reset so the same file can be re-picked
 
-function upload(list){
+async function upload(list){
   const keep=[...list].filter(f=>/\.(png|jpe?g|webp|bmp|avif|zip|txt)$/i.test(f.name));
-  if(!keep.length||uploading||!dsName) return;
+  if(!keep.length||uploading) return;
+  // Dropping onto the empty screen is how most sets begin, so the set is
+  // created here rather than being a thing you had to make first.
+  if(!dsName){
+    const name=($('#ds-new').value.trim()||suggestName(keep));
+    const r=await post('/api/datasets',{name});
+    if(r.error){ errInto('#ds-err',r.error); return }
+    $('#ds-new').value='';
+    await loadDatasets();
+    await openDataset(name);
+  }
   uploading=true; errInto('#ds-edit-err','');
   const box=$('#up-prog'); box.classList.remove('hide'); const bar=box.querySelector('i');
   $('#drop-title').textContent='Uploading…';
@@ -5128,40 +5168,47 @@ function upload(list){
 
 // ==================== TRAIN ====================
 // Train no longer owns a dataset; it picks one.
-const show=s=>['build','run'].forEach(x=>$('#step-'+x).classList.toggle('hide',x!==s));
+// Running or composing: the console shows one or the other, and the sheet
+// above it is untouched either way.
+const show=s=>{
+  $('#step-run').classList.toggle('hide',s!=='run');
+  $('#t-console').querySelector('.opts').classList.toggle('hide',s==='run');
+  $('#train-adv').classList.toggle('hide',s==='run'||!$('#t-toggle-adv').classList.contains('on'));
+};
 let trainDatasets=[];
-function fillTrainDatasets(list){
-  trainDatasets=list;
-  const sel=$('#t-dataset'), cur=sel.value;
-  sel.innerHTML='<option value="">Choose a dataset…</option>'+
-    list.map(d=>`<option value="${esc(d.name)}"${d.count?'':' disabled'}>${esc(d.name)} · ${d.count} image${d.count===1?'':'s'}${d.count?'':' (empty)'}</option>`).join('');
-  if(cur) sel.value=cur;
-  syncTrainDataset();
-}
+
+// The set you are looking at is the set you train. There is no second place
+// to choose one, so there is nothing that can disagree with the contact sheet.
 function syncTrainDataset(){
-  const d=trainDatasets.find(x=>x.name===$('#t-dataset').value);
-  $('#dataset').classList.toggle('hide',!d);
-  if(!d){ $('#t-dsinfo').textContent=''; checkTrainReady(); return }
-  const warn = d.uncaptioned ? ` · ${d.uncaptioned} uncaptioned` : '';
-  $('#t-dsinfo').textContent=`${d.count} image${d.count===1?'':'s'}${warn}`;
-  if(d.trigger_word && !$('#ltrig').value) $('#ltrig').value=d.trigger_word;
-  if(!$('#lname').value) $('#lname').value=d.name;
+  const d=trainDatasets.find(x=>x.name===dsName);
+  if(d){
+    if(d.trigger_word && !$('#ltrig').value) $('#ltrig').value=d.trigger_word;
+    if(!$('#lname').value) $('#lname').value=d.name;
+  }
   checkTrainReady();
 }
-$('#t-dataset').onchange=syncTrainDataset;
 
 function checkTrainReady(){
-  const ok=$('#t-dataset').value&&$('#lname').value.trim()&&$('#ltrig').value.trim();
+  const d=trainDatasets.find(x=>x.name===dsName);
+  const ok=!!d&&d.count>0&&$('#lname').value.trim()&&$('#ltrig').value.trim();
   $('#go-train').disabled=!ok;
-  $('#train-hint').textContent = !$('#t-dataset').value ? '' :
-    (!$('#lname').value.trim()||!$('#ltrig').value.trim()) ? 'Name it and set a trigger word to train' : '';
+  $('#train-hint').textContent =
+    !dsName ? 'Drop images, or pick a set' :
+    !d||!d.count ? 'This set is empty' :
+    (!$('#lname').value.trim()||!$('#ltrig').value.trim()) ? 'Name it and set a trigger word' : '';
 }
+$('#t-toggle-adv').onclick=()=>{
+  $('#t-toggle-adv').classList.toggle('on',!$('#train-adv').classList.toggle('hide'));
+};
+$('#ins-toggle').onclick=()=>{
+  $('#ins-toggle').classList.toggle('on',!$('#ins-panel').classList.toggle('hide'));
+};
 document.addEventListener('input',e=>{ if(e.target.id==='lname'||e.target.id==='ltrig') checkTrainReady() });
 
 let trainJob=null;
 $('#go-train').onclick=async()=>{
   $('#train-err').innerHTML='';
-  const r=await post('/api/train',{dataset:$('#t-dataset').value,lora_name:$('#lname').value.trim(),
+  const r=await post('/api/train',{dataset:dsName,lora_name:$('#lname').value.trim(),
     trigger_word:$('#ltrig').value.trim(),network_dim:$('#a-dim').value,network_alpha:$('#a-alpha').value,
     max_train_epochs:$('#a-epochs').value,learning_rate:$('#a-lr').value,resolution:$('#a-res').value,
     num_repeats:$('#a-rep').value,batch_size:$('#a-bs').value,seed:$('#a-seed').value});
