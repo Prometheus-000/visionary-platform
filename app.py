@@ -3037,31 +3037,50 @@ def web():
     @api.get("/api/state")
     def state() -> dict[str, Any]:
         volume.reload()
+        # Two shapes, because the volume really holds two.
+        #
+        # Training writes loras/{name}/, so a folder is a LoRA and its epoch
+        # checkpoints are that LoRA's versions. But anything that arrives some
+        # other way — migrated off an older volume, uploaded by hand, pulled
+        # down as a speed LoRA — is a bare file at the top level, and the
+        # folders-only walk skipped it silently. Four real LoRAs sat on the
+        # volume being invisible to the picker, which reads as "training never
+        # produced anything" rather than "this listing has an opinion about
+        # directory layout". A file that a run can load is a file the picker
+        # has to offer.
         loras = []
         if LORAS.is_dir():
             for d in sorted(LORAS.iterdir()):
-                if not d.is_dir():
-                    continue
-                final = d / f"{d.name}.safetensors"
-                ckpts = sorted(
-                    (p for p in d.glob("*.safetensors") if p != final),
-                    key=lambda p: p.stat().st_mtime, reverse=True,
-                )
-                files = ([final] if final.exists() else []) + ckpts
-                if not files:
-                    continue
-                trigger = ""
-                meta = d / "visionary.json"
-                if meta.exists():
-                    try:
-                        trigger = json.loads(meta.read_text()).get("trigger_word", "")
-                    except Exception:
-                        pass
-                loras.append({
-                    "name": d.name, "trigger_word": trigger,
-                    "path": str(files[0]),
-                    "files": [{"name": f.name, "path": str(f)} for f in files],
-                })
+                if d.is_dir():
+                    final = d / f"{d.name}.safetensors"
+                    ckpts = sorted(
+                        (p for p in d.glob("*.safetensors") if p != final),
+                        key=lambda p: p.stat().st_mtime, reverse=True,
+                    )
+                    files = ([final] if final.exists() else []) + ckpts
+                    if not files:
+                        continue
+                    trigger = ""
+                    meta = d / "visionary.json"
+                    if meta.exists():
+                        try:
+                            trigger = json.loads(meta.read_text()).get("trigger_word", "")
+                        except Exception:
+                            pass
+                    loras.append({
+                        "name": d.name, "trigger_word": trigger,
+                        "path": str(files[0]),
+                        "files": [{"name": f.name, "path": str(f)} for f in files],
+                    })
+                elif d.suffix == ".safetensors":
+                    # No sidecar to read a trigger word out of, and no epochs to
+                    # choose between — one file, one entry, named for itself.
+                    loras.append({
+                        "name": d.stem, "trigger_word": "",
+                        "path": str(d),
+                        "files": [{"name": d.name, "path": str(d)}],
+                    })
+        loras.sort(key=lambda l: l["name"].lower())
         return {
             "models": _model_status(),
             "loras": loras,
