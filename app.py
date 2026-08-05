@@ -5330,7 +5330,15 @@ function layoutShots(n){
   // shrinks with what is open, so a dvh sum would be wrong the moment anyone
   // opened Advanced — the stills would run under the bar instead of fitting
   // above it. A batch has to fit to be compared; a single still gets it all.
-  const h=$('#canvas').clientHeight-44;
+  //
+  // Every subtrahend is measured rather than guessed. clientHeight includes the
+  // canvas padding, and the caption below the grid is a real element with a
+  // real height; a fixed fudge factor for the two of them was 42px short, which
+  // put the caption under the console on exactly the shot you would screenshot.
+  const box=$('#canvas'), cs=getComputedStyle(box);
+  const cap=$(kind==='image'?'#gen-meta':'#vid-meta');
+  const h=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)
+          -(cap.offsetHeight||0)-12;
   g.style.setProperty('--shot-h', (n<=2 ? h : h/2-16)+'px');
 }
 // The canvas changes height whenever the console does, so the fit is recomputed
