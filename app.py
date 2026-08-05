@@ -3865,9 +3865,13 @@ svg{width:100%;height:100%;display:block}
    the frame — past the cap it scrolls itself instead. */
 .console{flex:none;max-height:54dvh;overflow:auto;padding:13px 28px 15px;
   border-top:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.012)}
-.crow{display:flex;align-items:flex-end;gap:10px}
-.crow .field{flex:1;min-width:0}
-.crow button.b{flex:none;height:44px;padding:0 26px}
+/* Generate lives in the bar with the controls it acts on, not beside the
+   prompt — so the prompt gets the console's full width, which is the thing
+   that actually benefits from it. Sized to the row: same height and radius as
+   every control next to it, still white, because it is still the one control
+   on the page that spends money. */
+.opts button.b{flex:none;height:36px;padding:0 20px;border-radius:11px;font:600 13px/1 inherit}
+.opts .actions{display:flex;align-items:center;gap:7px;flex:none;margin-left:auto}
 .drawer{flex:0 0 var(--drawer);min-width:0;border-left:1px solid rgba(255,255,255,.07);overflow:auto}
 .drawer-in{width:var(--drawer);padding:12px 14px 40px}
 /* Collapsed by flex-basis rather than display:none so the canvas reflows
@@ -4183,18 +4187,14 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
          feel like one feel like two. -->
     <div id="gen-err"></div>
     <div id="vid-err"></div>
-    <div class="crow">
-      <div class="field">
-        <textarea id="prompt" rows="2" placeholder="Describe an image…"></textarea>
-        <div class="bar2">
-          <div class="kinds" id="kinds">
-            <button data-kind="image" class="on">Image</button>
-            <button data-kind="video">Video</button>
-          </div>
+    <div class="field">
+      <textarea id="prompt" rows="2" placeholder="Describe an image…"></textarea>
+      <div class="bar2">
+        <div class="kinds" id="kinds">
+          <button data-kind="image" class="on">Image</button>
+          <button data-kind="video">Video</button>
         </div>
       </div>
-      <button class="b" id="go-gen">Generate</button>
-      <button class="b hide" id="go-vid">Generate</button>
     </div>
     <div id="gen-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
     <div id="vid-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
@@ -4218,9 +4218,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         <span class="vr"></span>
         <!-- Rows are added by hand; order is the order they patch in. -->
         <button class="s" id="add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
-        <span class="grow"></span>
-        <span class="muted" id="gen-model-line"></span>
-        <button class="opt ib" id="toggle-adv" data-ico="sliders" title="Advanced"></button>
+        <span class="actions">
+          <span class="muted" id="gen-model-line"></span>
+          <button class="opt ib" id="toggle-adv" data-ico="sliders" title="Advanced"></button>
+          <button class="b" id="go-gen">Generate</button>
+        </span>
       </div>
       <div id="lora-stack" style="margin-top:9px"></div>
 
@@ -4276,9 +4278,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         <!-- Wan only. Same idea as the image side's stack, plus the one thing
              the A14B pair forces: which expert a row patches. -->
         <button class="s hide" id="v-add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
-        <span class="grow"></span>
-        <span class="muted" id="v-model-line"></span>
-        <button class="opt ib" id="v-toggle-adv" data-ico="sliders" title="Advanced"></button>
+        <span class="actions">
+          <span class="muted" id="v-model-line"></span>
+          <button class="opt ib" id="v-toggle-adv" data-ico="sliders" title="Advanced"></button>
+          <button class="b" id="go-vid">Generate</button>
+        </span>
       </div>
       <div id="v-lora-stack" style="margin-top:9px"></div>
 
@@ -4588,8 +4592,6 @@ function setKind(k){
   $('#vid-note').classList.toggle('hide',k!=='video');
   $('#gen-err').classList.toggle('hide',k!=='image');
   $('#vid-err').classList.toggle('hide',k!=='video');
-  $('#go-gen').classList.toggle('hide',k!=='image');
-  $('#go-vid').classList.toggle('hide',k!=='video');
   syncPromptHint();
   syncCanvasView();
 }
