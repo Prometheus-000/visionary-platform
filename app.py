@@ -30,7 +30,7 @@ Forge's source.
 Set VISIONARY_VOLUME to run a second copy (staging, a different account) against
 its own storage.
 
-Nothing downloads on its own — pick what you want on the Models tab.
+Nothing downloads on its own — pick what you want under the gear.
 """
 
 # NOTE: deliberately NO `from __future__ import annotations`.
@@ -885,7 +885,7 @@ def _require_models(*keys: str) -> None:
         "",
         f"Resolved volume: {VOLUME_NAME!r} (override with VISIONARY_VOLUME). "
         "If those directories are empty it is a new or wrong volume, not a "
-        "failed download — check `modal profile current` and the Models tab.",
+        "failed download — check `modal profile current` and Settings.",
     ]
     raise RuntimeError("\n".join(lines))
 
@@ -989,8 +989,8 @@ def _download_weight(key: str, job_id: str) -> dict[str, Any]:
     token = _hf_token()
     if spec["gated"] and not token:
         err = (
-            f"{spec['label']} is a gated repo. Paste your HuggingFace token on the "
-            f"Models tab, and accept the licence at https://huggingface.co/{spec['repo_id']}"
+            f"{spec['label']} is a gated repo. Paste your HuggingFace token under the "
+            f"gear, and accept the licence at https://huggingface.co/{spec['repo_id']}"
         )
         _publish(job_id, status="failed", error=err)
         raise RuntimeError(err)
@@ -3018,7 +3018,7 @@ def web():
         """
         What this deployment can actually see on the volume.
 
-        Cheap CPU check for when the Models tab and a GPU job disagree — the
+        Cheap CPU check for when Settings and a GPU job disagree — the
         usual cause is the app resolving a different volume than the one
         holding the weights, so the resolved name is part of the answer.
         """

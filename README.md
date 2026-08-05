@@ -136,8 +136,8 @@ licence with the same account that issued it:
 - <https://huggingface.co/krea/Krea-2-Raw>
 - <https://huggingface.co/krea/Krea-2-Turbo>
 
-Paste the token on the Models panel. If the licence has not been accepted, the
-error says so and links the page rather than failing as a generic 403.
+Paste the token under the gear. If the licence has not been accepted, the error
+says so and links the page rather than failing as a generic 403.
 
 ---
 
@@ -146,11 +146,11 @@ error says so and links the page rather than failing as a generic 403.
 One Modal Volume, mounted at `/workspace`:
 
 ```
-models/            weights, flat, addressed by exact filename
-loras/{folder}/    one folder per trained LoRA
-datasets/{name}/   images + .txt caption sidecars
-outputs/{job}/     generated media + a visionary.json sidecar
-work/, .cache/     disposable
+models/               weights, flat, addressed by exact filename
+loras/                trained LoRAs, one folder each; loose files work too
+datasets/{name}/      images + .txt caption sidecars
+outputs/{job}/        generated media + a visionary.json sidecar
+work/, .cache/        disposable
 ```
 
 The layout is the contract, not the code. Datasets are folders of images with
