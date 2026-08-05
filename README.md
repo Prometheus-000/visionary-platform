@@ -186,19 +186,6 @@ or a missing weight is rejected on CPU in milliseconds, before a GPU is rented.
 
 ---
 
-## Training from the command line
-
-No browser needed:
-
-```bash
-modal run app.py --images-dir ./photos --lora-name my_style
-```
-
-Add `--caption` to caption the folder first. The dataset is named after the
-LoRA, so a run started here shows up on the Datasets tab and can be reused.
-
----
-
 ## Verifying a deployment
 
 Two smoke tests, both cheap, both runnable against your own account:
