@@ -1,9 +1,59 @@
 # Visionary
 
-A single-user LoRA training and generation platform that runs entirely on
-[Modal](https://modal.com). Train a LoRA on your own images, generate stills
-with it, and turn those stills into video — one deployment, one URL, no
-infrastructure to keep alive between sessions.
+A generative studio that runs on your own [Modal](https://modal.com) account.
+Train a LoRA on your photographs, generate stills with it, and animate any of
+them into a clip — in one interface, on one URL, with nothing to keep alive
+between sessions.
+
+![The canvas holds the screen; the console is a bar beneath it](docs/generate.png)
+
+It is a real interface, not a form in front of a script. The canvas is the
+largest thing on screen at every moment, because the picture is the reason the
+page exists. Everything you can change lives in a bar under it — never a rail
+beside it, which would cost the image 384px of the one dimension it cannot get
+back.
+
+---
+
+## The interface
+
+**Image and video are one workspace.** They share the prompt, the canvas and the
+gallery. The switch is a chip inside the prompt field, and the sentence survives
+it — because a shot you described as a still is the same sentence you would
+describe as a clip. There is no mode to navigate to and nothing to retype.
+
+![The console rebuilds itself for the model you chose](docs/video.png)
+
+**The controls follow the model.** Wan 2.2 takes LoRAs, a negative prompt and
+CFG; MiniMax-H3 is guidance-distilled and carries its own soundtrack, so it
+offers none of those and offers references instead. Only the controls the chosen
+model actually reads are on screen — a control that is present but ignored is
+worse than one that is absent.
+
+**Copy is a last resort.** Design first, then an icon, then words. A control that
+shows its own value gets no label; the two keyframe tiles put the mark where the
+frame sits in the clip rather than captioning themselves "first" and "last".
+
+![Everything you have made, in one grid](docs/gallery.png)
+
+**Your work stays beside your work.** The gallery is a drawer next to the canvas,
+not a destination you leave the studio to visit, because the still you made an
+hour ago is raw material for the clip you are making now. Any image can go
+straight back to the prompt, or become the first frame of a video, without a
+download and a re-upload. Open it full-width when you want the whole room.
+
+![Captioning is a workspace, not a batch job](docs/dataset.png)
+
+**Datasets are for reading, not just uploading.** Captions are written in prose
+by Qwen3-VL-8B-Instruct, because the text encoders these models use parse
+grammar — "red dress, blue jacket" cannot say which garment is which, and a
+sentence can. The panel beside the contact sheet reads the set back to you:
+trigger-word coverage, caption length, duplicates, and the clauses your captions
+repeat, so you can see what the LoRA is about to learn by accident.
+
+---
+
+## Install
 
 ```bash
 pip install modal
@@ -12,19 +62,18 @@ modal deploy app.py
 ```
 
 That is the whole install. The last command prints a URL, and the URL is the
-application: UI, API and GPU jobs. Nothing runs on your machine, nothing runs
-when you are not using it, and there is no config file to fill in first.
+application: interface, API and GPU jobs. Nothing runs on your machine, nothing
+runs when you are not using it, and there is no config file to fill in first.
 
 ---
 
-## What it does
+## What runs underneath
 
 **Train.** LoRA training for Krea 2 on [musubi-tuner](https://github.com/kohya-ss/musubi-tuner).
 Point it at a folder of images, get a `.safetensors` back.
 
 **Caption.** Datasets are named folders of images with `.txt` sidecars beside
-them. Captioning uses Qwen3-VL-8B-Instruct and writes prose rather than tags,
-because the text encoders these models use parse grammar.
+them, which is exactly what the trainer reads.
 
 **Generate stills.** Krea 2 inference on a vendored
 [sd-webui-forge-classic](https://github.com/Haoming02/sd-webui-forge-classic)
@@ -40,9 +89,10 @@ backend, with LoRA stacking and regional prompting.
 | References     | ref2va checkpoint       | no                         |
 | Experts        | one                     | two on A14B, one on the 5B |
 
-The two are not interchangeable, and the composer only shows the controls the
-chosen model actually reads — a control that is present but ignored is worse
-than one that is absent.
+Adding Wan did not add a backend. It reuses the container, the warm ComfyUI
+process and the job contract; what is per-family is a graph builder and one row
+of capabilities — which is also the row the composer reads to decide what to
+show you.
 
 ---
 
