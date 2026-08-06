@@ -175,6 +175,12 @@ web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "python-multipart==0.0.20",
     "pillow==11.1.0",
     "huggingface_hub[hf_transfer]==0.27.1",
+    # Google Drive, for LoRAs that were never on HuggingFace. Kept in this image
+    # rather than its own because it conflicts with nothing here — gdown pins
+    # only requests and beautifulsoup4 — and a separate image would mean a
+    # second build for a 200 kB pure-python package. The rule is to split images
+    # when pins fight, not when responsibilities differ.
+    "gdown==5.2.0",
 )
 
 trainer_image = (
@@ -1013,8 +1019,111 @@ def download_job(key: str) -> dict[str, Any]:
     return _download_weight(key, job_id)
 
 
-def _download_weight(key: str, job_id: str) -> dict[str, Any]:
-    """Fetch one weight to its exact destination. Shared by single and bulk downloads."""
+# How long a transfer may make no progress at all before it is called dead, and
+# how many times it may resume. Both exist because of one failure: Krea 2 Turbo
+# stopping at 4 GB of 17 and the job staying "running" — no error, no log line,
+# no byte count — until the four-hour timeout collected it. A download that can
+# hang is survivable; a download that can hang *silently* costs you the four
+# hours before you learn anything, and it can do it again the next day.
+DOWNLOAD_STALL_S = 240
+DOWNLOAD_TRIES = 5
+
+
+def _staged_bytes(root: Path) -> int:
+    """
+    Bytes on disk under the staging dir, incomplete parts included.
+
+    Polled rather than hooked because `hf_hub_download` offers no progress
+    callback, and the shape of what it writes — `.incomplete` parts, blobs,
+    per-version subdirectories — has changed across releases. Summing the tree
+    is indifferent to all of that, and to whether hf_transfer or the plain
+    requests backend is doing the writing.
+    """
+    total = 0
+    for p in root.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            # A part file renamed out from under the walk is normal, not an error.
+            continue
+    return total
+
+
+def _watch_download(
+    root: Path, label: str, job_id: str, done: "threading.Event",
+    expect_gb: float | None = None, note: str = "",
+    pct_base: float = 0.0, pct_span: float = 100.0,
+) -> dict[str, Any]:
+    """
+    Publish transfer progress until `done` is set, and record a stall.
+
+    Returns the live state dict so the caller can read `stalled` and `bytes`
+    after giving up — the numbers are the whole point, since "it stopped" and
+    "it stopped at 4.1 GB of 17.2 after 6 minutes of nothing" send you to
+    completely different places.
+
+    `expect_gb` is None when the size is not known ahead of time, which is the
+    normal case for anything off Google Drive. The byte count and the stall
+    detection are what actually matter and neither needs a total; only the
+    percentage does, and a percentage invented from a guess is worth less than
+    no percentage at all.
+    """
+    state = {"bytes": 0, "moved_at": time.time(), "stalled": False}
+    expect = int((expect_gb or 0) * 1e9)
+    started = time.time()
+    logged = 0.0
+
+    while not done.wait(5):
+        now = time.time()
+        n = _staged_bytes(root)
+        if n > state["bytes"]:
+            state["bytes"], state["moved_at"] = n, now
+        elif now - state["moved_at"] > DOWNLOAD_STALL_S:
+            state["stalled"] = True
+            return state
+
+        gb = n / 1e9
+        rate = n / max(1.0, now - started) / 1e6
+        size = f"{gb:.1f} of {expect_gb:.1f} GB" if expect else f"{gb:.1f} GB"
+        fields: dict[str, Any] = {
+            "phase": " · ".join(x for x in (label, note, size) if x),
+            "downloaded_gb": round(gb, 2),
+            "mb_s": round(rate, 1),
+        }
+        if expect:
+            # Mapped into this file's slice of the run, so the bar on a
+            # four-model pull crosses the window once instead of snapping back
+            # to zero four times. Capped just short of the slice's end: 100%
+            # belongs to the completion path, not to a byte count that is still
+            # an estimate against approx_gb.
+            fields["percent"] = min(99, int(pct_base + pct_span * min(1.0, n / expect)))
+        _publish(job_id, **fields)
+        # Every 30s to the container log too. The UI record is what you watch
+        # live; the log is what you still have tomorrow when you are asking why
+        # last night's pull died.
+        if now - logged > 30:
+            logged = now
+            stuck = int(now - state["moved_at"])
+            print(f"[download] {label}: {gb:.2f} GB  {rate:.1f} MB/s"
+                  + (f"  (no new bytes for {stuck}s)" if stuck > 20 else ""))
+    return state
+
+
+def _download_weight(
+    key: str, job_id: str, note: str = "",
+    pct_base: float = 0.0, pct_span: float = 100.0,
+) -> dict[str, Any]:
+    """
+    Fetch one weight to its exact destination. Shared by single and bulk downloads.
+
+    `note` is the queue position ("2 of 4") when this is one of a run. It is
+    threaded down to the watcher rather than published once before the transfer
+    starts, because the watcher rewrites `phase` every five seconds and would
+    otherwise erase the only thing telling you how much of the queue is left.
+    """
+    import threading
+
     from huggingface_hub import hf_hub_download
     from huggingface_hub.utils import (
         EntryNotFoundError, GatedRepoError, RepositoryNotFoundError,
@@ -1189,6 +1298,140 @@ def download_missing_job(keys: list[str]) -> dict[str, Any]:
     if failed:
         res["error"] = "; ".join(f["error"] for f in failed)
     _publish(job_id, **res)
+    return res
+
+
+# --------------------------------------------------------------------------
+# Google Drive
+#
+# Most LoRAs worth having were never published to HuggingFace — they are a link
+# someone sent you. This is the same job/status/stop contract the weight
+# downloads use, the same watcher, the same staging-then-move: what is different
+# is only where the bytes come from, which is the smallest a new capability
+# should be.
+# --------------------------------------------------------------------------
+
+GDRIVE_JOB = "dl_gdrive"
+
+
+def _is_drive_folder(url: str) -> bool:
+    """A folder link needs gdown's folder API; a file link needs its file API."""
+    return "/folders/" in url or "folderview" in url
+
+
+@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume})
+def gdrive_job(url: str, folder: str) -> dict[str, Any]:
+    """
+    Pull one file or one folder off Google Drive into loras/.
+
+    Staged first, then moved. Downloading straight into loras/ would put a
+    half-written .safetensors in front of the picker — and the picker globs the
+    directory live, so it would be offered, chosen, and fail inside a warm GPU
+    container with a torch deserialization error thirty seconds into a run.
+    Staging keeps a partial download invisible until it is a whole file.
+    """
+    import threading
+
+    import gdown
+
+    job_id = GDRIVE_JOB
+    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0}
+
+    if folder and not NAME_RE.match(folder):
+        err = f"Folder name must be 1-64 chars of [A-Za-z0-9_-]: {folder!r}"
+        _publish(job_id, status="failed", error=err)
+        return {"status": "failed", "error": err}
+
+    _reload_volume()
+    stage = WORK / f"gdrive-{int(time.time())}"
+    if stage.exists():
+        shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    print(f"[gdrive] {url} -> loras/{folder or ''}")
+
+    result: dict[str, Any] = {}
+    done = threading.Event()
+
+    def pull() -> None:
+        try:
+            if _is_drive_folder(url):
+                gdown.download_folder(url, output=str(stage), quiet=True,
+                                      use_cookies=False)
+            else:
+                # fuzzy, so a pasted browser URL works as well as a bare id —
+                # which is the form the link actually arrives in.
+                gdown.download(url, output=str(stage) + "/", quiet=True, fuzzy=True)
+        except Exception as exc:
+            result["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=pull, daemon=True).start()
+    state = _watch_download(stage, "Google Drive", job_id, done)
+
+    if state["stalled"]:
+        shutil.rmtree(stage, ignore_errors=True)
+        err = (f"Stalled at {state['bytes'] / 1e9:.2f} GB with no new bytes for "
+               f"{DOWNLOAD_STALL_S}s. Drive throttles large files and refuses "
+               "ones without link sharing — check the link opens in a private window.")
+        _publish(job_id, status="failed", error=err)
+        return {"status": "failed", "error": err}
+
+    if result.get("error") is not None:
+        shutil.rmtree(stage, ignore_errors=True)
+        exc = result["error"]
+        # gdown's own failure for a private file is an HTML page, not an
+        # exception with a useful message, so the likely cause is named here
+        # rather than left to be inferred from a parse error.
+        err = (f"{type(exc).__name__}: {exc}. If the file is not shared with "
+               "'Anyone with the link', Drive serves a sign-in page instead of "
+               "the file and there is nothing to download.")
+        _publish(job_id, status="failed", error=err)
+        return {"status": "failed", "error": err}
+
+    # Only weights. A Drive folder usually carries a preview grid and a readme
+    # too, and copying those onto the volume would put files in loras/ that the
+    # picker has to keep stepping over.
+    found = sorted(p for p in stage.rglob("*") if p.is_file())
+    weights = [p for p in found if p.suffix.lower() == ".safetensors"]
+    skipped = [p.name for p in found if p not in weights]
+    if not weights:
+        shutil.rmtree(stage, ignore_errors=True)
+        err = ("No .safetensors in that download"
+               + (f" — found {', '.join(skipped[:6])}." if skipped else "."))
+        _publish(job_id, status="failed", error=err)
+        return {"status": "failed", "error": err}
+
+    # No folder given means the top level of loras/, where the listing already
+    # treats a bare file as its own entry named for itself. A folder given means
+    # loras/{folder}/, where the listing treats the files as versions of one
+    # LoRA — which is right for a matched pair and wrong for a bag of unrelated
+    # ones, so it stays a choice rather than a default.
+    dest_dir = (LORAS / folder) if folder else LORAS
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    landed = []
+    for p in weights:
+        target = dest_dir / p.name
+        if target.exists():
+            target.unlink()
+        shutil.move(str(p), target)
+        landed.append(target.name)
+
+    shutil.rmtree(stage, ignore_errors=True)
+    volume.commit()
+
+    res = {
+        "status": "completed",
+        "percent": 100,
+        "files": landed,
+        "skipped": skipped,
+        "folder": folder,
+        "size_gb": round(sum((dest_dir / n).stat().st_size for n in landed) / 1e9, 2),
+        "duration_s": round(time.time() - started, 1),
+    }
+    _publish(job_id, **res)
+    print(f"[gdrive] {len(landed)} file(s), {res['size_gb']} GB in {res['duration_s']}s")
     return res
 
 
@@ -3329,6 +3572,27 @@ def web():
         download_job.spawn(key)
         return {"ok": True, "job_id": f"dl_{key}"}
 
+    @api.post("/api/gdrive")
+    def gdrive(payload: dict) -> dict[str, Any]:
+        """
+        Queue a Google Drive pull into loras/.
+
+        Rejected here rather than in the job for the same reason a bad LoRA path
+        is: an empty box and a malformed folder name are form errors, and
+        discovering either inside the job costs a container start before saying
+        so. What this route cannot check is whether the link is shared — only
+        Drive knows that, and it answers with an HTML sign-in page rather than
+        an error, which is why the job names that case explicitly.
+        """
+        url = str(payload.get("url") or "").strip()
+        folder = str(payload.get("folder") or "").strip()
+        if not url:
+            return {"error": "Paste a Google Drive link or file id."}
+        if folder and not NAME_RE.match(folder):
+            return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
+        gdrive_job.spawn(url, folder)
+        return {"ok": True, "job_id": GDRIVE_JOB}
+
     @api.post("/api/download-missing")
     def download_missing(payload: dict) -> dict[str, Any]:
         """
@@ -4906,6 +5170,34 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
       </p>
       <div id="dl-all-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
     </div>
+
+    <!-- The other way weights arrive. Most LoRAs worth having were never
+         published to HuggingFace — they are a link someone sent you — and
+         without this the only route onto the volume was to have trained it
+         here. Same card shape as the token above it, deliberately: this is
+         another place weights come from, not another kind of thing. -->
+    <div class="card">
+      <label>Google Drive</label>
+      <div class="row">
+        <input id="gd-url" class="grow" placeholder="Drive link or file id" autocomplete="off" spellcheck="false">
+        <input id="gd-folder" placeholder="folder (optional)" autocomplete="off" spellcheck="false"
+          style="width:158px;flex:none" title="Group the files under loras/{name}/ — for a matched pair that belongs together. Leave blank to drop them in loose.">
+        <button class="b" id="gd-go" style="padding:9px 16px;font-size:13px">Download</button>
+      </div>
+      <p class="muted" style="margin-top:8px">
+        Lands in <code>loras/</code>, ready to name in a prompt. Only
+        <code>.safetensors</code> is kept — a folder's preview images and readme
+        are left behind. The link has to be shared with anyone who has it.
+        <span id="gd-state"></span>
+      </p>
+      <!-- No progress bar, unlike the card above. Drive does not say how big a
+           file is before it sends it, so a bar here could only sit at zero for
+           the length of the transfer — which is what "stuck" looks like. The
+           byte count and the rate move, and moving is the whole job of this
+           element. -->
+      <div id="gd-prog" class="hide"><p class="muted" style="margin:0"></p></div>
+    </div>
+
     <div id="models"></div>
   </div>
 </div>
@@ -5294,6 +5586,42 @@ $('#dl-all').onclick=async()=>{
       msg.innerHTML='<span class="err">'+(s.error||'Download failed')+'</span>'; b.disabled=false; loadState(); }
   },3000);
 };
+// ---------- Google Drive ----------
+// Same poll loop as the weights above, against the same job record. The one
+// thing it says that they do not is which files landed: a Drive folder's
+// contents are not knowable up front, so "3 files · 0.4 GB" is the only
+// confirmation that what arrived is what you meant to send.
+$('#gd-go').onclick=async()=>{
+  const b=$('#gd-go'), url=$('#gd-url').value.trim();
+  const box=$('#gd-prog'), msg=box.querySelector('p');
+  if(!url){ $('#gd-url').focus(); return }
+  b.disabled=true; box.classList.remove('hide');
+  msg.textContent='Starting…';
+  const r=await post('/api/gdrive',{url,folder:$('#gd-folder').value.trim()});
+  if(r.error){ msg.innerHTML='<span class="err">'+esc(r.error)+'</span>'; b.disabled=false; return }
+  const t=setInterval(async()=>{
+    const s=await api('/api/status/dl_gdrive');
+    if(s.status==='completed'){
+      clearInterval(t); b.disabled=false;
+      $('#gd-url').value=''; $('#gd-folder').value='';
+      const n=(s.files||[]).length;
+      msg.innerHTML='<span class="ok">'+esc(`${n} file${n===1?'':'s'} · ${s.size_gb} GB — `
+        +(s.files||[]).join(', '))+'</span>'
+        +((s.skipped||[]).length?'<br><span class="muted">Skipped: '+esc(s.skipped.join(', '))+'</span>':'');
+      // The picker reads loraIndex, which only a state refresh rebuilds — so
+      // without this the LoRA you just pulled is on the volume and untypeable.
+      loadState();
+    } else if(s.status==='failed'){
+      clearInterval(t); b.disabled=false;
+      msg.innerHTML='<span class="err">'+esc(s.error||'Download failed')+'</span>';
+    } else {
+      msg.textContent=[s.phase||'Downloading…',s.mb_s&&`${s.mb_s} MB/s`].filter(Boolean).join(' · ');
+    }
+  },3000);
+};
+$('#gd-url').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#gd-go').click() });
+$('#gd-folder').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#gd-go').click() });
+
 async function startDownload(key,btn){
   btn.disabled=true; const el=$('#dl-'+key); el.textContent='Starting…';
   await post('/api/download',{key});

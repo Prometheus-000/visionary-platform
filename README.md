@@ -157,6 +157,23 @@ licence with the same account that issued it:
 Paste the token under the gear. If the licence has not been accepted, the error
 says so and links the page rather than failing as a generic 403.
 
+### LoRAs from Google Drive
+
+Most LoRAs worth having were never published to HuggingFace — they are a link
+someone sent you. Paste one under the gear and it lands in `loras/`, ready to
+name in a prompt.
+
+- A file link or a bare id both work; so does a folder link.
+- Only `.safetensors` is kept. A folder's preview grid and readme are named as
+  skipped rather than quietly copied onto the volume.
+- Leave **folder** blank and the files drop in loose, each its own entry. Give
+  one and they are grouped as versions of a single LoRA under
+  `loras/{folder}/` — which is right for a matched pair and wrong for a bag of
+  unrelated ones, so it stays your call.
+- The link has to be shared with anyone who has it. Drive answers an unshared
+  file with a sign-in page rather than an error, so the failure names that case
+  explicitly instead of surfacing a parse error.
+
 ---
 
 ## Storage

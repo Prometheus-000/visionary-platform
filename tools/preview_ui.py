@@ -119,6 +119,12 @@ STATE = {
          "family": "Krea 2 — images", "repo_id": "krea/Krea-2-TE", "present": True, "size_gb": 9.1,
          "approx_gb": 9.1, "gated": False},
     ],
+    # Three shapes, because `<lora:…>` has to name each of them unambiguously:
+    # a trained LoRA with epoch checkpoints, a bare file dropped at the top of
+    # loras/ (which is what a Google Drive pull with no folder produces), and
+    # the matched Wan speed pairs — whose files are BOTH called high/low, so
+    # they are the case that proves the picker qualifies a colliding name with
+    # its folder instead of silently offering the wrong expert.
     "loras": [
         {"name": "my_style", "trigger_word": "ohwx_style", "files": [
             {"path": "/workspace/loras/my_style/my_style.safetensors",
@@ -194,6 +200,11 @@ STATE = {
              "video": {"options": ["H100", "H200", "B200"], "default": "H100"}},
 }
 
+# Which Drive outcome the next poll reports. Mutable module state, like
+# DATASETS above and for the same reason: this flow is judged by what the card
+# does over several polls, and a fixed reply cannot show a transfer moving.
+GDRIVE = {"mode": "ok", "folder": "", "polls": 0}
+
 CAPTIONS = [
     "ohwx_style a photograph of a person seated by a window in soft daylight.",
     "ohwx_style a close portrait of a person against a plain grey backdrop.",
@@ -262,7 +273,67 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        path = self.path.split("?")[0]
+
+        # Saving and culling mutate the list in memory, because both are
+        # judged by what the rail does next — a set moving out of Unsaved, a
+        # card leaving and the heading going with it when it was the last one.
+        # A flat {"ok": true} leaves the page redrawing the state it started in.
+        m = re.match(r"/api/datasets/([^/]+)/(save|delete)$", path)
+        if m:
+            name, verb = m.group(1), m.group(2)
+            row = next((d for d in DATASETS if d["name"] == name), None)
+            if not row:
+                return self.reply({"error": f"No dataset named {name!r}."})
+            if verb == "delete":
+                DATASETS.remove(row)
+                return self.reply({"ok": True})
+            try:
+                new = json.loads(body or b"{}").get("name") or name
+            except json.JSONDecodeError:
+                new = name
+            row["name"], row["saved"] = new, True
+            return self.reply({"ok": True, **row})
+
+        if path == "/api/datasets":
+            try:
+                new = json.loads(body or b"{}").get("name") or "set_x"
+            except json.JSONDecodeError:
+                new = "set_x"
+            row = {"name": new, "count": 0, "uncaptioned": 0, "cover": None,
+                   "trigger_word": "", "saved": False}
+            DATASETS.insert(0, row)
+            return self.reply({"ok": True, **row})
+
+        # Google Drive. Driven by what is in the url field, because the states
+        # worth looking at here are the failures: a link that is not shared and
+        # a folder with no weights in it are the two things that actually happen,
+        # and neither is reachable by pasting a working link at a stub.
+        #   ...error   -> the job fails
+        #   ...slow    -> stays running, so the progress line can be watched
+        #   anything else -> completes with two files and one skipped
+        if path == "/api/gdrive":
+            try:
+                body_json = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                body_json = {}
+            url = str(body_json.get("url") or "")
+            folder = str(body_json.get("folder") or "")
+            if not url:
+                return self.reply({"error": "Paste a Google Drive link or file id."})
+            # Mirrors NAME_RE in app.py. Worth stubbing rather than skipping:
+            # this is the one error the route answers with instead of the job,
+            # so it is the only one that appears without a single poll.
+            if folder and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", folder):
+                return self.reply({
+                    "error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."})
+            GDRIVE["mode"] = ("error" if "error" in url
+                              else "slow" if "slow" in url else "ok")
+            GDRIVE["folder"] = folder
+            GDRIVE["polls"] = 0
+            return self.reply({"ok": True, "job_id": "dl_gdrive"})
+
         # No job ids: a stub that starts jobs it cannot finish leaves the UI
         # polling a status that never lands, which looks like a hung backend.
         self.reply({"ok": True, "note": "preview server — no backend attached."})
@@ -304,6 +375,33 @@ class Handler(BaseHTTPRequestHandler):
             # being empty — the video path itself is only reachable on Modal.
             return self.reply(swatch(w, h, m.group(1), hash(m.group(1))),
                               "image/svg+xml")
+
+        # A finished job, with results. This used to land `{"images": []}`,
+        # which meant the canvas — the largest thing on the page, and the one
+        # the whole layout is built around — was the one region the preview
+        # could never show in its filled state. Two images rather than one, so
+        # the contact-sheet grid and the per-still hover actions are both
+        # exercised; `files` alongside them so the video path lands too.
+        # Its own status shape: no total to divide by, so no percent — the byte
+        # count and the rate are the whole progress report, which is exactly the
+        # state the real job is in against Drive.
+        if path == "/api/status/dl_gdrive":
+            GDRIVE["polls"] += 1
+            if GDRIVE["mode"] == "error":
+                return self.reply({"status": "failed", "error":
+                    "HTTPError: 403. If the file is not shared with 'Anyone with "
+                    "the link', Drive serves a sign-in page instead of the file."})
+            if GDRIVE["mode"] == "slow" or GDRIVE["polls"] < 2:
+                gb = GDRIVE["polls"] * 0.4
+                return self.reply({"status": "running", "mb_s": 88.4,
+                                   "phase": f"Google Drive · {gb:.1f} GB",
+                                   "downloaded_gb": gb})
+            return self.reply({
+                "status": "completed", "percent": 100, "size_gb": 0.43,
+                "files": ["alxcn.safetensors", "k3nan.safetensors"],
+                "skipped": ["preview_grid.png", "README.md"],
+                "folder": GDRIVE["folder"],
+            })
 
         if path.startswith("/api/status/"):
             return self.reply({
