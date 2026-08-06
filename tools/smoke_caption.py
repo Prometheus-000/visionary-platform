@@ -65,13 +65,18 @@ def caption_one(dataset: str = "") -> dict:
 
     volume.reload()
 
-    root = Path("/workspace/datasets")
+    # Both roots: a set is a draft until it is saved, so on a volume that has
+    # only ever been dropped into there is nothing under datasets/ at all and
+    # the no-argument form would report an empty install as a broken one.
+    roots = [Path("/workspace/datasets"), Path("/workspace/drafts")]
     if dataset:
-        candidates = sorted(p for p in (root / dataset).iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"})
+        src = next((r / dataset for r in roots if (r / dataset).is_dir()), roots[0] / dataset)
+        candidates = sorted(p for p in src.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"})
     else:
-        candidates = sorted(root.rglob("*.jpg")) + sorted(root.rglob("*.png"))
+        candidates = sorted(p for r in roots if r.is_dir()
+                            for p in list(r.rglob("*.jpg")) + list(r.rglob("*.png")))
     if not candidates:
-        return {"error": f"no images under {root}"}
+        return {"error": f"no images under {' or '.join(str(r) for r in roots)}"}
 
     img_path = candidates[0]
     cache_dir = str(HF_CACHE)
