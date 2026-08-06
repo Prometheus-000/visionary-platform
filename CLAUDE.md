@@ -140,6 +140,37 @@ culling a single image is not.
   gear.
 - **Prose, not tags.** Captions are sentences, because the text encoders these
   models use parse grammar. See the `CAPTION_MODEL` comment.
+- **Reload through `_reload_volume()`, never `volume.reload()`.** Modal refuses
+  a reload while anything on the volume is open, and a container holding a
+  checkpoint always is — safetensors maps the weights straight off `/workspace`
+  and the mapping outlives the descriptor. A bare reload therefore worked once
+  per container and raised for the rest of its life. Freshness is not worth a
+  dead container, so the open-files conflict is absorbed and logged; every
+  other reload failure still raises.
+- **A long transfer publishes bytes, or it cannot be debugged.** `_download_weight`
+  used to print one line at the start and one at the end. Between them, on a
+  17 GB pull, it reported nothing — so "stalled at 4 GB" and "running fine at
+  90 MB/s" were the same UI state and the same empty log, and the job sat there
+  until the four-hour timeout. `_watch_download()` polls bytes on disk from a
+  thread and publishes a count and a rate; if they stop moving for
+  `DOWNLOAD_STALL_S` the attempt is abandoned and resumed, `DOWNLOAD_TRIES`
+  times. It polls rather than hooking because `hf_hub_download` has no progress
+  callback and the shape of what it writes changes across releases; summing the
+  tree is indifferent to both.
+
+  Two things to leave alone. **The worker takes its sink and its flag as
+  arguments** — with a closure, an abandoned attempt finishing late writes its
+  stale result into the *next* attempt's dict and sets the next attempt's event.
+  And **do not enable `hf_transfer` on `web_image`** without checking resume
+  first: its speed comes from parallel chunks, but it is also the backend with
+  no progress hook and the weaker resume story, which are exactly the two
+  properties that made this bug four hours long instead of four minutes.
+- **Weights are staged, then moved.** Both `_download_weight` and `gdrive_job`
+  write to a staging directory and `shutil.move` into place. The picker globs
+  `loras/` live, so a half-written `.safetensors` downloaded straight there is
+  offered, chosen, and fails inside a warm GPU container thirty seconds into a
+  run. Staging keeps a partial download invisible until it is a whole file, and
+  the move is a rename because staging is on the same volume.
 
 ## The page
 

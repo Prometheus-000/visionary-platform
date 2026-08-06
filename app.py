@@ -1058,27 +1058,78 @@ def _download_weight(key: str, job_id: str) -> dict[str, Any]:
             return f"{spec['filename']} is missing from {spec['repo_id']}."
         return None
 
-    try:
-        staged = hf_hub_download(
-            repo_id=spec["repo_id"],
-            filename=spec["filename"],
-            local_dir=str(STAGING),
-            token=token,
-        )
-    except GatedRepoError:
-        err = (
-            f"Access to {spec['repo_id']} was refused. Accept the licence at "
-            f"https://huggingface.co/{spec['repo_id']} using the same account "
-            "that issued this token."
-        )
-        _publish(job_id, status="failed", error=err)
-        raise RuntimeError(err)
-    except RepositoryNotFoundError:
-        err = f"Repo {spec['repo_id']} not found, or the token cannot see it."
-        _publish(job_id, status="failed", error=err)
-        raise RuntimeError(err)
-    except EntryNotFoundError:
-        err = f"{spec['filename']} is missing from {spec['repo_id']}."
+    # Takes its sink and its flag as arguments rather than closing over them.
+    # An abandoned attempt's thread is still alive and still going to finish
+    # eventually; with a closure it would write its stale result into the *next*
+    # attempt's dict and set the next attempt's event — handing the retry the
+    # answer to the question before it. Passing them in gives every attempt its
+    # own, so a straggler lands somewhere nobody is reading.
+    def pull(sink: dict[str, Any], flag: "threading.Event") -> None:
+        try:
+            sink["path"] = hf_hub_download(
+                repo_id=spec["repo_id"],
+                filename=spec["filename"],
+                local_dir=str(STAGING),
+                token=token,
+            )
+        except Exception as exc:  # re-raised on the calling thread below
+            sink["error"] = exc
+        finally:
+            flag.set()
+
+    staged: str | None = None
+    last_err = ""
+    for attempt in range(1, DOWNLOAD_TRIES + 1):
+        # The download runs in a worker while this thread watches the bytes
+        # land. It has to be this way round: hf_hub_download is a blocking call
+        # with no callback and no cancellation, so the only way to put a bound
+        # on it is to stop waiting for it. The thread is a daemon and is
+        # abandoned on a stall — the container is torn down when this function
+        # returns, and a leaked socket for those few seconds is a far smaller
+        # cost than four hours of a job that will never finish.
+        result: dict[str, Any] = {}
+        done = threading.Event()
+        threading.Thread(target=pull, args=(result, done), daemon=True).start()
+        state = _watch_download(STAGING, label, job_id, done, spec["approx_gb"],
+                                note, pct_base, pct_span)
+
+        if state["stalled"]:
+            last_err = (f"stalled at {state['bytes'] / 1e9:.2f} GB with no new bytes "
+                        f"for {DOWNLOAD_STALL_S}s")
+            print(f"[download] {label}: {last_err} — attempt {attempt} abandoned")
+            _publish(job_id, phase=f"{label} · stalled, resuming ({attempt} of {DOWNLOAD_TRIES})")
+            # No sleep and no cleanup: the partial file is the point. This
+            # image runs huggingface_hub's plain requests backend, which leaves
+            # a `.incomplete` beside the target and re-requests with a Range
+            # header — so a resume costs the bytes since the stall, not the 4 GB
+            # already on disk. Do not turn on hf_transfer here without checking
+            # that first: its speed comes from parallel chunks, but it is also
+            # the backend with no progress hook and the weaker resume story,
+            # which are precisely the two properties that made this bug
+            # four hours long instead of four minutes.
+            continue
+
+        exc = result.get("error")
+        if exc is not None:
+            msg = fatal(exc)
+            if msg:
+                _publish(job_id, status="failed", error=msg)
+                raise RuntimeError(msg)
+            last_err = f"{type(exc).__name__}: {exc}"
+            print(f"[download] {label}: attempt {attempt} failed — {last_err}")
+            _publish(job_id, phase=f"{label} · retrying ({attempt} of {DOWNLOAD_TRIES})")
+            continue
+
+        staged = result.get("path")
+        break
+
+    if not staged:
+        # Names the file, the byte count and the number of attempts, because
+        # those three separate a dead uplink from a wrong path from a repo that
+        # is simply refusing to serve this one file.
+        err = (f"{label} did not finish after {DOWNLOAD_TRIES} attempts — {last_err}. "
+               f"Partial data is kept at {STAGING}, so retrying resumes rather "
+               f"than starting over.")
         _publish(job_id, status="failed", error=err)
         raise RuntimeError(err)
 
@@ -1120,7 +1171,9 @@ def download_missing_job(keys: list[str]) -> dict[str, Any]:
             percent=round((i - 1) / len(keys) * 100),
         )
         try:
-            _download_weight(key, job_id)
+            _download_weight(key, job_id, note=f"{i} of {len(keys)}",
+                             pct_base=(i - 1) * 100 / len(keys),
+                             pct_span=100 / len(keys))
             done.append(key)
         except Exception as exc:
             # One gated repo must not abandon the rest of the queue.
@@ -5234,7 +5287,7 @@ $('#dl-all').onclick=async()=>{
   const t=setInterval(async()=>{
     const s=await api('/api/status/dl_all');
     bar.style.width=(s.percent||0)+'%';
-    msg.textContent=s.phase||'Downloading…';
+    msg.textContent=[s.phase||'Downloading…',s.mb_s&&`${s.mb_s} MB/s`].filter(Boolean).join(' · ');
     if(s.status==='completed'){ clearInterval(t); bar.style.width='100%';
       msg.innerHTML='<span class="ok">All models downloaded.</span>'; b.disabled=false; loadState(); }
     else if(s.status==='failed'){ clearInterval(t);
@@ -5247,8 +5300,12 @@ async function startDownload(key,btn){
   const t=setInterval(async()=>{
     const s=await api('/api/status/dl_'+key);
     if(s.status==='completed'){clearInterval(t);el.innerHTML='<span class="ok">Done</span>';loadState();}
-    else if(s.status==='failed'){clearInterval(t);el.innerHTML='<span class="err">'+(s.error||'Failed')+'</span>';btn.disabled=false;}
-    else el.textContent=s.phase||'Downloading…';
+    else if(s.status==='failed'){clearInterval(t);el.innerHTML='<span class="err">'+esc(s.error||'Failed')+'</span>';btn.disabled=false;}
+    // The rate, not just the phase. "Downloading…" is true of a transfer moving
+    // at 90 MB/s and of one that has not moved a byte in four minutes, and
+    // telling those apart without opening the Modal logs is the whole reason
+    // the job publishes a byte count at all.
+    else el.textContent=[s.phase||'Downloading…',s.mb_s&&`${s.mb_s} MB/s`].filter(Boolean).join(' · ');
   },3000);
 }
 

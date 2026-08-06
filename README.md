@@ -138,6 +138,14 @@ both text-to-video and image-to-video on its own.
 Downloads run on **CPU containers**, never on a GPU. Pulling 26 GB while an
 A100 idles is money burned for nothing.
 
+A transfer reports the bytes it has and the rate it is getting them at, and if
+it goes quiet for four minutes it is abandoned and **resumed** from where it
+stopped, up to five times. Both exist because of one failure: a 17 GB pull
+stopping dead at 4 GB and the job staying "running" — no error, no log line, no
+byte count — until the four-hour timeout collected it. A download that can hang
+is survivable; one that can hang silently costs you the four hours before you
+learn anything.
+
 ### Gated weights
 
 Krea 2 RAW and Krea 2 Turbo need a HuggingFace token, and you must accept the
