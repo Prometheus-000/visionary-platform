@@ -79,12 +79,52 @@ build-order problem, and the file is navigable by its banner comments.
 
     $VISIONARY_VOLUME (default "visionary")  ->  /workspace
       models/       weights, flat, descriptive filenames, addressed by exact path
-      loras/{folder}/{name}.safetensors
-      datasets/{name}/  images + .txt caption sidecars
+      loras/{folder}/{name}.safetensors   trained output, any nesting
+      loras/{name}.safetensors            loose files count too — see below
+      datasets/{name}/  images + .txt caption sidecars — sets you saved
+      drafts/{name}/    identical shape; sets you have not saved yet
       outputs/{job}/    generated media
       work/, .cache/    disposable
 
 Set `VISIONARY_VOLUME` to run a second copy against its own storage.
+
+### A folder is a LoRA; a loose file is also a LoRA
+
+Training writes `loras/{name}/`, so a folder is one LoRA and the checkpoints in
+it are that LoRA's epochs. Anything arriving another way — migrated off an older
+volume, pulled off Google Drive, dropped in by hand — is a bare file at the top
+level, and the folders-only walk skipped it silently. Four real LoRAs sat on the
+volume invisible to the picker, which reads as "training never produced
+anything" rather than "this listing has an opinion about directory layout." A
+file a run can load is a file the picker has to offer.
+
+This is also why a `<lora:…>` token resolves by the **shortest unambiguous
+name**. One `k3nan.safetensors` on the volume is `<lora:k3nan:1>`; the matched
+Wan speed pairs, whose files are both called `high` and `low`, are qualified by
+their folder. When a name matches more than one file the note says which ones,
+because "no LoRA named high" sends you looking for a file that is sitting right
+there.
+
+### Saving a set is a choice, and it is the only thing `drafts/` means
+
+Dropping images makes a **draft**. It captions, filters and trains exactly like a
+saved set — same folder, same sidecars, same code path — and the only difference
+it has is which parent it sits under. Saving moves the folder into `datasets/`
+under the name you type; the page never asks for one before the images are in
+front of you, because "is this worth keeping" is not a question you can answer at
+drop time. Most sets are dropped once to answer one question, and making each of
+those a permanent named entry taxes the common case to serve the rare one.
+
+A draft belongs to the window that made it. The page holds an id in
+`sessionStorage` — surviving a reload, dying with the tab — and heartbeats it to
+`/api/session`; a draft whose session has been quiet for fifteen minutes is
+swept. There is no server-side "app closed" event to use instead: the web
+container scales to zero on Modal's schedule, not yours, so a cold start would
+be a lifecycle signal that means nothing about whether you are still working.
+
+Sweeping and deleting both **move to `.trash/`**, per root. Deleting a set used
+to `rmtree`, which made it the one unrecoverable action in an application where
+culling a single image is not.
 
 ## Conventions
 
@@ -119,11 +159,46 @@ two domains, and the page follows the domains.
 - **Image and video are one workspace.** Shared prompt, canvas and gallery; the
   switch is a chip inside the prompt field and the prompt survives it. What
   differs is only the options, which rebuild from `VIDEO_MODELS` — see below.
-- **Copy is a last resort.** Design first, then an icon, then words. A control
-  that shows its own value gets no label. Twice the icon was not enough and the
-  design changed instead of a caption being added: keyframe tiles mark where
-  the frame sits in the clip, and a tile that appears replaced the checkbox
-  that used to reveal it.
+- **Copy is a last resort — but a number is not a value it can show.** Design
+  first, then an icon, then words. A control that shows its own value gets no
+  label: "Krea 2 Turbo", "16:9", "720p", "5s" name themselves. Twice the icon
+  was not enough and the design changed instead of a caption being added:
+  keyframe tiles mark where the frame sits in the clip, and a tile that appears
+  replaced the checkbox that used to reveal it.
+
+  The hyperparameters were where this rule was pushed past what it can carry.
+  "32" is a rank, an alpha, an epoch count or a seed with equal plausibility,
+  and the icons standing in for those words failed the only test that matters:
+  someone who has trained these models for five years had to hover every
+  numeric field to find out what it was. An icon is a rebus for a word you
+  already know — it cannot tell you *which* hyperparameter you are looking at.
+  So every numeric field carries its name, and the tooltip is promoted from
+  repeating that name to saying what the number does. The rule survives, with
+  its scope corrected: a control that shows its own value gets no label, and a
+  bare number is not a value.
+
+- **LoRAs are written in the prompt, not stacked under it.**
+  `<lora:name:0.8>`, Automatic1111's syntax, because it is the notation anyone
+  who has trained these models already types. Strength defaults to 1; a second
+  number is the text encoder weight on the image side and the Wan expert on the
+  video side, and both are omitted far more often than not.
+
+  A row per LoRA cost 56px plus a wrapped select — 380px of canvas for four
+  filenames and eight digits — and it still could not say the thing that
+  matters most, which is where in the sentence the LoRA applies. In the prompt
+  a fifth LoRA costs the canvas nothing, and `+ LoRA` survives as a picker that
+  writes a token at the caret, because you cannot type a syntax you have never
+  seen. What the prompt cannot show — a name that resolves to no file, a stack
+  past `MAX_LORAS`, a model that reads no LoRAs at all — is the only thing the
+  note under the field ever says.
+
+- **The ratio picker and the pixel boxes are one control.** There is only ever
+  a width and a height; the ratios are shortcuts to a pair of them. Picking one
+  writes the boxes, typing in the boxes selects Custom, and Custom is the only
+  option that spells out its own size, because it is the only one with no name
+  that implies it. Sizes snap to 16 on the way out — the pipeline floors to the
+  patch grid regardless, and a box that keeps 1000 while the model renders 992
+  is a box that lied to you.
 
 `tools/preview_ui.py` serves `UI_HTML` against stubbed JSON, so the front end
 is worked on locally instead of paying an image build and a cold start per CSS

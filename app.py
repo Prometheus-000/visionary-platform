@@ -24,7 +24,8 @@ Forge's source.
       models/qwen3vl-4b-bf16.safetensors
       loras/{folder}/{name}.safetensors   trained output, any nesting
       outputs/{job}/                      generated images
-      datasets/{job}/, uploads/{job}/     working dirs
+      datasets/{name}/                    sets you saved
+      drafts/{name}/                      sets you have not saved yet
       .cache/                             HF staging, never read directly
 
 Set VISIONARY_VOLUME to run a second copy (staging, a different account) against
@@ -95,6 +96,12 @@ LORAS = WORKSPACE / "loras"
 # training runs that use them; WORK is the per-run scratch copy musubi resizes
 # and caches into, and is disposable.
 DATASETS = WORKSPACE / "datasets"
+# A set you have not kept yet. Identical folder shape to a dataset — images
+# with .txt sidecars — so captioning, the contact sheet and the trainer never
+# learn which root a set came from, and saving one is a move rather than a
+# conversion. The split is the whole meaning of "saved": what is under
+# datasets/ is your library, and nothing else is promised to survive.
+DRAFTS = WORKSPACE / "drafts"
 WORK = WORKSPACE / "work"
 OUTPUTS = WORKSPACE / "outputs"
 STAGING = WORKSPACE / ".cache" / "hf-staging"
@@ -890,6 +897,42 @@ def _require_models(*keys: str) -> None:
     raise RuntimeError("\n".join(lines))
 
 
+def _reload_volume() -> bool:
+    """
+    Bring the volume forward. Returns False if it had to be skipped.
+
+    Modal refuses a reload while anything on the volume is still open, and a
+    container that has loaded a checkpoint always has something open: safetensors
+    maps the weights straight off /workspace and the mapping outlives the file
+    descriptor, so the kernel is still holding /workspace long after the loader
+    returned. The first `generate` in a fresh container reloaded fine because
+    nothing was loaded yet, and every request after it raised — one image per
+    container, then `ConflictError: there are open files preventing the
+    operation` for the rest of the container's life.
+
+    Raising there is the wrong trade. A reload is a *freshness* step: it exists
+    so a LoRA trained ten minutes ago is visible to a warm container. Skipping it
+    costs a stale listing until that container scales down; raising cost every
+    generation after the first. Everything the job is about to open was already
+    validated by the web container, which holds nothing open and reloads on
+    every request, so the reload here is the second look, not the only one.
+
+    Only the open-files conflict is absorbed. Any other reload failure is still
+    an error, because it says something about the volume rather than about what
+    this container happens to be holding.
+    """
+    try:
+        volume.reload()
+        return True
+    except RuntimeError as exc:
+        if "open files" not in str(exc):
+            raise
+        # Not silent: a stale view is a real cause of "that LoRA is not there",
+        # and this line is the only thing that distinguishes it from a typo.
+        print(f"[volume] reload skipped, weights still mapped ({exc})", flush=True)
+        return False
+
+
 def _sizes_on_disk(dests: Any) -> dict[Path, int]:
     """
     {dest: size in bytes} for a set of weight paths, 0 when absent.
@@ -980,7 +1023,7 @@ def _download_weight(key: str, job_id: str) -> dict[str, Any]:
     spec = MODEL_CATALOGUE[key]
     dest: Path = spec["dest"]
 
-    volume.reload()
+    _reload_volume()
     if dest.exists() and dest.stat().st_size > 0:
         res = {"status": "completed", "key": key, "note": "already present"}
         _publish(job_id, **res)
@@ -998,7 +1041,22 @@ def _download_weight(key: str, job_id: str) -> dict[str, Any]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     STAGING.mkdir(parents=True, exist_ok=True)
     started = time.time()
-    print(f"[download] {spec['label']}: {spec['repo_id']}/{spec['filename']}")
+    label = spec["label"]
+    print(f"[download] {label}: {spec['repo_id']}/{spec['filename']}")
+
+    # The four permanent failures, hoisted out of the retry loop: a gated repo,
+    # a wrong repo id and a wrong filename are answers, not weather. Retrying
+    # them four more times only delays the sentence that tells you what to fix.
+    def fatal(exc: Exception) -> str | None:
+        if isinstance(exc, GatedRepoError):
+            return (f"Access to {spec['repo_id']} was refused. Accept the licence at "
+                    f"https://huggingface.co/{spec['repo_id']} using the same account "
+                    "that issued this token.")
+        if isinstance(exc, RepositoryNotFoundError):
+            return f"Repo {spec['repo_id']} not found, or the token cannot see it."
+        if isinstance(exc, EntryNotFoundError):
+            return f"{spec['filename']} is missing from {spec['repo_id']}."
+        return None
 
     try:
         staged = hf_hub_download(
@@ -1188,7 +1246,7 @@ def caption_job(
     length: str = "medium", overwrite: bool = False,
 ) -> dict[str, Any]:
     jobs[job_id] = {"status": "running", "phase": "caption", "stop": False}
-    volume.reload()
+    _reload_volume()
     src = _dataset_dir(dataset)
     if not src.is_dir():
         raise RuntimeError(f"No dataset named {dataset!r}.")
@@ -1226,7 +1284,7 @@ def train_job(
     started = time.time()
     log: deque[str] = deque(maxlen=400)
     jobs[job_id] = {"status": "running", "phase": "starting", "stop": False}
-    volume.reload()
+    _reload_volume()
 
     _require_models("raw", "vae", "text_encoder")
 
@@ -1408,13 +1466,109 @@ MAX_LORAS = 6
 # rank sweep from it. The directory is the whole model: images plus .txt
 # sidecars, which is exactly what musubi consumes, so there is no database to
 # fall out of sync with the files and no export step.
+#
+# Keeping one is a choice you make afterwards. Dropping images makes a draft
+# under drafts/, which trains and captions exactly like a saved set and lasts as
+# long as the window that made it; saving moves the folder into datasets/. Most
+# sets are dropped once to answer one question, and making every one of those a
+# permanent, named entry in the library taxes the common case to serve the rare
+# one.
 # --------------------------------------------------------------------------
 
 
-def _dataset_dir(name: str) -> Path:
+# A draft belongs to the window that made it. "When I close the app" has no
+# server-side event here — the web container scales to zero on Modal's schedule,
+# not yours, and a cold start is not something you did — so a page that has
+# stopped saying it is open is the only honest signal there is. The grace period
+# is long enough that a laptop asleep through a coffee break is still open.
+DRAFT_GRACE_S = 15 * 60
+SESSIONS_DIR = ".sessions"
+
+
+def _check_name(name: str) -> str:
     if not NAME_RE.match(name or ""):
-        raise ValueError("Dataset names are 1-64 chars of letters, numbers, _ or -.")
-    return DATASETS / name
+        raise ValueError("Set names are 1-64 chars of letters, numbers, _ or -.")
+    return name
+
+
+def _dataset_dir(name: str) -> Path:
+    """
+    Where the set called `name` lives: saved under datasets/, else drafts/.
+
+    A name is unique across both roots — creating and saving each refuse one the
+    other root already holds — so this never has to choose between two folders.
+    An unused name resolving into drafts/ is what makes dropping images produce
+    a draft without a second create path to keep in step with this one.
+    """
+    _check_name(name)
+    saved = DATASETS / name
+    return saved if saved.is_dir() else DRAFTS / name
+
+
+def _name_taken(name: str) -> bool:
+    return (DATASETS / name).exists() or (DRAFTS / name).exists()
+
+
+def _touch_session(sid: str) -> None:
+    """Record that a window is still open. The mtime is the entire payload."""
+    if not NAME_RE.match(sid or ""):
+        return
+    marker = DRAFTS / SESSIONS_DIR / sid
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("")
+
+
+def _sweep_drafts() -> int:
+    """
+    Retire drafts whose window closed. Returns how many moved.
+
+    Into drafts/.trash/ rather than unlinked, because this is the one deletion
+    nobody asked for by name: it has to cost a file move like every other one
+    here, so a sweep that fires at the wrong moment is a recoverable mistake.
+    Liveness is per session and not per container, so a second tab open on the
+    same app keeps its own drafts and does not reap the first one's.
+    """
+    if not DRAFTS.is_dir():
+        return 0
+    now, swept = time.time(), 0
+    for d in sorted(DRAFTS.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        sid = ""
+        try:
+            sid = str(json.loads((d / "dataset.json").read_text()).get("session") or "")
+        except (OSError, json.JSONDecodeError):
+            pass
+        seen = 0.0
+        if NAME_RE.match(sid or ""):
+            try:
+                seen = (DRAFTS / SESSIONS_DIR / sid).stat().st_mtime
+            except OSError:
+                seen = 0.0
+        # The folder's own mtime counts as a heartbeat, so a draft created
+        # seconds ago by a page whose first ping has not landed — or one made by
+        # a caller that never sends a session at all — is not swept out from
+        # under the upload that is still writing into it.
+        try:
+            seen = max(seen, d.stat().st_mtime)
+        except OSError:
+            continue
+        if now - seen < DRAFT_GRACE_S:
+            continue
+        trash = DRAFTS / TRASH_DIR
+        trash.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(d), str(trash / f"{d.name}-{int(now)}"))
+        swept += 1
+
+    # Markers outlive the drafts they kept alive; a day is well past the point
+    # where one can still be protecting anything.
+    for marker in (DRAFTS / SESSIONS_DIR).glob("*"):
+        try:
+            if now - marker.stat().st_mtime > 86400:
+                marker.unlink()
+        except OSError:
+            pass
+    return swept
 
 
 def _dataset_images(d: Path) -> list[Path]:
@@ -1447,6 +1601,9 @@ def _dataset_stats(d: Path) -> dict[str, Any]:
         "trigger_word": str(info.get("trigger_word") or ""),
         "modified": max((p.stat().st_mtime for p in images), default=0.0),
         "cover": images[0].name if images else None,
+        # Which parent it sits under, not a field in dataset.json: the flag and
+        # the folder cannot then disagree about whether the set is kept.
+        "saved": d.parent == DATASETS,
     }
 
 
@@ -1859,7 +2016,7 @@ class Generator:
 
         started = time.time()
         jobs[job_id] = {"status": "running", "phase": "loading", "stop": False}
-        volume.reload()
+        _reload_volume()
 
         model = "turbo" if str(params.get("model") or "turbo") != "raw" else "raw"
 
@@ -2742,7 +2899,7 @@ class VideoGenerator:
         """
         started = time.time()
         jobs[job_id] = {"status": "running", "phase": "loading", "stop": False}
-        volume.reload()
+        _reload_volume()
 
         model = str(params.get("model") or "h3")
 
@@ -3022,9 +3179,9 @@ def web():
         usual cause is the app resolving a different volume than the one
         holding the weights, so the resolved name is part of the answer.
         """
-        volume.reload()
+        _reload_volume()
         tree: dict[str, Any] = {}
-        for d in (MODELS, LORAS, DATASETS, OUTPUTS):
+        for d in (MODELS, LORAS, DATASETS, DRAFTS, OUTPUTS):
             if d.is_dir():
                 tree[str(d)] = sorted(
                     f"{p.name} ({p.stat().st_size / 1e9:.2f} GB)" if p.is_file() else f"{p.name}/"
@@ -3036,7 +3193,7 @@ def web():
 
     @api.get("/api/state")
     def state() -> dict[str, Any]:
-        volume.reload()
+        _reload_volume()
         # Two shapes, because the volume really holds two.
         #
         # Training writes loras/{name}/, so a folder is a LoRA and its epoch
@@ -3131,7 +3288,7 @@ def web():
         if token:
             config["hf_token"] = token
 
-        volume.reload()
+        _reload_volume()
         missing = [m["key"] for m in _model_status() if not m["present"]]
         if not missing:
             return {"ok": True, "job_id": None, "missing": [], "note": "Everything is already here."}
@@ -3169,11 +3326,13 @@ def web():
     async def _do_upload(request: Request) -> JSONResponse:
         form = await request.form()
 
-        # Uploads always target a named dataset. Appending must never be able to
-        # delete one that already exists, so track whether this call created it.
-        # `dataset` is deliberately not reused as a loop variable below — an
-        # earlier version named both this and the per-file basename `name`, so
-        # the response reported the last uploaded filename as the dataset.
+        # Uploads always target a named set — an existing one by name, which is
+        # how a second batch lands in the set you already have, otherwise a new
+        # draft. Appending must never be able to delete one that already exists,
+        # so track whether this call created it. `dataset` is deliberately not
+        # reused as a loop variable below — an earlier version named both this
+        # and the per-file basename `name`, so the response reported the last
+        # uploaded filename as the dataset.
         dataset = str(form.get("dataset") or "").strip()
         if not dataset:
             return JSONResponse({"error": "A dataset name is required."}, 400)
@@ -3183,6 +3342,11 @@ def web():
             return JSONResponse({"error": str(exc)}, 400)
         appending = raw.is_dir()
         raw.mkdir(parents=True, exist_ok=True)
+        if not appending:
+            # Stamp the window before the first byte is written: an upload that
+            # takes longer than the grace period would otherwise be writing into
+            # a folder the sweep considers ownerless.
+            _write_dataset_meta(raw, session=str(form.get("session") or ""))
 
         count, zips = 0, []
         for up in form.getlist("files"):
@@ -3236,12 +3400,31 @@ def web():
             return None, {"error": f"No dataset named {name!r}."}
         return d, None
 
+    @api.post("/api/session")
+    def session_ping(payload: dict) -> dict[str, Any]:
+        """
+        The page saying it is still open, and the only thing keeping a draft
+        alive. Sweeping here as well as on the listing means a window left open
+        on Generate still clears out the drafts of the one you closed.
+        """
+        _reload_volume()
+        DRAFTS.mkdir(parents=True, exist_ok=True)
+        _touch_session(str(payload.get("session") or ""))
+        swept = _sweep_drafts()
+        volume.commit()
+        return {"ok": True, "swept": swept}
+
     @api.get("/api/datasets")
     def list_datasets() -> dict[str, Any]:
-        volume.reload()
+        _reload_volume()
         DATASETS.mkdir(parents=True, exist_ok=True)
+        DRAFTS.mkdir(parents=True, exist_ok=True)
+        if _sweep_drafts():
+            volume.commit()
         out = [
-            _dataset_stats(d) for d in sorted(DATASETS.iterdir())
+            _dataset_stats(d)
+            for root in (DATASETS, DRAFTS)
+            for d in sorted(root.iterdir())
             if d.is_dir() and not d.name.startswith(".")
         ]
         out.sort(key=lambda r: -r["modified"])
@@ -3249,18 +3432,59 @@ def web():
 
     @api.post("/api/datasets")
     def create_dataset(payload: dict) -> dict[str, Any]:
+        """
+        New sets start as drafts. Pass `saved` to make one in the library
+        directly; the page does not, because naming a set is a decision worth
+        having images in front of you for.
+        """
         name = str(payload.get("name") or "").strip()
         try:
-            d = _dataset_dir(name)
+            _check_name(name)
         except ValueError as exc:
             return {"error": str(exc)}
-        if d.exists():
-            return {"error": f"A dataset named {name!r} already exists."}
-        volume.reload()
+        _reload_volume()
+        if _name_taken(name):
+            return {"error": f"A set named {name!r} already exists."}
+        d = (DATASETS if payload.get("saved") else DRAFTS) / name
         d.mkdir(parents=True)
-        _write_dataset_meta(d, trigger_word=str(payload.get("trigger_word") or ""))
+        _write_dataset_meta(
+            d,
+            trigger_word=str(payload.get("trigger_word") or ""),
+            session=str(payload.get("session") or ""),
+        )
         volume.commit()
         return {"ok": True, **_dataset_stats(d)}
+
+    @api.post("/api/datasets/{name}/save")
+    def save_dataset(name: str, payload: dict) -> dict[str, Any]:
+        """
+        Keep a draft: move it into datasets/, under the name you give it here.
+
+        A move and not a copy, because the draft was already the real thing —
+        the only difference it ever had was which parent it sat under, so
+        nothing has to be rebuilt and the images are never on the volume twice.
+        """
+        _reload_volume()
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        if d.parent == DATASETS:
+            return {"error": f"{name!r} is already saved."}
+        new = str(payload.get("name") or name).strip() or name
+        try:
+            _check_name(new)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if new != name and _name_taken(new):
+            return {"error": f"A set named {new!r} already exists."}
+        DATASETS.mkdir(parents=True, exist_ok=True)
+        target = DATASETS / new
+        shutil.move(str(d), str(target))
+        # Drop the session: a saved set has no window it belongs to, and leaving
+        # a stale id on it would be a fact that stops being true.
+        _write_dataset_meta(target, session="")
+        volume.commit()
+        return {"ok": True, **_dataset_stats(target)}
 
     @api.get("/api/datasets/{name}")
     def dataset_detail(name: str) -> dict[str, Any]:
@@ -3271,7 +3495,7 @@ def web():
         which put a 200-image dataset at ~6.6 MB before a single tile rendered
         and rebuilt every thumbnail on every load.
         """
-        volume.reload()
+        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -3304,7 +3528,7 @@ def web():
 
     @api.post("/api/datasets/{name}/meta")
     def dataset_meta(name: str, payload: dict) -> dict[str, Any]:
-        volume.reload()
+        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -3314,13 +3538,21 @@ def web():
 
     @api.post("/api/datasets/{name}/delete")
     def delete_dataset(name: str) -> dict[str, Any]:
-        volume.reload()
+        """
+        Cull a set. Moves to its own root's .trash/, the way an image does.
+
+        This used to rmtree, which made deleting a set the single unrecoverable
+        action in an application where culling one image is not.
+        """
+        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
-        shutil.rmtree(d, ignore_errors=True)
+        trash = d.parent / TRASH_DIR
+        trash.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(d), str(trash / f"{d.name}-{int(time.time())}"))
         volume.commit()
-        return {"ok": True}
+        return {"ok": True, "trash": str(trash)}
 
     @api.get("/api/thumb/{name}/{filename}")
     def thumb(name: str, filename: str):
@@ -3381,7 +3613,7 @@ def web():
     @api.post("/api/datasets/{name}/caption")
     def save_caption(name: str, payload: dict) -> dict[str, Any]:
         """One caption, saved on blur. Bulk save was how edits went missing."""
-        volume.reload()
+        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -3402,7 +3634,7 @@ def web():
         not the file. Nothing surfaces .trash/ yet — it is there so the bytes
         still exist when someone asks for undo.
         """
-        volume.reload()
+        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -3423,7 +3655,7 @@ def web():
 
     @api.get("/api/datasets/{name}/insight")
     def dataset_insight(name: str, trigger: str = "") -> dict[str, Any]:
-        volume.reload()
+        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -3446,7 +3678,7 @@ def web():
         if not trigger:
             return {"error": "A trigger word is required."}
 
-        volume.reload()
+        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -3548,7 +3780,7 @@ def web():
 
         # Reject here rather than in the job: a bad path is a form error, and
         # spawning would cost a cold A100 before discovering it.
-        volume.reload()
+        _reload_volume()
         try:
             stack = _validate_loras(stack)
         except ValueError as exc:
@@ -3621,7 +3853,7 @@ def web():
             return {"error": f"{MAX_H3_REF_TOTAL} references in total is the "
                              f"model's limit ({len(refs)} images + {len(vids)} videos)."}
 
-        volume.reload()
+        _reload_volume()
         try:
             stack = _validate_video_loras(payload.get("loras")) if supports["loras"] else []
         except ValueError as exc:
@@ -3701,7 +3933,7 @@ def web():
     @api.get("/api/gallery")
     def gallery() -> dict[str, Any]:
         """Everything on the volume, newest first — no job id required."""
-        volume.reload()
+        _reload_volume()
         return {"items": _gallery()}
 
     @api.get("/api/file/{job_id}/{name}")
@@ -3732,7 +3964,7 @@ def web():
         # is exactly the miss case.
         path = OUTPUTS / job_id / name
         if not path.is_file():
-            volume.reload()
+            _reload_volume()
             if not path.is_file():
                 return JSONResponse({"error": "Not found."}, status_code=404)
         return FileResponse(
@@ -3746,7 +3978,7 @@ def web():
         """Cull a result. Moves to outputs/.trash/, the way datasets do."""
         if not NAME_RE.match(job_id):
             return {"error": "Invalid job_id."}
-        volume.reload()
+        _reload_volume()
         d = OUTPUTS / job_id
         if not d.is_dir():
             return {"error": "Not found."}
@@ -3761,7 +3993,7 @@ def web():
         """Serve generated PNGs off the volume, keeping them out of the job dict."""
         if not NAME_RE.match(job_id):
             return {"error": "Invalid job_id."}
-        volume.reload()
+        _reload_volume()
         d = OUTPUTS / job_id
         if not d.is_dir():
             return {"images": []}
@@ -3881,6 +4113,9 @@ svg{width:100%;height:100%;display:block}
 /* The sheet's own toolbar sticks for the same reason the console is pinned:
    the filters are how you find the six bad captions in eighty images, and
    scrolling to look for them is exactly when they must not scroll away. */
+/* The open contact sheet takes a drop too, so a second batch lands in the set
+   you are looking at instead of starting another one. */
+#ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:8px;border-radius:16px}
 #ds-sheet .sheet-bar{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
   padding:22px 28px 10px;background:var(--bg)}
 #ds-list{gap:8px}
@@ -3891,17 +4126,33 @@ svg{width:100%;height:100%;display:block}
 .drawer{transition:flex-basis .18s ease}
 .drawer-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-height:28px}
 
-/* Controls in a row, not a form. Each one shows its own value — "Krea 2
-   Turbo", "16:9", "720p", "5s" — so a label above it would only repeat what
-   the control already says. The two whose value means nothing on its own get
-   an icon instead of a word: a count and a seed. */
+/* Controls in a row, not a form. A control that shows its own value — "Krea 2
+   Turbo", "16:9", "720p", "5s" — still gets no label, because one would only
+   repeat what the control already says.
+   A number does not show its own value. "32" is a rank, an alpha, a step
+   count or a seed with equal plausibility, and the icons that used to stand in
+   for those words failed the only test that matters: someone who has trained
+   these models for five years had to hover every numeric field to find out
+   what it was. An icon is a rebus for a word you already know; it cannot teach
+   you which hyperparameter you are looking at. So every numeric field is
+   named, and the tooltip is promoted from repeating the name to saying what
+   the number does. */
 .opts{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px}
 .opt{display:inline-flex;align-items:center;gap:5px;height:36px;padding:0 5px 0 9px;
   background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
 .opt:focus-within{border-color:rgba(255,255,255,.28)}
 .opt>svg{width:14px;height:14px;flex:none;color:var(--dim)}
+/* `.lead`, not `.lb` — `.lb` is the lightbox, `position:fixed;inset:0`, and
+   every label in the strip quietly became a full-screen black overlay. Same
+   class of bug as `.blank` above: a selector that collides is invisible in the
+   markup and total on the page. */
+.opt>.lead{font-size:11.5px;line-height:1;color:var(--dim);flex:none;white-space:nowrap;
+  cursor:default;-webkit-user-select:none;user-select:none}
 .opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:34px;border-radius:8px}
 .opt input{width:76px}
+/* Named numerics do not need the width an unlabelled one did: the label
+   carries the meaning, so the box only has to hold two or three digits. */
+.opt.n input{width:52px}
 .opt.mid input{width:136px}
 .opt.wide{flex:1;min-width:220px}
 .opt.wide input,.opt.wide textarea{flex:1;min-width:0;width:auto}
@@ -3913,6 +4164,12 @@ svg{width:100%;height:100%;display:block}
 .opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
 .opt.ib>svg{width:16px;height:16px;color:inherit}
 .adv{margin-top:9px;padding-top:10px;border-top:1px solid var(--line)}
+/* Not an inline style, which is what this was: an empty <p> is zero-height but
+   still spends its margin, and the :empty rule that reclaims it cannot outrank
+   a style attribute. A line that has nothing to say most of the time should
+   cost the canvas nothing most of the time. */
+#lora-note{margin:7px 2px 0}
+#lora-note:empty{margin:0}
 
 /* The prompt field. The textarea and the Image/Video chip are one bordered
    box, and the prompt itself is shared by both — switching mid-sentence keeps
@@ -3985,11 +4242,22 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .shots{display:grid;gap:16px;margin:0 auto}
 .shot{position:relative;width:fit-content;max-width:100%;justify-self:center;
   border-radius:16px;overflow:hidden;border:1px solid var(--line);background:rgba(255,255,255,.02)}
-.shot img{display:block;max-width:100%;max-height:var(--shot-h,none);width:auto;height:auto}
+/* zoom-in, because it does: the still on the canvas opens the same lightbox the
+   gallery card does. A result you have to send to the gallery to look at
+   properly is a result the canvas is only pretending to show you. */
+.shot img{display:block;max-width:100%;max-height:var(--shot-h,none);width:auto;height:auto;cursor:zoom-in}
 .shot .acts{position:absolute;right:10px;bottom:10px;display:flex;gap:6px;opacity:0;transition:opacity .12s}
 .shot:hover .acts{opacity:1}
+#vid-out{position:relative}
 #vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
   border:1px solid var(--line);background:#000}
+/* A button rather than a click on the video: the video already owns its own
+   click, which is play/pause, and taking that away to open a viewer would
+   trade a control people use constantly for one they use occasionally. */
+#vid-out .zoom{position:absolute;top:10px;right:10px;width:30px;height:30px;border:0;border-radius:999px;
+  background:rgba(0,0,0,.66);color:#eee;padding:7px;cursor:pointer;backdrop-filter:blur(8px);
+  opacity:0;transition:opacity .12s}
+#vid-out:hover .zoom{opacity:1}
 
 /* Cards ----------------------------------------------------------------- */
 /* One card, three homes: the drawer, the full gallery, the dataset index.
@@ -4016,10 +4284,14 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .foot .more:hover{background:rgba(255,255,255,.09);color:var(--fg)}
 
 /* Overflow menu --------------------------------------------------------- */
-.menu{position:fixed;z-index:80;min-width:196px;padding:5px;border-radius:13px;
+/* Scrolls rather than growing: this is also the LoRA picker, and a volume with
+   forty of them would otherwise open a menu taller than the window. */
+.menu{position:fixed;z-index:80;min-width:196px;max-width:min(420px,92vw);
+  max-height:min(56vh,430px);overflow:auto;padding:5px;border-radius:13px;
   border:1px solid rgba(255,255,255,.14);background:#111;box-shadow:0 18px 48px rgba(0,0,0,.6)}
 .menu button{display:block;width:100%;text-align:left;border:0;background:none;color:#e6e6e6;
-  font:13px/1 inherit;padding:9px 11px;border-radius:9px;cursor:pointer}
+  font:13px/1 inherit;padding:9px 11px;border-radius:9px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .menu button:hover{background:rgba(255,255,255,.09)}
 .menu button.danger{color:#f87171}
 .menu button.danger:hover{background:rgba(248,113,113,.14)}
@@ -4054,6 +4326,29 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .ds-card:hover{border-color:rgba(255,255,255,.24)}
 /* The set you are looking at, and the one Start training will use. */
 .ds-card.sel{border-color:rgba(255,255,255,.55)}
+/* Not kept yet. The border is the whole statement — a dashed edge is what a
+   provisional thing looks like, and it costs the card no words to say it. The
+   same dash and the same alpha as the drop target, deliberately: a draft is
+   what came off it, and at --line's 10% the gaps only made the card look
+   fainter than its neighbours rather than different from them. */
+.ds-card.draft{border-style:dashed;border-color:rgba(255,255,255,.2)}
+/* The delete target has to sit beside the card rather than inside it: the card
+   is a <button>, and a button cannot contain one. */
+/* width:100% because a <button> shrinks to its content: without it the cards
+   end at wherever each name happens to stop and the rail loses its edge. */
+.ds-row{position:relative;min-width:0}
+.ds-row .ds-card{width:100%}
+.ds-row .ds-x{position:absolute;top:50%;right:9px;transform:translateY(-50%);
+  width:24px;height:24px;border:0;border-radius:50%;background:rgba(0,0,0,.62);
+  color:#eee;cursor:pointer;font-size:13px;line-height:1;padding:0;opacity:0;
+  transition:opacity .12s}
+.ds-row:hover .ds-x,.ds-row .ds-x:focus-visible{opacity:1}
+/* Which group a card is in, said once above the group rather than on every
+   card in it. */
+.ds-group{grid-column:1/-1;margin:14px 2px 2px;font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim)}
+.ds-group:first-child{margin-top:0}
+.ds-group span{text-transform:none;letter-spacing:0}
 .ds-cover{aspect-ratio:4/3;background:rgba(255,255,255,.045);display:block;width:100%;
   flex:none;object-fit:contain}
 .ds-cover.empty{display:grid;place-items:center;color:var(--dim);font-size:22px}
@@ -4139,12 +4434,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   background:rgba(0,0,0,.7);padding:1px 5px;border-radius:4px}
 .ref button{position:absolute;top:3px;right:3px;width:19px;height:19px;border:0;border-radius:50%;
   background:rgba(0,0,0,.66);color:#eee;font-size:11px;line-height:1;cursor:pointer}
-/* Stack rows wrap to two lines rather than compressing. The rail is 384px and
-   a LoRA path squeezed into 110px of select is a control you cannot read. */
-.stack-row,.region{margin-bottom:12px}
-.stack-row .nums{display:flex;gap:6px;margin-top:6px}
-.num{width:62px;text-align:center;padding:8px 4px}
-.stack-row button,.region button{padding:8px 10px;flex:none}
+.region{margin-bottom:12px}
+.region button{padding:8px 10px;flex:none}
 .region .cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:6px}
 .region .cells input{padding:8px 2px;text-align:center;font-size:12px}
 .wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -4213,6 +4504,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         </div>
       </div>
     </div>
+    <!-- Only ever says what is wrong. A line confirming the LoRAs you can
+         already read in the prompt above it would be the page telling you
+         what you can see; a name that resolves to nothing is the one thing
+         the prompt cannot show on its own. -->
+    <p class="muted warn" id="lora-note"></p>
     <div id="gen-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
     <div id="vid-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
     <p class="muted warn" id="gen-note" style="margin:8px 2px 0"></p>
@@ -4222,18 +4518,25 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
     <div id="c-image">
       <div class="opts">
         <div class="opt"><select id="g-model"></select></div>
+        <!-- The ratio was never the parameter — the pixels are. So this picker
+             and the Width/Height boxes under Advanced are one control: picking
+             a ratio writes the boxes, typing in the boxes selects Custom, and
+             Custom is the only option that has to spell out its own size. -->
         <div class="opt"><select id="g-aspect">
           <option value="1024x1024">1:1</option><option value="1152x896">4:3</option>
           <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
           <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
+          <option value="custom">Custom</option>
         </select></div>
-        <!-- A bare "1" and a bare number box say nothing on their own, so these
-             two are the only controls in the strip that get an icon. -->
-        <div class="opt" data-ico="copies"><select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
-        <div class="opt" data-ico="dice"><input id="g-seed" placeholder="random" inputmode="numeric"></div>
+        <div class="opt n" data-lb="Images"><select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+        <div class="opt" data-lb="Seed"><input id="g-seed" placeholder="random" inputmode="numeric"
+          title="Fix the noise so a prompt reproduces. Blank draws a new one per image."></div>
         <div class="opt"><select id="g-gpu"></select></div>
         <span class="vr"></span>
-        <!-- Rows are added by hand; order is the order they patch in. -->
+        <!-- A picker, not a row: it writes a <lora:name:1> into the prompt at
+             the caret. The button is here for discovery — you cannot type a
+             syntax you have never seen — and after that the prompt is the
+             stack, so a fifth LoRA costs the canvas nothing. -->
         <button class="s" id="add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
         <span class="actions">
           <span class="muted" id="gen-model-line"></span>
@@ -4241,16 +4544,26 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
           <button class="b" id="go-gen">Generate</button>
         </span>
       </div>
-      <div id="lora-stack" style="margin-top:9px"></div>
 
       <div id="gen-adv" class="hide adv">
         <textarea id="g-neg" rows="2" placeholder="Negative prompt"></textarea>
         <div class="opts">
-          <div class="opt"><select id="g-sampler"></select></div>
-          <div class="opt"><select id="g-scheduler"></select></div>
-          <div class="opt" data-ico="steps"><input id="g-steps" placeholder="auto" inputmode="numeric"></div>
-          <div class="opt" data-ico="cfg"><input id="g-cfg" placeholder="CFG" inputmode="decimal"></div>
-          <div class="opt" data-ico="shift"><input id="g-shift" placeholder="shift 1.15" inputmode="decimal"></div>
+          <div class="opt" data-lb="Sampler"><select id="g-sampler"></select></div>
+          <div class="opt" data-lb="Scheduler"><select id="g-scheduler"></select></div>
+          <div class="opt n" data-lb="Steps"><input id="g-steps" placeholder="auto" inputmode="numeric"
+            title="Denoising steps. More is slower; past the model's trained range it stops helping."></div>
+          <div class="opt n" data-lb="CFG"><input id="g-cfg" placeholder="auto" inputmode="decimal"
+            title="Guidance scale — how hard sampling is pushed toward the prompt. Turbo is distilled to 1.0."></div>
+          <div class="opt n" data-lb="Shift"><input id="g-shift" placeholder="1.15" inputmode="decimal"
+            title="Timestep shift. Higher spends more of the schedule on structure, less on detail."></div>
+          <span class="vr"></span>
+          <!-- The real parameter, exposed. Snapped to 16 on the way out, because
+               the pipeline floors to 16 anyway and a box that keeps 1000 while
+               the model renders 992 is a box that lied to you. -->
+          <div class="opt n" data-lb="Width"><input id="g-w" inputmode="numeric"
+            title="Pixels. Rounded down to a multiple of 16 — the DiT's patch grid."></div>
+          <div class="opt n" data-lb="Height"><input id="g-h" inputmode="numeric"
+            title="Pixels. Rounded down to a multiple of 16 — the DiT's patch grid."></div>
           <span class="vr"></span>
           <label class="row" style="gap:7px;margin:0;color:#ddd;font-size:13px">
             <input type="checkbox" id="g-regional" style="width:auto"> Regional</label>
@@ -4280,7 +4593,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         </select></div>
         <div class="opt"><select id="v-tier"></select></div>
         <div class="opt"><select id="v-seconds"></select></div>
-        <div class="opt" data-ico="dice"><input id="v-seed" placeholder="random" inputmode="numeric"></div>
+        <div class="opt" data-lb="Seed"><input id="v-seed" placeholder="random" inputmode="numeric"
+          title="Fix the noise so a prompt reproduces. Blank draws a new one."></div>
         <div class="opt"><select id="v-gpu"></select></div>
         <span class="vr"></span>
         <!-- Keyframes are what make this image-to-video; with neither, the
@@ -4292,8 +4606,10 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         <button class="drop mini hide" id="v-drop-last" title="Last frame">
           <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
         </button>
-        <!-- Wan only. Same idea as the image side's stack, plus the one thing
-             the A14B pair forces: which expert a row patches. -->
+        <!-- Wan only, and the same picker the image side uses. The one thing
+             the A14B pair forces — which expert a LoRA patches — rides in the
+             token as a third field, and is read off the filename when the
+             matched `high`/`low` pair names it. -->
         <button class="s hide" id="v-add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
         <span class="actions">
           <span class="muted" id="v-model-line"></span>
@@ -4301,7 +4617,6 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
           <button class="b" id="go-vid">Generate</button>
         </span>
       </div>
-      <div id="v-lora-stack" style="margin-top:9px"></div>
 
       <!-- References are the other way to condition a clip, and they exclude
            keyframes because they load a different transformer. H3 only — Wan
@@ -4324,13 +4639,20 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
              model never looks at. -->
         <textarea id="v-neg" rows="2" class="hide" placeholder="Negative prompt"></textarea>
         <div class="opts">
-          <div class="opt"><select id="v-sampler"></select></div>
-          <div class="opt"><select id="v-scheduler"></select></div>
-          <div class="opt" data-ico="steps"><input id="v-steps" inputmode="numeric"></div>
-          <div class="opt hide" id="v-cfg-wrap" data-ico="cfg"><input id="v-cfg" placeholder="CFG" inputmode="decimal"></div>
-          <div class="opt hide" id="v-shift-wrap" data-ico="shift"><input id="v-shift" placeholder="shift" inputmode="decimal"></div>
+          <div class="opt" data-lb="Sampler"><select id="v-sampler"></select></div>
+          <div class="opt" data-lb="Scheduler"><select id="v-scheduler"></select></div>
+          <div class="opt n" data-lb="Steps"><input id="v-steps" inputmode="numeric"
+            title="Denoising steps. Blank uses the model's own default."></div>
+          <div class="opt n hide" id="v-cfg-wrap" data-lb="CFG"><input id="v-cfg" inputmode="decimal"
+            title="Guidance scale — how hard sampling is pushed toward the prompt and away from the negative."></div>
+          <div class="opt n hide" id="v-shift-wrap" data-lb="Shift"><input id="v-shift" inputmode="decimal"
+            title="Timestep shift. Higher spends more of the schedule on motion and structure."></div>
           <!-- Only the A14B pair has a handover to place. -->
-          <div class="opt hide" id="v-switch-wrap" data-ico="handover"><input id="v-switch" placeholder="switch at" inputmode="numeric"></div>
+          <!-- "auto", not empty: every other box in this row shows the model's
+               default in grey, and one blank box among them reads as broken
+               rather than as unset. -->
+          <div class="opt n hide" id="v-switch-wrap" data-lb="Expert switch"><input id="v-switch" placeholder="auto" inputmode="numeric"
+            title="Step at which the high-noise expert hands the latent to the low-noise one."></div>
         </div>
       </div>
     </div>
@@ -4384,12 +4706,14 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
          rather than a bar you find after creating something to put it in. -->
     <div class="drop hero" id="drop">
       <input type="file" id="files" multiple accept="image/*,.zip,.txt" class="hide">
+      <!-- No name field. Naming was the toll on the one action this screen
+           exists for, and it is charged for a decision — is this set worth
+           keeping — that you cannot make before seeing the images. It moved to
+           Save, on the sheet, where the images are. -->
       <div class="drop-face">
         <div class="glyph" id="drop-glyph"></div>
         <b id="drop-title">Drop images or a .zip</b>
         <div class="muted" id="drop-sub" style="margin-top:7px"></div>
-        <input id="ds-new" placeholder="name this set" spellcheck="false"
-               style="width:230px;margin-top:16px;text-align:center">
       </div>
       <div id="up-prog" class="hide" style="margin-top:18px;width:min(420px,70%)">
         <div class="bar"><i style="width:0%"></i></div>
@@ -4399,7 +4723,14 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
     <!-- A set is chosen: its contact sheet, which is the thing that scrolls. -->
     <div id="ds-sheet" class="hide">
       <div class="opts sheet-bar">
+        <!-- A saved set states its name; a draft is still asking for one, so
+             for a draft the name field *is* the title rather than sitting
+             next to a heading that repeats it. -->
         <b id="ds-title" style="font-size:14px"></b>
+        <div class="opt mid hide" id="ds-name-wrap" data-ico="tag">
+          <input id="ds-save-name" placeholder="name to save it" spellcheck="false">
+        </div>
+        <button class="s hide" id="ds-save" title="Keep this set in datasets/">Save</button>
         <span class="muted" id="ds-count"></span>
         <span class="vr"></span>
         <button class="s" id="f-all" title="Show every image">All</button>
@@ -4441,9 +4772,18 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
       <div class="opt wide" data-ico="tag"><input id="lname" placeholder="LoRA name" spellcheck="false"></div>
       <div class="opt mid" data-ico="trigger"><input id="ltrig" placeholder="trigger word" spellcheck="false"></div>
       <span class="vr"></span>
-      <div class="opt" data-ico="rank"><input id="a-dim" type="number" value="32" title="Rank"></div>
-      <div class="opt" data-ico="steps"><input id="a-epochs" type="number" value="30" title="Epochs"></div>
-      <div class="opt" data-ico="cfg"><input id="a-lr" type="number" step="0.00001" value="0.0001" title="Learning rate"></div>
+      <!-- Named, not iconed. These are the three dials that decide whether a run
+           is worth its hours, and a glyph beside a bare "32" cannot say which
+           of rank, alpha, epochs or batch size you are looking at. The tooltip
+           is spent on what the number does instead of repeating the label. -->
+      <div class="opt n" data-lb="Rank"><input id="a-dim" type="number" value="32"
+        title="Network dimension — how much the LoRA can learn. Higher fits more and overfits sooner."></div>
+      <div class="opt n" data-lb="Epochs"><input id="a-epochs" type="number" value="30"
+        title="Passes over the set. A checkpoint is saved each one, so this is also how many you get to choose between."></div>
+      <!-- Not `.n`: the narrow box fits three digits, and 0.0001 is six. A
+           learning rate clipped to "0.000" is worse than no field at all. -->
+      <div class="opt" data-lb="Learning rate"><input id="a-lr" type="number" step="0.00001" value="0.0001"
+        title="Step size per update. 1e-4 is the usual starting point for a rank-32 LoRA."></div>
       <span class="actions">
         <span class="muted" id="train-hint"></span>
         <button class="opt ib" id="t-toggle-adv" data-ico="sliders" title="Advanced"></button>
@@ -4452,11 +4792,16 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
     </div>
     <div id="train-adv" class="hide adv">
       <div class="opts" style="margin-top:0">
-        <div class="opt" data-ico="rank"><input id="a-alpha" type="number" value="32" title="Alpha"></div>
-        <div class="opt" data-ico="frame"><input id="a-res" type="number" step="64" value="1024" title="Resolution"></div>
-        <div class="opt" data-ico="copies"><input id="a-rep" type="number" value="1" title="Repeats"></div>
-        <div class="opt" data-ico="batch"><input id="a-bs" type="number" value="1" title="Batch size"></div>
-        <div class="opt" data-ico="dice"><input id="a-seed" type="number" value="42" title="Seed"></div>
+        <div class="opt n" data-lb="Alpha"><input id="a-alpha" type="number" value="32"
+          title="Scales the LoRA's contribution: the effective strength is alpha ÷ rank. Equal to rank means no scaling."></div>
+        <div class="opt n" data-lb="Resolution"><input id="a-res" type="number" step="64" value="1024"
+          title="Training pixels per side. Images are bucketed to it; higher costs VRAM quadratically."></div>
+        <div class="opt n" data-lb="Repeats"><input id="a-rep" type="number" value="1"
+          title="How many times each image is seen per epoch. Raise it for a set too small to fill an epoch."></div>
+        <div class="opt n" data-lb="Batch size"><input id="a-bs" type="number" value="1"
+          title="Images per update. Higher is steadier and needs more VRAM."></div>
+        <div class="opt n" data-lb="Seed"><input id="a-seed" type="number" value="42"
+          title="Fixes shuffling and noise so two runs differing in one dial are actually comparable."></div>
         <span class="actions"><span class="muted">Krea 2 RAW · bf16</span></span>
       </div>
     </div>
@@ -4514,7 +4859,18 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const api=async(p,o)=>{const r=await fetch(p,o);return r.json()};
+// A failed request comes back as {error}, never as a thrown parse error. A 500
+// from Modal is a plain-text traceback, so r.json() rejected inside whichever
+// caller happened to make the request and took the rest of that function with
+// it — loadState() died on `s.models.filter` and left the composer looking like
+// a deployment with no weights on it.
+const api=async(p,o)=>{
+  let r;
+  try{ r=await fetch(p,o) }catch(e){ return {error:String(e.message||e)} }
+  const body=await r.text();
+  try{ return JSON.parse(body) }
+  catch{ return {error:`${r.status} ${r.statusText||''} ${body.slice(0,400)}`.trim()} }
+};
 const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 const errInto=(sel,msg)=>{ $(sel).innerHTML = msg ? '<div class="err-box">'+esc(msg)+'</div>' : ''; };
@@ -4532,31 +4888,28 @@ const ICON={
   panel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M15 4.5v15"/></svg>',
   train:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 19V11"/><path d="M10 19V5"/><path d="M16 19v-5"/><path d="M22 19V8"/></svg>',
   back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>',
-  // Strip icons. Only for the controls whose own value is not self-describing:
-  // a bare "2" and a bare number box could be anything.
-  copies:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="8.5" y="3.5" width="12" height="12" rx="2.5"/><path d="M15.5 20.5h-10a2 2 0 0 1-2-2v-10"/></svg>',
-  dice:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>',
+  // Strip icons. The numeric fields that used to be in here are labelled now —
+  // see the .opt rules — so what is left is the controls that have no value to
+  // show at all: a disclosure toggle and two text fields whose placeholder
+  // disappears the moment you type into them.
   sliders:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
-  steps:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h4v-5h5v-5h5V5h4"/></svg>',
-  cfg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3v2M12 19v2M4.2 7.5l1.7 1M18.1 15.5l1.7 1M4.2 16.5l1.7-1M18.1 8.5l1.7-1"/><circle cx="12" cy="12" r="4"/></svg>',
-  shift:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16c4 0 5-8 9-8s5 8 9 8"/></svg>',
-  handover:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h7l3 6h8"/><path d="M17 11l3-2-3-2"/></svg>',
   refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.7 4.3"/><path d="M20 4.5V11h-6.5"/></svg>',
   expand:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5H4.5v5"/><path d="M14.5 19.5h5v-5"/><path d="M4.5 4.5l6 6"/><path d="M19.5 19.5l-6-6"/></svg>',
   first:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="3.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
   last:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="15.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
   tag:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3.5 11V4.5H10L20.5 15 15 20.5 3.5 11z"/><circle cx="7.5" cy="8" r="1.3" fill="currentColor" stroke="none"/></svg>',
   trigger:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 12h6"/><path d="M14 12h6"/><circle cx="12" cy="12" r="2.2"/></svg>',
-  rank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 19V5"/><path d="M9 19v-7"/><path d="M14 19V9"/><path d="M19 19v-4"/></svg>',
-  batch:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>',
-  frame:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M3.5 15l4.5-4 3.5 3 3-2.5 6 5"/></svg>',
   upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>',
-  plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>',
   film:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M8 5.5v13M16 5.5v13"/></svg>',
 };
 // Every control that asked for an icon instead of a label gets it here, so the
 // markup names the idea ("dice") and only this table knows the path data.
 $$('[data-ico]').forEach(el=>el.insertAdjacentHTML('afterbegin',ICON[el.dataset.ico]));
+// And every control that asked for the word. Same mechanism as data-ico, and
+// mutually exclusive with it by construction: a pill carries one or the other,
+// never both, because a labelled icon is two ways to say one thing.
+$$('[data-lb]').forEach(el=>
+  el.insertAdjacentHTML('afterbegin','<span class="lead">'+esc(el.dataset.lb)+'</span>'));
 $('#drop-glyph').innerHTML=ICON.upload;
 $('#v-add-ref').innerHTML='<span>'+ICON.photo+'</span>';
 $('#v-add-vid').innerHTML='<span>'+ICON.film+'</span>';
@@ -4621,6 +4974,34 @@ $$('#kinds button').forEach(b=>{
   b.insertAdjacentHTML('afterbegin',b.dataset.kind==='image'?ICON.photo:ICON.play);
   b.onclick=()=>setKind(b.dataset.kind);
 });
+
+// Enter generates. Which button that is belongs to the kind you are in, not to
+// the key, so this is looked up rather than bound twice — and a disabled button
+// is a model that is not downloaded, which Enter must not paper over.
+function fireGenerate(){
+  const b=$(kind==='image'?'#go-gen':'#go-vid');
+  if(!b.disabled) b.click();
+  return !b.disabled;
+}
+// Shift+Enter keeps the newline, because prompts here are prose and paragraphs
+// in them are real. ⌘/Ctrl+Enter works too: it is what the muscle expects from
+// every other box that submits, and costs nothing to honour.
+// isComposing, because an IME's Enter is committing a character, not submitting.
+$('#prompt').addEventListener('keydown',e=>{
+  if(e.key!=='Enter'||e.isComposing||e.shiftKey||e.altKey) return;
+  e.preventDefault();
+  fireGenerate();
+});
+// And from any single-line box in the composer — you have just typed a seed or
+// a step count, and reaching for the mouse to commit it is the wrong ending.
+// Not the textareas: a negative prompt is prose with the same claim on Enter
+// the positive one has.
+$$('#c-image,#c-video').forEach(sec=>sec.addEventListener('keydown',e=>{
+  if(e.key!=='Enter'||e.isComposing||!e.target.matches('input:not([type=file])')) return;
+  e.preventDefault();
+  e.target.blur();   // so a width still on its way to being snapped is snapped first
+  fireGenerate();
+}));
 
 // One placeholder, three states: it has to name the kind, and on the H3
 // checkpoints it also has to ask for the soundtrack, which is denoised from
@@ -4707,8 +5088,27 @@ function lightbox(src,video){
 }
 
 // ==================== MODELS (settings) ====================
+// The volume check is a page-load thing, not a Settings thing: what it decides
+// is whether Generate works, and that has to be answered before the gear is
+// ever opened. It ran at boot already — but it ran *concurrently* with the
+// gallery and the dataset list, and the reload it does on the server could not
+// survive that, so the one call that mattered was the one that 500'd. Opening
+// Settings then fixed it by accident, being the only /api/state on its own.
+// Hence the retry: this answer is worth waiting a few seconds for.
+let stateTries=0;
 async function loadState(){
   const s=await api('/api/state');
+  if(!s||!s.models){
+    stateTries++;
+    // Named, not blank. "No DiT on the volume" for an answer that never
+    // arrived sends you to download 17 GB you already have.
+    $('#gen-note').textContent = stateTries<6
+      ? 'Checking the volume… ('+(s&&s.error?s.error:'no answer')+')'
+      : 'Could not read the volume: '+((s&&s.error)||'no answer');
+    if(stateTries<6) setTimeout(loadState,2500);
+    return;
+  }
+  stateTries=0;
   $('#tok-state').innerHTML = s.hf_token_set?'<span class="ok">Token saved.</span>':'<span class="warn">No token saved.</span>';
   // Name the cost up front: how many are missing and how many GB that is.
   const miss=s.models.filter(m=>!m.present);
@@ -4751,16 +5151,29 @@ async function loadState(){
   }).join('');
   $$('[data-dl]').forEach(b=>b.onclick=()=>startDownload(b.dataset.dl,b));
 
-  // Options for every LoRA row, existing and future. Rebuilt on each poll so a
-  // freshly trained LoRA appears without a reload; current picks are kept.
+  // Everything a `<lora:…>` token can name. Rebuilt on each poll so a freshly
+  // trained LoRA is typeable without a reload — nothing holds a selection any
+  // more, so there is no pick to preserve across the rebuild.
   window.MAX_LORAS=s.max_loras||6;
   window.WAN_EXPERTS=s.wan_experts||['both','high','low'];
-  loraOpts=s.loras.map(l=>l.files.map(f=>
-    `<option value="${f.path}" data-t="${l.trigger_word||''}">${l.name} · ${f.name}</option>`).join('')).join('');
-  ['#lora-stack','#v-lora-stack'].forEach(sel=>
-    $$(sel+' [data-f=path]').forEach(el=>{const v=el.value; el.innerHTML=loraOpts; el.value=v;}));
-  $('#add-lora').disabled=!s.loras.length;
-  $('#v-add-lora').disabled=!s.loras.length;
+  loraIndex=s.loras.flatMap(l=>l.files.map(f=>{
+    // Relative to loras/ and derived from the path rather than assembled from
+    // the two labels, because the layout allows any nesting under a folder and
+    // `folder + "/" + name` would quietly lose a level of it.
+    const rel=String(f.path).split('/loras/').pop().replace(/\.safetensors$/i,'');
+    return {path:f.path, rel, stem:rel.split('/').pop(),
+            file:String(f.path).split('/').pop(),
+            label:`${l.name} · ${f.name}`, trigger:l.trigger_word||''};
+  }));
+  // The shortest name that still points at one file. A volume with one
+  // `k3nan.safetensors` gets `<lora:k3nan:1>`; the matched Wan speed pairs,
+  // which are both called `high`, get the folder that tells them apart.
+  loraIndex.forEach(l=>{
+    l.token = loraIndex.filter(x=>x.stem===l.stem).length===1 ? l.stem : l.rel;
+  });
+  $('#add-lora').disabled=!loraIndex.length;
+  $('#v-add-lora').disabled=!loraIndex.length;
+  syncLoraNote();
 
   if(s.samplers&&!$('#g-sampler').options.length){
     $('#g-sampler').innerHTML=s.samplers.map(x=>`<option>${x}</option>`).join('');
@@ -4842,32 +5255,81 @@ async function startDownload(key,btn){
 // ==================== DATASETS ====================
 // A dataset is a named folder; the editor is a view onto it. Nothing here is
 // tied to a training run, which is the whole point of the section.
-let dsName=null, dsImages=[], dsInsight=null, dsFilter='all', dsDensity=2, capPoll=null;
+//
+// A set you drop is a draft until you save it. Drafts are tied to this window:
+// sessionStorage, not localStorage, because it survives a reload and dies with
+// the tab — which is exactly the lifetime an unsaved thing should have. The
+// heartbeat is what the server reads as "still open"; without it a draft is
+// swept to drafts/.trash/ once the grace period passes.
+const SESSION=(()=>{
+  let s=null;
+  try{ s=sessionStorage.getItem('vis-session') }catch{}
+  if(!s){
+    s='s'+Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+    try{ sessionStorage.setItem('vis-session',s) }catch{}
+  }
+  return s;
+})();
+const beat=()=>post('/api/session',{session:SESSION});
+let beatTimer=null;
+// Only while there is something to keep alive. A ping reloads and commits the
+// volume, and a tab left open on Generate for a day would do that seven hundred
+// times to protect nothing — the sweep it drives also runs whenever the list is
+// read, which is the moment it matters.
+function keepAlive(on){
+  if(on && !beatTimer) beatTimer=setInterval(()=>{ if(!document.hidden) beat() },120000);
+  if(!on && beatTimer){ clearInterval(beatTimer); beatTimer=null }
+}
+// One on load whatever the state: it registers this window and sweeps out the
+// drafts of the one you closed.
+beat();
+// A tab that was hidden for longer than the grace period has to say it is back
+// before anything reads the list, or its own drafts look abandoned.
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&beatTimer) beat() });
+
+let dsName=null, dsSaved=false, dsImages=[], dsInsight=null, dsFilter='all',
+    dsDensity=2, capPoll=null;
 
 async function loadDatasets(){
   const r=await api('/api/datasets');
   if(r.error){ errInto('#ds-err',r.error); return }
   const list=r.datasets||[];
-  $('#ds-list').innerHTML=list.map(d=>`
-    <button class="ds-card${d.name===dsName?' sel':''}" data-open="${esc(d.name)}">
-      ${d.cover
-        ? `<img class="ds-cover" loading="lazy" src="/api/thumb/${encodeURIComponent(d.name)}/${encodeURIComponent(d.cover)}" alt="">`
-        : '<div class="ds-cover empty">▤</div>'}
-      <div class="ds-meta">
-        <b>${esc(d.name)}</b>
-        <div class="muted" style="margin-top:3px;font-size:12px">
-          ${d.count} image${d.count===1?'':'s'}${d.uncaptioned?` · ${d.uncaptioned} uncaptioned`:''}
+  const card=d=>`
+    <div class="ds-row">
+      <button class="ds-card${d.name===dsName?' sel':''}${d.saved?'':' draft'}" data-open="${esc(d.name)}">
+        ${d.cover
+          ? `<img class="ds-cover" loading="lazy" src="/api/thumb/${encodeURIComponent(d.name)}/${encodeURIComponent(d.cover)}" alt="">`
+          : '<div class="ds-cover empty">▤</div>'}
+        <div class="ds-meta">
+          <b>${esc(d.name)}</b>
+          <div class="muted" style="margin-top:3px;font-size:12px">
+            ${d.count} image${d.count===1?'':'s'}${d.uncaptioned?` · ${d.uncaptioned} uncaptioned`:''}
+          </div>
         </div>
-      </div>
-    </button>`).join('');
+      </button>
+      <button class="ds-x" data-del="${esc(d.name)}" title="Move to .trash">×</button>
+    </div>`;
+  // Drafts first: they are the set you are working on, and the reason they are
+  // labelled at all is that the label is a promise about what happens to them.
+  const drafts=list.filter(d=>!d.saved), saved=list.filter(d=>d.saved);
+  $('#ds-list').innerHTML =
+    (drafts.length ? `<p class="ds-group">Unsaved <span>· cleared when you close the app</span></p>`
+      + drafts.map(card).join('') : '')
+    + (saved.length ? (drafts.length ? `<p class="ds-group">Saved</p>` : '')
+      + saved.map(card).join('') : '');
   $('#ds-empty').textContent = list.length ? '' : '';
   $$('#ds-list [data-open]').forEach(b=>b.onclick=()=>openDataset(b.dataset.open));
+  $$('#ds-list [data-del]').forEach(b=>b.onclick=()=>deleteSet(b.dataset.del));
+  keepAlive(drafts.length>0);
   trainDatasets=list;
+  const open=list.find(d=>d.name===dsName);
+  dsSaved=!!(open&&open.saved);
+  renderSetBar();
   syncTrainDataset();
 }
 
 // Back to the drop target. Nothing is destroyed — the set stays in the rail.
-$('#ds-fresh').onclick=()=>{ dsName=null; showSheet(false); loadDatasets(); $('#ds-new').focus() };
+$('#ds-fresh').onclick=()=>{ dsName=null; dsSaved=false; showSheet(false); loadDatasets() };
 $('#ds-add').onclick=()=>$('#files').click();
 
 function showSheet(on){
@@ -4878,7 +5340,8 @@ function showSheet(on){
 
 // A name that is free to use, so dropping never stops to ask for one. A zip
 // carries a name worth keeping; loose images do not, so they get a numbered
-// one you can type over before you drop.
+// one. Either way it is provisional — this is the draft's handle, and the name
+// that lasts is the one typed into Save.
 function suggestName(files){
   const zip=[...(files||[])].find(f=>/\.zip$/i.test(f.name));
   const raw=zip ? zip.name.replace(/\.zip$/i,'') : '';
@@ -4888,10 +5351,23 @@ function suggestName(files){
   return 'set_'+n;
 }
 
+// One control, two states: a saved set is titled, a draft is named.
+function renderSetBar(){
+  $('#ds-title').textContent = dsSaved ? (dsName||'') : '';
+  $('#ds-title').classList.toggle('hide',!dsSaved);
+  $('#ds-name-wrap').classList.toggle('hide',dsSaved);
+  $('#ds-save').classList.toggle('hide',dsSaved);
+  // A zip dropped as `portraits.zip` already suggested `portraits`; carrying it
+  // in means Save is usually one click rather than one click and some typing.
+  if(!dsSaved && !$('#ds-save-name').value) $('#ds-save-name').value=dsName||'';
+}
+
 async function openDataset(name){
   dsName=name; dsFilter='all';
+  dsSaved=!!(trainDatasets.find(d=>d.name===name)||{}).saved;
+  $('#ds-save-name').value='';
   showSheet(true);
-  $('#ds-title').textContent=name;
+  renderSetBar();
   errInto('#ds-edit-err','');
   $$('#ds-list [data-open]').forEach(b=>b.classList.toggle('sel',b.dataset.open===name));
   await loadTiles();
@@ -4902,9 +5378,39 @@ async function loadTiles(){
   const d=await api('/api/datasets/'+encodeURIComponent(dsName));
   if(d.error){ errInto('#ds-edit-err',d.error); return }
   dsImages=d.images||[];
+  dsSaved=!!d.saved;
+  renderSetBar();
   if(!$('#ds-trig').value) $('#ds-trig').value=d.trigger_word||'';
   await loadInsight();
   renderTiles();
+}
+
+// ---------- keep, or cull ----------
+$('#ds-save').onclick=async()=>{
+  const b=$('#ds-save'), name=$('#ds-save-name').value.trim();
+  if(!name){ errInto('#ds-edit-err','Give the set a name to save it.'); $('#ds-save-name').focus(); return }
+  b.disabled=true;
+  const r=await post('/api/datasets/'+encodeURIComponent(dsName)+'/save',{name});
+  b.disabled=false;
+  if(r.error){ errInto('#ds-edit-err',r.error); return }
+  errInto('#ds-edit-err','');
+  await loadDatasets();
+  await openDataset(r.name);
+};
+$('#ds-save-name').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#ds-save').click() } };
+
+// Confirm on anything with images in it, saved or not. A draft is disposable by
+// design, but forty files you just waited on an upload for are not, and the
+// dashed border does not make a stray click on a small round × any less easy.
+async function deleteSet(name){
+  const d=trainDatasets.find(x=>x.name===name)||{};
+  if(d.count && !confirm(`Move “${name}” to .trash?\n\n`
+    + `${d.count} image${d.count===1?'':'s'} and their captions move to `
+    + `${d.saved?'datasets':'drafts'}/.trash — nothing is unlinked.`)) return;
+  const r=await post('/api/datasets/'+encodeURIComponent(name)+'/delete');
+  if(r.error){ errInto('#ds-err',r.error); return }
+  if(name===dsName){ dsName=null; dsSaved=false; showSheet(false) }
+  await loadDatasets();
 }
 
 async function loadInsight(){
@@ -5115,24 +5621,31 @@ $('#do-caption').onclick=async()=>{
 };
 
 // ---------- upload (fires immediately on drop; no prerequisites) ----------
-const drop=$('#drop'), fin=$('#files');
+const drop=$('#drop'), fin=$('#files'), dsSheet=$('#ds-sheet');
 let uploading=false;
 drop.onclick=()=>{ if(!uploading) fin.click() };
 drop.ondragover=e=>{e.preventDefault();drop.classList.add('hot')};
 drop.ondragleave=()=>drop.classList.remove('hot');
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');upload(e.dataTransfer.files)};
+// The open sheet takes a drop too, and `upload` appends whenever a set is open.
+// Adding to a set you already have was otherwise reachable only through the
+// + Images button, so the obvious gesture did nothing — or worse, dropped the
+// file into a caption box, which is what the browser does by default.
+dsSheet.ondragover=e=>{e.preventDefault();dsSheet.classList.add('hot')};
+dsSheet.ondragleave=e=>{ if(!dsSheet.contains(e.relatedTarget)) dsSheet.classList.remove('hot') };
+dsSheet.ondrop=e=>{e.preventDefault();dsSheet.classList.remove('hot');upload(e.dataTransfer.files)};
 fin.onchange=()=>{ upload(fin.files); fin.value=''; };   // reset so the same file can be re-picked
 
 async function upload(list){
   const keep=[...list].filter(f=>/\.(png|jpe?g|webp|bmp|avif|zip|txt)$/i.test(f.name));
   if(!keep.length||uploading) return;
   // Dropping onto the empty screen is how most sets begin, so the set is
-  // created here rather than being a thing you had to make first.
+  // created here rather than being a thing you had to make first. It starts as
+  // a draft: nothing you drop is committed to the library until you say so.
   if(!dsName){
-    const name=($('#ds-new').value.trim()||suggestName(keep));
-    const r=await post('/api/datasets',{name});
+    const name=suggestName(keep);
+    const r=await post('/api/datasets',{name,session:SESSION});
     if(r.error){ errInto('#ds-err',r.error); return }
-    $('#ds-new').value='';
     await loadDatasets();
     await openDataset(name);
   }
@@ -5144,6 +5657,7 @@ async function upload(list){
   const fd=new FormData();
   keep.forEach(f=>fd.append('files',f,f.name));
   fd.append('dataset',dsName);
+  fd.append('session',SESSION);
 
   // XHR, not fetch — fetch reports no upload progress.
   const x=new XMLHttpRequest();
@@ -5158,7 +5672,11 @@ async function upload(list){
       errInto('#ds-edit-err','Upload failed ('+x.status+'): '+detail);
       renderTiles(); return;
     }
+    // The rail as well as the sheet: the image count Start training reads
+    // lives in the list, so refreshing only the tiles left the button disabled
+    // on a set you were looking at the contents of.
     await loadTiles();
+    await loadDatasets();
   };
   x.onerror=()=>{ uploading=false; box.classList.add('hide');
     $('#drop-sub').textContent='';
@@ -5183,7 +5701,10 @@ function syncTrainDataset(){
   const d=trainDatasets.find(x=>x.name===dsName);
   if(d){
     if(d.trigger_word && !$('#ltrig').value) $('#ltrig').value=d.trigger_word;
-    if(!$('#lname').value) $('#lname').value=d.name;
+    // Only a saved set lends its name. A draft's handle is `set_3`, which is a
+    // placeholder standing in for a name you have not chosen yet — proposing it
+    // as the LoRA's name would turn it into one by default.
+    if(d.saved && !$('#lname').value) $('#lname').value=d.name;
   }
   checkTrainReady();
 }
@@ -5265,48 +5786,291 @@ $('#toggle-adv').onclick=()=>{
   $('#toggle-adv').classList.toggle('on',!$('#gen-adv').classList.toggle('hide'));
 };
 
-// ---------- LoRA stack ----------
-// One row per LoRA. Two weights each, the way Forge splits them: the first
-// patches the DiT, the second the text encoder. Order matters — LoRAs patch in
-// the order shown, so the arrows are authority, not decoration.
-let loraOpts='';
-function loraRow(sel,unet,te){
-  const row=document.createElement('div');
-  row.className='stack-row'; row.dataset.lora='1';
-  row.innerHTML=`
-    <select data-f="path">${loraOpts}</select>
-    <div class="nums">
-      <input class="num" data-f="unet" inputmode="decimal" value="${unet??1}" title="UNet weight">
-      <input class="num" data-f="te" inputmode="decimal" value="${te??1}" title="Text encoder weight">
-      <span class="grow"></span>
-      <button class="s" data-f="up" title="Move up">↑</button>
-      <button class="s" data-f="down" title="Move down">↓</button>
-      <button class="s" data-f="rm" title="Remove">✕</button>
-    </div>`;
-  if(sel) row.querySelector('[data-f=path]').value=sel;
-  const q=f=>row.querySelector('[data-f='+f+']');
-  q('rm').onclick=()=>row.remove();
-  q('up').onclick=()=>row.previousElementSibling&&row.parentNode.insertBefore(row,row.previousElementSibling);
-  q('down').onclick=()=>row.nextElementSibling&&row.parentNode.insertBefore(row.nextElementSibling,row);
-  q('path').onchange=()=>{
-    const t=q('path').selectedOptions[0]?.dataset.t;
-    if(t&&!$('#prompt').value.includes(t))
-      $('#prompt').value=(t+', '+$('#prompt').value).trim().replace(/,\s*$/,'');
-  };
-  return row;
+// ---------- LoRAs, written in the prompt ----------
+// A stack of rows was the wrong shape for this. Each row cost 56px of vertical
+// space plus a wrapped select, so four LoRAs took 380px off the canvas — the one
+// dimension the whole layout exists to protect — to hold four filenames and
+// eight digits. And the row could not say the thing that actually matters,
+// which is where in the sentence the LoRA applies.
+//
+// So they live in the prompt, in Automatic1111's syntax, because that is the
+// notation anyone who has trained these models already types:
+//
+//     a portrait <lora:k3nan:0.4> in soft window light <lora:alxcn:1>
+//
+// Strength is optional and defaults to 1. A second number is the text encoder
+// weight, which the backend already defaults to the UNet weight when omitted —
+// so `<lora:x:0.8>` is exactly Forge's one-weight behaviour, not an
+// approximation of it. On the video side the third field is the expert instead,
+// because that is what Wan's A14B pair needs and a text-encoder weight is not a
+// thing its model-only loader has.
+//
+// Cost to the canvas: zero. Four LoRAs are four words in a box that was
+// already there.
+let loraIndex=[];
+// One capture and a split, rather than three optional groups: the field count
+// varies by family and a regex that encodes that is a regex that has to change
+// every time a family does.
+const LORA_RE=/<lora:([^<>]*)>/gi;
+
+// Resolution is by path under loras/ first, then by bare filename when that is
+// unambiguous. The picker writes whichever of the two is unique, so a typed
+// `<lora:k3nan:1>` works while two files called `high.safetensors` in different
+// folders still have to be told apart — which is the exact case the video side
+// hits with the matched speed pairs.
+function resolveLora(name){
+  const n=String(name||'').trim().replace(/\.safetensors$/i,'').toLowerCase();
+  if(!n) return null;
+  const byRel=loraIndex.filter(l=>l.rel.toLowerCase()===n);
+  if(byRel.length) return byRel[0];
+  const byStem=loraIndex.filter(l=>l.stem.toLowerCase()===n);
+  return byStem.length===1 ? byStem[0] : null;
 }
-$('#add-lora').onclick=()=>{
-  const stack=$('#lora-stack');
-  if(stack.children.length>=(window.MAX_LORAS||6)) return;
-  stack.appendChild(loraRow());
-};
+
+// Why a name did not resolve, which is a different question from whether it
+// did. `<lora:high:1>` against a volume holding both Wan speed pairs is not a
+// missing file — it is two files and no way to tell which — and sending you to
+// look for a LoRA that is sitting right there is the worse of the two wrong
+// answers.
+function loraAlternatives(name){
+  const n=String(name||'').trim().replace(/\.safetensors$/i,'').toLowerCase();
+  return loraIndex.filter(l=>l.stem.toLowerCase()===n).map(l=>l.token);
+}
+
+// Every token in the text, with the offsets the ⌘↑/⌘↓ handler needs to rewrite
+// one in place. Unresolved names are kept rather than dropped: a LoRA that
+// silently does nothing is indistinguishable from a LoRA with no effect, which
+// is the failure this whole file is written to avoid.
+function parseLoras(text){
+  const out=[];
+  LORA_RE.lastIndex=0;
+  let m;
+  while((m=LORA_RE.exec(text))){
+    const parts=m[1].split(':').map(s=>s.trim());
+    out.push({
+      start:m.index, end:m.index+m[0].length,
+      name:parts[0]||'', a:parts[1]??'', b:parts[2]??'',
+      hit:resolveLora(parts[0]),
+    });
+  }
+  return out;
+}
+
+// What the text encoders see. The tokens are markup for this page, not
+// language — leaving them in would have the model rendering the word "lora".
+function promptText(){
+  return $('#prompt').value.replace(LORA_RE,' ').replace(/\s+/g,' ')
+    .replace(/\s+([,.;:!?])/g,'$1').trim();
+}
+
+const loraNum=(v,d)=>{ const n=parseFloat(v); return Number.isFinite(n) ? n : d };
+
 function readLoras(){
-  return $$('#lora-stack [data-lora]').map(r=>({
-    path:r.querySelector('[data-f=path]').value,
-    unet:parseFloat(r.querySelector('[data-f=unet]').value)||0,
-    text_encoder:parseFloat(r.querySelector('[data-f=te]').value)||0,
-  })).filter(l=>l.path);
+  return parseLoras($('#prompt').value).filter(t=>t.hit)
+    .slice(0,window.MAX_LORAS||6).map(t=>({
+      path:t.hit.path,
+      unet:loraNum(t.a,1),
+      // Left null on purpose when unwritten: the backend defaults the text
+      // encoder weight to the UNet weight, so omitting it is a decision the
+      // client does not have to duplicate — and duplicating it would freeze
+      // today's default into every prompt ever saved.
+      text_encoder:t.b===''?null:loraNum(t.b,null),
+    }));
 }
+
+function readVidLoras(){
+  const sup=(videoModel()||{supports:{}}).supports;
+  if(!sup.loras) return [];
+  return parseLoras($('#prompt').value).filter(t=>t.hit)
+    .slice(0,window.MAX_LORAS||6).map(t=>({
+      path:t.hit.path, unet:loraNum(t.a,1), expert:vidExpert(t),
+    }));
+}
+
+// The matched speed pairs are named `high` and `low` inside one folder, so the
+// file already says which expert it belongs to. Reading it beats making you
+// write the same fact twice, and beats the silent quality loss of crossing them.
+function vidExpert(t){
+  const valid=window.WAN_EXPERTS||['both','high','low'];
+  const b=String(t.b||'').toLowerCase();
+  if(valid.includes(b)) return b;
+  const n=t.hit.rel.toLowerCase();
+  if(/(^|\/)high|high_noise/.test(n)) return 'high';
+  if(/(^|\/)low|low_noise/.test(n)) return 'low';
+  return 'both';
+}
+
+// The picker. Discovery only — you cannot type a syntax you have never seen —
+// after which the prompt is the stack and this button is a shortcut.
+function loraMenu(btn){
+  if(!loraIndex.length) return;
+  openMenu(btn, loraIndex.map(l=>({label:l.label, run:()=>insertLora(l)})));
+}
+$('#add-lora').onclick=e=>loraMenu(e.currentTarget);
+$('#v-add-lora').onclick=e=>loraMenu(e.currentTarget);
+
+// Where the caret was when the prompt last had it. Clicking + LoRA takes focus
+// away, and the menu takes it again, so by the time an item is chosen
+// selectionStart is meaningless — it would put every pick at the end of the
+// sentence, which is the one place the syntax makes no difference.
+let promptCaret=0;
+['keyup','click','select','focus','blur'].forEach(ev=>
+  $('#prompt').addEventListener(ev,e=>{ promptCaret=e.target.selectionStart??0 }));
+
+function insertLora(l){
+  const el=$('#prompt');
+  // The trigger word first, so the caret arithmetic below is done against the
+  // final string. Prepending afterwards shifted the caret off the strength by
+  // exactly the length of the trigger, which is a bug you only see on the
+  // LoRAs that have one. A LoRA loaded without its trigger is a LoRA doing
+  // nothing, for a reason nothing on screen explains.
+  if(l.trigger&&!el.value.includes(l.trigger)){
+    const add=l.trigger+(el.value.trim()?', ':'');
+    el.value=add+el.value; promptCaret+=add.length;
+  }
+  const v=el.value, at=Math.min(promptCaret,v.length);
+  // Never welded to the neighbouring word: `<lora:x:1>` glued to the end of a
+  // sentence survives the strip but reads as a typo while you are writing.
+  const before=v.slice(0,at), after=v.slice(at);
+  const tok=(before&&!/\s$/.test(before)?' ':'')+`<lora:${l.token}:1>`
+           +(after&&!/^\s/.test(after)?' ':'');
+  el.value=before+tok+after;
+  // Caret onto the strength, selected, so the next thing you can do is ⌘↑ it
+  // or type over it.
+  const cur=before.length+tok.indexOf(':1>')+1;
+  promptCaret=cur;
+  el.focus(); el.setSelectionRange(cur,cur+1);
+  syncLoraNote();
+}
+
+// ⌘↑ / ⌘↓ on a strength, the way the same chord nudges attention weights in
+// Automatic. Put the caret anywhere inside the brackets — the token under it is
+// the one that moves, and the selection is restored so a run of presses walks
+// the value instead of moving once and losing its place.
+function nudgeLora(el,delta){
+  const at=el.selectionStart;
+  const t=parseLoras(el.value).find(t=>at>=t.start&&at<=t.end);
+  if(!t) return false;
+  // Clamped, not unbounded: past ±2 a LoRA stops styling the image and starts
+  // destroying it, and the clamp is the cheapest place to say so.
+  const next=Math.max(-2,Math.min(2,Math.round((loraNum(t.a,1)+delta)*100)/100));
+  const body=[t.name,String(next)].concat(t.b?[t.b]:[]).join(':');
+  const tok=`<lora:${body}>`;
+  el.value=el.value.slice(0,t.start)+tok+el.value.slice(t.end);
+  const num=t.start+tok.indexOf(':'+next)+1;
+  el.setSelectionRange(num,num+String(next).length);
+  syncLoraNote();
+  return true;
+}
+$('#prompt').addEventListener('keydown',e=>{
+  if(!(e.metaKey||e.ctrlKey)||(e.key!=='ArrowUp'&&e.key!=='ArrowDown')) return;
+  // Only swallowed when the caret was actually in a token; outside one, ⌘↑ is
+  // still the caret-to-top the rest of the OS says it is.
+  if(nudgeLora(e.target, e.key==='ArrowUp'?0.05:-0.05)) e.preventDefault();
+});
+
+// Only ever a complaint. What is loaded is legible in the prompt; what is not
+// loaded, and why, is the part the prompt cannot show.
+function syncLoraNote(){
+  const toks=parseLoras($('#prompt').value);
+  const bad=[...new Set(toks.filter(t=>!t.hit).map(t=>t.name))];
+  const max=window.MAX_LORAS||6;
+  const sup=(typeof videoModel==='function'&&videoModel()||{supports:{}}).supports;
+  const bits=[];
+  // Ambiguous first and named individually: the fix is to copy one of the
+  // alternatives, so listing them is the whole message.
+  const vague=bad.filter(b=>loraAlternatives(b).length>1);
+  const gone=bad.filter(b=>!loraAlternatives(b).length);
+  vague.forEach(b=>bits.push(
+    `"${b}" names ${loraAlternatives(b).length} LoRAs — use ${loraAlternatives(b).join(' or ')}.`));
+  if(gone.length){
+    bits.push(gone.length===1
+      ? `No LoRA named "${gone[0]}" on the volume.`
+      : `No LoRAs named ${gone.map(b=>`"${b}"`).join(', ')} on the volume.`);
+  }
+  if(toks.filter(t=>t.hit).length>max)
+    bits.push(`Only the first ${max} LoRAs are applied.`);
+  // The prompt is shared by image and video, so a stack typed for one is still
+  // sitting there when you switch to the other. Saying that beats letting a
+  // guidance-distilled checkpoint quietly ignore four of them.
+  if(kind==='video'&&!sup.loras&&toks.some(t=>t.hit))
+    bits.push(`${($('#v-model').selectedOptions[0]||{}).text||'This model'} takes no LoRAs — the ones in the prompt are ignored.`);
+  $('#lora-note').textContent=bits.join(' ');
+}
+$('#prompt').addEventListener('input',syncLoraNote);
+
+// Written back into the prompt, which is now the only place a stack lives. The
+// canonical form goes in — full path when the bare name is ambiguous — so a
+// reused prompt resolves to the same file the original run used.
+function loraTokens(list,video){
+  return (list||[]).map(l=>{
+    // Image records the stem, video the filename; both match the way the two
+    // stacks were read back before this, and an entry whose file is gone is
+    // simply not written rather than becoming an unresolvable token.
+    const hit=loraIndex.find(x=>video ? x.file===l.name : x.stem===l.name)
+           || resolveLora(l.name);
+    if(!hit) return '';
+    const tail=video
+      ? (l.expert&&l.expert!=='both'&&l.expert!==vidExpert({b:'',hit})?':'+l.expert:'')
+      : (l.text_encoder!=null&&l.text_encoder!==l.unet?':'+l.text_encoder:'');
+    return `<lora:${hit.token}:${l.unet??1}${tail}>`;
+  }).filter(Boolean).join(' ');
+}
+
+// ---------- size ----------
+// The ratio picker and the two pixel boxes are one control, not two that have
+// to be kept in agreement. There is only ever a width and a height; the ratios
+// are shortcuts to a pair of them, so picking one writes the boxes and typing
+// in the boxes selects Custom. Nothing here can hold a size the other half
+// disagrees with, because there is only one size.
+//
+// Custom is not something you choose — it is what the picker says once you have
+// typed. It still carries the numbers, so the strip tells the truth about the
+// size even with Advanced collapsed, which is the state it will be in most of
+// the time.
+const SNAP=16;  // pipeline.py floors to the DiT patch grid; snapping here means
+                // the box never claims a size the model is not going to render.
+const snap=(v,d)=>{
+  const n=parseInt(v,10);
+  return Number.isFinite(n) ? Math.max(64,Math.min(2048,Math.floor(n/SNAP)*SNAP)) : d;
+};
+function readSize(){
+  const a=$('#g-aspect').value;
+  if(a!=='custom'){ const p=a.split('x'); return [+p[0],+p[1]] }
+  return [snap($('#g-w').value,1024), snap($('#g-h').value,1024)];
+}
+// Reduced, so Custom can say whether 992×1488 is still the 2:3 you meant.
+// Only when it reduces to something a person actually says, though: 992×1024
+// is honestly 31:32, and printing that is noise dressed as precision.
+const ratio=(w,h)=>{
+  const g=(a,b)=>b?g(b,a%b):a, d=g(w,h)||1, a=w/d, b=h/d;
+  return (a<=21&&b<=21) ? `${a}:${b}` : '';
+};
+function syncSize(fromBoxes){
+  const sel=$('#g-aspect');
+  if(fromBoxes) sel.value='custom';
+  const [w,h]=readSize();
+  $('#g-w').value=w; $('#g-h').value=h;
+  // Only Custom carries its numbers, and only because it has no name that
+  // implies them. A preset says "16:9" and the Width/Height boxes say what
+  // that is in pixels, updating as you switch — so putting the pixels in the
+  // option label too would be the same fact in two places, and the one place
+  // it would cost is the strip's width on a laptop.
+  const custom=[...sel.options].find(o=>o.value==='custom');
+  custom.textContent = sel.value==='custom'
+    ? ['Custom',ratio(w,h),`${w}×${h}`].filter(Boolean).join(' · ') : 'Custom';
+}
+$('#g-aspect').onchange=()=>syncSize(false);
+// On input, not change: switching the picker to Custom while you are still
+// typing is what makes the two halves read as one control.
+['#g-w','#g-h'].forEach(s=>{
+  $(s).addEventListener('input',()=>{ $('#g-aspect').value='custom'; });
+  // Snapped on the way out rather than per keystroke, which would fight you at
+  // "10" on the way to "1000".
+  $(s).addEventListener('change',()=>syncSize(true));
+  $(s).addEventListener('blur',()=>syncSize(true));
+});
+syncSize(false);
 
 // ---------- regions ----------
 // Rectangles in normalised canvas coordinates. Columns/Rows lay them out
@@ -5392,12 +6156,12 @@ new ResizeObserver(()=>{
 }).observe(document.querySelector('#canvas'));
 
 $('#go-gen').onclick=async()=>{
-  const p=$('#prompt').value.trim(), regions=readRegions();
+  const p=promptText(), regions=readRegions();
   if(!p&&!regions.length)return;
   $('#gen-err').innerHTML=''; $('#gen-meta').textContent='';
   const btn=$('#go-gen'); btn.disabled=true;
   const box=$('#gen-prog'); box.classList.remove('hide'); box.querySelector('p').textContent='Queued…';
-  const [w,h]=$('#g-aspect').value.split('x');
+  const [w,h]=readSize();
   const r=await post('/api/generate',{
     prompt:p, negative_prompt:$('#g-neg').value, model:$('#g-model').value,
     loras:readLoras(), regions,
@@ -5426,6 +6190,11 @@ $('#go-gen').onclick=async()=>{
         || '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
       $$('#gen-out .acts button').forEach(b=>b.onclick=()=>
         toVideo(imgs[+b.dataset.n].data.split(',')[1], b.dataset.as));
+      // The same viewer the gallery card opens. A still on the canvas is fitted
+      // to whatever the console left it — at four-up, half of that — so the one
+      // thing you want next is to see it at size, and it should not cost a trip
+      // through the gallery to a copy of the image already on screen.
+      $$('#gen-out img').forEach(im=>im.onclick=()=>lightbox(im.src,false));
       // Surface which LoRAs actually matched — a stack that silently no-ops
       // looks identical to a stack that had no effect.
       const skipped=(s.loras||[]).filter(l=>!l.applied);
@@ -5520,7 +6289,9 @@ function syncVideoModel(){
   $('#v-shift-wrap').classList.toggle('hide',!sup.cfg);
   $('#v-switch-wrap').classList.toggle('hide',!sup.experts);
   $('#v-drop-last').classList.toggle('hide',!sup.last_frame);
-  $$('#v-lora-stack [data-f=expert]').forEach(el=>el.classList.toggle('hide',!sup.experts));
+  // The prompt survives a model change, and so do the LoRAs written in it — so
+  // whether this model reads them is something only the note can say.
+  syncLoraNote();
 
   // A model that cannot take what is already attached would fail at submit.
   // Dropping it here, where the section it came from is visibly gone, is the
@@ -5542,58 +6313,6 @@ function syncVideoModel(){
   drawRefs();
 }
 $('#v-model').onchange=syncVideoModel;
-
-// ---------- video LoRA stack ----------
-// The image stack's two weights do not carry over: ComfyUI's model-only loader
-// patches the DiT and umT5 is loaded separately, so there is one strength. What
-// replaces the second field is the expert, which the A14B pair forces — it is
-// two checkpoints, and a row has to say which one it patches.
-function vidLoraRow(sel,unet,expert){
-  const sup=(videoModel()||{supports:{}}).supports;
-  const row=document.createElement('div');
-  row.className='stack-row'; row.dataset.lora='1';
-  row.innerHTML=`
-    <select data-f="path">${loraOpts}</select>
-    <div class="nums">
-      <input class="num" data-f="unet" inputmode="decimal" value="${unet??1}" title="Strength">
-      <select data-f="expert" class="${sup.experts?'':'hide'}" title="Which expert this patches">
-        ${(window.WAN_EXPERTS||['both','high','low']).map(e=>
-          `<option value="${e}">${e==='both'?'both experts':e+' noise'}</option>`).join('')}
-      </select>
-      <span class="grow"></span>
-      <button class="s" data-f="up" title="Move up">↑</button>
-      <button class="s" data-f="down" title="Move down">↓</button>
-      <button class="s" data-f="rm" title="Remove">✕</button>
-    </div>`;
-  const q=f=>row.querySelector('[data-f='+f+']');
-  if(sel) q('path').value=sel;
-  if(expert) q('expert').value=expert;
-  q('rm').onclick=()=>row.remove();
-  q('up').onclick=()=>row.previousElementSibling&&row.parentNode.insertBefore(row,row.previousElementSibling);
-  q('down').onclick=()=>row.nextElementSibling&&row.parentNode.insertBefore(row.nextElementSibling,row);
-  // The paired speed LoRAs are named `high` and `low` inside one folder, so the
-  // file already says which expert it belongs to. Reading it beats making you
-  // set the same fact twice and beats the silent quality loss of crossing them.
-  q('path').onchange=()=>{
-    const n=(q('path').value.split('/').pop()||'').toLowerCase();
-    if(n.startsWith('high')||n.includes('high_noise')) q('expert').value='high';
-    else if(n.startsWith('low')||n.includes('low_noise')) q('expert').value='low';
-  };
-  return row;
-}
-$('#v-add-lora').onclick=()=>{
-  const stack=$('#v-lora-stack');
-  if(stack.children.length>=(window.MAX_LORAS||6)) return;
-  stack.appendChild(vidLoraRow());
-};
-function readVidLoras(){
-  if(!(videoModel()||{supports:{}}).supports.loras) return [];
-  return $$('#v-lora-stack [data-lora]').map(r=>({
-    path:r.querySelector('[data-f=path]').value,
-    unet:parseFloat(r.querySelector('[data-f=unet]').value)||0,
-    expert:r.querySelector('[data-f=expert]').value||'both',
-  })).filter(l=>l.path);
-}
 
 // Reading a File to base64 is needed by four different entry points — the two
 // keyframe drops, the reference picker, and the hand-off from finished work —
@@ -5728,7 +6447,7 @@ $('#v-toggle-adv').onclick=()=>{
 };
 
 $('#go-vid').onclick=async()=>{
-  const p=$('#prompt').value.trim();
+  const p=promptText();
   if(!p)return;
   $('#vid-err').innerHTML=''; $('#vid-meta').textContent='';
   const btn=$('#go-vid'); btn.disabled=true;
@@ -5766,9 +6485,13 @@ $('#go-vid').onclick=async()=>{
     if(s.status==='completed'){
       clearInterval(t); syncVideoModel(); box.classList.add('hide');
       const f=(s.files||[])[0];
+      const src=`/api/file/${r.job_id}/${f}`;
       $('#vid-out').innerHTML=f
-        ? `<video controls autoplay loop playsinline src="/api/file/${r.job_id}/${f}"></video>`
+        ? `<video controls autoplay loop playsinline src="${src}"></video>`
+          +`<button class="zoom" title="Full screen">${ICON.expand}</button>`
         : '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
+      const zoom=$('#vid-out .zoom');
+      if(zoom) zoom.onclick=()=>lightbox(src,true);
       const stack=readVidLoras();
       $('#vid-meta').textContent=[
         s.width&&`${s.width}×${s.height}`,
@@ -5926,29 +6649,26 @@ function reuse(it){
   const set=(sel,v)=>{ if(v!=null&&v!=='') $(sel).value=v };
   if(it.kind==='image'){
     setKind('image');
-    set('#prompt',it.prompt); set('#g-neg',it.negative_prompt);
+    // Prompt and stack are one field now, so they are restored as one string.
+    // A LoRA deleted since the run simply does not come back — the same thing
+    // the old row-matching did, minus a row left behind to explain it.
+    set('#prompt',[it.prompt,loraTokens(it.loras,false)].filter(Boolean).join(' '));
+    set('#g-neg',it.negative_prompt);
     if(it.model) $('#g-model').value=it.model;
     const size=`${it.width}x${it.height}`;
-    if([...$('#g-aspect').options].some(o=>o.value===size)) $('#g-aspect').value=size;
+    if([...$('#g-aspect').options].some(o=>o.value===size)){
+      $('#g-aspect').value=size; syncSize(false);
+    } else if(it.width&&it.height){
+      // Not a preset, so it was a custom size — and it has to come back as one,
+      // or "reuse" would silently render a different picture than the card.
+      $('#g-w').value=it.width; $('#g-h').value=it.height; syncSize(true);
+    }
     set('#g-seed',(it.seeds||[])[0]);
     set('#g-sampler',it.sampler); set('#g-scheduler',it.scheduler);
     set('#g-steps',it.steps); set('#g-cfg',it.cfg_scale); set('#g-shift',it.shift);
-    // The stack is reported by name, not path, so rows are matched against the
-    // filename each option carries. A LoRA since deleted simply does not return.
-    const stack=$('#lora-stack'); stack.innerHTML='';
-    (it.loras||[]).forEach(l=>{
-      const row=loraRow(); stack.appendChild(row);
-      const sel=row.querySelector('[data-f=path]');
-      const hit=[...sel.options].find(o=>
-        o.value.split('/').pop().replace(/\.safetensors$/i,'')===l.name);
-      if(hit) sel.value=hit.value; else row.remove();
-      if(hit){
-        row.querySelector('[data-f=unet]').value=l.unet??1;
-        row.querySelector('[data-f=te]').value=l.text_encoder??1;
-      }
-    });
-    syncModelLine();
-    if(it.negative_prompt||it.steps) $('#gen-adv').classList.remove('hide');
+    syncModelLine(); syncLoraNote();
+    if(it.negative_prompt||it.steps||$('#g-aspect').value==='custom')
+      $('#gen-adv').classList.remove('hide');
     $('#prompt').focus();
   } else {
     setKind('video');
@@ -5959,7 +6679,12 @@ function reuse(it){
       $('#v-model').value=it.model;
     }
     syncVideoModel();
-    set('#prompt',it.prompt); set('#v-neg',it.negative_prompt);
+    // Matched on the full filename under loras/, not the stem: `high.safetensors`
+    // is the filename of both speed pairs, so a stem match would restore the
+    // t2v LoRA into an i2v run without a word about it. loraTokens() writes
+    // whichever name is unambiguous, which is the folder-qualified one here.
+    set('#prompt',[it.prompt,loraTokens(it.loras,true)].filter(Boolean).join(' '));
+    set('#v-neg',it.negative_prompt);
     set('#v-seed',it.seed); set('#v-steps',it.steps);
     set('#v-cfg',it.cfg_scale); set('#v-shift',it.shift); set('#v-switch',it.switch_at);
     // Marked as chosen, not defaulted: restoring a clip's settings and then
@@ -5980,19 +6705,7 @@ function reuse(it){
       }).sort((x,y)=>x.d-y.d)[0];
       if(near) $('#v-aspect').value=near.v;
     }
-    // Matched on the full name under loras/, not the stem: `high.safetensors`
-    // is the filename of both speed pairs, so a stem match would restore the
-    // t2v LoRA into an i2v run without a word about it.
-    const stack=$('#v-lora-stack'); stack.innerHTML='';
-    (it.loras||[]).forEach(l=>{
-      const row=vidLoraRow(); stack.appendChild(row);
-      const sel=row.querySelector('[data-f=path]');
-      const hit=[...sel.options].find(o=>o.value.endsWith('/'+l.name));
-      if(!hit){ row.remove(); return }
-      sel.value=hit.value;
-      row.querySelector('[data-f=unet]').value=l.unet??1;
-      row.querySelector('[data-f=expert]').value=l.expert||'both';
-    });
+    syncLoraNote();
     if(it.negative_prompt||it.steps||it.cfg_scale) $('#vid-adv').classList.remove('hide');
     $('#prompt').focus();
   }
@@ -6043,7 +6756,9 @@ function metaSheet(it){
 
 setKind('image');
 setMode('generate');
-loadState();
-loadDatasets();
+// Sequenced, and in this order. Both of these reload the volume server-side,
+// and firing them together is what put two reloads on the same container in
+// the same instant. The one that decides whether Generate works goes first.
+loadState().then(loadDatasets);
 </script></body></html>
 """

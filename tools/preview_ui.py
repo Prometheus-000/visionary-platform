@@ -24,6 +24,7 @@ Stdlib only, and never imported by app.py: this must run on a laptop with no
 torch, no modal, and no credentials.
 """
 
+import base64
 import json
 import re
 import sys
@@ -85,15 +86,22 @@ GALLERY = [
     for i in range(14)
 ]
 
+# Two unsaved sets and three saved ones, because the rail has to be looked at
+# with both groups in it: one group alone hides whether the headings, the dashed
+# card and the spacing between the groups read as a difference or as damage.
 DATASETS = [
+    {"name": "set_2", "count": 31, "uncaptioned": 31, "cover": "0.png",
+     "trigger_word": "", "saved": False},
+    {"name": "beach_walk", "count": 12, "uncaptioned": 3, "cover": "0.png",
+     "trigger_word": "", "saved": False},
     {"name": "studio_portraits", "count": 24, "uncaptioned": 0, "cover": "0.png",
-     "trigger_word": "ohwx_style"},
+     "trigger_word": "ohwx_style", "saved": True},
     {"name": "street_night", "count": 41, "uncaptioned": 7, "cover": "0.png",
-     "trigger_word": "ohwx_night"},
+     "trigger_word": "ohwx_night", "saved": True},
     {"name": "product_flatlay", "count": 18, "uncaptioned": 18, "cover": "0.png",
-     "trigger_word": ""},
+     "trigger_word": "", "saved": True},
     {"name": "empty_set", "count": 0, "uncaptioned": 0, "cover": None,
-     "trigger_word": ""},
+     "trigger_word": "", "saved": True},
 ]
 
 STATE = {
@@ -117,6 +125,14 @@ STATE = {
              "name": "my_style"},
             {"path": "/workspace/loras/my_style/my_style-000020.safetensors",
              "name": "my_style-000020"}]},
+        {"name": "alxcn", "trigger_word": "", "files": [
+            {"path": "/workspace/loras/alxcn.safetensors", "name": "alxcn.safetensors"}]},
+        {"name": "wan22-speed-t2v", "trigger_word": "", "files": [
+            {"path": "/workspace/loras/wan22-speed-t2v/high.safetensors", "name": "high"},
+            {"path": "/workspace/loras/wan22-speed-t2v/low.safetensors", "name": "low"}]},
+        {"name": "wan22-speed-i2v", "trigger_word": "", "files": [
+            {"path": "/workspace/loras/wan22-speed-i2v/high.safetensors", "name": "high"},
+            {"path": "/workspace/loras/wan22-speed-i2v/low.safetensors", "name": "low"}]},
     ],
     # One of each shape the composer has to redraw for: audio + references and
     # no CFG (H3), the two-expert pair (A14B), and the single-expert 5B. A stub
@@ -271,6 +287,7 @@ class Handler(BaseHTTPRequestHandler):
             row = next((d for d in DATASETS if d["name"] == name), None)
             return self.reply({
                 "trigger_word": (row or {}).get("trigger_word", ""),
+                "saved": (row or {}).get("saved", True),
                 "images": images((row or {}).get("count", 0)),
             })
 
@@ -289,9 +306,26 @@ class Handler(BaseHTTPRequestHandler):
                               "image/svg+xml")
 
         if path.startswith("/api/status/"):
-            return self.reply({"status": "completed", "percent": 100})
+            return self.reply({
+                "status": "completed", "percent": 100, "files": ["clip.mp4"],
+                "seeds": [4242, 4243], "sampler": "Euler", "scheduler": "Simple",
+                "steps": 8, "cfg_scale": 1.0, "shift": 1.15, "duration_s": 6.2,
+                "width": 1024, "height": 1024,
+                "seconds": 5, "frames": 120, "fps": 24, "seed": 4242,
+                # One applied and one not: a stack that silently no-ops looks
+                # identical to a stack that had no effect, and the line that
+                # says which is which has to be visible somewhere.
+                "loras": [{"name": "my_style", "unet": 0.8, "applied": True},
+                          {"name": "gone", "unet": 1.0, "applied": False,
+                           "reason": "no matching keys"}],
+            })
         if path.startswith("/api/outputs/"):
-            return self.reply({"images": []})
+            return self.reply({"images": [
+                {"data": "data:image/svg+xml;base64," + base64.b64encode(
+                    swatch(w, h, name, seed)).decode()}
+                for name, (w, h, seed) in
+                (("shot 1", (1024, 1024, 11)), ("shot 2", (1024, 1024, 29)))
+            ]})
 
         self.reply({"error": f"No stub for {path}"}, code=404)
 

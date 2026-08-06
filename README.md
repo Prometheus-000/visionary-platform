@@ -30,9 +30,19 @@ offers none of those and offers references instead. Only the controls the chosen
 model actually reads are on screen — a control that is present but ignored is
 worse than one that is absent.
 
-**Copy is a last resort.** Design first, then an icon, then words. A control that
-shows its own value gets no label; the two keyframe tiles put the mark where the
-frame sits in the clip rather than captioning themselves "first" and "last".
+**LoRAs are written in the prompt.** `<lora:my_style:0.8>`, the syntax anyone who
+has trained these models already types. Strength defaults to 1 and the token
+sits where the LoRA applies, so a fifth LoRA costs the canvas nothing — the rows
+this replaced cost 380px of it for four filenames. `+ LoRA` still opens a
+picker, because you cannot type a syntax you have never seen.
+
+**Copy is a last resort — but a number is not a value it can show.** Design
+first, then an icon, then words. A control that shows its own value gets no
+label; the two keyframe tiles put the mark where the frame sits in the clip
+rather than captioning themselves "first" and "last". Hyperparameters are the
+exception, and they are the exception on purpose: "32" is a rank, an alpha, an
+epoch count or a seed with equal plausibility, so every numeric field carries
+its name and the tooltip says what the number *does*.
 
 ![Everything you have made, in one grid](docs/gallery.png)
 
