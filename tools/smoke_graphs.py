@@ -1,12 +1,19 @@
 """
-Smoke test for the video graphs — every variant, on CPU, with no weights.
+Smoke test for every graph this app builds — all variants, on CPU, no weights.
 
-    modal run tools/smoke_video.py
+    modal run tools/smoke_graphs.py
 
-Checks that every graph `_h3_graph` and `_wan_graph` can emit is structurally
-valid against the ComfyUI build pinned in `video_image`: every `class_type`
-exists, every input key is a real input on that node, and every link points at
-a node in the same graph.
+Checks that every graph `_krea2_graph`, `_h3_graph` and `_wan_graph` can emit is
+structurally valid against the ComfyUI build pinned in `comfy_image`: every
+`class_type` exists, every input key is a real input on that node, and every
+link points at a node in the same graph.
+
+This was `smoke_video.py`, and covered video only because images ran on a
+vendored Forge with a smoke test of its own that imported the backend. There is
+one backend now, so there is one of these. The Krea 2 variants also make it the
+check for the custom node pack: `/object_info` lists a node only if it
+imported, so a pack that raises on import fails here on a CPU container rather
+than at the first regional render on a warm H100.
 
 Why this is worth its own tool. The graphs are written as Python dicts against
 Comfy's templates, so the failure they invite is a name: a node renamed
@@ -25,6 +32,13 @@ boundary of what it proves:
   "minimax" or "wan", a sampler or scheduler this deployment offers that
   ComfyUI does not have, `ref_image_size`, the two-expert noise flags. Those
   lists are compiled in, so they are populated with no weights present.
+- It DOES catch a model-sampling node whose baked-in multiplier disagrees with
+  the checkpoint's own config. That one is checked against
+  `comfy.supported_models` rather than against a name, because it is the shape
+  of failure names cannot reach: `ModelSamplingSD3` and `ModelSamplingAuraFlow`
+  differ only in a number neither node exposes, both validate, and sending
+  Krea 2 the wrong one returns coloured noise at the right step count with no
+  error anywhere. See `_check_model_sampling`.
 - It does NOT catch a filename that is not on the volume. Loader nodes take a
   combo too, but one whose options are the files ComfyUI can see, and with no
   weights present every one of those lists is empty. Emptiness is what
@@ -54,21 +68,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import (  # noqa: E402
     COMFY,
     COMFY_PORT,
+    KREA2_REGIONAL_NODE,
+    SAMPLERS,
+    SCHEDULERS,
     VIDEO_MODELS,
     _h3_canvas,
     _h3_frames,
     _h3_graph,
+    _krea2_graph,
     _wan_canvas,
     _wan_frames,
     _wan_graph,
-    video_image,
+    comfy_image,
 )
 
-smoke = modal.App("visionary-smoke-video")
+smoke = modal.App("visionary-smoke-graphs")
 
-# `modal run tools/smoke_video.py` mounts tools/, not the repo root, so app.py
+# `modal run tools/smoke_graphs.py` mounts tools/, not the repo root, so app.py
 # has to be added explicitly — the graph builders come from there.
-smoke_image = video_image.add_local_python_source("app")
+smoke_image = comfy_image.add_local_python_source("app")
 
 # ComfyUI's frontend appends this to seed widgets; it is not something an API
 # graph supplies, and some nodes still list it as required. Excluding it by
@@ -88,6 +106,45 @@ def _variants() -> list[tuple[str, dict]]:
     """
     out: list[tuple[str, dict]] = []
     seed, steps = 1, 4
+
+    # ── Krea 2 images ─────────────────────────────────────────────────────
+    #
+    # Three branches, because three is how many shapes _krea2_graph has and a
+    # branch never built is a name never checked. The regional pair is the one
+    # that matters most here: it is the only place the app names a node it does
+    # not own, and `_edit_lora_name` picks a combo value that has to be a member
+    # of a list the node computes from the volume — which is empty here, so this
+    # also pins the empty-volume fallback.
+    krea = dict(model="turbo", prompt="a smoke test", negative_prompt="blurry",
+                width=1216, height=832, batch_size=1, seed=seed, steps=steps,
+                cfg=1.0, shift=1.15, sampler="euler", scheduler="simple")
+    stack_img = [{"name": "style.safetensors", "unet": 0.8, "text_encoder": 0.7}]
+    boxes = [
+        {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0,
+         "prompt": "a man", "lora": "a.safetensors", "strength": 1.35},
+        {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0,
+         "prompt": "a woman", "lora": "b.safetensors", "strength": 1.3},
+    ]
+    # A mold on one box and not the other, and the second box carries no LoRA at
+    # all — the ref-only region, which is a character from a photograph with no
+    # training run behind it. Both halves are worth building: `ref_image` has to
+    # reach regions_json in box order, and a row whose `lora` is "None" while
+    # its `ref_image` is set is the row most likely to be filtered out by
+    # accident somewhere between the form and the graph.
+    molded = [
+        {**boxes[0], "ref_image": "gen1-region0.png"},
+        {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0,
+         "prompt": "a woman", "lora": "None", "strength": 1.0,
+         "ref_image": "gen1-region1.png"},
+    ]
+    out += [
+        ("krea2 plain", _krea2_graph(**krea, loras=stack_img, regions=[])),
+        ("krea2 regional", _krea2_graph(**krea, loras=stack_img, regions=boxes,
+                                        region_weight=1.1)),
+        ("krea2 regional + molds", _krea2_graph(**krea, loras=[], regions=molded)),
+        ("krea2 krea2edit", _krea2_graph(**krea, loras=[], regions=boxes,
+                                         scene="s.png", outfit="o.png")),
+    ]
 
     # ── MiniMax-H3 ────────────────────────────────────────────────────────
     w, h = _h3_canvas("16:9", "draft")
@@ -172,14 +229,30 @@ def _combo(spec: Any) -> list | None:
 
 def _check_menus(schema: dict) -> list[str]:
     """
-    Every sampler and scheduler `VIDEO_MODELS` offers, against what exists.
+    Every sampler and scheduler the page offers, against what exists.
 
     The graph variants only build one of each, but the page renders the whole
     list — so an entry that ComfyUI dropped is a menu item that raises on
     selection, hours after this passed. Checked against the sampler node each
     family actually uses, because the two are not guaranteed to agree.
+
+    This is the check the image side most needed and never had: SAMPLERS and
+    SCHEDULERS were Forge's labels ("Euler a", "Automatic") and every one of
+    them is a value KSampler rejects. Nothing would have caught that until a
+    render failed, because the old smoke test imported a backend instead of
+    validating a graph.
     """
     bad: list[str] = []
+    for field, offered_list in (("sampler", SAMPLERS), ("scheduler", SCHEDULERS)):
+        inp = "sampler_name" if field == "sampler" else "scheduler"
+        options = _combo(
+            (schema.get("KSampler", {}).get("input", {}).get("required", {}) or {}).get(inp)
+        ) or []
+        for offered in offered_list:
+            if offered not in options:
+                bad.append(f"{field.upper()}S offers {offered!r}, which "
+                           f"KSampler.{inp} does not have")
+
     for key, spec in VIDEO_MODELS.items():
         # H3 picks its sampler through KSamplerSelect and its scheduler through
         # BasicScheduler; Wan takes both as widgets on KSamplerAdvanced.
@@ -195,6 +268,66 @@ def _check_menus(schema: dict) -> list[str]:
                 if offered not in options:
                     bad.append(f"VIDEO_MODELS[{key!r}] offers {field} {offered!r}, "
                                f"which {cls}.{inp} does not have")
+    return bad
+
+
+# Which multiplier each model-sampling node bakes in. Both build the same
+# ModelSamplingDiscreteFlow and differ only here: `ModelSamplingAuraFlow.
+# patch_aura` is one line, `return self.patch(model, shift, multiplier=1.0)`,
+# against `patch`'s own default of 1000.
+SAMPLING_MULTIPLIER = {"ModelSamplingSD3": 1000, "ModelSamplingAuraFlow": 1.0}
+
+# The model config each family's graph is sampling. Named here because the
+# check below has to read `sampling_settings` off the right one, and nothing in
+# a graph says which checkpoint it is for. WAN22_T2V declares only a shift and
+# inherits the rest from WAN21_T2V, which declares no multiplier at all — so it
+# falls through to ModelSamplingDiscreteFlow's own default of 1000, which is
+# what ModelSamplingSD3 bakes in. Krea 2 is the one that asks for 1.0.
+GRAPH_MODEL_CLASS = {"krea2": "Krea2", "wan": "WAN22_T2V"}
+
+
+def _check_model_sampling(_schema: dict) -> list[str]:
+    """
+    The check that only ever fails silently: a valid node with the wrong number.
+
+    `timestep(sigma) = sigma * multiplier` is what the DiT is handed, and the
+    Krea 2 and Wan configs disagree about that multiplier — 1.0 against 1000.
+    Both nodes exist, both take a `shift`, both validate, and the graph runs to
+    completion at the right step count and the right speed. Send Krea 2 the
+    1000 and every render is coloured noise, on every sampler, with and without
+    LoRAs, and nothing anywhere raises. That happened, from copying the node off
+    the Wan path where it is correct.
+
+    Nothing about that is reachable by checking names, which is what the rest of
+    this file does — so it is checked against the model config itself rather
+    than against a number written down twice.
+    """
+    import comfy.supported_models
+
+    bad: list[str] = []
+    for graph_name, graph in _variants():
+        family = "krea2" if graph_name.startswith("krea2") else (
+            "wan" if graph_name.startswith("wan") else None)
+        if family is None:          # H3 sets no shift node at all
+            continue
+        cfg = getattr(comfy.supported_models, GRAPH_MODEL_CLASS[family], None)
+        if cfg is None:
+            bad.append(f"{graph_name}: no model config named "
+                       f"{GRAPH_MODEL_CLASS[family]!r} in comfy.supported_models — "
+                       "it was renamed upstream, so this check is now blind")
+            continue
+        want = cfg.sampling_settings.get("multiplier", 1000)
+        for node_id, node in graph.items():
+            got = SAMPLING_MULTIPLIER.get(node["class_type"])
+            if got is None:
+                continue
+            if got != want:
+                bad.append(
+                    f"{graph_name}: {node['class_type']} bakes in "
+                    f"multiplier={got}, but {GRAPH_MODEL_CLASS[family]}'s config "
+                    f"asks for {want}. The DiT gets timesteps {got / want:g}x "
+                    f"too large and the render comes out as noise with no error. "
+                    f"Use {'ModelSamplingAuraFlow' if want == 1.0 else 'ModelSamplingSD3'}.")
     return bad
 
 
@@ -246,7 +379,7 @@ def main() -> None:
     import urllib.request
 
     # No extra_model_paths.yaml and no volume: /object_info describes the nodes
-    # ComfyUI has compiled in, which is a property of the pin in video_image,
+    # ComfyUI has compiled in, which is a property of the pins in comfy_image,
     # not of anything on our storage.
     (COMFY / "input").mkdir(parents=True, exist_ok=True)
     (COMFY / "output").mkdir(parents=True, exist_ok=True)
@@ -280,6 +413,17 @@ def main() -> None:
         print(f"[smoke] {len(schema)} node types available", flush=True)
 
         failures: list[str] = []
+        # Named before the graphs are walked, because "no such node type" for a
+        # custom node has one cause worth separating from a typo: the pack
+        # raised on import and ComfyUI carried on without it. The traceback is
+        # in the startup output either way, and saying which of the two it is
+        # decides whether you look at CLIFF_SHA or at the graph builder.
+        for node in (KREA2_REGIONAL_NODE, "VisionaryBoxes"):
+            if node not in schema:
+                failures.append(
+                    f"custom node {node!r} did not register — it failed to "
+                    "import, and its traceback is in the startup output above")
+        print(f"  {'FAIL' if failures else ' ok '}  custom nodes", flush=True)
         for name, graph in _variants():
             bad = _check(name, graph, schema)
             nodes = len(graph)
@@ -290,6 +434,11 @@ def main() -> None:
         print(f"  {'FAIL' if menus else ' ok '}  the sampler and scheduler menus",
               flush=True)
         failures += menus
+
+        sampling = _check_model_sampling(schema)
+        print(f"  {'FAIL' if sampling else ' ok '}  the model-sampling multipliers",
+              flush=True)
+        failures += sampling
     finally:
         proc.terminate()
 

@@ -7,15 +7,15 @@ URL that is the whole application.
 
     modal deploy app.py
 
-Training runs on musubi-tuner. Inference runs on sd-webui-forge-classic (neo),
-vendored into forge/ — see forge/VENDOR.md. The two are deliberately separate
-images: forge wants newer transformers/diffusers than musubi pins, and the
-generation side gets Forge's LoRA stacking, samplers and schedules for free.
+Training runs on musubi-tuner. Inference — images and video both — runs on
+ComfyUI, driven over its API rather than ported, and pinned by commit. They are
+deliberately separate images: ComfyUI wants newer transformers than musubi
+pins, and coupling them would mean every ComfyUI bump re-litigates training.
 
 Storage is ours, not borrowed. The volume is created on first deploy and the
 layout is flat and self-describing — nothing here mirrors a checkout of another
-project, so there is no directory that only makes sense to somebody who has read
-Forge's source.
+project, so there is no directory that only makes sense to somebody who has
+read a backend's source.
 
     $VISIONARY_VOLUME (default "visionary")  ->  /workspace
       models/krea2-raw.safetensors        Krea 2 RAW DiT   (training)
@@ -53,6 +53,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import zipfile
 from collections import deque
@@ -106,22 +107,26 @@ WORK = WORKSPACE / "work"
 OUTPUTS = WORKSPACE / "outputs"
 STAGING = WORKSPACE / ".cache" / "hf-staging"
 
-# Removed images land here rather than being unlinked. Non-destructive by
-# default: a mis-click during a cull should cost a file move, not the file.
-TRASH_DIR = ".trash"
+# Deletions used to move here instead of unlinking. The name survives only so
+# `_drop_legacy_trash` can clear what earlier versions left on the volume; no
+# code writes into it any more.
+LEGACY_TRASH_DIR = ".trash"
 THUMB_DIR = ".thumbs"
 MUSUBI = Path("/opt/musubi-tuner")
 
-# The vendored sd-webui-forge-classic backend that inference runs on. Lives next
-# to this file so `modal deploy` from anywhere still finds it.
-FORGE_DIR = str(Path(__file__).parent / "forge")
-FORGE = Path("/opt/forge")
+# Both inference paths are Hopper now, and the reason is the image rather than
+# the model: SageAttention is compiled for sm_90 in comfy_image, so a card of
+# any other architecture loads the weights, finds no kernel, and silently runs
+# on the slow path. Krea 2 used to have an A100-40GB of its own, sized against a
+# measured 29.26 GiB peak at 1024px — that headroom does not survive V12, whose
+# own regression notes record a 30.27 GiB block-mask build and a 17.88 GiB dense
+# score tensor at the sequence lengths reference frames produce.
+GPU = os.environ.get("VISIONARY_IMAGE_GPU", "H100")
 
-GPU = "A100-40GB"  # measured 29.26 GiB peak at 1024px, rank 32 — ~11 GiB spare
-
-# Video is its own GPU class. The H3 stack is 42.5 GB of weights before any
-# activations, so it does not share a card with training or Krea 2 — and an
-# A100-40GB cannot hold it at all.
+# Video is still its own GPU class, and still for the original reason: the H3
+# stack is 42.5 GB of weights before any activations, so it does not share a
+# card with training or Krea 2. Sharing the *image* is new; sharing the
+# container is not on the table while both hold a checkpoint resident.
 VIDEO_GPU = os.environ.get("VISIONARY_VIDEO_GPU", "H100")
 
 # Cards the UI may ask for, per feature.
@@ -133,19 +138,35 @@ VIDEO_GPU = os.environ.get("VISIONARY_VIDEO_GPU", "H100")
 # reason, and requests for the default are sent to the base class rather than
 # through with_options so the common path keeps its warm container.
 #
-# Video is Hopper-only on purpose: SageAttention is compiled for sm_90 in
-# video_image. B200 is sm_100 and would load the model fine and then fall back
+# Both lists are Hopper-only on purpose: SageAttention is compiled for sm_90 in
+# comfy_image. B200 is sm_100 and would load the model fine and then fall back
 # off the fast kernels — the failure this list exists to prevent. Adding it
-# means changing TORCH_CUDA_ARCH_LIST and forcing an image rebuild.
-IMAGE_GPUS = ("A100-40GB", "A100-80GB", "H100")
+# means changing TORCH_CUDA_ARCH_LIST and forcing an image rebuild. The A100
+# entries that used to be here went with the same rebuild: sm_80 is not sm_90.
+IMAGE_GPUS = ("H100", "H200")
 VIDEO_GPUS = ("H100", "H200")
 
-# ComfyUI is the video inference backend, pinned by commit rather than vendored.
+# ComfyUI is the inference backend for both images and video, pinned by commit
+# rather than vendored.
 #
-# Vendoring earned its place for Krea 2 (forge/VENDOR.md) because that path
-# needed a patch. This one does not: we drive ComfyUI, we do not modify it, so
-# a SHA in the image definition is both smaller and more honest than a copy of
-# the tree. Updating is a one-line change; `git log` upstream is the changelog.
+# It was the video backend first, and Krea 2 ran on a vendored Forge next door.
+# What ended that split was regional prompting: it was the one feature Forge
+# could do and ComfyUI could not, because Forge Couple's cross-attention design
+# cannot reach a single-stream DiT and reaching it needed a patch to
+# backend/nn/krea.py. CLIFF_SHA below is a node pack that does the same job
+# through ComfyUI's own hooks and does it better — it masks each LoRA's
+# activation delta to its box, so there is no pathway left for one character's
+# identity to reach another's, where masking attention only makes it unlikely.
+# With the one blocker gone, keeping a second backend, a second image and a
+# second GPU class bought nothing.
+#
+# Why ComfyUI at all, when diffusers has a MiniMax-H3 pipeline: the diffusers
+# integration runs the released bf16 weights, 123.6 GB across the transformer
+# and the Qwen3-VL-32B conditioner. ComfyUI runs Comfy's repackage — modulation
+# weights pruned into a lookup table, int8-convrot weights, and their own
+# kernels — for 42.5 GB and int8 tensor-core matmuls instead of bf16 ones. On
+# one card that is the difference between offloading every request and holding
+# the model resident, on top of roughly 2x on the denoise loop itself.
 #
 # Why ComfyUI at all, when diffusers has a MiniMax-H3 pipeline: the diffusers
 # integration runs the released bf16 weights, 123.6 GB across the transformer
@@ -157,6 +178,34 @@ VIDEO_GPUS = ("H100", "H200")
 COMFY_SHA = "16e3f3034f2bba1fff6c70cbd759339778555cd6"  # 2026-08-03, H3 VAE fix
 COMFY = Path("/opt/comfyui")
 COMFY_PORT = 8188
+
+# Regional multi-character LoRA for Krea 2, by a commit rather than a branch —
+# the pack was pushed to twice in the week this landed, and a floating ref means
+# the graph builder below can stop matching the node it builds for.
+#
+# Its whole surface on ComfyUI is public: it wraps the diffusion model through
+# comfy.patcher_extension, swaps attention through the transformer_options
+# `optimized_attention_override` hook, and loads LoRAs with
+# comfy.sd.load_lora_for_models. All three exist at COMFY_SHA, which is what
+# makes this an install rather than a vendor — nothing here is patched, so
+# forge/VENDOR.md has no successor.
+#
+# One node out of the pack's six is wired up: V12. It subclasses V9, so V9's
+# engine ships whether or not it is reachable, and exposing both would mean two
+# sets of semantics on the page for one capability.
+CLIFF_SHA = "a33a0e487fbaaa6b64a19ad6e26e707695723b75"  # 2026-08-01
+CLIFF_REPO = (
+    "https://github.com/CliffNodes/"
+    "Krea2-Multi-Character-Lora-Node-with-bounding-box-Scene-and-Outfit-Edit"
+)
+
+# The V12 class id, spelled once. It is what /object_info is checked against at
+# startup and what the graph names, and those two have to agree or the check is
+# theatre.
+KREA2_REGIONAL_NODE = "Krea2RegionalMultiLoRAV12"
+
+# Our own node next to the pack's — one shim, see comfy_nodes/visionary_boxes.
+COMFY_NODES_DIR = str(Path(__file__).parent / "comfy_nodes")
 
 app = modal.App(APP_NAME)
 
@@ -170,17 +219,53 @@ app = modal.App(APP_NAME)
 # weight. Only FastAPI, Request, HTMLResponse and JSONResponse are used, which
 # are core. python-multipart is listed explicitly because the upload form needs
 # it and plain fastapi does not pull it.
-web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
-    "fastapi==0.115.6",
-    "python-multipart==0.0.20",
-    "pillow==11.1.0",
-    "huggingface_hub[hf_transfer]==0.27.1",
-    # Google Drive, for LoRAs that were never on HuggingFace. Kept in this image
-    # rather than its own because it conflicts with nothing here — gdown pins
-    # only requests and beautifulsoup4 — and a separate image would mean a
-    # second build for a 200 kB pure-python package. The rule is to split images
-    # when pins fight, not when responsibilities differ.
-    "gdown==5.2.0",
+web_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "fastapi==0.115.6",
+        "python-multipart==0.0.20",
+        "pillow==11.1.0",
+        "huggingface_hub[hf_transfer]==0.27.1",
+        # Named as well as pulled by the extra above, matching caption_image:
+        # the extra has been observed not to install it, and with the env var
+        # below set its absence surfaces as a confusing load error rather than
+        # as a missing dependency.
+        "hf_transfer==0.1.9",
+        # Google Drive, for LoRAs that were never on HuggingFace. Kept in this
+        # image rather than its own because it conflicts with nothing here —
+        # gdown pins only requests and beautifulsoup4 — and a separate image
+        # would mean a second build for a 200 kB pure-python package. The rule
+        # is to split images when pins fight, not when responsibilities differ.
+        "gdown==5.2.0",
+    )
+    # The single biggest number in this file.
+    #
+    # This was deliberately left unset for a long time, on the grounds that
+    # hf_transfer has no progress hook and a weaker resume story — the two
+    # properties that once turned a stalled download into a four-hour silence.
+    # Both halves of that were measured on this image against a 21 GB file
+    # rather than reasoned about, and they did not survive it:
+    #
+    #   plain requests    30.6 MB/s     hf_transfer   243.8 MB/s
+    #
+    # 8x, and it is the whole gap between "over 200 MB/s with the hf CLI" and a
+    # platform that took a working day to fetch its own weights. The progress
+    # objection was already dead: `_staged_bytes` sums the tree, which is
+    # indifferent to which backend wrote it, and is exactly how those numbers
+    # were taken. The resume objection is real and confirmed — killed mid-file,
+    # plain requests restarts at 0.29 of 0.29 GB and hf_transfer at 0.00 of
+    # 5.09 — but it is now an objection to something that costs less than it
+    # saves: at this speed the largest weight in the catalogue lands in under
+    # two minutes, which is shorter than DOWNLOAD_STALL_S itself. Resume was
+    # machinery for a fifteen-minute download, and there is no longer one.
+    #
+    # Falling back to the plain backend on a retry was measured too and does
+    # work — it picks up hf_transfer's bytes rather than starting over — but it
+    # is deliberately not done: it buys a resume for a two-minute transfer at
+    # the price of an 8x slower one, and a second backend on the failure path
+    # is a second set of behaviour that only ever runs when things are already
+    # going wrong. Retries stay on hf_transfer and start over.
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
 )
 
 trainer_image = (
@@ -216,54 +301,11 @@ trainer_image = (
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1"})
 )
 
-# Inference runs on sd-webui-forge-classic's backend, not musubi — see
-# forge/VENDOR.md. Deliberately a separate image from the trainer: forge wants
-# newer transformers/diffusers than musubi pins, and coupling them means every
-# forge sync risks breaking training.
-#
-# Python 3.11 because comfy-kitchen ships cp311 manylinux wheels and numpy 2.x
-# requires >=3.11. CUDA 12.8 for the torch 2.8 wheels; comfy-kitchen disables
-# its own CUDA backend below CUDA 13 and falls back to plain torch ops, which is
-# fine — Krea 2 only uses it for fused RoPE.
-inference_image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04", add_python="3.11"
-    )
-    .apt_install("libgl1", "libglib2.0-0")
-    .pip_install(
-        "torch==2.8.0",
-        "torchvision==0.23.0",
-        index_url="https://download.pytorch.org/whl/cu128",
-    )
-    .pip_install(
-        "accelerate==1.10.1",
-        "comfy-kitchen==0.2.26",
-        "diffusers==0.35.1",
-        "einops==0.8.1",
-        "huggingface_hub==0.34.4",
-        "numpy==2.2.6",
-        "pillow==11.3.0",
-        "psutil==7.0.0",
-        "pyyaml==6.0.2",
-        "rich==14.1.0",
-        "safetensors==0.6.2",
-        "scipy==1.16.1",          # sd_schedulers' Beta schedule
-        "torchsde==0.2.6",        # the SDE samplers' Brownian tree
-        "transformers==4.56.1",
-        "tqdm==4.67.1",
-    )
-    # The Qwen3-VL tokenizer is loaded from backend/huggingface/krea/.../tokenizer,
-    # so unlike the trainer this image needs no HuggingFace round-trip at runtime.
-    .env({"PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false"})
-    .add_local_dir(FORGE_DIR, remote_path="/opt/forge")
-)
-
-
-# Captioning is a third image for the same reason there is a second one:
+# Captioning is a separate image for the same reason the others are:
 # Qwen3VLForConditionalGeneration landed in transformers 4.57, which is newer
-# than musubi's pins and newer than the 4.56.1 forge is verified against.
-# Pinning one transformers across all three would mean every captioner bump
-# re-litigates both training and inference.
+# than musubi's pins and newer than the version ComfyUI's own requirements
+# resolve to. Pinning one transformers across all three would mean every
+# captioner bump re-litigates both training and inference.
 caption_image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04", add_python="3.11"
@@ -290,7 +332,13 @@ caption_image = (
 )
 
 
-# Video: ComfyUI on a CUDA 13 torch wheel.
+# Inference: ComfyUI on a CUDA 13 torch wheel. Images and video both.
+#
+# One image, two GPU classes. They stay separate classes because each holds a
+# checkpoint resident and `max_containers=1` is per class — merging them would
+# make an image request wait behind a ten-minute clip. They share the *build*
+# because there is nothing per-family in it: the same ComfyUI, the same torch,
+# the same attention kernels, and one node pack that only the image side loads.
 #
 # The CUDA version is the whole point of this image, not an incidental pin.
 # ComfyUI's quant_ops.py reads torch.version.cuda and disables comfy-kitchen's
@@ -305,7 +353,7 @@ caption_image = (
 # kernels from source and needs nvcc. The torch wheels carry a CUDA *runtime*,
 # never a compiler, so a slim base gets all the way to the SageAttention build
 # before failing on a missing nvcc.
-video_image = (
+comfy_image = (
     modal.Image.from_registry(
         "nvidia/cuda:13.0.3-cudnn-devel-ubuntu24.04", add_python="3.12"
     )
@@ -340,8 +388,10 @@ video_image = (
     # install and silently get no attention backend at all. SageAttention is
     # what ComfyUI's own H3 documentation names, and it is worth roughly 2x.
     #
-    # TORCH_CUDA_ARCH_LIST must match VIDEO_GPU. 9.0 is Hopper (H100/H200);
-    # move to "10.0" for B200 and force a rebuild, or the kernels will not load.
+    # TORCH_CUDA_ARCH_LIST must match every card in IMAGE_GPUS and VIDEO_GPUS.
+    # 9.0 is Hopper (H100/H200); move to "10.0" for B200 and force a rebuild, or
+    # the kernels will not load. This is also what keeps Krea 2 off the A100 it
+    # used to run on — one image means one architecture, and sm_80 is not sm_90.
     .env({"TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8"})
     # --no-build-isolation is required (the build imports the torch installed
     # above rather than a fresh one), but it also means pip supplies nothing:
@@ -369,9 +419,39 @@ video_image = (
     # weights arrive on the volume via `_download_weight`, which runs on
     # web_image on CPU. Leaving the pin out means ComfyUI's own resolution is
     # the only thing deciding the hub version, which is the only way it can be
-    # right. `tools/smoke_video.py` is what catches it if this regresses.
+    # right. `tools/smoke_graphs.py` is what catches it if this regresses.
     .pip_install("pillow==11.3.0")
+    # Regional multi-character LoRA for Krea 2. Cloned, not vendored, for the
+    # reason given at CLIFF_SHA: nothing in it is patched.
+    #
+    # Cloned at a *full* SHA and then checked out, rather than --depth 1 on a
+    # branch, because --depth 1 cannot reach a commit that is no longer the tip
+    # — which is precisely the case a pin exists to survive. The clone is 356 kB
+    # of Python either way.
+    #
+    # torch and safetensors are its only declared dependencies and both are
+    # already here, so there is deliberately no pip install of its
+    # requirements: running one would resolve torch again against a CUDA
+    # default and undo the cu130 wheel three steps up. `ultralytics` is left
+    # out with the Detailer node it belongs to.
+    .run_commands(
+        f"git clone {CLIFF_REPO} {COMFY}/custom_nodes/krea2_regional",
+        f"cd {COMFY}/custom_nodes/krea2_regional && git checkout {CLIFF_SHA}",
+    )
     .env({"PYTHONUNBUFFERED": "1"})
+    # Last, because add_local_dir invalidates nothing above it — the shim is
+    # the file most likely to change and rebuilding SageAttention to edit
+    # twenty lines of Python would be its own kind of failure.
+    #
+    # Mounted at the package itself, not at custom_nodes/. The default
+    # (copy=False) attaches this as a mount at container startup rather than an
+    # image layer, so pointing it one level up would overlay the directory the
+    # clone above writes into and the pack would vanish at runtime while the
+    # build log still showed it being cloned.
+    .add_local_dir(
+        f"{COMFY_NODES_DIR}/visionary_boxes",
+        remote_path=f"{COMFY}/custom_nodes/visionary_boxes",
+    )
 )
 
 
@@ -427,6 +507,32 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": MODELS / "qwen3vl-4b-bf16.safetensors",
         "gated": False,
         "approx_gb": 8.9,
+    },
+    # The one weight that is optional and still belongs here.
+    #
+    # It lands in loras/ rather than models/ because that is what it is — the
+    # regional node takes it through the same `folder_paths` lookup as a
+    # character LoRA, and putting it anywhere else would mean teaching the
+    # node's combo about a second directory. The cost is that it appears in the
+    # LoRA picker like any other file, which is honest: you can write
+    # `<lora:krea2_identity_edit_v1_2:1>` and it will do something.
+    #
+    # Only the scene and outfit transfer path loads it. Every other render
+    # names it in V12's required `edit_lora` slot and never opens it — see
+    # `_edit_lora_name` for why that slot cannot simply be left empty.
+    #
+    # The filename is load-bearing: it is what the node pack's own fallback
+    # spells, so KREA2_EDIT_LORA matches it exactly and the two must move
+    # together.
+    "krea2_edit": {
+        "label": "Krea 2 Identity Edit",
+        "note": "Optional — scene and outfit transfer",
+        "family": "Krea 2 — images",
+        "repo_id": "conradlocke/krea2-identity-edit",
+        "filename": "krea2_identity_edit_v1_2.safetensors",
+        "dest": LORAS / "krea2_identity_edit_v1_2.safetensors",
+        "gated": False,
+        "approx_gb": 1.8,
     },
     # ── MiniMax-H3 video ───────────────────────────────────────────────────
     #
@@ -677,8 +783,11 @@ WAN_MODEL_KEYS: dict[tuple[str, str], tuple[str, ...]] = {
     ("5b", "i2v"): ("wan_ti2v_5b", "wan_te", "wan_vae_22"),
 }
 
+# The three weights musubi is handed on the command line. Turbo used to have an
+# alias here too, for the Forge pipeline that took absolute paths; ComfyUI's
+# loaders take a basename inside a search path, so the graph builders read
+# `MODEL_CATALOGUE[...]["dest"].name` and nothing needs a fourth constant.
 RAW_PATH = MODEL_CATALOGUE["raw"]["dest"]
-TURBO_PATH = MODEL_CATALOGUE["turbo"]["dest"]
 VAE_PATH = MODEL_CATALOGUE["vae"]["dest"]
 TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
 
@@ -749,6 +858,11 @@ def _publish(job_id: str, /, **fields: Any) -> None:
     try:
         cur = jobs.get(job_id) or {}
         cur.update(fields)
+        # When this record last spoke. A status is a claim about a container
+        # that may no longer exist — the Dict is named and outlives every
+        # container, app and deploy that writes to it — so the claim is only
+        # worth what its age says. See `_download_alive`.
+        cur["beat"] = time.time()
         jobs[job_id] = cur
     except Exception as exc:  # progress must never take the job down
         print(f"[progress] {job_id}: {exc}")
@@ -858,6 +972,9 @@ def _safe_extract_zip(zip_path: Path, dest: Path) -> int:
             with zf.open(member) as src, open(dest / name, "wb") as out:
                 shutil.copyfileobj(src, out)
             if suffix in IMAGE_EXTS:
+                # Same normalisation the loose-file path does. A zip is the more
+                # likely carrier of camera originals, not the less.
+                _upright_inplace(dest / name)
                 count += 1
     return count
 
@@ -926,7 +1043,21 @@ def _reload_volume() -> bool:
     Only the open-files conflict is absorbed. Any other reload failure is still
     an error, because it says something about the volume rather than about what
     this container happens to be holding.
+
+    Serialised, because two of these at once is not two reloads — it is one
+    reload and one 500. `/api/file` has always noted that concurrent reloads of
+    the same volume returned an error for one of two simultaneous requests, and
+    the canvas now asks for a batch of stills at once, all of which miss on the
+    first look at a brand-new job. The lock turns that from a race into a queue.
     """
+    with _RELOAD_LOCK:
+        return _reload_volume_locked()
+
+
+_RELOAD_LOCK = threading.Lock()
+
+
+def _reload_volume_locked() -> bool:
     try:
         volume.reload()
         return True
@@ -1011,12 +1142,17 @@ def _model_status() -> list[dict[str, Any]]:
 @app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume})
 def download_job(key: str) -> dict[str, Any]:
     job_id = f"dl_{key}"
-    jobs[job_id] = {
-        "status": "running",
-        "phase": f"Downloading {MODEL_CATALOGUE[key]['label']}",
-        "percent": 0,
-    }
-    return _download_weight(key, job_id)
+    # Merged, not assigned. The route seeds this record before spawning, and a
+    # Cancel pressed during the cold start writes `stop` into it — a plain
+    # assignment here would erase that request seconds before the transfer it
+    # was meant to stop begins. `stop` is deliberately not re-set: absent reads
+    # as False, so there is nothing to clobber.
+    _publish(job_id, status="running", percent=0,
+             phase=f"Downloading {MODEL_CATALOGUE[key]['label']}")
+    try:
+        return _download_weight(key, job_id)
+    except StopRequested:
+        return {"status": "stopped", "key": key}
 
 
 # How long a transfer may make no progress at all before it is called dead, and
@@ -1027,6 +1163,92 @@ def download_job(key: str) -> dict[str, Any]:
 # hours before you learn anything, and it can do it again the next day.
 DOWNLOAD_STALL_S = 240
 DOWNLOAD_TRIES = 5
+
+# How long a record may claim to be running without saying so again before it is
+# read as a corpse. `_watch_download` publishes every 5s whether or not bytes
+# moved, so a live transfer — even a stalled one — beats continuously; only a
+# container that no longer exists goes quiet. Generous against the other end of
+# the window: `.spawn()` returns before the container starts, and a cold start
+# plus `_reload_volume()` plus the first `done.wait(5)` has to fit inside this.
+DOWNLOAD_DEAD_S = 120
+
+
+def _download_alive(job_id: str) -> bool:
+    """
+    Whether a job record claiming "running" belongs to a container still alive.
+
+    `jobs` is a *named* Modal Dict, so it outlives the container, the app, the
+    deploy and the image rebuild. A container killed mid-transfer — `modal app
+    stop`, a redeploy, a preemption — never reaches any of its own terminal
+    paths, so its record stays "running" for good. Trusting that field alone
+    turned the concurrency guard below into a permanent lockout: three ghosts
+    left over from one stopped app refused every download that came after,
+    and rebuilding the image could not clear them because the Dict is not part
+    of the image.
+
+    So a status is only believed as far as its `beat`. A stale one is rewritten
+    to failed here rather than merely ignored, because the UI polls this same
+    record: leaving it would clear the lock while still showing a download that
+    is "running" and will never finish or fail. Records written before `beat`
+    existed have none, which dates them as older than any live job — which is
+    exactly what they are.
+    """
+    rec = jobs.get(job_id) or {}
+    if rec.get("status") != "running":
+        return False
+    if time.time() - float(rec.get("beat") or 0.0) <= DOWNLOAD_DEAD_S:
+        return True
+    _publish(
+        job_id,
+        status="failed",
+        error=(f"The container running this download went away without finishing "
+               f"— stopped, redeployed or preempted. It last reported "
+               f"{rec.get('downloaded_gb', 0)} GB. Start it again when you are "
+               f"ready; it downloads the file from the beginning."),
+    )
+    print(f"[download] {job_id}: stale record cleared (no beat for "
+          f"{int(time.time() - float(rec.get('beat') or 0.0))}s)")
+    return False
+
+
+# Which download job is the live one. A pointer rather than a scan, because the
+# scan was two bugs: `jobs` is a network Dict, so walking `dl_{key}` across the
+# whole catalogue is 20-odd sequential round trips, and it made `/api/download`
+# take seven seconds to answer. A button that does nothing for seven seconds is
+# a button you press again — which is exactly how the first report of this
+# arrived, and the second press is the thing the check existed to prevent.
+DL_ACTIVE = "dl_active"
+
+
+def _family_job_id(family: str) -> str:
+    """
+    A stable job id for one family's queue, derived from its name.
+
+    Derived rather than passed in by the page: the id is what Cancel and every
+    status poll address, so it has to survive a reload, and a position in a list
+    does not — adding a model to the catalogue would silently repoint it at a
+    different family. The page never builds one; it uses whatever `job_id` the
+    route hands back.
+    """
+    return "dl_fam_" + (re.sub(r"[^a-z0-9]+", "-", family.lower()).strip("-")[:48] or "x")
+
+
+def _active_download() -> str | None:
+    """
+    The job id of the weight download running now, or None.
+
+    Two reads whatever the catalogue grows to: the pointer, then the liveness
+    of the one record it names. A pointer left behind by a container that died
+    is handled by `_download_alive` rather than by trusting the pointer, so the
+    two can never disagree for longer than DOWNLOAD_DEAD_S.
+    """
+    job_id = (jobs.get(DL_ACTIVE) or {}).get("job_id")
+    if not job_id:
+        return None
+    if _download_alive(job_id):
+        return job_id
+    jobs[DL_ACTIVE] = {}
+    return None
 
 
 def _staged_bytes(root: Path) -> int:
@@ -1056,12 +1278,13 @@ def _watch_download(
     pct_base: float = 0.0, pct_span: float = 100.0,
 ) -> dict[str, Any]:
     """
-    Publish transfer progress until `done` is set, and record a stall.
+    Publish transfer progress until `done` is set, and record a stall or a
+    stop request.
 
-    Returns the live state dict so the caller can read `stalled` and `bytes`
-    after giving up — the numbers are the whole point, since "it stopped" and
-    "it stopped at 4.1 GB of 17.2 after 6 minutes of nothing" send you to
-    completely different places.
+    Returns the live state dict so the caller can read `stalled`, `stopped`
+    and `bytes` after giving up — the numbers are the whole point, since "it
+    stopped" and "it stopped at 4.1 GB of 17.2 after 6 minutes of nothing"
+    send you to completely different places.
 
     `expect_gb` is None when the size is not known ahead of time, which is the
     normal case for anything off Google Drive. The byte count and the stall
@@ -1069,22 +1292,48 @@ def _watch_download(
     percentage does, and a percentage invented from a guess is worth less than
     no percentage at all.
     """
-    state = {"bytes": 0, "moved_at": time.time(), "stalled": False}
+    n0 = _staged_bytes(root)
+    state = {"bytes": n0, "moved_at": time.time(), "stalled": False, "stopped": False}
     expect = int((expect_gb or 0) * 1e9)
-    started = time.time()
     logged = 0.0
+    # Movement in either direction, not a high-water mark. The tree can shrink:
+    # hf_transfer truncates a partial rather than ranging over it, so the first
+    # thing a restarted attempt does is make this number smaller. Against a
+    # high-water mark that reads as "no new bytes" for as long as it takes to
+    # climb back — which is a live transfer at full speed being timed out for a
+    # stall it is not having. A byte count that changed is a container doing
+    # something, whichever way it went.
+    # Windowed, not cumulative-since-this-attempt-started: a resumed attempt
+    # begins with several GB already on disk from before, so dividing the
+    # total by the few seconds this attempt has been alive reports a number
+    # with nothing to do with the network — high at first, then decaying
+    # toward the real rate as the denominator catches up. That decay reads
+    # exactly like a slowing transfer even when the transfer itself is
+    # steady, which is what sent a fresh, healthy 3-way concurrent pull
+    # through the logs looking like it was dying. Tracking only what arrived
+    # since the last poll reports what is actually happening right now.
+    prev_n, prev_t = n0, state["moved_at"]
 
     while not done.wait(5):
         now = time.time()
         n = _staged_bytes(root)
-        if n > state["bytes"]:
+        if n != state["bytes"]:
             state["bytes"], state["moved_at"] = n, now
         elif now - state["moved_at"] > DOWNLOAD_STALL_S:
             state["stalled"] = True
             return state
 
+        if _stop_requested(job_id):
+            state["stopped"] = True
+            return state
+
         gb = n / 1e9
-        rate = n / max(1.0, now - started) / 1e6
+        # Floored at zero for the same shrinking tree. A truncation is not a
+        # transfer running backwards at 820 MB/s, which is what the raw delta
+        # published — one window of "0.0 MB/s" is the honest reading of a
+        # window that delivered nothing.
+        rate = max(0.0, n - prev_n) / max(1.0, now - prev_t) / 1e6
+        prev_n, prev_t = n, now
         size = f"{gb:.1f} of {expect_gb:.1f} GB" if expect else f"{gb:.1f} GB"
         fields: dict[str, Any] = {
             "phase": " · ".join(x for x in (label, note, size) if x),
@@ -1167,18 +1416,21 @@ def _download_weight(
             return f"{spec['filename']} is missing from {spec['repo_id']}."
         return None
 
-    # Takes its sink and its flag as arguments rather than closing over them.
-    # An abandoned attempt's thread is still alive and still going to finish
-    # eventually; with a closure it would write its stale result into the *next*
-    # attempt's dict and set the next attempt's event — handing the retry the
-    # answer to the question before it. Passing them in gives every attempt its
-    # own, so a straggler lands somewhere nobody is reading.
-    def pull(sink: dict[str, Any], flag: "threading.Event") -> None:
+    # Takes its sink, its flag and its directory as arguments rather than
+    # closing over them. An abandoned attempt's thread is still alive and still
+    # going to finish eventually; with a closure it would write its stale result
+    # into the *next* attempt's dict and set the next attempt's event — handing
+    # the retry the answer to the question before it. The directory is on that
+    # list for the same reason and was the one that got away: a straggler kept
+    # writing into the shared staging path, so its bytes were counted as the
+    # next attempt's progress. Every attempt gets its own of all three, so a
+    # straggler lands somewhere nobody is reading.
+    def pull(sink: dict[str, Any], flag: "threading.Event", where: Path) -> None:
         try:
             sink["path"] = hf_hub_download(
                 repo_id=spec["repo_id"],
                 filename=spec["filename"],
-                local_dir=str(STAGING),
+                local_dir=str(where),
                 token=token,
             )
         except Exception as exc:  # re-raised on the calling thread below
@@ -1186,36 +1438,60 @@ def _download_weight(
         finally:
             flag.set()
 
+    # Nothing carries over between attempts.
+    #
+    # Keeping the partial used to be the entire point — the plain backend ranged
+    # over it, so a resume cost the bytes since the stall rather than the 4 GB
+    # already down. hf_transfer discards it regardless, so what is left is not a
+    # head start: it is dead weight on a volume whose only other way to reclaim
+    # space is the Modal CLI, and a false floor under every number published
+    # here. `_staged_bytes` sums a tree, so 9.6 GB of abandoned Krea 2 RAW
+    # counted as bytes the next attempt had downloaded — which is where
+    # "882 MB/s" five seconds into a transfer came from, and then a rate of
+    # -820 MB/s when hf_transfer truncated it. Measuring from an empty directory
+    # is what makes the rate the rate.
+    shutil.rmtree(STAGING, ignore_errors=True)
+    STAGING.mkdir(parents=True, exist_ok=True)
+
     staged: str | None = None
     last_err = ""
     for attempt in range(1, DOWNLOAD_TRIES + 1):
+        stage = STAGING / f"attempt-{attempt}"
+        stage.mkdir(parents=True, exist_ok=True)
+
         # The download runs in a worker while this thread watches the bytes
         # land. It has to be this way round: hf_hub_download is a blocking call
         # with no callback and no cancellation, so the only way to put a bound
         # on it is to stop waiting for it. The thread is a daemon and is
-        # abandoned on a stall — the container is torn down when this function
-        # returns, and a leaked socket for those few seconds is a far smaller
-        # cost than four hours of a job that will never finish.
+        # abandoned on a stall or a stop request — the container is torn down
+        # when this function returns, and a leaked socket for those few
+        # seconds is a far smaller cost than four hours of a job that will
+        # never finish, or one nobody wanted running anymore.
         result: dict[str, Any] = {}
         done = threading.Event()
-        threading.Thread(target=pull, args=(result, done), daemon=True).start()
-        state = _watch_download(STAGING, label, job_id, done, spec["approx_gb"],
+        threading.Thread(target=pull, args=(result, done, stage), daemon=True).start()
+        state = _watch_download(stage, label, job_id, done, spec["approx_gb"],
                                 note, pct_base, pct_span)
+
+        if state.get("stopped"):
+            print(f"[download] {label}: stop requested at "
+                  f"{state['bytes'] / 1e9:.2f} GB — attempt {attempt} abandoned")
+            _publish(job_id, status="stopped",
+                     phase=f"{label} · cancelled at {state['bytes'] / 1e9:.2f} GB")
+            raise StopRequested(label)
 
         if state["stalled"]:
             last_err = (f"stalled at {state['bytes'] / 1e9:.2f} GB with no new bytes "
                         f"for {DOWNLOAD_STALL_S}s")
             print(f"[download] {label}: {last_err} — attempt {attempt} abandoned")
-            _publish(job_id, phase=f"{label} · stalled, resuming ({attempt} of {DOWNLOAD_TRIES})")
-            # No sleep and no cleanup: the partial file is the point. This
-            # image runs huggingface_hub's plain requests backend, which leaves
-            # a `.incomplete` beside the target and re-requests with a Range
-            # header — so a resume costs the bytes since the stall, not the 4 GB
-            # already on disk. Do not turn on hf_transfer here without checking
-            # that first: its speed comes from parallel chunks, but it is also
-            # the backend with no progress hook and the weaker resume story,
-            # which are precisely the two properties that made this bug
-            # four hours long instead of four minutes.
+            _publish(job_id, phase=f"{label} · stalled, restarting ({attempt} of {DOWNLOAD_TRIES})")
+            # "Restarting", not "resuming": this image runs hf_transfer, which
+            # was measured discarding a 5.09 GB partial rather than ranging over
+            # it. That is the accepted cost of the 8x — see web_image — and it
+            # is what keeps DOWNLOAD_STALL_S where it is rather than tuning it
+            # down to match a two-minute transfer. A stall detector that fires
+            # early used to cost the bytes since the stall; it now costs all of
+            # them, so it stays conservative.
             continue
 
         exc = result.get("error")
@@ -1237,13 +1513,19 @@ def _download_weight(
         # those three separate a dead uplink from a wrong path from a repo that
         # is simply refusing to serve this one file.
         err = (f"{label} did not finish after {DOWNLOAD_TRIES} attempts — {last_err}. "
-               f"Partial data is kept at {STAGING}, so retrying resumes rather "
-               f"than starting over.")
+               f"Each attempt restarts the file, so this is {DOWNLOAD_TRIES} full "
+               f"tries that got nowhere rather than {DOWNLOAD_TRIES} nudges at a "
+               f"partial one: suspect the repo or the uplink, not the last mile.")
         _publish(job_id, status="failed", error=err)
         raise RuntimeError(err)
 
     # Same filesystem, so this is an instant rename rather than a 26 GB copy.
     shutil.move(staged, dest)
+    # Then the attempt directories, including any a straggler is still filling.
+    # Nothing here is a resume any more, so anything left is pure occupancy on a
+    # volume that needs the Modal CLI to reclaim space — and this ran once with
+    # 9.6 GB of a download nobody was waiting for still sitting in it.
+    shutil.rmtree(STAGING, ignore_errors=True)
     volume.commit()
 
     res = {
@@ -1258,16 +1540,21 @@ def _download_weight(
 
 
 @app.function(image=web_image, cpu=2.0, timeout=6 * 60 * 60, volumes={"/workspace": volume})
-def download_missing_job(keys: list[str]) -> dict[str, Any]:
+def download_missing_job(keys: list[str], job_id: str = "dl_all") -> dict[str, Any]:
     """
-    Fetch every missing weight in one container, sequentially.
+    Fetch a list of missing weights in one container, sequentially.
 
     Sequential rather than four parallel containers: these are large files
     sharing one uplink, so running them at once mostly splits the same bandwidth
     while multiplying container cost — and it gives the UI a single job to
     follow instead of four independent ones.
+
+    `job_id` is a parameter because "every missing weight" and "this family's
+    missing weights" are the same walk over a different list. A second function
+    for the second one would be a second copy of the queue, the failure
+    accounting and the stop path, to no end — which is why one family's button
+    reaches this and not something new.
     """
-    job_id = "dl_all"
     done, failed = [], []
     for i, key in enumerate(keys, 1):
         label = MODEL_CATALOGUE[key]["label"]
@@ -1284,6 +1571,14 @@ def download_missing_job(keys: list[str]) -> dict[str, Any]:
                              pct_base=(i - 1) * 100 / len(keys),
                              pct_span=100 / len(keys))
             done.append(key)
+        except StopRequested:
+            # The whole queue stops, not just this key — cancelling "download
+            # all" means getting the uplink back, not skipping ahead to the
+            # next multi-GB file.
+            print(f"[download-all] stop requested — {len(done)} of {len(keys)} done")
+            res = {"status": "stopped", "downloaded": done, "remaining": keys[i - 1:]}
+            _publish(job_id, **res)
+            return res
         except Exception as exc:
             # One gated repo must not abandon the rest of the queue.
             print(f"[download-all] {label} failed: {exc}")
@@ -1335,7 +1630,8 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
     import gdown
 
     job_id = GDRIVE_JOB
-    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0}
+    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
+                    "stop": False, "beat": time.time()}
 
     if folder and not NAME_RE.match(folder):
         err = f"Folder name must be 1-64 chars of [A-Za-z0-9_-]: {folder!r}"
@@ -1369,6 +1665,11 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
 
     threading.Thread(target=pull, daemon=True).start()
     state = _watch_download(stage, "Google Drive", job_id, done)
+
+    if state.get("stopped"):
+        shutil.rmtree(stage, ignore_errors=True)
+        _publish(job_id, status="stopped")
+        return {"status": "stopped"}
 
     if state["stalled"]:
         shutil.rmtree(stage, ignore_errors=True)
@@ -1489,7 +1790,7 @@ def _caption_images(
             print("[caption] stop requested")
             break
         try:
-            image = Image.open(img_path).convert("RGB")
+            image = _upright(Image.open(img_path)).convert("RGB")
             # Qwen3-VL takes the image as a content part, not an inline <image>
             # token, and apply_chat_template does the placeholder expansion.
             convo = [{
@@ -1595,13 +1896,24 @@ def train_job(
     image_dir, cache_dir = work / "images", work / "cache"
     image_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # Orientation is baked in on the way into scratch, not left to the trainer:
+    # musubi opens with PIL and PIL does not rotate, so an EXIF-rotated portrait
+    # would be measured landscape, bucketed landscape and trained sideways. The
+    # scratch copy is the right place for it — the dataset on the volume keeps
+    # its original bytes, and every run gets upright pixels without the user
+    # having to know the tag exists.
+    rotated = 0
     for item in src.iterdir():
-        if item.suffix.lower() in IMAGE_EXTS or item.suffix.lower() == ".txt":
+        if item.suffix.lower() in IMAGE_EXTS:
+            rotated += _upright_copy(item, image_dir / item.name)
+        elif item.suffix.lower() == ".txt":
             shutil.copy2(item, image_dir / item.name)
 
     images = [p for p in image_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS]
     if not images:
         raise RuntimeError("No images to train on.")
+    if rotated:
+        log.append(f"[prepare] rotated {rotated} image(s) upright from EXIF")
 
     # Krea 2 trains from caption files; a missing .txt is a hard error inside the
     # cache step, so an uncaptioned image gets the bare trigger word.
@@ -1730,29 +2042,352 @@ num_repeats = {num_repeats}
 # --------------------------------------------------------------------------
 # Generation
 #
-# Backed by sd-webui-forge-classic (neo), not musubi. musubi's
+# Backed by ComfyUI, the same backend video runs on. musubi's
 # krea2_generate_image.py is a one-shot CLI: it reloaded ~35 GB of weights for
 # every image and took a single LoRA at a single strength. This is a Modal Cls,
-# so the checkpoint stays resident between requests, and LoRAs stack the way
-# they do in Forge — any number of them, each with its own UNet and text-encoder
-# weight. See forge/VENDOR.md and forge/krea2/.
+# so the checkpoint stays resident between requests, and LoRAs stack — any
+# number of them, each with its own UNet and text-encoder weight.
+#
+# This ran on a vendored sd-webui-forge-classic until regional prompting stopped
+# being a reason to keep it; see the note at CLIFF_SHA.
 # --------------------------------------------------------------------------
 
 
-# Mirrors krea2.sampler_names() / scheduler_names(). Duplicated rather than
-# imported because /api/state runs in the CPU web image, and importing the forge
-# backend needs a CUDA device — see forge/krea2/bootstrap.py. tools/smoke_krea2.py
-# prints the authoritative lists if these ever need re-checking.
+# ComfyUI's own names, not Forge's.
+#
+# These are values sent into a graph, not labels — `KSampler` validates
+# `sampler_name` against `comfy.samplers.KSAMPLER_NAMES` and rejects anything
+# else as "Value not in list", so "DPM++ 2M" is not a spelling of `dpmpp_2m`
+# here, it is a rejected request. The old list was Forge's and every entry in it
+# was wrong the moment the backend changed.
+#
+# A subset, not the full 40-odd, chosen the same way VIDEO_MODELS chooses:
+# ancestral variants reintroduce noise each step, which fights an 8-step
+# distilled Turbo, and the cfg_pp family is for models that take CFG. The full
+# list is `python -c "import comfy.samplers; print(...)"` inside the container
+# if one is ever wanted back.
+#
+# `er_sde` is the exception to the no-SDE rule and the reason the rule is worded
+# about ancestral samplers rather than stochastic ones: it is an ER-SDE solver,
+# so the noise it adds is scheduled by the solver rather than injected on top of
+# the step, and it holds together at Turbo's step count where `euler_a` does not.
 SAMPLERS = [
-    "Euler", "Euler a", "DPM++ 2M", "DPM++ 2M SDE", "DPM++ 3M SDE",
-    "DPM++ SDE", "DPM++ 2s a RF", "Heun", "LMS", "LCM", "ER SDE", "Res Multistep",
+    "er_sde", "euler", "res_multistep", "dpmpp_2m", "heun", "ddpm", "lcm",
+    "deis", "ipndm",
 ]
-SCHEDULERS = [
-    "Automatic", "Karras", "Exponential", "Polyexponential", "Normal", "Simple",
-    "Uniform", "SGM Uniform", "Linear Quadratic", "KL Optimal", "DDIM",
-    "Align Your Steps", "Beta", "Turbo", "Bong Tangent", "FlowMatchEulerDiscrete",
-]
+# Krea 2 is flow-matching, so these are the schedules that mean something on a
+# sigma curve that starts at 1. "Automatic" is gone with Forge: it was Forge
+# picking a schedule per sampler, and ComfyUI has no such concept — `simple` is
+# the default the model config implies and what the video path already sends.
+SCHEDULERS = ["simple", "normal", "beta", "sgm_uniform", "karras", "exponential",
+              "linear_quadratic", "kl_optimal", "ddim_uniform"]
+
+# What an image render uses when nothing says otherwise. Separate from
+# KREA2_DEFAULTS because that dict is per-checkpoint and these are not: the
+# sampler and the schedule are properties of a flow-matching curve, and Turbo
+# and RAW want the same pair. Served to the page as well as applied here, so the
+# menu opens on the value the backend would have picked anyway — two places
+# spelling the same default is how they drift.
+IMAGE_DEFAULTS = {"sampler": "er_sde", "scheduler": "sgm_uniform"}
 MAX_LORAS = 6
+
+# Per-checkpoint defaults, which used to live inside the Forge pipeline and be
+# reported back in `last_report`. They are here now because the graph builder
+# has to write a number into KSampler — ComfyUI has no notion of "auto", and a
+# steps field left empty has to become something before the graph is valid.
+#
+# Turbo is guidance-distilled: CFG 1.0 is not a low setting, it is the absence
+# of a negative branch, and raising it on Turbo burns contrast rather than
+# adding adherence.
+KREA2_DEFAULTS = {
+    "turbo": {"steps": 8, "cfg": 1.0},
+    "raw": {"steps": 28, "cfg": 5.5},
+}
+
+
+# --------------------------------------------------------------------------
+# ComfyUI — one process per container, driven over 127.0.0.1
+#
+# Shared by both GPU classes. It was written for video and stayed there while
+# images ran on Forge; when images moved, copying it would have meant two
+# implementations of "wait for a graph and find what it saved" whose bugs are
+# fixed one at a time. The families differ in the graph they build and nothing
+# else, which is the same line the job contract already draws.
+# --------------------------------------------------------------------------
+
+
+class _Comfy:
+    """
+    A warm ComfyUI, and the four things anyone needs from it.
+
+    ComfyUI runs as a local server inside the container and is spoken to over
+    127.0.0.1 — it is never exposed, and the only client is this class. Running
+    the real thing rather than porting its model code is what keeps the
+    int8-convrot kernels, the dynamic offloader, Krea 2 support and every
+    upstream fix on our side of the line instead of in a fork we would own.
+
+    Not a Modal Cls itself, deliberately: `@modal.enter` and `@modal.method`
+    belong to the classes Modal instantiates, and a base class carrying them is
+    a question about Modal's decorator inheritance that nothing here needs to
+    ask. Each GPU class owns one of these and calls `start()` from its own
+    enter hook.
+    """
+
+    def __init__(self, tag: str):
+        # Prefixes the readiness line so two containers' logs are tellable
+        # apart in Modal's stream, where they interleave.
+        self.tag = tag
+        self.job_id: str | None = None
+        self._log: deque[str] = deque(maxlen=200)
+        self._proc: subprocess.Popen | None = None
+
+    def start(self) -> None:
+        import threading
+
+        # Point ComfyUI at our flat models/ directory instead of moving weights
+        # into the per-type tree it expects. The volume layout is the contract;
+        # ComfyUI adapts to it. Every type maps to the same folder, so every
+        # file is visible to whichever loader asks for it.
+        #
+        # loras/ is the exception and keeps its nesting, because that nesting is
+        # meaningful — one folder per trained LoRA, checkpoints beside the final
+        # weights. ComfyUI walks it recursively and names a file by its path
+        # relative to here, which is exactly what the LoRA validators emit.
+        (COMFY / "extra_model_paths.yaml").write_text(
+            "visionary:\n"
+            f"  base_path: {WORKSPACE}/\n"
+            "  diffusion_models: models/\n"
+            "  text_encoders: models/\n"
+            "  clip: models/\n"
+            "  vae: models/\n"
+            "  loras: loras/\n"
+        )
+
+        # A fresh clone ships input/ and output/, but a changed --base-directory
+        # or a pruned image would not, and the failure would surface as a
+        # LoadImage error about a file we thought we had just written.
+        (COMFY / "input").mkdir(parents=True, exist_ok=True)
+        (COMFY / "output").mkdir(parents=True, exist_ok=True)
+
+        self._proc = subprocess.Popen(
+            ["python", "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
+             "--disable-auto-launch", "--disable-metadata",
+             # Safe on both paths, for different reasons. H3 and Wan never pass
+             # an attention mask. Krea 2 does, but only through the regional
+             # node, and that node installs itself as
+             # `optimized_attention_override` and runs its own FlexAttention
+             # kernel for exactly the masked case — sageattention is what it
+             # delegates *unmasked* blocks to. The one call that still reaches
+             # sage with a mask is ComfyUI's own fallback-per-call path, which
+             # is a slower call and not a wrong picture.
+             "--use-sage-attention",
+             # Not a tuning choice — the alternative is broken. ComfyUI's
+             # `text_encoder_dtype()` ends in a bare `return torch.float16`
+             # with no device or model test, so every text encoder is stored
+             # fp16 unless a flag says otherwise, and the startup log duly
+             # reported `dtype: torch.float16` for a file we download in bf16.
+             #
+             # Most models survive that because they read one normalised final
+             # hidden state. Krea 2 does not: `comfy/text_encoders/krea2.py`
+             # taps twelve RAW intermediate layers of Qwen3-VL-4B — 2 through
+             # 35 — and concatenates them into a (B, seq, 12*2560) conditioning
+             # tensor. Qwen's deep layers carry very large activations, and in
+             # fp16 those lose most of their precision or leave the range
+             # outright. That is conditioning the DiT cannot denoise against,
+             # which is the noise every Krea 2 render produced from the day the
+             # image path moved off Forge — Forge held this encoder in bf16.
+             #
+             # Process-wide, because CLIPLoader takes no dtype and the three
+             # families share one ComfyUI. That is fine for the other two:
+             # umT5 and a quantised Qwen3-VL-32B both prefer bf16 to fp16.
+             "--bf16-text-enc"],
+            cwd=str(COMFY),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        threading.Thread(target=self._drain, daemon=True).start()
+        self._wait_ready()
+
+    def _drain(self) -> None:
+        """
+        Mirror ComfyUI's output to Modal's logs, and lift step progress out of it.
+
+        ComfyUI prints a tqdm bar for the sampling loop, which TQDM_RE already
+        parses for musubi — the same shape, so the same regex. Reading progress
+        off stdout rather than opening ComfyUI's websocket keeps this to one
+        connection and one dependency-free thread.
+        """
+        assert self._proc is not None and self._proc.stdout is not None
+        for line in self._proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            print(line, flush=True)
+            self._log.append(line)
+            m = TQDM_RE.search(line)
+            if m and self.job_id:
+                fields: dict[str, Any] = {
+                    "phase": "generate",
+                    "step": int(m.group("step")),
+                    "total_steps": int(m.group("total")),
+                    "percent": int(m.group("pct")),
+                }
+                if m.group("eta"):
+                    fields["eta"] = m.group("eta")
+                    fields["rate"] = f"{m.group('rate')}{m.group('unit')}"
+                _publish(self.job_id, **fields)
+
+    def _wait_ready(self, timeout: float = 300.0) -> None:
+        import urllib.error
+        import urllib.request
+
+        assert self._proc is not None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    "ComfyUI exited during startup.\n" + "\n".join(self._log)
+                )
+            try:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{COMFY_PORT}/system_stats", timeout=2
+                ).read()
+                print(f"[{self.tag}] ComfyUI ready", flush=True)
+                return
+            except (urllib.error.URLError, OSError):
+                time.sleep(1.0)
+        raise RuntimeError("ComfyUI did not become ready.\n" + "\n".join(self._log))
+
+    def require_nodes(self, *class_types: str) -> None:
+        """
+        Fail at startup if a custom node did not register, naming it.
+
+        ComfyUI logs an import traceback for a custom node that raises and then
+        starts anyway without it. Left alone, the first symptom is a queued
+        graph rejected for an unknown class_type — which reads like our graph
+        builder naming a node wrong, minutes into a warm GPU, when the real
+        fault was an import error printed during startup and scrolled past. The
+        log tail goes in the message because that traceback is the answer and
+        it is already in hand.
+        """
+        known = self.get("/object_info") or {}
+        missing = [c for c in class_types if c not in known]
+        if missing:
+            raise RuntimeError(
+                f"ComfyUI started without {', '.join(missing)}. A custom node "
+                f"failed to import; its traceback is above.\n"
+                + "\n".join(list(self._log)[-40:])
+            )
+
+    def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{COMFY_PORT}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        return json.loads(urllib.request.urlopen(req, timeout=30).read() or b"{}")
+
+    def get(self, path: str) -> Any:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{COMFY_PORT}{path}", timeout=30
+        ) as r:
+            return json.loads(r.read() or b"{}")
+
+    def stage(self, job_id: str, blob: str, slot: str, ext: str = "png") -> str:
+        """
+        Drop one uploaded file where a LoadImage node can name it.
+
+        Under the job id, so two takes cannot collide on a filename — the
+        second would otherwise silently reuse the first's frame.
+        """
+        name = f"{job_id}-{slot}.{ext}"
+        (COMFY / "input" / name).write_bytes(base64.b64decode(blob))
+        return name
+
+    def run(self, job_id: str, graph: dict[str, Any], *, what: str) -> list[str]:
+        """
+        Queue one graph and return what it saved, relative to output/.
+
+        `what` is the noun for the "saved nothing" error, which is the one
+        failure here that is neither an exception nor a picture: the graph ran,
+        reported success, and the run is about to be thrown away by a job that
+        says it produced no files.
+        """
+        self.job_id = job_id
+        try:
+            prompt_id = self.post("/prompt", {"prompt": graph})["prompt_id"]
+            return self._await(job_id, prompt_id, what)
+        finally:
+            self.job_id = None
+
+    def _await(self, job_id: str, prompt_id: str, what: str) -> list[str]:
+        assert self._proc is not None
+        while True:
+            if _stop_requested(job_id):
+                # ComfyUI unwinds the sampler itself and stays warm, which a
+                # killed process would not — the weights stay loaded for the
+                # next take.
+                self.post("/interrupt", {})
+                raise StopRequested("generate")
+
+            entry = (self.get(f"/history/{prompt_id}") or {}).get(prompt_id)
+            if entry:
+                status = entry.get("status", {})
+                if status.get("status_str") == "error" or not status.get("completed", True):
+                    raise RuntimeError(self._why_failed(status))
+                names: list[str] = []
+                for out in entry.get("outputs", {}).values():
+                    # "images" is the one that actually fires for video too:
+                    # SaveVideo returns ui.PreviewVideo, whose as_dict() is
+                    # {"images": [...], "animated": (True,)} — a video is
+                    # reported through the image channel, flagged rather than
+                    # separately named. The other two are what the older save
+                    # nodes emit and cost a tuple to keep.
+                    for key in ("images", "videos", "gifs"):
+                        for item in out.get(key) or []:
+                            name = item.get("filename")
+                            if not name:
+                                continue
+                            # Honour the subfolder rather than assuming the flat
+                            # case our filename_prefix happens to produce: the
+                            # prefix is split on a path separator, so the day one
+                            # gains a slash this stops silently reading the
+                            # wrong path.
+                            names.append(str(Path(item.get("subfolder") or "") / name))
+                if names:
+                    # Sorted because a batch arrives in whatever order the save
+                    # node reported it, and the gallery numbers what it is
+                    # given — an unsorted batch of four renumbers itself
+                    # between polls of the same finished job.
+                    return sorted(names)
+                raise RuntimeError(
+                    f"ComfyUI reported success but saved no {what}.\n"
+                    + "\n".join(list(self._log)[-25:])
+                )
+
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    "ComfyUI exited mid-generation.\n" + "\n".join(list(self._log)[-25:])
+                )
+            time.sleep(1.5)
+
+    @staticmethod
+    def _why_failed(status: dict[str, Any]) -> str:
+        """
+        Turn ComfyUI's execution_error message into one line worth reading.
+
+        The raw record nests the useful part — node type and exception — under
+        a list of (event, payload) pairs, and a bare "status_str: error" sends
+        you to the container logs for something the record already knows.
+        """
+        for event, payload in status.get("messages") or []:
+            if event == "execution_error":
+                node = payload.get("node_type") or payload.get("node_id")
+                return f"{node}: {payload.get('exception_message') or 'failed'}"
+        return "ComfyUI reported an error with no detail."
 
 
 # --------------------------------------------------------------------------
@@ -1814,15 +2449,117 @@ def _touch_session(sid: str) -> None:
     marker.write_text("")
 
 
+def _upright(im):
+    """
+    Apply an image's EXIF orientation to its pixels.
+
+    Every consumer here reads pixels with PIL, and PIL does not rotate on open —
+    browsers do. So a phone photo stored landscape with an orientation tag looked
+    right in the page and was sideways to everything that mattered: the captioner
+    described a rotated scene, and musubi's loader is a bare
+    `Image.open(...).convert("RGB")`, so the bucket was chosen from the stored
+    dimensions and the model trained on the rotation. A 3024x4032 portrait went
+    into a landscape bucket.
+
+    Returns the image unchanged when there is no orientation tag, which is the
+    common case and costs nothing.
+    """
+    from PIL import ImageOps
+
+    try:
+        return ImageOps.exif_transpose(im) or im
+    except Exception:
+        # A truncated or malformed EXIF block is not a reason to lose the image.
+        return im
+
+
+def _upright_inplace(path: Path) -> bool:
+    """
+    Rewrite one uploaded image with its EXIF rotation baked into the pixels.
+
+    The consumers each handle orientation now, but this is the only fix at the
+    root: "rotate" in Finder or Photos usually writes the orientation tag and
+    leaves the pixels alone, so the file that lands here is sideways to anything
+    that does not read EXIF — and that is most things, including the trainer.
+    Normalising once on arrival means nothing downstream has to know the tag
+    exists, which is the same reason the captions are `.txt` sidecars: the
+    storage layout is the contract.
+
+    Writes via a temp file and `replace`, so a failure mid-encode cannot leave a
+    half-written image where a whole one was. Untagged files — nearly all of
+    them — are not touched at all.
+    """
+    from PIL import Image
+
+    tmp = path.with_name(path.name + ".upright")
+    try:
+        with Image.open(path) as im:
+            if (im.getexif() or {}).get(274, 1) in (0, 1):
+                return False
+            upright = _upright(im)
+            if path.suffix.lower() in {".jpg", ".jpeg"}:
+                upright.convert("RGB").save(tmp, "JPEG", quality=95, subsampling=0)
+            else:
+                upright.save(tmp)
+        tmp.replace(path)
+        return True
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        print(f"[upload] could not normalise orientation for {path.name}: {exc}")
+        return False
+
+
+def _upright_copy(src: Path, dst: Path) -> bool:
+    """
+    Copy one training image, baking in its EXIF rotation. True if it rotated.
+
+    Only re-encodes when the tag says to. Anything else is `copy2`, so a set of
+    200 already-upright images pays one header read each and keeps its bytes
+    exactly — the originals on the volume are never touched either way, because
+    this only ever writes into the per-run scratch copy.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(src) as im:
+            if (im.getexif() or {}).get(274, 1) in (0, 1):
+                raise ValueError("no rotation")
+            upright = _upright(im)
+            if dst.suffix.lower() in {".jpg", ".jpeg"}:
+                upright.save(dst, quality=95, subsampling=0)
+            else:
+                upright.save(dst)
+            return True
+    except Exception:
+        shutil.copy2(src, dst)
+        return False
+
+
+def _drop_legacy_trash(root: Path) -> None:
+    """
+    Clear a `.trash/` an earlier version of this file left behind.
+
+    Deletion is now unlinking everywhere, so these folders are not a safety net
+    any more — they are a second copy of everything already thrown away, sitting
+    on a volume whose only other way to reclaim space is the Modal CLI. Called
+    from the delete paths rather than from a listing or a timer, so it happens
+    where a deletion was already asked for and never as a surprise.
+    """
+    victim = root / LEGACY_TRASH_DIR
+    if victim.is_dir():
+        shutil.rmtree(victim, ignore_errors=True)
+
+
 def _sweep_drafts() -> int:
     """
-    Retire drafts whose window closed. Returns how many moved.
+    Retire drafts whose window closed. Returns how many went.
 
-    Into drafts/.trash/ rather than unlinked, because this is the one deletion
-    nobody asked for by name: it has to cost a file move like every other one
-    here, so a sweep that fires at the wrong moment is a recoverable mistake.
-    Liveness is per session and not per container, so a second tab open on the
-    same app keeps its own drafts and does not reap the first one's.
+    Unlinked, like every other deletion here. This is the one that nobody asks
+    for by name, so it is the one where the grace period is doing all the work:
+    `DRAFT_GRACE_S` of silence from the session, and the folder's own mtime
+    counted as a heartbeat so an upload still writing cannot be swept out from
+    under itself. Liveness is per session and not per container, so a second tab
+    open on the same app keeps its own drafts and does not reap the first one's.
     """
     if not DRAFTS.is_dir():
         return 0
@@ -1851,10 +2588,15 @@ def _sweep_drafts() -> int:
             continue
         if now - seen < DRAFT_GRACE_S:
             continue
-        trash = DRAFTS / TRASH_DIR
-        trash.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(d), str(trash / f"{d.name}-{int(now)}"))
+        shutil.rmtree(d, ignore_errors=True)
         swept += 1
+
+    # This is the app's periodic housekeeping pass, which makes it the one place
+    # a one-time migration can run without waiting for the user to delete
+    # something in each root. Both are no-ops on a volume that never had a
+    # `.trash/`, and on one that did they run once and then cost a stat.
+    _drop_legacy_trash(DRAFTS)
+    _drop_legacy_trash(DATASETS)
 
     # Markers outlive the drafts they kept alive; a day is well past the point
     # where one can still be protecting anything.
@@ -2111,10 +2853,30 @@ def _infotext(
     ]
     add("Loras", ", ".join(loras))
 
+    # A regional render is not reproducible from its prompts alone — which LoRA
+    # sat in which box is the whole result — so each region is written as
+    # "lora@strength: text" in box order, and box order is what pairs a row
+    # with its rectangle.
     regions = report.get("regions") or []
     if regions:
         add("Regions", len(regions))
-        add("Region prompts", " | ".join(str(r.get("prompt", "")) for r in regions))
+        add("Region prompts", " | ".join(
+            ((f"{r['lora']}@{r.get('strength', 1.0)}: " if r.get("lora") not in
+              (None, "", "None") else "") + str(r.get("prompt", "")))
+            for r in regions
+        ))
+        add("Region weight", report.get("region_weight"))
+        # Only when some box had one. A mold changes the likeness more than any
+        # number here does, and "why does this one look so much more like her"
+        # is unanswerable from a sidecar that does not mention the photograph.
+        molds = sum(1 for r in regions if r.get("ref"))
+        if molds:
+            add("Region refs", molds)
+        # The caption goes in as a field rather than as the infotext's first
+        # line, because that line is the prompt and A1111's format says so —
+        # a reader pasting this back expects to get the sentence they wrote,
+        # not the machine's expansion of it.
+        add("Caption", report.get("caption"))
 
     lines.append(", ".join(pairs))
     return "\n".join(lines)
@@ -2236,40 +2998,558 @@ def _validate_loras(raw: Any) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             raise ValueError(f"LoRA strengths must be numbers: {path.name}")
 
-        out.append({"path": str(path), "unet": unet, "text_encoder": te})
+        # `name` is the same conversion _validate_video_loras makes and for the
+        # same reason: LoraLoader takes a combo validated against a directory
+        # listing, not a path, so a path reaching the graph fails inside a warm
+        # GPU as "Value not in list" rather than here as a form error.
+        out.append({
+            "path": str(path),
+            "name": path.relative_to(LORAS.resolve()).as_posix(),
+            "unet": unet,
+            # Krea 2's text encoder takes LoRA weights, unlike Wan's — so this
+            # stack keeps the second number the video one has no use for.
+            # Defaulted to the UNet weight here rather than in the client, so
+            # today's default is not frozen into every prompt ever saved.
+            "text_encoder": unet if te is None else te,
+        })
     return out
 
 
-def _lora_specs(raw: Any) -> list:
-    """GPU-side wrapper. Re-validates: this is the container that opens the file."""
-    from krea2 import LoraSpec
+# What `_edit_lora_choices()` in the node pack falls back to when the volume
+# holds no LoRAs at all. Read off the catalogue rather than spelled again,
+# because the combo we send has to be a member of the list that function
+# returns — and when the volume is empty that list is exactly `[this]`, so the
+# two names have to be the same string or the empty-volume case fails
+# validation on a value we chose ourselves.
+KREA2_EDIT_LORA = MODEL_CATALOGUE["krea2_edit"]["dest"].name
 
-    return [LoraSpec(e["path"], unet=e["unet"], text_encoder=e["text_encoder"])
-            for e in _validate_loras(raw)]
+# Rectangles per render. V12 pairs box i with row i of regions_json and the
+# attention partition is built per box, so this is a real cost rather than a
+# tidy limit — eight subjects in one 1024px frame is already ~128px of canvas
+# each, below which a face has no pixels to be recognisable in.
+MAX_REGIONS = 8
 
 
-def _regions(raw: Any) -> list:
-    """Regional prompting rectangles, in normalised 0..1 canvas coordinates."""
-    from krea2 import Region
+def _validate_regions(raw: Any) -> list[dict[str, Any]]:
+    """
+    Validate the regional stack: one box, one optional LoRA, one description,
+    one optional reference photo.
 
+    Rows are kept index-aligned with the boxes and never filtered, because V9's
+    `_pair_boxes` matches box i to row i by ORIGINAL index — dropping an empty
+    row here would hand every later row the rectangle belonging to the one
+    before it, which is a picture with the right faces in the wrong places and
+    no error anywhere.
+
+    Pure stdlib and importable from the web container, same as the LoRA stack:
+    a region naming a deleted LoRA should be a form error in milliseconds, not
+    a dead job after a cold H100. That is also why `ref` is only type-checked
+    here and never decoded — a base64 blob is the one field in this payload
+    whose validation would cost real time, and the decode happens on the GPU
+    side where the bytes are going anyway.
+    """
     if not raw:
         return []
-    out = []
-    for entry in list(raw)[:8]:
-        prompt = str(entry.get("prompt") or "").strip()
-        if not prompt:
-            continue
-        out.append(Region(
-            prompt,
-            x=float(entry.get("x", 0.0)), y=float(entry.get("y", 0.0)),
-            width=float(entry.get("width", 1.0)), height=float(entry.get("height", 1.0)),
-            weight=float(entry.get("weight", 1.0)),
-        ))
+
+    out: list[dict[str, Any]] = []
+    for i, entry in enumerate(list(raw)[:MAX_REGIONS]):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Region {i + 1} is malformed.")
+        try:
+            box = {k: float(entry.get(k, d)) for k, d in
+                   (("x", 0.0), ("y", 0.0), ("width", 1.0), ("height", 1.0))}
+        except (TypeError, ValueError):
+            raise ValueError(f"Region {i + 1} has a non-numeric box.")
+        if box["width"] <= 0 or box["height"] <= 0:
+            raise ValueError(f"Region {i + 1} has no area.")
+        # Clamped, not rejected: a box dragged off the edge of the canvas is a
+        # gesture with an obvious meaning, and refusing it would be pedantry.
+        # Coordinates staying inside 0..1 also keeps `_coerce_bbox_norm` from
+        # reading them as pixels, which it does for anything above 1.0.
+        box["x"] = min(max(box["x"], 0.0), 1.0)
+        box["y"] = min(max(box["y"], 0.0), 1.0)
+        box["width"] = min(box["width"], 1.0 - box["x"])
+        box["height"] = min(box["height"], 1.0 - box["y"])
+
+        # `loras` arriving from the page, `lora`/`strength` arriving back from
+        # ourselves. This function runs twice on the same rows — once in
+        # /api/generate so a box naming a deleted LoRA is a form error in
+        # milliseconds, and once inside the job — and it renames the field it
+        # validates. So the second pass looked for a `loras` key its own output
+        # does not have, took the empty branch below, and rewrote every box to
+        # "None" at strength 1.0.
+        #
+        # Nothing showed it. A box's other fields keep their names across the
+        # rename, so text and geometry survived the round trip and only the
+        # identity died: the caption still placed each subject, the boxes still
+        # drew, and the node got a regions_json in which no row had a LoRA —
+        # which it answers by returning the model unpatched. A render that looks
+        # routed and contains no LoRA at all is the failure this cost.
+        #
+        # `_validate_loras` is idempotent already: it reads `path` and `unet`,
+        # which is what it writes. This makes its caller match rather than
+        # dropping one of the two call sites, because both are load-bearing —
+        # the first is the fast rejection, the second is what the graph and the
+        # sidecar are built from.
+        raw_loras = entry.get("loras")
+        if raw_loras is None and entry.get("lora") not in (None, "", "None"):
+            strength = entry.get("strength")
+            raw_loras = [{"path": str(LORAS / str(entry["lora"])),
+                          "unet": 1.0 if strength is None else strength}]
+        lora = _validate_loras(raw_loras)
+        if len(lora) > 1:
+            # One LoRA per box is the node's shape, not ours to paper over: a
+            # region row carries a single `lora` name. Silently keeping the
+            # first would make the second token look applied.
+            raise ValueError(
+                f"Region {i + 1} names {len(lora)} LoRAs; a region takes one. "
+                "Put the others in the main prompt to apply them to the whole "
+                "canvas."
+            )
+
+        # The region's own reference photo — V9's `regions_json.ref_image`, a
+        # latent mold pulling this box toward that face. It is not an
+        # `extra_ref_*` plate, so it does NOT switch the run onto krea2edit and
+        # does NOT need the identity-edit LoRA: molds are armed on the plain
+        # single-pass path too. Anything that gates this the way the plates are
+        # gated is hiding a feature that has no such cost.
+        ref = entry.get("ref")
+        if ref is not None and not isinstance(ref, str):
+            raise ValueError(f"Region {i + 1} has a malformed reference photo.")
+
+        out.append({
+            **box,
+            "prompt": str(entry.get("prompt") or "").strip(),
+            "lora": lora[0]["name"] if lora else "None",
+            "strength": lora[0]["unet"] if lora else 1.0,
+            "ref": ref or "",
+        })
     return out
+
+
+# Where a box sits and how big it is, said in words. The vocabulary is mirrored
+# verbatim from the node pack's own `_compile_unified_plan`, and that is the
+# whole point of it: the plate path builds these sentences itself from the same
+# rectangles, so inventing our own phrasing would mean dropping a scene photo
+# silently re-described every box. "middle left side" on one path and "on the
+# left" on the other is two different prompts for one rectangle.
+def _box_horizontal(cx: float) -> str:
+    if cx < 0.20:
+        return "far-left side"
+    if cx < 0.40:
+        return "left side"
+    if cx < 0.60:
+        return "center"
+    if cx < 0.80:
+        return "right side"
+    return "far-right side"
+
+
+def _box_vertical(cy: float) -> str:
+    if cy < 0.25:
+        return "top"
+    if cy < 0.45:
+        return "upper portion"
+    if cy < 0.65:
+        return "middle"
+    if cy < 0.82:
+        return "lower portion"
+    return "bottom"
+
+
+def _box_framing(height: float) -> str:
+    if height >= 0.70:
+        return "a large prominent near-frame-height foreground subject"
+    if height >= 0.45:
+        return "a prominent medium-to-large subject"
+    if height >= 0.25:
+        return ("a medium-distance subject standing several steps from the "
+                "camera, full body visible")
+    return ("a small distant background figure far from the camera, whole body "
+            "occupying only a small part of the frame")
+
+
+# "a man" -> "one single man only". The node pack's own rewrite, mirrored for
+# the same reason the vocabulary is: it is free anti-duplication phrasing, and
+# a box that gets it on one path and not the other is a box that renders two
+# people on one path and not the other.
+_ONE_SUBJECT_RE = re.compile(r"^(?:a|an|one)\s+(man|woman|person)\b", re.I)
+
+# Spelled rather than numeric, because the rest of the caption is prose and
+# Qwen3-VL is reading it as prose. Indexed by count, so it stops at MAX_REGIONS.
+_COUNT_WORDS = ("", "one", "two", "three", "four", "five", "six", "seven", "eight")
+
+
+def _compose_caption(prompt: str, regions: list[dict[str, Any]]) -> str:
+    """
+    Turn the prompt and the boxes into one caption the text encoder can read.
+
+    Without this the rectangles do almost nothing. On the plain regional path
+    the node masks each LoRA's *weights* to its box, but there is no attention
+    routing and no attraction field — those live in `_apply_edit_mode`, which
+    only runs when a reference plate is attached. So nothing tells the model to
+    put a person in the box at all: it renders whatever the prompt describes,
+    wherever it likes, and the masks then apply one identity to a rectangle
+    that may contain none of that person's face. Saying where each subject goes
+    is what makes a box mean something on this path.
+
+    That is also why every box gets a clause, not just the ones with words. A
+    box holding only a LoRA is still the instruction "this character, here",
+    and "here" is the half the token cannot say. A box holding only words gets
+    placed too — no mask behind it, so it is a soft placement rather than a
+    guaranteed one, but soft is what regional prompting without an identity is.
+
+    Qwen3-VL is an instruction-tuned VLM rather than a bag-of-tokens encoder,
+    which is the reason this works at all and the reason it is prose.
+    """
+    parts: list[str] = []
+    base = (prompt or "").strip()
+    if base:
+        parts.append(base.rstrip(".") + ".")
+
+    clauses: list[str] = []
+    for region in regions:
+        described = (region.get("prompt") or "").strip()
+        has_identity = (region.get("lora") not in (None, "", "None")
+                        or bool(region.get("ref_image")))
+        if not described and not has_identity:
+            continue
+        # A box with an identity and no direction is still someone standing
+        # there; the LoRA or the photo says who, so the words only have to say
+        # that a single person is present.
+        described = described or "a person"
+        described = _ONE_SUBJECT_RE.sub(r"one single \1 only", described)
+        cx = float(region["x"]) + float(region["width"]) / 2.0
+        cy = float(region["y"]) + float(region["height"]) / 2.0
+        clauses.append(
+            f"In the {_box_vertical(cy)} {_box_horizontal(cx)}, "
+            f"{described.rstrip('.')}, as {_box_framing(float(region['height']))}."
+        )
+
+    if not clauses:
+        return base
+
+    parts.extend(clauses)
+    if len(clauses) > 1:
+        # The failure this prevents is the classic one: ask for two people in
+        # two places and get four. The node adds its own version of this
+        # sentence on the plate path and does not reach this one.
+        #
+        # The count is spelled out because the per-clause guard cannot be
+        # relied on here. That one rides on `_ONE_SUBJECT_RE`, which keys on a
+        # leading article — and a box directed with a rare trigger token
+        # ("alxcn, in a denim jacket") has no article to key on, so exactly the
+        # descriptions a trained character uses are the ones that get no
+        # singular. Naming the total covers every box however it is written.
+        total = _COUNT_WORDS[len(clauses)] if len(clauses) < len(_COUNT_WORDS) \
+            else str(len(clauses))
+        parts.append(f"Exactly {total} distinct subjects in the frame, one in "
+                     "each position described above and no others. Do not "
+                     "duplicate any subject.")
+    return " ".join(parts)
+
+
+def _edit_lora_name(available: list[str]) -> str:
+    """
+    Pick a value for V12's `edit_lora` that its combo will actually accept.
+
+    The input is required and validated against `folder_paths.get_filename_list
+    ("loras")`, so any name not on the volume is rejected before the node runs —
+    including, awkwardly, the identity-edit LoRA's own filename when it has not
+    been downloaded. The weights are only ever *loaded* on the krea2edit path,
+    so on every other render this is a required field whose value is unused,
+    and the only wrong answer is one the combo rejects.
+
+    Hence: the real file if it is there, otherwise any LoRA at all, otherwise
+    the name the node itself falls back to when the volume is empty. Requests
+    that genuinely need the edit path call `_require_models("krea2_edit")`,
+    which is the same check every other weight gets and produces the same
+    listing when it fails.
+    """
+    if KREA2_EDIT_LORA in available:
+        return KREA2_EDIT_LORA
+    return available[0] if available else KREA2_EDIT_LORA
+
+
+def _lora_names_on_disk() -> list[str]:
+    """Every LoRA the way ComfyUI's combo spells it — path relative to loras/."""
+    if not LORAS.is_dir():
+        return []
+    return sorted(
+        p.relative_to(LORAS).as_posix() for p in LORAS.rglob("*.safetensors")
+    )
+
+
+def _krea2_graph(
+    *,
+    model: str,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    batch_size: int,
+    seed: int,
+    steps: int,
+    cfg: float,
+    shift: float,
+    sampler: str,
+    scheduler: str,
+    loras: list[dict[str, Any]],
+    regions: list[dict[str, Any]] | None = None,
+    scene: str | None = None,
+    outfit: str | None = None,
+    region_weight: float = 1.0,
+) -> dict[str, Any]:
+    """
+    Build ComfyUI's API-format graph for one Krea 2 render.
+
+    Written out as a dict here rather than shipped as workflow JSON for the
+    same reason the video graphs are: a wrong node name should be a Python
+    error next to the code that caused it, and nothing in this repo should have
+    to be re-exported from a GUI when a parameter changes. The node pack's
+    example workflow is a UI export that also pulls in ComfyUI-KJNodes for a
+    box builder and a resolution picker — a canvas needs those, an API caller
+    needs two integers and a list.
+
+    Three shapes come out of here, and which one you get is read off what was
+    attached rather than asked for:
+
+      * no regions            — loaders, LoRA chain, KSampler. The plain path.
+      * regions               — the same, plus V12 between the model and the
+                                sampler, masking each region's LoRA to its box.
+      * regions + a reference — V12's krea2edit path: the scene is regenerated
+                                around the boxes and the identity-edit LoRA is
+                                loaded.
+
+    The middle one is the feature this backend was swapped for. It needs no
+    reference image and no edit LoRA: V12 falls through to V9's likeness engine,
+    which masks each LoRA's activation delta to its rectangle and samples once.
+    """
+    dit = MODEL_CATALOGUE["turbo" if model == "turbo" else "raw"]["dest"].name
+    te = MODEL_CATALOGUE["text_encoder"]["dest"].name
+    vae = MODEL_CATALOGUE["vae"]["dest"].name
+
+    graph: dict[str, Any] = {
+        "dit": {"class_type": "UNETLoader",
+                "inputs": {"unet_name": dit, "weight_dtype": "default"}},
+        # type="krea2" is what selects Krea2Tokenizer and the Qwen3-VL hidden
+        # state Krea 2 reads. The file is the bf16 text encoder — the fp8_scaled
+        # one carries ~504 extra weight_scale tensors and is rejected outright.
+        "clip": {"class_type": "CLIPLoader",
+                 "inputs": {"clip_name": te, "type": "krea2", "device": "default"}},
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        # Krea 2's latent format is `Wan21`: 16 channels, and
+        # `latent_dimensions = 3`, so the sampler works on [B, 16, T, H/8, W/8].
+        # `length: 1` gives ((1-1)//4)+1 = 1 frame — the same node the Wan path
+        # builds its latents with, asked for a single frame.
+        #
+        # `EmptySD3LatentImage` also works and is what the node pack's own
+        # example workflow uses: `common_ksampler` runs every latent through
+        # `fix_empty_latent_channels`, which does `if latent_dimensions == 3 and
+        # ndim == 4: unsqueeze(2)` — unconditionally, not just for empty ones.
+        # Its 4-D output therefore arrives at the sampler as the identical
+        # 5-D tensor. This node is preferred only because it states the shape
+        # rather than relying on that fix-up; if you swap them back, nothing
+        # changes. It is emphatically *not* what made this path render noise —
+        # that was the model-sampling multiplier, see the `shift` node below.
+        "latent": {"class_type": "EmptyHunyuanLatentVideo",
+                   "inputs": {"width": width, "height": height,
+                              "length": 1, "batch_size": batch_size}},
+    }
+
+    # Prompt-level LoRAs are the whole canvas; a region's own LoRA is applied
+    # by V12 inside its box and never appears in this chain. Both weights are
+    # carried because Krea 2's text encoder takes LoRA patches — the video
+    # side's model-only loader has no such second number.
+    model_src, clip_src = ["dit", 0], ["clip", 0]
+    for i, lora in enumerate(loras):
+        tag = f"lora{i}"
+        graph[tag] = {
+            "class_type": "LoraLoader",
+            "inputs": {"model": model_src, "clip": clip_src,
+                       "lora_name": lora["name"],
+                       "strength_model": lora["unet"],
+                       "strength_clip": lora["text_encoder"]},
+        }
+        model_src, clip_src = [tag, 0], [tag, 1]
+
+    # Shift last on the model chain, before anything wraps it: it is the final
+    # word on the sampling curve, and Krea 2's config already carries 1.15 —
+    # this node is here so the UI can move it, not to introduce it.
+    #
+    # AuraFlow, not SD3, and the difference is not cosmetic. Both build the same
+    # ModelSamplingDiscreteFlow; they disagree on `multiplier`, which is the
+    # factor in `timestep(sigma) = sigma * multiplier` — the number the DiT is
+    # actually handed. ModelSamplingSD3 hardcodes 1000. Krea 2's model config
+    # asks for 1.0, and ModelSamplingAuraFlow is exactly ModelSamplingSD3 with
+    # multiplier=1.0 (`patch_aura` is a one-line call into `patch`).
+    #
+    # Sending the SD3 one gives the model timestep ~535 where it expects ~0.53,
+    # every step, so nothing denoises and the render completes at the right step
+    # count, the right speed, with no error anywhere, and returns coloured
+    # noise. The Wan path two sections down *does* want ModelSamplingSD3 — its
+    # config takes the 1000 default — which is exactly why this looked like a
+    # line worth copying. Check the model config, not the neighbouring graph.
+    graph["shift"] = {"class_type": "ModelSamplingAuraFlow",
+                      "inputs": {"model": model_src, "shift": shift}}
+    model_src = ["shift", 0]
+
+    if regions:
+        # Boxes travel as JSON through a node of ours rather than as a literal
+        # list, because ComfyUI reads any 2-element list as a [node_id, slot]
+        # link — and two boxes is the commonest case this feature has. See
+        # comfy_nodes/visionary_boxes.
+        graph["boxes"] = {
+            "class_type": "VisionaryBoxes",
+            "inputs": {"boxes_json": json.dumps([
+                {"x": r["x"], "y": r["y"],
+                 "width": r["width"], "height": r["height"]} for r in regions
+            ])},
+        }
+        # Index-aligned with the boxes, disabled rows included — V12 pairs box i
+        # with row i by original index.
+        #
+        # `ref_image` is a filename in ComfyUI's input folder, which is exactly
+        # what `_Comfy.stage()` returns — the caller has already staged each
+        # region's photo and written the name back onto the row. Empty is the
+        # common case and means "identity comes from the LoRA alone".
+        regions_json = json.dumps([
+            {"lora": r["lora"], "strength": r["strength"], "enable": True,
+             "ref_image": r.get("ref_image", ""), "prompt": r["prompt"],
+             "portrait": False}
+            for r in regions
+        ])
+
+        v12: dict[str, Any] = {
+            "model": model_src, "clip": clip_src, "vae": ["vae", 0],
+            "bboxes": ["boxes", 0],
+            "edit_lora": _edit_lora_name(_lora_names_on_disk()),
+            "canvas_width": width, "canvas_height": height,
+            "regions_json": regions_json,
+            "prompt": prompt, "negative_prompt": negative_prompt,
+            # base_strength multiplies every region's own strength. The page
+            # spells it "Region weight" and it is the one global knob over a
+            # stack of per-region numbers.
+            "base_strength": region_weight,
+            # Documented as LEAVE AT 0 by the node itself: anything above zero
+            # blends every LoRA across the whole canvas, which is the identity
+            # bleeding this feature exists to prevent. Not exposed.
+            "blend_override": 0.0,
+            # Defaults from the node, written out rather than omitted. They are
+            # optional inputs, so leaving them off would work — but then the
+            # graph stops recording what it ran at, and a render is only
+            # reproducible from a sidecar that names every number.
+            "seam_feather": 0.08,
+            "ref_strength": 0.30,
+            "ref_start_percent": 0.0,
+            "ref_end_percent": 0.60,
+            "ref_feather": 0.06,
+            # The four below are the same rule extended to inputs it had missed,
+            # and two of them were not the values we thought we were getting.
+            # V9 declares its defaults twice — once in INPUT_TYPES for the
+            # canvas widget, once in `run()`'s signature — and for an optional
+            # input the graph omits, ComfyUI uses the signature. The two
+            # disagree:
+            #
+            #   edit_lora_strength  INPUT_TYPES 0.7   run() 1.0
+            #   ref_max_side        INPUT_TYPES 0     run() 1024
+            #
+            # So every plate render so far has run the identity-edit LoRA at
+            # 1.0, which the node's own tooltip warns gives "mottled,
+            # crumpled-looking texture" because V9 runs it and the character
+            # LoRA in the same forward and the deltas add; and has downscaled
+            # every reference to 1024, which its tooltip says "costs likeness
+            # for speed". Both are the declared defaults now, spelled here so
+            # the disagreement can never be silent again.
+            "edit_lora_strength": 0.7,
+            "compose_steps": 10,
+            "compose_seed": 0,
+            "ref_max_side": 0,
+            # What each plate socket *is*, declared positionally: entry 1 is
+            # extra_ref_1, entry 2 is extra_ref_2. Always both, whichever
+            # sockets are wired, because roles are matched to sockets and the
+            # unwired ones are dropped afterwards — a list compacted to fit
+            # would slide the outfit's role onto the scene the moment only one
+            # plate is present.
+            #
+            # Left at its `[]` default, every socket is `auto`, and that is
+            # wrong twice. `_reference_clause` returns "" for auto with no
+            # note, so the outfit was encoded into the attention sequence with
+            # nothing in the prompt referring to it — krea2edit is
+            # instruction-driven, so an unreferenced frame does close to
+            # nothing, which reads as "outfit transfer does not work" rather
+            # than as a missing sentence. And `as_scene` is
+            # `role == "scene" or (auto and full-canvas box)`, so an outfit
+            # dropped with no scene beside it became the canvas: the whole
+            # frame replaced by a photograph of a jacket.
+            #
+            # The note's tail is load-bearing. With a bare noun and a subject
+            # in the shot, the object branch falls back to `holding {clause}`,
+            # which is not what wearing something means. The frame number is
+            # deliberately absent — the node writes "the second reference"
+            # itself, because it is the only thing that knows how many plates
+            # ended up wired.
+            "refs_json": json.dumps([
+                {"role": "scene"},
+                {"role": "object", "note": "outfit, worn by the subject"},
+            ]),
+            # A *force* flag, not the switch. V9 computes
+            # `use_edit = bool(extras) or use_krea2edit or force_edit_mode`, so
+            # a wired extra_ref_* already turns the edit path on by itself and
+            # this only exists to reach krea2edit with no plate at all. False is
+            # correct on every path we build.
+            "use_krea2edit": False,
+            # Auto-portrait renders a bare LoRA into a portrait and feeds it
+            # back as a reference frame. Off: it costs an extra render plus a
+            # model reload per region, and with two bare LoRAs it changes the
+            # engine to a four-pass sequential path where only the last
+            # character gets a live reference — a control whose cost is
+            # measured in passes is not a default.
+            "auto_portrait": False,
+            "portrait_preview": False,
+        }
+
+        # A reference plate is what turns on krea2edit, so this is also what
+        # decides whether the identity-edit LoRA is needed at all.
+        if scene:
+            graph["scene"] = {"class_type": "LoadImage", "inputs": {"image": scene}}
+            v12["extra_ref_1"] = ["scene", 0]
+            v12["extra_box_1"] = "0,0,1,1"
+        if outfit:
+            graph["outfit"] = {"class_type": "LoadImage", "inputs": {"image": outfit}}
+            v12["extra_ref_2"] = ["outfit", 0]
+            # Full canvas, which is what makes this an extra reference *frame*
+            # rather than a paste into a sub-box — the node switches on exactly
+            # that, and a sub-box here would hard-paste an outfit photo into the
+            # picture instead of transferring the garment.
+            v12["extra_box_2"] = "0,0,1,1"
+
+        graph["v12"] = {"class_type": KREA2_REGIONAL_NODE, "inputs": v12}
+        sampler_model, positive, negative = ["v12", 0], ["v12", 1], ["v12", 2]
+    else:
+        graph["pos"] = {"class_type": "CLIPTextEncode",
+                        "inputs": {"text": prompt, "clip": clip_src}}
+        graph["neg"] = {"class_type": "CLIPTextEncode",
+                        "inputs": {"text": negative_prompt, "clip": clip_src}}
+        sampler_model, positive, negative = model_src, ["pos", 0], ["neg", 0]
+
+    graph["sample"] = {
+        "class_type": "KSampler",
+        "inputs": {"model": sampler_model, "seed": seed, "steps": steps,
+                   "cfg": cfg, "sampler_name": sampler, "scheduler": scheduler,
+                   "positive": positive, "negative": negative,
+                   "latent_image": ["latent", 0], "denoise": 1.0},
+    }
+    graph["decode"] = {"class_type": "VAEDecode",
+                       "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}}
+    graph["save"] = {"class_type": "SaveImage",
+                     "inputs": {"images": ["decode", 0],
+                                "filename_prefix": "visionary"}}
+    return graph
 
 
 @app.cls(
-    image=inference_image, gpu=GPU, cpu=2.0, timeout=60 * 60,
+    image=comfy_image, gpu=GPU, cpu=4.0, timeout=60 * 60,
     volumes={"/workspace": volume},
     # One container: the checkpoint is ~35 GB across DiT/VAE/TE, so a second
     # replica costs a full cold load rather than sharing the warm one.
@@ -2277,39 +3557,23 @@ def _regions(raw: Any) -> list:
     scaledown_window=10 * 60,
 )
 @modal.concurrent(max_inputs=1)  # one GPU, one sampling loop
-class Generator:
-    """Holds a loaded Krea 2 checkpoint across requests."""
+class ImageGenerator:
+    """Holds a warm ComfyUI process, loaded with a Krea 2 checkpoint."""
 
     @modal.enter()
     def setup(self):
-        import sys
-
-        sys.path.insert(0, str(FORGE))
-        self._pipelines: dict[str, Any] = {}
-
-    def _pipeline(self, model: str):
-        from krea2 import Krea2Pipeline, unload_all
-
-        if model not in self._pipelines:
-            # Only one checkpoint fits on the card, so switching between Turbo
-            # and RAW evicts the outgoing one first — dropping the reference
-            # alone leaves its weights resident and the new load OOMs.
-            if self._pipelines:
-                self._pipelines.clear()
-                unload_all()
-            _require_models(model, "vae", "text_encoder")
-            self._pipelines[model] = Krea2Pipeline(
-                dit_path=TURBO_PATH if model == "turbo" else RAW_PATH,
-                vae_path=VAE_PATH,
-                text_encoder_path=TE_PATH,
-                key=model,
-            )
-        return self._pipelines[model]
+        self._comfy = _Comfy("image")
+        self._comfy.start()
+        # Checked once at startup rather than per request. A custom node that
+        # fails to import leaves ComfyUI running happily without it, and the
+        # first symptom would otherwise be a queued graph rejected for an
+        # unknown class_type — which reads as our graph builder naming a node
+        # wrong, minutes into a warm GPU, when the traceback that explains it
+        # scrolled past during startup.
+        self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes")
 
     @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        from krea2 import GenerateRequest
-
         started = time.time()
         jobs[job_id] = {"status": "running", "phase": "loading", "stop": False}
         _reload_volume()
@@ -2317,38 +3581,88 @@ class Generator:
         model = "turbo" if str(params.get("model") or "turbo") != "raw" else "raw"
 
         try:
-            pipe = self._pipeline(model)
-            _publish(job_id, phase="generate", step=0, percent=0)
+            # Inside the try, not above it: a missing weight raised out here
+            # would leave the record saying "running" forever, and the UI
+            # polling a job that is never going to answer.
+            _require_models(model, "vae", "text_encoder")
 
-            def progress(step: int, total: int) -> None:
-                _publish(job_id, phase="generate", step=step, total_steps=total,
-                         percent=int(step * 100 / max(1, total)))
-                # Stop between steps rather than mid-forward: the model stays
-                # loaded and the container survives for the next request, which
-                # a killed process would not.
-                if _stop_requested(job_id):
-                    raise StopRequested("generate")
+            regions = _validate_regions(params.get("regions"))
+            plates = {}
+            for slot in ("scene", "outfit"):
+                if params.get(slot):
+                    if not regions:
+                        # The plates are inputs to V12 and V12 is only in the
+                        # graph when there are boxes. Silently ignoring one
+                        # would be a dropped reference image with a normal
+                        # picture to show for it.
+                        raise ValueError(
+                            f"A {slot} reference needs at least one region — "
+                            "the scene is composed around the boxes."
+                        )
+                    _require_models("krea2_edit")
+                    plates[slot] = self._comfy.stage(job_id, params[slot], slot)
 
-            req = GenerateRequest(
-                prompt=str(params.get("prompt") or ""),
+            # Each region's own photo, staged the same way the plates are and
+            # deliberately without their two gates: a mold is not an
+            # `extra_ref_*`, so it neither turns on krea2edit nor needs the
+            # identity-edit weight. The staged name goes back onto the row,
+            # which is what `_krea2_graph` reads into `regions_json`.
+            for i, region in enumerate(regions):
+                if region["ref"]:
+                    region["ref_image"] = self._comfy.stage(
+                        job_id, region["ref"], f"region{i}")
+
+            # Once, and reused by both the graph and the sidecar. Validating
+            # again after the render would re-stat the volume, so a LoRA deleted
+            # during a run could fail the job that already produced the picture.
+            loras = _validate_loras(params.get("loras"))
+            shift = float(params.get("shift") or 1.15)
+            sampler = str(params.get("sampler") or IMAGE_DEFAULTS["sampler"])
+            scheduler = str(params.get("scheduler") or IMAGE_DEFAULTS["scheduler"])
+            # Only None and "" are unset. `or 1.0` read a typed 0 as absent and
+            # rewrote it to 1.0, so /api/generate recorded the zero the page
+            # sent while the render used something else — a value replaced
+            # rather than honoured or refused, which is the shape of the bug
+            # that let a box lose its LoRA name. It matters because
+            # `base_strength` multiplies every region's own strength, so 0 is a
+            # real state with a real meaning — every regional LoRA off — and it
+            # has to reach the node intact rather than be rounded up on the way.
+            raw_weight = params.get("region_weight")
+            region_weight = 1.0 if raw_weight in (None, "") else float(raw_weight)
+
+            seed = params.get("seed")
+            seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
+            steps = int(params.get("steps") or KREA2_DEFAULTS[model]["steps"])
+            cfg = float(params.get("cfg_scale")
+                        if params.get("cfg_scale") is not None
+                        else KREA2_DEFAULTS[model]["cfg"])
+            batch = max(1, min(4, int(params.get("num_images") or 1)))
+            width, height = int(params.get("width") or 1024), int(params.get("height") or 1024)
+
+            # What the encoder reads is not what was typed once there are
+            # boxes: each one contributes a clause saying where its subject
+            # stands. Composed here rather than in `_krea2_graph` so the record
+            # below can keep both — the sentence you wrote, which is what
+            # `reuse` puts back in the field, and the caption that actually ran,
+            # which is the only thing that explains the picture.
+            typed = str(params.get("prompt") or "")
+            caption = _compose_caption(typed, regions) if regions else typed
+
+            graph = _krea2_graph(
+                model=model,
+                prompt=caption,
                 negative_prompt=str(params.get("negative_prompt") or ""),
-                width=int(params.get("width") or 1024),
-                height=int(params.get("height") or 1024),
-                steps=params.get("steps") or None,
-                cfg_scale=params.get("cfg_scale"),
-                seed=params.get("seed"),
-                batch_size=max(1, min(4, int(params.get("num_images") or 1))),
-                sampler=str(params.get("sampler") or "Euler"),
-                scheduler=str(params.get("scheduler") or "Automatic"),
-                shift=float(params.get("shift") or 1.15),
-                loras=_lora_specs(params.get("loras")),
-                regions=_regions(params.get("regions")),
-                region_weight=float(params.get("region_weight") or 1.0),
+                width=width, height=height, batch_size=batch,
+                seed=seed, steps=steps, cfg=cfg,
+                shift=shift, sampler=sampler, scheduler=scheduler,
+                loras=loras, regions=regions, region_weight=region_weight,
+                **plates,
             )
-            if not req.prompt.strip() and not req.regions:
-                raise ValueError("A prompt is required.")
 
-            images = pipe.generate(req, progress=progress)
+            info = {"width": width, "height": height, "seed": seed, "steps": steps}
+            _publish(job_id, phase="generate", step=0, total_steps=steps,
+                     percent=0, **info)
+            out_names = self._comfy.run(job_id, graph, what="image")
         except StopRequested:
             res = {"status": "stopped", "job_id": job_id, "files": [],
                    "duration_s": round(time.time() - started, 1)}
@@ -2358,29 +3672,64 @@ class Generator:
             _publish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
             raise
 
-        from PIL import PngImagePlugin
+        from PIL import Image, PngImagePlugin
 
         out_dir = OUTPUTS / job_id
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%H%M%S")
-        report = getattr(pipe, "last_report", {})
-        seeds = report.get("seeds") or []
+        report = {
+            "sampler": sampler, "scheduler": scheduler,
+            "cfg_scale": cfg, "shift": shift,
+            "loras": [{"name": l["name"], "unet": l["unet"],
+                       "text_encoder": l["text_encoder"]} for l in loras],
+            # Boxes as a 4-list in the order the row's fields read, so `reuse`
+            # can put them straight back into x/y/w/h without a schema.
+            #
+            # `ref` is a bool, never the photo. This dict is the job record and
+            # the job record is polled every 400ms — eight base64 photographs in
+            # something on that loop is the exact failure the "keep the polled
+            # thing small" rule exists for. The staged file is gone with the
+            # container anyway, so there is nothing here a caller could reuse.
+            "regions": [{"box": [r["x"], r["y"], r["width"], r["height"]],
+                         "lora": r["lora"], "strength": r["strength"],
+                         "prompt": r["prompt"],
+                         "ref": bool(r.get("ref_image"))} for r in regions],
+            "region_weight": region_weight,
+            # Only when it differs from what was typed. A caption nobody wrote
+            # is the one thing about a regional render that cannot be worked
+            # out from the fields, and "why is he on the right" has no answer
+            # without it — but repeating the prompt back on every plain render
+            # would be the record describing itself.
+            **({"caption": caption} if caption != typed else {}),
+            # Which engine ran, because the three are not the same picture and
+            # the numbers beside them do not say which one produced it.
+            "mode": ("krea2edit" if plates else "regional") if regions else "plain",
+            **info,
+        }
         names = []
-        for i, image in enumerate(images):
+        for i, src in enumerate(out_names):
             name = f"{stamp}_{i:02d}.png"
-            # Per-image seed, not the batch's first: in a batch of four each
-            # image has its own, and a metadata block that reports the same
-            # seed for all four cannot reproduce three of them.
-            info = PngImagePlugin.PngInfo()
-            info.add_text("parameters", _infotext(
-                prompt=str(params.get("prompt") or ""),
-                negative_prompt=str(params.get("negative_prompt") or ""),
-                model=model,
-                seed=seeds[i] if i < len(seeds) else None,
-                report=report,
-            ))
-            image.save(out_dir / name, pnginfo=info)
+            # Re-encoded rather than copied, because the parameters block has to
+            # go in and ComfyUI ran with --disable-metadata. The alternative is
+            # a PNG whose settings live only in a job record that expires,
+            # which is the thing every existing tool — PNG Info tabs, ComfyUI,
+            # the gallery — reads a file to avoid.
+            with Image.open(COMFY / "output" / src) as im:
+                png = PngImagePlugin.PngInfo()
+                png.add_text("parameters", _infotext(
+                    prompt=str(params.get("prompt") or ""),
+                    negative_prompt=str(params.get("negative_prompt") or ""),
+                    model=model,
+                    # Per-image seed, not the batch's first: ComfyUI advances
+                    # the noise seed per latent in a batch, so a metadata block
+                    # reporting the same seed for all four cannot reproduce
+                    # three of them.
+                    seed=seed + i,
+                    report=report,
+                ))
+                im.save(out_dir / name, pnginfo=png)
             names.append(name)
+
         _write_output_meta(
             out_dir, kind="image", job_id=job_id, model=model,
             prompt=str(params.get("prompt") or ""),
@@ -2390,8 +3739,10 @@ class Generator:
         volume.commit()
 
         # Only filenames go into the job record. The PNGs themselves are served
-        # by /api/outputs/{job_id} straight off the volume — a 1024px base64
-        # image is megabytes, and this dict is polled every few seconds.
+        # by /api/file/{job_id}/{name} straight off the volume — a 1024px base64
+        # image is megabytes, and this dict is polled several times a second.
+        # `files` is also what the canvas builds its <img> tags from, so the
+        # completed record is the last round trip a run needs.
         res = {
             "status": "completed", "job_id": job_id, "files": names,
             "model": model, "output_dir": str(out_dir),
@@ -3050,7 +4401,7 @@ def _wan_graph(
 
 
 @app.cls(
-    image=video_image, gpu=VIDEO_GPU, cpu=4.0, timeout=60 * 60,
+    image=comfy_image, gpu=VIDEO_GPU, cpu=4.0, timeout=60 * 60,
     volumes={"/workspace": volume},
     max_containers=1,
     # Longer than the image side's 10 min: 42.5 GB is a slow thing to reload,
@@ -3059,128 +4410,12 @@ def _wan_graph(
 )
 @modal.concurrent(max_inputs=1)
 class VideoGenerator:
-    """
-    Holds a warm ComfyUI process across requests.
-
-    ComfyUI runs as a local server inside this container and is spoken to over
-    127.0.0.1 — it is never exposed, and the only client is the code below.
-    Running the real thing rather than porting its model code is what keeps the
-    int8-convrot kernels, the dynamic offloader and every upstream H3 fix on
-    our side of the line instead of in a fork we would own.
-    """
+    """Holds a warm ComfyUI process, loaded with a video checkpoint."""
 
     @modal.enter()
     def setup(self):
-        import threading
-
-        # Point ComfyUI at our flat models/ directory instead of moving weights
-        # into the per-type tree it expects. The volume layout is the contract;
-        # ComfyUI adapts to it. Every type maps to the same folder, so all four
-        # files are visible to whichever loader asks for them.
-        #
-        # loras/ is the exception and keeps its nesting, because that nesting is
-        # meaningful — one folder per trained LoRA, checkpoints beside the final
-        # weights. ComfyUI walks it recursively and names a file by its path
-        # relative to here, which is exactly what _validate_video_loras() emits.
-        (COMFY / "extra_model_paths.yaml").write_text(
-            "visionary:\n"
-            f"  base_path: {WORKSPACE}/\n"
-            "  diffusion_models: models/\n"
-            "  text_encoders: models/\n"
-            "  clip: models/\n"
-            "  vae: models/\n"
-            "  loras: loras/\n"
-        )
-
-        # A fresh clone ships input/ and output/, but a changed --base-directory
-        # or a pruned image would not, and the failure would surface as a
-        # LoadImage error about a file we thought we had just written.
-        (COMFY / "input").mkdir(parents=True, exist_ok=True)
-        (COMFY / "output").mkdir(parents=True, exist_ok=True)
-
-        self._job_id: str | None = None
-        self._log: deque[str] = deque(maxlen=200)
-        self._proc = subprocess.Popen(
-            ["python", "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
-             "--disable-auto-launch", "--disable-metadata",
-             # Safe here in a way it would not be on the image side: the Krea 2
-             # path masks attention for regional prompting, and sageattention
-             # asserts `mask is None` and falls back per call. H3 never passes a
-             # mask, so this image gets the fast kernel and the inference image
-             # deliberately still does not. See forge/krea2/regional.py.
-             "--use-sage-attention"],
-            cwd=str(COMFY),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-        )
-        threading.Thread(target=self._drain, daemon=True).start()
-        self._wait_ready()
-
-    def _drain(self) -> None:
-        """
-        Mirror ComfyUI's output to Modal's logs, and lift step progress out of it.
-
-        ComfyUI prints a tqdm bar for the sampling loop, which TQDM_RE already
-        parses for musubi — the same shape, so the same regex. Reading progress
-        off stdout rather than opening ComfyUI's websocket keeps this to one
-        connection and one dependency-free thread.
-        """
-        assert self._proc.stdout is not None
-        for line in self._proc.stdout:
-            line = line.rstrip()
-            if not line:
-                continue
-            print(line, flush=True)
-            self._log.append(line)
-            m = TQDM_RE.search(line)
-            if m and self._job_id:
-                fields: dict[str, Any] = {
-                    "phase": "generate",
-                    "step": int(m.group("step")),
-                    "total_steps": int(m.group("total")),
-                    "percent": int(m.group("pct")),
-                }
-                if m.group("eta"):
-                    fields["eta"] = m.group("eta")
-                    fields["rate"] = f"{m.group('rate')}{m.group('unit')}"
-                _publish(self._job_id, **fields)
-
-    def _wait_ready(self, timeout: float = 300.0) -> None:
-        import urllib.error
-        import urllib.request
-
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self._proc.poll() is not None:
-                raise RuntimeError(
-                    "ComfyUI exited during startup.\n" + "\n".join(self._log)
-                )
-            try:
-                urllib.request.urlopen(
-                    f"http://127.0.0.1:{COMFY_PORT}/system_stats", timeout=2
-                ).read()
-                print("[video] ComfyUI ready", flush=True)
-                return
-            except (urllib.error.URLError, OSError):
-                time.sleep(1.0)
-        raise RuntimeError("ComfyUI did not become ready.\n" + "\n".join(self._log))
-
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        import urllib.request
-
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{COMFY_PORT}{path}",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        return json.loads(urllib.request.urlopen(req, timeout=30).read() or b"{}")
-
-    def _get(self, path: str) -> Any:
-        import urllib.request
-
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{COMFY_PORT}{path}", timeout=30
-        ) as r:
-            return json.loads(r.read() or b"{}")
+        self._comfy = _Comfy("video")
+        self._comfy.start()
 
     @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -3203,24 +4438,16 @@ class VideoGenerator:
             # Inside the try, not above it: a missing weight raised out here
             # would leave the record saying "running" forever, and the UI
             # polling a job that is never going to answer.
-            #
-            # Every input image lands in ComfyUI's input directory under the job
-            # id, so a LoadImage node can name it and two takes cannot collide
-            # on a filename.
             def stage(blob: str, slot: str, ext: str = "png") -> str:
-                name = f"{job_id}-{slot}.{ext}"
-                (COMFY / "input" / name).write_bytes(base64.b64decode(blob))
-                return name
+                return self._comfy.stage(job_id, blob, slot, ext)
 
             plan = (self._plan_h3 if model == "h3" else self._plan_wan)(params, stage)
             graph, info = plan["graph"], plan["info"]
 
-            self._job_id = job_id
             _publish(job_id, phase="generate", step=0,
                      total_steps=info["steps"], percent=0, **info)
 
-            prompt_id = self._post("/prompt", {"prompt": graph})["prompt_id"]
-            out_name = self._await(job_id, prompt_id)
+            out_names = self._comfy.run(job_id, graph, what="video")
         except StopRequested:
             res = {"status": "stopped", "job_id": job_id, "files": [],
                    "duration_s": round(time.time() - started, 1)}
@@ -3229,13 +4456,14 @@ class VideoGenerator:
         except Exception as exc:
             _publish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
             raise
-        finally:
-            self._job_id = None
 
         out_dir = OUTPUTS / job_id
         out_dir.mkdir(parents=True, exist_ok=True)
         name = f"{time.strftime('%H%M%S')}.mp4"
-        shutil.copyfile(COMFY / "output" / out_name, out_dir / name)
+        # One clip per graph, so the first is the only one. Taking [0] rather
+        # than asserting length: a save node that ever emitted a poster frame
+        # beside the mp4 should cost the poster, not the take.
+        shutil.copyfile(COMFY / "output" / out_names[0], out_dir / name)
         _write_output_meta(
             out_dir, kind="video", job_id=job_id, model=model,
             prompt=params["prompt"], created=time.time(), **info, **plan["meta"],
@@ -3368,67 +4596,6 @@ class VideoGenerator:
                                 "expert": l["expert"]} for l in loras]},
         }
 
-    def _await(self, job_id: str, prompt_id: str) -> str:
-        """Poll until the graph finishes; return the saved file's path in output/."""
-        while True:
-            if _stop_requested(job_id):
-                # ComfyUI unwinds the sampler itself and stays warm, which a
-                # killed process would not — the 42.5 GB stays loaded for the
-                # next take.
-                self._post("/interrupt", {})
-                raise StopRequested("generate")
-
-            entry = (self._get(f"/history/{prompt_id}") or {}).get(prompt_id)
-            if entry:
-                status = entry.get("status", {})
-                if status.get("status_str") == "error" or not status.get("completed", True):
-                    raise RuntimeError(self._why_failed(status))
-                for out in entry.get("outputs", {}).values():
-                    # "images" is the one that actually fires: SaveVideo returns
-                    # ui.PreviewVideo, whose as_dict() is {"images": [...],
-                    # "animated": (True,)} — a video is reported through the
-                    # image channel, flagged rather than separately named. The
-                    # other two are what the older save nodes emit and cost a
-                    # tuple to keep, and getting this wrong is expensive in a
-                    # specific way: the clip renders, saves, and is then thrown
-                    # away by a job that says it saved nothing.
-                    for key in ("images", "videos", "gifs"):
-                        for item in out.get(key) or []:
-                            name = item.get("filename")
-                            if not name:
-                                continue
-                            # Honour the subfolder rather than assuming the flat
-                            # case our filename_prefix happens to produce: the
-                            # prefix is split on a path separator, so the day one
-                            # gains a slash this stops silently copying the
-                            # wrong path.
-                            return str(Path(item.get("subfolder") or "") / name)
-                raise RuntimeError(
-                    "ComfyUI reported success but saved no video.\n"
-                    + "\n".join(list(self._log)[-25:])
-                )
-
-            if self._proc.poll() is not None:
-                raise RuntimeError(
-                    "ComfyUI exited mid-generation.\n" + "\n".join(list(self._log)[-25:])
-                )
-            time.sleep(1.5)
-
-    @staticmethod
-    def _why_failed(status: dict[str, Any]) -> str:
-        """
-        Turn ComfyUI's execution_error message into one line worth reading.
-
-        The raw record nests the useful part — node type and exception — under
-        a list of (event, payload) pairs, and a bare "status_str: error" sends
-        you to the container logs for something the record already knows.
-        """
-        for event, payload in status.get("messages") or []:
-            if event == "execution_error":
-                node = payload.get("node_type") or payload.get("node_id")
-                return f"{node}: {payload.get('exception_message') or 'failed'}"
-        return "ComfyUI reported an error with no detail."
-
 
 # --------------------------------------------------------------------------
 # Web app — UI + API on a single URL
@@ -3540,7 +4707,21 @@ def web():
             "hf_token_set": bool(_hf_token()),
             "samplers": SAMPLERS,
             "schedulers": SCHEDULERS,
+            # Which of those two menus opens selected. The video side already
+            # carries its defaults per model in VIDEO_MODELS; this is the image
+            # side's one row of the same thing.
+            "image_defaults": IMAGE_DEFAULTS,
             "max_loras": MAX_LORAS,
+            "max_regions": MAX_REGIONS,
+            "krea2_defaults": KREA2_DEFAULTS,
+            # Whether the scene/outfit controls are live. Same rule VIDEO_MODELS
+            # follows: a control that is present but ignored is worse than one
+            # that is absent, and without this weight those two drops render a
+            # picture that quietly has nothing to do with the photo.
+            "edit_lora": bool(
+                _sizes_on_disk([MODEL_CATALOGUE["krea2_edit"]["dest"]])[
+                    MODEL_CATALOGUE["krea2_edit"]["dest"]]
+            ),
             # Served rather than hardcoded in the page: the allowed cards are a
             # property of what the images were compiled for (see VIDEO_GPUS), so
             # a copy in the HTML would be a second source of truth that drifts
@@ -3566,11 +4747,52 @@ def web():
 
     @api.post("/api/download")
     def download(payload: dict) -> dict[str, Any]:
+        """
+        Start one weight downloading, or report the one already going.
+
+        Idempotent, and never an error for being busy. Pressing Download twice
+        is not a mistake to be corrected — it is what anyone does when the first
+        press appears to do nothing — so the second press returns the job the
+        first one started rather than a red message the page has to find room
+        for. `started` is the only difference between the two, and it exists so
+        the caller can tell "this is yours, it is running" from "something else
+        holds the line".
+
+        Downloads stay one-at-a-time: they share an uplink, and two at once is
+        not two downloads, it is the same bandwidth cut in half plus a second
+        container to pay for.
+        """
         key = str(payload.get("key") or "")
         if key not in MODEL_CATALOGUE:
             return {"error": f"Unknown model: {key}"}
+
+        job_id = f"dl_{key}"
+        busy = _active_download()
+        if busy:
+            rec = jobs.get(busy) or {}
+            return {
+                "ok": True, "started": False, "job_id": busy,
+                "mine": busy == job_id,
+                "busy_with": rec.get("phase") or busy,
+            }
+
+        # Seeded here, synchronously, rather than on the container's first line:
+        # `.spawn()` returns before the container starts, and a second press
+        # landing in that gap would read `_active_download()` as empty and start
+        # a competitor — the gap being precisely when a second press happens.
+        jobs[job_id] = {
+            "status": "running",
+            "phase": f"Downloading {MODEL_CATALOGUE[key]['label']}",
+            "percent": 0,
+            "stop": False,
+            # The clock starts at the spawn, not at the container's first
+            # publish, so the gap a cold start opens is covered by the same
+            # liveness rule as everything after it.
+            "beat": time.time(),
+        }
+        jobs[DL_ACTIVE] = {"job_id": job_id}
         download_job.spawn(key)
-        return {"ok": True, "job_id": f"dl_{key}"}
+        return {"ok": True, "started": True, "job_id": job_id, "mine": True}
 
     @api.post("/api/gdrive")
     def gdrive(payload: dict) -> dict[str, Any]:
@@ -3596,7 +4818,13 @@ def web():
     @api.post("/api/download-missing")
     def download_missing(payload: dict) -> dict[str, Any]:
         """
-        Save the token (if one was supplied) and queue every missing weight.
+        Save the token (if one was supplied) and queue missing weights.
+
+        `family` scopes it to one group from the catalogue; without it the queue
+        is everything missing. One route rather than two because the only
+        difference is which keys go in the list — the queue, the sequencing, the
+        stop and the failure accounting are identical, and a second endpoint
+        would be a second copy of all four.
 
         Taking the token in the same call is deliberate: pasting a key and then
         having to press Save before Download is a step that exists for no reason.
@@ -3605,8 +4833,24 @@ def web():
         if token:
             config["hf_token"] = token
 
+        family = str(payload.get("family") or "").strip()
+        job_id = _family_job_id(family) if family else "dl_all"
+
+        # Same rule as `/api/download`: already-running is a state, not an error.
+        busy = _active_download()
+        if busy:
+            rec = jobs.get(busy) or {}
+            return {"ok": True, "started": False, "job_id": busy,
+                    "mine": busy == job_id,
+                    "busy_with": rec.get("phase") or busy}
+
         _reload_volume()
-        missing = [m["key"] for m in _model_status() if not m["present"]]
+        models = _model_status()
+        if family:
+            models = [m for m in models if m["family"] == family]
+            if not models:
+                return {"error": f"No such family: {family}"}
+        missing = [m["key"] for m in models if not m["present"]]
         if not missing:
             return {"ok": True, "job_id": None, "missing": [], "note": "Everything is already here."}
 
@@ -3618,8 +4862,12 @@ def web():
                 + ". Paste one in the field above."
             }
 
-        download_missing_job.spawn(missing)
-        return {"ok": True, "job_id": "dl_all", "missing": missing}
+        jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
+                        "stop": False, "beat": time.time()}
+        jobs[DL_ACTIVE] = {"job_id": job_id}
+        download_missing_job.spawn(missing, job_id)
+        return {"ok": True, "started": True, "job_id": job_id, "mine": True,
+                "missing": missing}
 
     @api.post("/api/upload")
     async def upload(request: Request) -> JSONResponse:
@@ -3681,6 +4929,7 @@ def web():
             if suffix == ".zip":
                 zips.append(target)
             elif suffix in IMAGE_EXTS:
+                _upright_inplace(target)
                 count += 1
 
         for z in zips:
@@ -3831,7 +5080,10 @@ def web():
             w = h = None
             try:
                 with Image.open(img) as im:
-                    w, h = im.size
+                    # The size after orientation, which is the size the browser
+                    # draws and the size the bucketer will see. Reporting the
+                    # stored one labelled a portrait photo "4032×3024".
+                    w, h = _upright(im).size
             except Exception:
                 pass
             items.append({
@@ -3855,21 +5107,15 @@ def web():
 
     @api.post("/api/datasets/{name}/delete")
     def delete_dataset(name: str) -> dict[str, Any]:
-        """
-        Cull a set. Moves to its own root's .trash/, the way an image does.
-
-        This used to rmtree, which made deleting a set the single unrecoverable
-        action in an application where culling one image is not.
-        """
+        """Delete a set and everything in it. Unlinked, not recoverable."""
         _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
-        trash = d.parent / TRASH_DIR
-        trash.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(d), str(trash / f"{d.name}-{int(time.time())}"))
+        shutil.rmtree(d, ignore_errors=True)
+        _drop_legacy_trash(d.parent)
         volume.commit()
-        return {"ok": True, "trash": str(trash)}
+        return {"ok": True}
 
     @api.get("/api/thumb/{name}/{filename}")
     def thumb(name: str, filename: str):
@@ -3895,7 +5141,10 @@ def web():
         try:
             if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
                 with Image.open(img) as im:
-                    im = im.convert("RGB")
+                    # Upright before thumbnailing: browsers rotate the original
+                    # from EXIF and PIL does not, so without this the tile and
+                    # the full-screen view of the same file disagreed by 90°.
+                    im = _upright(im).convert("RGB")
                     im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
                     buf = io.BytesIO()
                     im.save(buf, "JPEG", quality=78, optimize=True)
@@ -3944,13 +5193,7 @@ def web():
 
     @api.post("/api/datasets/{name}/remove")
     def remove_image(name: str, payload: dict) -> dict[str, Any]:
-        """
-        Move an image and its caption into the dataset's .trash/.
-
-        Non-destructive by default: a mis-click during a cull costs a file move,
-        not the file. Nothing surfaces .trash/ yet — it is there so the bytes
-        still exist when someone asks for undo.
-        """
+        """Delete an image, its caption and its thumbnail. Not recoverable."""
         _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
@@ -3959,13 +5202,10 @@ def web():
         if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
             return {"error": "Image not found."}
 
-        trash = d / TRASH_DIR
-        trash.mkdir(exist_ok=True)
-        stamp = time.strftime("%Y%m%d%H%M%S")
         for part in (img, img.with_suffix(".txt")):
-            if part.is_file():
-                part.rename(trash / f"{stamp}-{part.name}")
+            part.unlink(missing_ok=True)
         (d / THUMB_DIR / (img.stem + ".jpg")).unlink(missing_ok=True)
+        _drop_legacy_trash(d)
 
         volume.commit()
         return {"ok": True, **_dataset_stats(d)}
@@ -4096,15 +5336,28 @@ def web():
             stack = [{"path": payload["lora_path"], "unet": num("lora_multiplier", 1.0, float)}]
 
         # Reject here rather than in the job: a bad path is a form error, and
-        # spawning would cost a cold A100 before discovering it.
+        # spawning would cost a cold H100 before discovering it. Regions are
+        # validated on the same trip and for the same reason — a region naming
+        # a LoRA deleted since the page loaded is the failure a stale tab
+        # actually hits.
         _reload_volume()
         try:
             stack = _validate_loras(stack)
+            regions = _validate_regions(regions)
         except ValueError as exc:
             return {"error": str(exc)}
 
+        # The plates are inputs to the regional node, so they mean nothing
+        # without boxes. Caught here rather than in the job because the answer
+        # is "draw a box", which is a thing to say while the reference image is
+        # still on screen.
+        for slot in ("scene", "outfit"):
+            if payload.get(slot) and not regions:
+                return {"error": f"A {slot} reference needs at least one region — "
+                                 "the scene is composed around the boxes."}
+
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        runner = _on_gpu(Generator, payload.get("gpu"), IMAGE_GPUS, GPU)
+        runner = _on_gpu(ImageGenerator, payload.get("gpu"), IMAGE_GPUS, GPU)
         runner().generate.spawn(job_id=job_id, params={
             "prompt": prompt,
             "negative_prompt": str(payload.get("negative_prompt") or ""),
@@ -4112,14 +5365,17 @@ def web():
             "loras": stack,
             "regions": regions,
             "region_weight": num("region_weight", 1.0, float),
+            # Base64, the same shape /api/video already takes its keyframes in.
+            "scene": payload.get("scene"),
+            "outfit": payload.get("outfit"),
             "width": num("width", 1024, int),
             "height": num("height", 1024, int),
             "num_images": max(1, min(4, num("num_images", 1, int))),
             "steps": num("steps", None, int),
             "cfg_scale": num("cfg_scale", None, float),
             "seed": num("seed", None, int),
-            "sampler": str(payload.get("sampler") or "Euler"),
-            "scheduler": str(payload.get("scheduler") or "Automatic"),
+            "sampler": str(payload.get("sampler") or IMAGE_DEFAULTS["sampler"]),
+            "scheduler": str(payload.get("scheduler") or IMAGE_DEFAULTS["scheduler"]),
             "shift": num("shift", 1.15, float),
         })
         return {"ok": True, "job_id": job_id}
@@ -4258,10 +5514,12 @@ def web():
         """
         Stream one result off the volume, image or video.
 
-        Deliberately not base64 in a JSON body the way /api/outputs does it:
-        inlining is what made a gallery impossible, since a page of stills or a
-        clip with its soundtrack is tens of megabytes of JSON before anything
-        renders, and a <video> cannot seek until all of it has arrived.
+        Deliberately not base64 in a JSON body: inlining is what made a gallery
+        impossible, since a page of stills or a clip with its soundtrack is tens
+        of megabytes of JSON before anything renders, and a <video> cannot seek
+        until all of it has arrived. The route that did it that way is gone —
+        this is now the only way a result's bytes reach the page, from the canvas
+        the moment a run finishes through to the gallery.
 
         Matching the whole filename, not its stem: `Path("../../x").stem` is
         "x", which passes NAME_RE while the joined path still escapes outputs/.
@@ -4292,42 +5550,87 @@ def web():
 
     @api.post("/api/outputs/{job_id}/delete")
     def delete_output(job_id: str) -> dict[str, Any]:
-        """Cull a result. Moves to outputs/.trash/, the way datasets do."""
+        """Delete a result and its files. Unlinked, not recoverable."""
         if not NAME_RE.match(job_id):
             return {"error": "Invalid job_id."}
         _reload_volume()
         d = OUTPUTS / job_id
         if not d.is_dir():
             return {"error": "Not found."}
-        trash = OUTPUTS / TRASH_DIR
-        trash.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(d), str(trash / f"{job_id}-{int(time.time())}"))
+        shutil.rmtree(d, ignore_errors=True)
+        _drop_legacy_trash(OUTPUTS)
         volume.commit()
         return {"ok": True}
 
-    @api.get("/api/outputs/{job_id}")
-    def outputs(job_id: str) -> dict[str, Any]:
-        """Serve generated PNGs off the volume, keeping them out of the job dict."""
-        if not NAME_RE.match(job_id):
+    @api.post("/api/outputs/purge")
+    def purge_outputs(payload: dict) -> dict[str, Any]:
+        """
+        Delete many results in one request.
+
+        Two guards, because deletion here does not go anywhere first.
+
+        `confirm` has to be in the body, so a bare POST to a guessed URL cannot
+        fire it. And the caller names the folders rather than describing them:
+        re-deriving the set here from a filter would delete whatever matched at
+        request time, which is not the set the user was shown a count of and
+        agreed to. A run that finished during the confirm dialog would go
+        without ever having been on screen. The list is the agreement.
+        """
+        if payload.get("confirm") != "delete":
+            return {"error": "Unconfirmed."}
+
+        job_ids = payload.get("job_ids")
+        if not isinstance(job_ids, list) or not job_ids:
+            return {"error": "Nothing to delete."}
+        if any(not isinstance(j, str) or not NAME_RE.match(j) for j in job_ids):
             return {"error": "Invalid job_id."}
+
         _reload_volume()
-        d = OUTPUTS / job_id
-        if not d.is_dir():
-            return {"images": []}
-        return {
-            "images": [
-                {"name": p.name,
-                 "data": "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()}
-                for p in sorted(d.glob("*.png"), key=lambda p: p.stat().st_mtime)
-            ]
-        }
+        removed = 0
+        for job_id in dict.fromkeys(job_ids):
+            d = OUTPUTS / job_id
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+
+        _drop_legacy_trash(OUTPUTS)
+        volume.commit()
+        return {"ok": True, "removed": removed}
+
+    # There was a GET /api/outputs/{job_id} here that returned every PNG of a run
+    # base64'd into one JSON body. It is gone rather than left unused: /api/file
+    # already serves the same bytes, streamed and cacheable, and it is what the
+    # gallery, the drawer and now the canvas all use. Two routes for one job,
+    # where the second one is strictly slower, is the shape a future change
+    # picks the wrong half of.
+
+    # Job ids whose completion this container has already reacted to. Bounded by
+    # replacing the set rather than growing it: nothing here needs history, only
+    # "have I already done the one-time thing for this job".
+    _warmed: set = set()
 
     @api.get("/api/status/{job_id}")
     def status(job_id: str) -> dict[str, Any]:
         try:
-            return jobs.get(job_id) or {"status": "unknown"}
+            rec = jobs.get(job_id) or {"status": "unknown"}
         except Exception as exc:
             return {"status": "unknown", "error": str(exc)}
+
+        # The poll that first sees "completed" is the last thing to happen before
+        # the client asks for the pixels, which makes it the free place to pull
+        # the volume forward. Without it the first /api/file of every run misses,
+        # reloads, and pays that latency in front of the image the user is
+        # waiting on — with it, the reload overlaps the client's own round trip
+        # and every still is served off a warm view.
+        if rec.get("status") == "completed" and job_id not in _warmed:
+            if len(_warmed) > 256:
+                _warmed.clear()
+            _warmed.add(job_id)
+            try:
+                _reload_volume()
+            except Exception as exc:
+                print(f"[status] warm reload failed for {job_id}: {exc}", flush=True)
+        return rec
 
     @api.post("/api/stop/{job_id}")
     def stop(job_id: str) -> dict[str, Any]:
@@ -4533,6 +5836,12 @@ button.t:hover{color:var(--fg)}
 .pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:0;
   border-radius:999px;padding:7px 13px;color:#ddd;font:13px inherit;cursor:pointer}
 .pill.on{background:#fff;color:#000}
+/* Red and spelled out, because this one is a whole gallery at once. The per-card
+   × is the same kind of action at a scale a mis-click can survive; this is the
+   scale where the confirm dialog is the only thing between you and the volume. */
+.pill.danger{background:rgba(248,113,113,.12);color:#f87171}
+.pill.danger:hover{background:rgba(248,113,113,.2)}
+.pill.danger[disabled]{opacity:.35;cursor:default;background:rgba(248,113,113,.12)}
 .bar{height:3px;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden;margin-top:10px}
 .bar>i{display:block;height:100%;background:#fff;border-radius:99px;transition:width .4s}
 .muted{color:var(--dim);font-size:12px}
@@ -4612,6 +5921,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .menu button:hover{background:rgba(255,255,255,.09)}
 .menu button.danger{color:#f87171}
 .menu button.danger:hover{background:rgba(248,113,113,.14)}
+/* A ticked item is one already in the prompt, and choosing it again takes it
+   out. The gutter is reserved on every button in such a menu rather than only
+   the ticked ones, so the labels do not shift sideways as items toggle. */
+.menu.checks button{padding-left:28px}
+.menu button.on::before{content:"";position:absolute;left:12px;top:50%;margin-top:-5px;
+  width:5px;height:9px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.menu.checks button{position:relative}
 .menu hr{border:0;border-top:1px solid rgba(255,255,255,.1);margin:5px 7px}
 
 /* Sheets: settings, metadata, lightbox ---------------------------------- */
@@ -4626,11 +5942,27 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .fam+.fam{border-top:1px solid var(--line);padding-top:18px}
 .fam-head{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px}
 .fam-head .muted{margin-left:auto;font-size:12px}
+/* The queue reports where you started it, under the head it belongs to, rather
+   than in one shared strip at the top of Settings — with a button per family
+   there is no longer a single place that "the download" means. */
+.fam-prog{margin:0 2px 12px}
 .kv{display:grid;grid-template-columns:132px 1fr;gap:5px 14px;font-size:13px}
 .kv dt{color:var(--mut)}
 .kv dd{color:#e8e8e8;word-break:break-word}
-.lb{position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:70;display:grid;place-items:center;padding:34px}
-.lb img,.lb video{max-width:100%;max-height:100%;object-fit:contain}
+/* Flex, not grid. As a grid container with `place-items:center` the image was
+   the only in-flow item, in an implicit auto-sized row, and `align-items:center`
+   stops that row stretching — so the row was sized from the image and the
+   image's `max-height:100%` was a percentage of a height derived from itself.
+   Cyclic, so the browser drops the constraint. `max-width:100%` kept working
+   because the inline axis is definite, which is exactly why this only showed up
+   on images taller than the viewport: a 640x1536 rendered at 640x1536 and ran
+   592px off the bottom of the screen, and the strip you could see read as a
+   centre crop. A flex item's percentages resolve against the container's
+   content box, which `inset:0` makes definite, so `100%` means the screen. */
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:70;
+  display:flex;align-items:center;justify-content:center;padding:34px}
+.lb img,.lb video{max-width:100%;max-height:100%;width:auto;height:auto;
+  min-width:0;min-height:0;object-fit:contain}
 .lb .x{position:absolute;top:16px;right:20px;width:34px;height:34px;border:0;background:none;color:#bbb;padding:7px;cursor:pointer}
 
 /* Datasets -------------------------------------------------------------- */
@@ -4751,10 +6083,92 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   background:rgba(0,0,0,.7);padding:1px 5px;border-radius:4px}
 .ref button{position:absolute;top:3px;right:3px;width:19px;height:19px;border:0;border-radius:50%;
   background:rgba(0,0,0,.66);color:#eee;font-size:11px;line-height:1;cursor:pointer}
-.region{margin-bottom:12px}
-.region button{padding:8px 10px;flex:none}
-.region .cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:6px}
-.region .cells input{padding:8px 2px;text-align:center;font-size:12px}
+/* Regions --------------------------------------------------------------- */
+/* A region is a rectangle on the canvas, so it is drawn on the canvas. The
+   four coordinates were the right parameter and the wrong primary: "0.5 0 0.5
+   1" is a rectangle you rebuild in your head every time, which is why the row
+   that carried those numbers also had to carry a 32px picture of them. That
+   picture is this, at the size of the frame and grabbable — and the numbers,
+   still here in the inspector, are now a readout that moves while you drag.
+   Dragging is what teaches them; they never taught the dragging.
+
+   It also fixes what the stack cost: a row was ~74px, so the eight regions the
+   backend allows were ~592px of console against a 54dvh cap — the feature's
+   fullest state broke the rule the console exists to hold. One inspector row
+   is the same height whether there is one box or eight. */
+/* `.frame`, not `.stage` — `.view > .stage` is already the canvas-plus-console
+   column, and a second `.stage` carrying aspect-ratio and a max-height would
+   have landed on it and collapsed the whole view. Third time this file has
+   been bitten by a reused class name; see the notes on `.lb` and on
+   `.blank`/`.empty`. */
+/* Both dimensions in pixels, set by layoutFrame() off the canvas the way
+   --shot-h is. `aspect-ratio` with an auto width is the obvious way to write
+   this and does not work here: the frame is a flex item in a column, so its
+   width is the cross size, and the ratio never transferred into it — the box
+   came out 2px wide, which is exactly its two borders and nothing else. A dvh
+   sum would be wrong for the height anyway the moment the console grew, so
+   both numbers were going to be measured regardless. */
+.frame{position:relative;align-self:center;flex:none;
+  width:var(--frame-w,0);height:var(--frame-h,0);
+  border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.02);
+  overflow:hidden;touch-action:none}
+/* Absolute, not a flow child: a child sized height:100% would establish the
+   container's height itself and aspect-ratio would never apply — the same trap
+   documented on .tile .ph. */
+.frame>.plate{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+/* Thirds. Faint enough to be a viewfinder rather than a grid you are working
+   against, and gone the moment there is a picture underneath to judge. */
+.frame>.thirds{position:absolute;inset:0;pointer-events:none;opacity:.5;
+  background:
+    linear-gradient(to right,transparent calc(33.333% - .5px),rgba(255,255,255,.07) calc(33.333% - .5px),
+      rgba(255,255,255,.07) calc(33.333% + .5px),transparent calc(33.333% + .5px)),
+    linear-gradient(to right,transparent calc(66.666% - .5px),rgba(255,255,255,.07) calc(66.666% - .5px),
+      rgba(255,255,255,.07) calc(66.666% + .5px),transparent calc(66.666% + .5px)),
+    linear-gradient(to bottom,transparent calc(33.333% - .5px),rgba(255,255,255,.07) calc(33.333% - .5px),
+      rgba(255,255,255,.07) calc(33.333% + .5px),transparent calc(33.333% + .5px)),
+    linear-gradient(to bottom,transparent calc(66.666% - .5px),rgba(255,255,255,.07) calc(66.666% - .5px),
+      rgba(255,255,255,.07) calc(66.666% + .5px),transparent calc(66.666% + .5px))}
+.frame.hot,.shot.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:-4px}
+
+/* The layer is reparented between the frame and the first still, so every
+   coordinate in it is a percentage and nothing measures its host. */
+#region-layer{position:absolute;inset:0;touch-action:none;cursor:crosshair}
+#region-layer.off{display:none}
+.rbox{position:absolute;border:1px solid rgba(255,255,255,.9);border-radius:4px;
+  cursor:move;touch-action:none;overflow:hidden;
+  box-shadow:0 0 0 1px rgba(0,0,0,.45),inset 0 0 0 1px rgba(0,0,0,.28)}
+/* Solid when the box holds an identity — a resolvable LoRA or a photo — and
+   faint when it holds neither, which is the same distinction the 32px plots
+   drew and the one that decides what comes out: an empty rectangle is filled
+   by the scene prompt, a box with an identity in it is a person. */
+.rbox{opacity:.34}
+.rbox.armed{opacity:1}
+.rbox.sel{border-color:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.6),0 0 0 3px rgba(255,255,255,.16)}
+.rbox>.face{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.5;
+  pointer-events:none}
+.rbox>.tag{position:absolute;left:0;top:0;max-width:100%;padding:3px 7px;
+  background:rgba(0,0,0,.6);backdrop-filter:blur(8px);color:#fff;
+  border-radius:0 0 6px 0;font:500 11px/1.25 inherit;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.rbox>.tag em{font-style:normal;color:var(--mut)}
+/* Handles are hidden until the box is worth resizing — eight dots on every box
+   at eight boxes is 64 dots on a picture you are trying to look at. */
+.rbox>i{position:absolute;width:11px;height:11px;border-radius:3px;
+  background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.5);opacity:0;transition:opacity .12s}
+.rbox:hover>i,.rbox.sel>i{opacity:1}
+.rbox>i[data-h=nw]{left:-5px;top:-5px;cursor:nwse-resize}
+.rbox>i[data-h=ne]{right:-5px;top:-5px;cursor:nesw-resize}
+.rbox>i[data-h=sw]{left:-5px;bottom:-5px;cursor:nesw-resize}
+.rbox>i[data-h=se]{right:-5px;bottom:-5px;cursor:nwse-resize}
+.rbox>i[data-h=n]{left:50%;top:-5px;margin-left:-5px;cursor:ns-resize}
+.rbox>i[data-h=s]{left:50%;bottom:-5px;margin-left:-5px;cursor:ns-resize}
+.rbox>i[data-h=w]{left:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+.rbox>i[data-h=e]{right:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+/* Snap guides: drawn only while a drag is landing on one, so the line is
+   feedback rather than furniture. */
+#region-layer>.guide{position:absolute;background:rgba(255,255,255,.55);pointer-events:none}
+#region-layer>.guide.v{top:0;bottom:0;width:1px}
+#region-layer>.guide.h{left:0;right:0;height:1px}
 .wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
 /* Train ----------------------------------------------------------------- */
@@ -4783,7 +6197,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   <span class="grow"></span>
   <button class="door" id="door"></button>
   <span class="sep"></span>
-  <button class="ico on" id="t-drawer" title="Recent work"></button>
+  <!-- Off at load, matching the `nodrawer` the studio opens with: the drawer
+       is raw material for the thing you are making, and on a page you have
+       just opened there is nothing being made yet — so the canvas gets the
+       320px until you ask for the gallery back. -->
+  <button class="ico" id="t-drawer" title="Recent work"></button>
   <button class="ico" id="t-settings" title="Settings"></button>
 </header>
 
@@ -4793,13 +6211,21 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 <!-- Canvas first, console under it. Image and video are one place: which one
      you get is a property of what you are making, not an address you navigate
      to, so it sits inside the prompt field rather than in the chrome. -->
-<div class="view studio" id="v-generate">
+<div class="view studio nodrawer" id="v-generate">
  <div class="stage">
   <div class="canvas" id="canvas">
     <!-- No copy. An empty frame above a focused prompt field is already the
          whole instruction, and a sentence telling you to type is a sentence
          that will be read on every visit forever to be useful once. -->
     <div id="canvas-empty" class="blank"><div class="glyph" id="canvas-glyph"></div></div>
+    <!-- The frame regional mode draws on: the render's own aspect, at the size
+         the canvas can give it. It replaces the placeholder rather than sitting
+         beside it, because an empty frame and an empty-state glyph are two
+         answers to the same question. -->
+    <div id="frame" class="frame hide"><div class="thirds"></div></div>
+    <!-- Lives here so it exists before anything reparents it; drawRegions()
+         moves it onto whichever host is showing. -->
+    <div id="region-layer" class="off"></div>
     <div id="gen-out" class="shots hide"></div>
     <p class="muted" id="gen-meta" style="margin:12px 2px"></p>
     <div id="vid-out" class="hide"></div>
@@ -4826,8 +6252,47 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
          what you can see; a name that resolves to nothing is the one thing
          the prompt cannot show on its own. -->
     <p class="muted warn" id="lora-note"></p>
-    <div id="gen-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
-    <div id="vid-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
+    <!-- One row for whichever box is selected, not one row per box. What you
+         touch on the canvas decides what this is about, which is why it can
+         stay a single 36px line at eight regions where the old stack was
+         ~592px. The four coordinates are still here — they are the escape
+         hatch, and while you drag they are the readout that teaches what they
+         mean. -->
+    <div id="region-bar" class="opts hide">
+      <button class="drop mini" id="r-ref"
+        title="A photo of this character. Pulls the box toward that likeness during sampling — stacks with the LoRA, and works without one.">
+        <img id="r-ref-thumb" class="hide" alt=""><span id="r-ref-hint"></span>
+      </button>
+      <!-- Direction for one performer, not a second scene description. The
+           split is the only rule this feature has and it is worth the two
+           sentences: the prompt above is what every performer is standing in,
+           this is what this one is doing, and the box already said where. -->
+      <div class="opt wide"><input id="r-prompt"
+        placeholder="a man in a denim jacket, laughing &lt;lora:name:1.3&gt;"
+        title="This performer only — who they are and what they are doing. The scene, the light and the lens go in the prompt above; where they stand is the box. Do not write a position here, it is already said."></div>
+      <div class="opt n" data-lb="Strength"><input id="r-strength" inputmode="decimal"
+        data-step="0.05" data-bigstep="0.25"
+        title="How hard this box's LoRA is applied. The node pack's guidance is 1.3–1.4 for a character. Writes the number in the token."></div>
+      <span class="vr"></span>
+      <div class="opt n" data-lb="X"><input data-r="x" inputmode="decimal"
+        data-step="0.01" data-bigstep="0.1"
+        title="Left edge, as a fraction of the width. 0 is the left of the canvas."></div>
+      <div class="opt n" data-lb="Y"><input data-r="y" inputmode="decimal"
+        data-step="0.01" data-bigstep="0.1"
+        title="Top edge, as a fraction of the height. 0 is the top of the canvas."></div>
+      <div class="opt n" data-lb="W"><input data-r="width" inputmode="decimal"
+        data-step="0.01" data-bigstep="0.1"
+        title="How much of the canvas width this box covers, 0 to 1."></div>
+      <div class="opt n" data-lb="H"><input data-r="height" inputmode="decimal"
+        data-step="0.01" data-bigstep="0.1"
+        title="How much of the canvas height this box covers, 0 to 1."></div>
+      <span class="actions">
+        <button class="opt ib" id="r-del" data-ico="trash"
+          title="Remove this box — or select it and press ⌫"></button>
+      </span>
+    </div>
+    <div id="gen-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><div class="row" style="gap:10px;margin-top:6px"><p class="muted grow" style="margin:0"></p><button class="s" data-cancel>Cancel</button></div></div>
+    <div id="vid-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><div class="row" style="gap:10px;margin-top:6px"><p class="muted grow" style="margin:0"></p><button class="s" data-cancel>Cancel</button></div></div>
     <p class="muted warn" id="gen-note" style="margin:8px 2px 0"></p>
     <p class="muted warn" id="vid-note" style="margin:8px 2px 0"></p>
 
@@ -4839,9 +6304,14 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
              and the Width/Height boxes under Advanced are one control: picking
              a ratio writes the boxes, typing in the boxes selects Custom, and
              Custom is the only option that has to spell out its own size. -->
+        <!-- 3:4 is here because the swap button under Advanced put it here:
+             every other landscape preset had a portrait counterpart to flip
+             into and 4:3 did not, so the one ratio the page opens on was the
+             one whose flip landed on Custom. -->
         <div class="opt"><select id="g-aspect">
-          <option value="1024x1024">1:1</option><option value="1152x896">4:3</option>
+          <option value="1024x1024">1:1</option><option value="1152x896" selected>4:3</option>
           <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
+          <option value="896x1152">3:4</option>
           <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
           <option value="custom">Custom</option>
         </select></div>
@@ -4855,6 +6325,12 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
              syntax you have never seen — and after that the prompt is the
              stack, so a fifth LoRA costs the canvas nothing. -->
         <button class="s" id="add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
+        <!-- Out of Advanced, which is collapsed by default and was therefore
+             hiding the feature this backend was swapped for. It belongs beside
+             + LoRA because both answer "who is in this picture"; the difference
+             is only whether it matters where they stand. -->
+        <button class="opt ib" id="g-regional" data-ico="regions"
+          title="Regional — place each character in their own box on the canvas"></button>
         <span class="actions">
           <span class="muted" id="gen-model-line"></span>
           <button class="opt ib" id="toggle-adv" data-ico="sliders" title="Advanced"></button>
@@ -4869,25 +6345,68 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
           <div class="opt" data-lb="Scheduler"><select id="g-scheduler"></select></div>
           <div class="opt n" data-lb="Steps"><input id="g-steps" placeholder="auto" inputmode="numeric"
             title="Denoising steps. More is slower; past the model's trained range it stops helping."></div>
+          <!-- data-step, because ↑/↓ default to 1 and ⌘ to 8, and a CFG of 1.0
+               stepped by 8 is not a coarser version of the same gesture — it is
+               a number no checkpoint here accepts. Same for Shift below. -->
           <div class="opt n" data-lb="CFG"><input id="g-cfg" placeholder="auto" inputmode="decimal"
+            data-step="0.1" data-bigstep="1"
             title="Guidance scale — how hard sampling is pushed toward the prompt. Turbo is distilled to 1.0."></div>
-          <div class="opt n" data-lb="Shift"><input id="g-shift" placeholder="1.15" inputmode="decimal"
-            title="Timestep shift. Higher spends more of the schedule on structure, less on detail."></div>
+          <!-- The one control here whose *name* explains nothing, which is why
+               the tooltip is on the pill and not on the box: "Shift" is the
+               part you hover, and a title on the 52px input meant the word
+               itself was the one place on the control that answered nothing.
+               Two sentences rather than one, because timestep shift is a
+               flow-matching idea most people meet for the first time here —
+               the others are naming a knob you already know. -->
+          <div class="opt n" data-lb="Shift"
+            title="Timestep shift bends the noise schedule: higher spends more steps in the noisy half, where composition, pose and anatomy are settled, and fewer on fine detail. Krea 2's own config says 1.15 — raise it if large canvases come out muddled, lower it if they come out flat."><input
+            id="g-shift" placeholder="1.15" inputmode="decimal"
+            data-step="0.05" data-bigstep="0.5"></div>
           <span class="vr"></span>
           <!-- The real parameter, exposed. Snapped to 16 on the way out, because
                the pipeline floors to 16 anyway and a box that keeps 1000 while
                the model renders 992 is a box that lied to you. -->
           <div class="opt n" data-lb="Width"><input id="g-w" inputmode="numeric"
-            title="Pixels. Rounded down to a multiple of 16 — the DiT's patch grid."></div>
+            title="Pixels. Rounded down to a multiple of 8 — the VAE's grid. ↑/↓ steps by 1, ⌘↑/⌘↓ by 8."></div>
+          <!-- Between the two boxes it operates on, because that is the only
+               place it needs no label: an arrow pointing both ways, sitting
+               between a width and a height, is the whole explanation. -->
+          <button class="opt ib" id="g-swap" data-ico="swap"
+            title="Swap width and height"></button>
           <div class="opt n" data-lb="Height"><input id="g-h" inputmode="numeric"
-            title="Pixels. Rounded down to a multiple of 16 — the DiT's patch grid."></div>
-          <span class="vr"></span>
-          <label class="row" style="gap:7px;margin:0;color:#ddd;font-size:13px">
-            <input type="checkbox" id="g-regional" style="width:auto"> Regional</label>
-          <select id="g-region-dir" class="hide" style="width:auto;height:36px;padding:0 10px"><option value="columns">Columns</option><option value="rows">Rows</option></select>
-          <button class="s hide" id="add-region" style="height:36px;padding:0 13px">+ Region</button>
+            title="Pixels. Rounded down to a multiple of 8 — the VAE's grid. ↑/↓ steps by 1, ⌘↑/⌘↓ by 8."></div>
+          <span class="vr" id="g-region-vr"></span>
+          <!-- Was a persistent Columns/Rows select that filled only the
+               coordinates nobody had typed into. Once boxes are drawn there is
+               no such thing as an untouched coordinate, so the mode became a
+               verb: distribute what is already there, on demand. -->
+          <button class="opt ib hide" id="g-arrange" data-ico="arrange"
+            title="Distribute the boxes evenly"></button>
+          <!-- The prompt above keeps applying everywhere once regions are on —
+               it is what holds the lighting, lens and palette common to all of
+               them. This is how hard it pulls against them. The backend has
+               taken it since regional prompting landed; nothing ever sent it,
+               so it sat at its default and the knob did not exist. -->
+          <div class="opt n hide" id="g-region-base-wrap" data-lb="Global"><input id="g-region-base"
+            value="1" inputmode="decimal" data-step="0.05" data-bigstep="0.25"
+            title="Multiplies every region's LoRA strength at once. 1 uses the strengths as written; nudge to 1.1 if all the identities look soft."></div>
+          <!-- Two plates, and they are not variants of each other: a scene is
+               regenerated *around* the boxes so the subjects are lit by it and
+               can lean on the furniture, while an outfit is a second reference
+               frame the garments are read out of. Both need the identity edit
+               LoRA, so both stay hidden until it is on the volume — a tile that
+               silently renders a picture with nothing to do with the photo you
+               dropped is the failure this hiding prevents. -->
+          <button class="drop mini hide" id="g-drop-scene"
+            title="Scene photo. The picture is generated inside it — lighting, perspective and shadows integrate.">
+            <img id="g-thumb-scene" class="hide" alt=""><span id="g-hint-scene"></span>
+          </button>
+          <button class="drop mini hide" id="g-drop-outfit"
+            title="Outfit or object photo. Transferred onto the subjects rather than pasted into the frame.">
+            <img id="g-thumb-outfit" class="hide" alt=""><span id="g-hint-outfit"></span>
+          </button>
         </div>
-        <div id="region-stack" class="hide" style="margin-top:9px"></div>
+        <p class="muted hide" id="region-note" style="margin:7px 0 0"></p>
       </div>
     </div>
 
@@ -4961,9 +6480,15 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
           <div class="opt n" data-lb="Steps"><input id="v-steps" inputmode="numeric"
             title="Denoising steps. Blank uses the model's own default."></div>
           <div class="opt n hide" id="v-cfg-wrap" data-lb="CFG"><input id="v-cfg" inputmode="decimal"
+            data-step="0.1" data-bigstep="1"
             title="Guidance scale — how hard sampling is pushed toward the prompt and away from the negative."></div>
-          <div class="opt n hide" id="v-shift-wrap" data-lb="Shift"><input id="v-shift" inputmode="decimal"
-            title="Timestep shift. Higher spends more of the schedule on motion and structure."></div>
+          <!-- Same idea, same placement, different half of the schedule that
+               matters: on a clip the noisy steps buy motion and layout rather
+               than anatomy, and Wan's default is 8.0 rather than Krea 2's 1.15
+               because a video latent is a much longer sequence. -->
+          <div class="opt n hide" id="v-shift-wrap" data-lb="Shift"
+            title="Timestep shift bends the noise schedule: higher spends more steps in the noisy half, where motion and layout are settled, and fewer on fine detail. Wan's own default is 8.0 — lower it for a near-static shot, raise it if motion comes out stiff."><input
+            id="v-shift" inputmode="decimal" data-step="0.1" data-bigstep="1"></div>
           <!-- Only the A14B pair has a handover to place. -->
           <!-- "auto", not empty: every other box in this row shows the model's
                default in grey, and one blank box among them reads as broken
@@ -5000,6 +6525,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
       <button class="pill" data-filter="image">Images</button>
       <button class="pill" data-filter="video">Video</button>
       <button class="ico" id="gal-refresh" title="Refresh"></button>
+      <!-- Words rather than the × the cards carry: a glyph that means "this one"
+           cannot also mean "every one of these", and the difference is the whole
+           point of the button. The label tracks the filter so it names what is
+           actually about to go. -->
+      <button class="pill danger" id="gal-purge">Delete all</button>
     </div>
     <div id="gal-grid" class="grid"></div>
     <p class="muted" id="gal-empty"></p>
@@ -5157,18 +6687,22 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
       <h1 class="grow">Settings</h1>
       <button class="ico" id="settings-x"></button>
     </div>
+    <!-- The token, and only the token. "Download missing" used to sit in this
+         row, which put the one button that pulls the entire catalogue — every
+         family, including the ones this install will never run — next to a
+         password field it has nothing to do with. Each family downloads itself
+         now, so the button that is almost always the wrong scope is gone and
+         the card is about the thing it is labelled with. -->
     <div class="card">
       <label>HuggingFace token</label>
       <div class="row">
         <input id="tok" type="password" class="grow" placeholder="hf_…" autocomplete="off">
         <button class="s" id="tok-save">Save</button>
-        <button class="b" id="dl-all" style="padding:9px 16px;font-size:13px">Download missing</button>
       </div>
       <p class="muted" style="margin-top:8px">
         Needed for Krea 2 RAW and Turbo, which are gated. Accept the licence at
         huggingface.co/krea/Krea-2-Raw with the same account. <span id="tok-state"></span>
       </p>
-      <div id="dl-all-prog" class="hide"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:7px"></p></div>
     </div>
 
     <!-- The other way weights arrive. Most LoRAs worth having were never
@@ -5195,7 +6729,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
            the length of the transfer — which is what "stuck" looks like. The
            byte count and the rate move, and moving is the whole job of this
            element. -->
-      <div id="gd-prog" class="hide"><p class="muted" style="margin:0"></p></div>
+      <div id="gd-prog" class="hide"><div class="row" style="gap:10px"><p class="muted grow" style="margin:0"></p><button class="s" data-cancel>Cancel</button></div></div>
     </div>
 
     <div id="models"></div>
@@ -5239,6 +6773,10 @@ const ICON={
   // disappears the moment you type into them.
   sliders:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
   refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.7 4.3"/><path d="M20 4.5V11h-6.5"/></svg>',
+  // Two arrows crossing, not one double-headed one: the width and the height
+  // trade places, and a single arrow with two heads reads as a dimension being
+  // measured rather than two values being exchanged.
+  swap:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5h13"/><path d="M13.5 5l3.5 3.5-3.5 3.5"/><path d="M20 15.5H7"/><path d="M10.5 12L7 15.5 10.5 19"/></svg>',
   expand:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5H4.5v5"/><path d="M14.5 19.5h5v-5"/><path d="M4.5 4.5l6 6"/><path d="M19.5 19.5l-6-6"/></svg>',
   first:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="3.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
   last:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><rect x="15.5" y="5.5" width="5" height="13" rx="2.5" fill="currentColor" stroke="none" opacity=".85"/></svg>',
@@ -5246,6 +6784,17 @@ const ICON={
   trigger:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 12h6"/><path d="M14 12h6"/><circle cx="12" cy="12" r="2.2"/></svg>',
   upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>',
   film:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M8 5.5v13M16 5.5v13"/></svg>',
+  // A room with a horizon, and a hanging garment. The two reference plates do
+  // different things to the same render — one becomes the world, the other
+  // becomes what the subjects are wearing — so drawing them alike would make
+  // the pair of tiles a coin toss.
+  scene:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M3.5 15.5l4.6-4a1.8 1.8 0 0 1 2.4 0l5.4 4.7"/><path d="M14.6 13.2l1.6-1.4a1.8 1.8 0 0 1 2.4 0l1.9 1.7"/><circle cx="8.4" cy="9.6" r="1.3" fill="currentColor" stroke="none"/></svg>',
+  outfit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5L5 7.2l1.4 3.2 1.8-.8V19.5h7.6V9.6l1.8.8L19 7.2l-4.5-2.7"/><path d="M9.5 4.5a2.5 2.5 0 0 0 5 0"/></svg>',
+  // The feature, drawn: a frame with two boxes standing in it. Nothing more
+  // abstract survived the test of being recognisable at 16px.
+  regions:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5" opacity=".45"/><rect x="6" y="8.5" width="5" height="8" rx="1.4" fill="currentColor" stroke="none"/><rect x="13" y="8.5" width="5" height="8" rx="1.4" fill="currentColor" stroke="none" opacity=".55"/></svg>',
+  arrange:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="6" width="5" height="12" rx="1.4"/><rect x="9.5" y="6" width="5" height="12" rx="1.4"/><rect x="15.5" y="6" width="5" height="12" rx="1.4"/></svg>',
+  trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15"/><path d="M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7"/><path d="M6.5 7l.8 11.3A1.7 1.7 0 0 0 9 20h6a1.7 1.7 0 0 0 1.7-1.7L17.5 7"/></svg>',
 };
 // Every control that asked for an icon instead of a label gets it here, so the
 // markup names the idea ("dice") and only this table knows the path data.
@@ -5253,8 +6802,16 @@ $$('[data-ico]').forEach(el=>el.insertAdjacentHTML('afterbegin',ICON[el.dataset.
 // And every control that asked for the word. Same mechanism as data-ico, and
 // mutually exclusive with it by construction: a pill carries one or the other,
 // never both, because a labelled icon is two ways to say one thing.
-$$('[data-lb]').forEach(el=>
-  el.insertAdjacentHTML('afterbegin','<span class="lead">'+esc(el.dataset.lb)+'</span>'));
+// Factored out of the one-shot pass rather than left inline, because region
+// rows are built long after load: a label injected only at startup is a label
+// every dynamically-added pill silently goes without.
+function label(root){
+  [...root.querySelectorAll('[data-lb]')].forEach(el=>{
+    if(!el.querySelector(':scope>.lead'))
+      el.insertAdjacentHTML('afterbegin','<span class="lead">'+esc(el.dataset.lb)+'</span>');
+  });
+}
+label(document);
 $('#drop-glyph').innerHTML=ICON.upload;
 $('#v-add-ref').innerHTML='<span>'+ICON.photo+'</span>';
 $('#v-add-vid').innerHTML='<span>'+ICON.film+'</span>';
@@ -5341,11 +6898,127 @@ $('#prompt').addEventListener('keydown',e=>{
 // a step count, and reaching for the mouse to commit it is the wrong ending.
 // Not the textareas: a negative prompt is prose with the same claim on Enter
 // the positive one has.
-$$('#c-image,#c-video').forEach(sec=>sec.addEventListener('keydown',e=>{
+$$('#c-image,#c-video,#region-bar').forEach(sec=>sec.addEventListener('keydown',e=>{
   if(e.key!=='Enter'||e.isComposing||!e.target.matches('input:not([type=file])')) return;
   e.preventDefault();
   e.target.blur();   // so a width still on its way to being snapped is snapped first
   fireGenerate();
+}));
+
+// ---------- ⌥← / ⌥→ : move the clause under the caret ----------
+// A prompt is written by reordering it. "in soft window light" belongs before
+// the subject as often as after, and moving it there by hand is a select, a
+// cut, a click and a paste — four gestures, each with its own way of eating a
+// comma or leaving a double space behind.
+//
+// The separators are slots and they do not move: the commas and line breaks
+// stay exactly where they are and the text between them changes places. That is
+// what keeps a prompt written across two lines at two lines, and a prompt with
+// one comma at one comma, however many times you press the chord. Each slot
+// also keeps its own leading and trailing whitespace, so a clause moving into
+// the first position does not drag the space that used to precede it along.
+//
+// Returns false rather than doing nothing quietly when there is nowhere to go —
+// at the ends, or against an empty slot, which is a trailing comma and not a
+// clause. The caller lets the key fall through to the OS's word-jump there,
+// which is the honest answer to ⌥← on the first clause in the box.
+function moveClause(el,dir){
+  const v=el.value, at=el.selectionStart;
+  const slots=[];
+  let s=0;
+  for(let i=0;i<=v.length;i++){
+    if(i!==v.length&&v[i]!==','&&v[i]!=='\n') continue;
+    const t=v.slice(s,i), core=t.trim();
+    slots.push({
+      s, e:i, sep:v[i]||'', core,
+      // An all-whitespace slot has no core to sit between a lead and a tail,
+      // and splitting it into both would write the run out twice.
+      lead: core ? t.slice(0,t.length-t.trimStart().length) : t,
+      tail: core ? t.slice(t.trimEnd().length) : '',
+    });
+    s=i+1;
+  }
+  const i=slots.findIndex(sl=>at>=sl.s&&at<=sl.e), j=i+dir;
+  if(i<0||j<0||j>=slots.length||!slots[i].core||!slots[j].core) return false;
+  // Where the caret sits inside the clause it is holding, so a run of presses
+  // keeps hold of it rather than moving it once and losing its place.
+  const within=Math.min(slots[i].core.length,
+                        Math.max(0, at-slots[i].s-slots[i].lead.length));
+  [slots[i].core,slots[j].core]=[slots[j].core,slots[i].core];
+  let out='', pos=0;
+  slots.forEach((sl,k)=>{
+    if(k===j) pos=out.length+sl.lead.length;
+    out+=sl.lead+sl.core+sl.tail+sl.sep;
+  });
+  el.value=out;
+  el.setSelectionRange(pos+within,pos+within);
+  // Bubbling, because the note under the field is driven by an input listener
+  // and a `<lora:…>` token that has just changed clause has not changed what it
+  // resolves to — but the caret the LoRA picker tracks reads this too.
+  el.dispatchEvent(new Event('input',{bubbles:true}));
+  return true;
+}
+// The negatives take it as well: they are the same kind of comma-separated
+// prose, and a chord that works in one box and not the one under it is a chord
+// nobody trusts.
+['#prompt','#g-neg','#v-neg'].forEach(sel=>$(sel).addEventListener('keydown',e=>{
+  if(!e.altKey||e.metaKey||e.ctrlKey||e.isComposing) return;
+  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight') return;
+  if(moveClause(e.target,e.key==='ArrowRight'?1:-1)) e.preventDefault();
+}));
+
+// ---------- ↑ / ↓ on a number ----------
+// Every numeric box in the composer takes the arrows, ⌘ (or Ctrl) for the
+// coarse step. Delegated from the two sections rather than bound per field for
+// the same reason label() is a function: region rows are built long after load,
+// and a handler attached only at startup is one every row added later silently
+// goes without.
+//
+// 1 and 8 are the defaults because Width and Height are the boxes this was
+// asked for, and 8 is the VAE's grid — ⌘↑ there lands on the next size the
+// model can actually render rather than one it will floor. A field whose useful
+// range is 1.0 to 1.4 carries its own data-step: stepping a shift of 1.15 by 8
+// leaves behind every value the model accepts, which is a shortcut that cannot
+// be right once. The coarse step is 8× the fine one unless data-bigstep says
+// otherwise, so the two stay in proportion wherever the fine one is overridden.
+//
+// Nothing is snapped or clamped to the grid here. The boxes already do that on
+// the way out — typing 1153 shows 1153 until you leave the field — and an arrow
+// is a faster way to type a number, not a second way to commit one.
+const dec=v=>(String(v).split('.')[1]||'').length;
+// What ↑ counts from when the box is empty. The placeholder when it is a
+// number, which is what the video row prints there; otherwise the table the
+// image row's "auto" stands for, so ↑ on an empty Steps means "one more than
+// the model would have used" rather than "1". A seed reading "random" has no
+// such number and is left alone — walking a seed you have not drawn yet is not
+// a thing the box can do.
+function nudgeBase(el){
+  const ph=parseFloat(el.placeholder);
+  if(Number.isFinite(ph)) return ph;
+  const d=(window.KREA2_DEFAULTS||{})[$('#g-model').value]||{};
+  if(el.id==='g-steps') return d.steps;
+  if(el.id==='g-cfg') return d.cfg;
+  return null;
+}
+function nudgeNumber(el,dir,coarse){
+  const fine=parseFloat(el.dataset.step)||1;
+  const step=coarse ? (parseFloat(el.dataset.bigstep)||fine*8) : fine;
+  const base=el.value!=='' ? parseFloat(el.value) : nudgeBase(el);
+  if(!Number.isFinite(base)) return false;
+  // Rounded to the decimals the value and the step between them carry: 1.15 +
+  // 0.1 is 1.2500000000000002 in binary floating point, and the box would
+  // print every digit of it.
+  const next=Math.max(0, Number((base+dir*step).toFixed(
+    Math.max(dec(step),dec(base)))));
+  el.value=String(next);
+  el.dispatchEvent(new Event('input',{bubbles:true}));
+  return true;
+}
+$$('#c-image,#c-video,#region-bar').forEach(sec=>sec.addEventListener('keydown',e=>{
+  if(e.key!=='ArrowUp'&&e.key!=='ArrowDown') return;
+  if(e.altKey||e.shiftKey) return;
+  if(!e.target.matches('input[inputmode=numeric],input[inputmode=decimal]')) return;
+  if(nudgeNumber(e.target, e.key==='ArrowUp'?1:-1, e.metaKey||e.ctrlKey)) e.preventDefault();
 }));
 
 // One placeholder, three states: it has to name the kind, and on the H3
@@ -5368,6 +7041,12 @@ function syncCanvasView(){
   $('#vid-meta').classList.toggle('hide',img);
   $('#canvas-empty').classList.toggle('hide',!!n);
   $('#canvas-glyph').innerHTML=img?ICON.photo:ICON.play;
+  // The boxes are an image-side thing and the video canvas is the same element,
+  // so switching kinds has to take the layer with it — otherwise the rectangles
+  // sit over a clip they mean nothing to. drawRegions also owns the
+  // canvas-empty toggle when regions are on, so it runs after this one.
+  // window flag, not typeof — see the note in syncSize.
+  if(window.REGIONS_READY) drawRegions();
 }
 
 $('#t-drawer').onclick=()=>{
@@ -5393,17 +7072,28 @@ let menuEl=null;
 function closeMenu(){ if(menuEl){ menuEl.remove(); menuEl=null } }
 document.addEventListener('mousedown',e=>{ if(menuEl&&!menuEl.contains(e.target)) closeMenu() },true);
 window.addEventListener('resize',closeMenu);
-document.addEventListener('scroll',closeMenu,true);
+// Capture, because a menu anchored to a button inside a scrolling pane has to
+// close when that pane moves under it — but the menu is itself a scroller when
+// the LoRA list is long, and its own scroll reaches this listener the same way.
+// Without the guard the list closed on the first wheel notch, which reads as
+// "the picker cannot scroll" rather than "the picker is closing".
+document.addEventListener('scroll',e=>{ if(!(menuEl&&menuEl.contains(e.target))) closeMenu() },true);
 
 function openMenu(btn,items){
   closeMenu();
   const m=document.createElement('div'); m.className='menu';
   m.innerHTML=items.map((it,i)=>it.sep?'<hr>':
-    `<button data-i="${i}"${it.danger?' class="danger"':''}>${esc(it.label)}</button>`).join('');
+    `<button data-i="${i}" class="${it.danger?'danger':''}${it.on?' on':''}">${esc(it.label)}</button>`).join('');
+  if(items.some(it=>it.on)) m.classList.add('checks');
   document.body.appendChild(m);
   const r=btn.getBoundingClientRect(), w=m.offsetWidth, h=m.offsetHeight;
   m.style.left=Math.max(8,Math.min(r.right-w,innerWidth-w-8))+'px';
-  m.style.top=(r.bottom+h+10>innerHeight ? r.top-h-6 : r.bottom+6)+'px';
+  // Clamped, because a menu tall enough to need flipping above its button is
+  // also tall enough for r.top-h to land off the top of the window, and the
+  // rows that go past the edge are unreachable — the scrollbar is inside the
+  // menu, so nothing scrolls them back.
+  const top=(r.bottom+h+10>innerHeight ? r.top-h-6 : r.bottom+6);
+  m.style.top=Math.max(8,Math.min(top,innerHeight-h-8))+'px';
   m.querySelectorAll('button').forEach(b=>b.onclick=()=>{ const it=items[+b.dataset.i]; closeMenu(); it.run() });
   menuEl=m;
 }
@@ -5457,10 +7147,6 @@ async function loadState(){
   $('#tok-state').innerHTML = s.hf_token_set?'<span class="ok">Token saved.</span>':'<span class="warn">No token saved.</span>';
   // Name the cost up front: how many are missing and how many GB that is.
   const miss=s.models.filter(m=>!m.present);
-  const gb=miss.reduce((a,m)=>a+m.approx_gb,0);
-  const dlAll=$('#dl-all');
-  dlAll.disabled=!miss.length;
-  dlAll.textContent=miss.length?`Download ${miss.length} missing · ${gb.toFixed(1)} GB`:'All models present';
   // Grouped by family, in catalogue order. Twenty-odd flat cards is a wall you
   // scroll rather than a list you read, and the groups are the unit you
   // actually decide in: you want the Wan stack or you do not.
@@ -5469,7 +7155,15 @@ async function loadState(){
     const g=fams.find(f=>f.name===m.family);
     (g||fams[fams.push({name:m.family,items:[]})-1]).items.push(m);
   });
-  $('#models').innerHTML = fams.map(f=>{
+  // The family is the unit you decide in, so it is the unit that downloads.
+  // A stack is four or five files that are only useful together — the Wan pair
+  // is literally two halves of one model — and clicking them one at a time
+  // meant watching a 4 GB file finish to be allowed to start the next, which is
+  // a queue kept in a person rather than in the program. The button is indexed
+  // rather than carrying the family name in an attribute: `fams` is in scope
+  // where the handlers are wired, so nothing has to be escaped into markup and
+  // read back out.
+  $('#models').innerHTML = fams.map((f,i)=>{
     const left=f.items.filter(m=>!m.present);
     const size=left.reduce((a,m)=>a+m.approx_gb,0);
     return `
@@ -5477,7 +7171,9 @@ async function loadState(){
       <div class="fam-head">
         <b>${esc(f.name)}</b>
         <span class="muted">${left.length?`${left.length} missing · ${size.toFixed(1)} GB`:'complete'}</span>
+        ${left.length>1?`<button class="s" data-dl-fam="${i}">Download all ${left.length}</button>`:''}
       </div>
+      <div class="fam-prog hide"><div class="bar"><i style="width:0%"></i></div><div class="row" style="gap:10px;margin-top:7px"><p class="muted grow" style="margin:0"></p><button class="s" data-cancel>Cancel</button></div></div>
       ${f.items.map(m=>`
       <div class="card row">
         <div class="grow">
@@ -5488,27 +7184,46 @@ async function loadState(){
         <div style="text-align:right">
           ${m.present
             ? `<span class="ok">✓ ${m.size_gb} GB</span>`
-            : `<button class="s" data-dl="${m.key}">Download ${m.approx_gb} GB</button>`}
+            : `<button class="s" data-dl="${m.key}">Download ${m.approx_gb} GB</button>
+               <button class="s hide" data-dl-cancel="${m.key}">Cancel</button>`}
           <div class="muted dl-state" id="dl-${m.key}"></div>
         </div>
       </div>`).join('')}
     </div>`;
   }).join('');
   $$('[data-dl]').forEach(b=>b.onclick=()=>startDownload(b.dataset.dl,b));
+  $$('[data-dl-fam]').forEach(b=>b.onclick=()=>startFamilyDownload(fams[+b.dataset.dlFam],b));
 
   // Everything a `<lora:…>` token can name. Rebuilt on each poll so a freshly
   // trained LoRA is typeable without a reload — nothing holds a selection any
   // more, so there is no pick to preserve across the rebuild.
   window.MAX_LORAS=s.max_loras||6;
+  window.MAX_REGIONS=s.max_regions||8;
   window.WAN_EXPERTS=s.wan_experts||['both','high','low'];
+  // Per-checkpoint steps and CFG. The boxes show "auto" rather than these, so
+  // this is what ↑ on an empty one counts from — the number the backend would
+  // have used, which is the only base that makes the first press mean anything.
+  window.KREA2_DEFAULTS=s.krea2_defaults||{};
+  // Polled rather than read once, so downloading the edit LoRA under the gear
+  // makes the two plate tiles appear without a reload — the same way a freshly
+  // trained LoRA becomes typeable.
+  const hadEdit=window.HAS_EDIT_LORA;
+  window.HAS_EDIT_LORA=!!s.edit_lora;
+  // Re-runs the regional mode's own setter rather than duplicating what it
+  // does, so the two tiles have exactly one rule deciding whether they show.
+  // Setter, not the click handler: that would flip the mode off.
+  if(hadEdit!==window.HAS_EDIT_LORA&&typeof setRegional==='function')
+    setRegional(regionOn());
   loraIndex=s.loras.flatMap(l=>l.files.map(f=>{
     // Relative to loras/ and derived from the path rather than assembled from
     // the two labels, because the layout allows any nesting under a folder and
     // `folder + "/" + name` would quietly lose a level of it.
     const rel=String(f.path).split('/loras/').pop().replace(/\.safetensors$/i,'');
+    // No `trigger` here. `/api/state` still serves `trigger_word` and the
+    // dataset side still records it; the picker just stopped writing it into
+    // the prompt, so carrying it on this index would be state nothing reads.
     return {path:f.path, rel, stem:rel.split('/').pop(),
-            file:String(f.path).split('/').pop(),
-            label:`${l.name} · ${f.name}`, trigger:l.trigger_word||''};
+            file:String(f.path).split('/').pop()};
   }));
   // The shortest name that still points at one file. A volume with one
   // `k3nan.safetensors` gets `<lora:k3nan:1>`; the matched Wan speed pairs,
@@ -5520,9 +7235,18 @@ async function loadState(){
   $('#v-add-lora').disabled=!loraIndex.length;
   syncLoraNote();
 
+  // Built once, and only once: the guard is what keeps a poll landing between
+  // two clicks from resetting a sampler you just picked. Which also means the
+  // default is applied here or nowhere — the lists arrive empty in the markup,
+  // so a `selected` attribute has nothing to attach to.
   if(s.samplers&&!$('#g-sampler').options.length){
     $('#g-sampler').innerHTML=s.samplers.map(x=>`<option>${x}</option>`).join('');
     $('#g-scheduler').innerHTML=s.schedulers.map(x=>`<option>${x}</option>`).join('');
+    // Served rather than spelled here, so the menu opens on exactly what the
+    // backend would have used had the request left them out.
+    const d=s.image_defaults||{};
+    if(s.samplers.includes(d.sampler)) $('#g-sampler').value=d.sampler;
+    if(s.schedulers.includes(d.scheduler)) $('#g-scheduler').value=d.scheduler;
   }
 
   // Built once. Rebuilding on every poll would reset a card the user picked
@@ -5549,7 +7273,12 @@ async function loadState(){
   // Model picker reflects the volume rather than being hardcoded — otherwise it
   // claims both models are available even when neither is downloaded.
   const ms=$('#g-model'), prev=ms.value;
-  const pick=s.models.filter(m=>m.key==='turbo'||m.key==='raw');
+  // Turbo first, against the catalogue's order: the catalogue is ordered by
+  // what trains, this picker is read by what generates, and those disagree.
+  // Eight steps against twenty-eight is the whole difference here, so falling
+  // through to RAW because it happens to be listed first is a picker that
+  // charges you three and a half times the sampling to open the page.
+  const pick=['turbo','raw'].map(k=>s.models.find(m=>m.key===k)).filter(Boolean);
   ms.innerHTML=pick.map(m=>
     `<option value="${m.key}" ${m.present?'':'disabled'}>${m.label}${m.present?'':' — missing'}</option>`).join('');
   const avail=pick.filter(m=>m.present).map(m=>m.key);
@@ -5567,25 +7296,56 @@ $('#tok-save').onclick=async()=>{
   const r=await post('/api/token',{hf_token:$('#tok').value});
   $('#tok').value=''; $('#tok-state').innerHTML=r.hf_token_set?'<span class="ok">Token saved.</span>':'<span class="warn">Cleared.</span>';
 };
-$('#dl-all').onclick=async()=>{
-  const b=$('#dl-all'); b.disabled=true;
-  const box=$('#dl-all-prog'), bar=box.querySelector('i'), msg=box.querySelector('p');
-  box.classList.remove('hide'); bar.style.width='0%'; msg.textContent='Starting…';
-  // Token rides along, so pasting a key and pressing Download is one action.
-  const r=await post('/api/download-missing',{hf_token:$('#tok').value});
-  $('#tok').value='';
-  if(r.error){ msg.innerHTML='<span class="err">'+r.error+'</span>'; b.disabled=false; return }
-  if(!r.job_id){ msg.textContent=r.note||'Nothing missing.'; b.disabled=false; loadState(); return }
+// Downloads are one-at-a-time, and the page says so by taking the other buttons
+// away rather than by answering a press with a red message. The backend is
+// idempotent regardless — this is what stops the question being asked, not what
+// answers it, and the two disagree only for the moment a click is in flight.
+// Deliberately not a loadState() call to re-enable. Rebuilding the model list
+// would wipe the row the outcome was just written into, so "Cancelled." and a
+// failure reason would both survive exactly as long as it took to re-render.
+// Only a completed download changes what the list says, so only a completed
+// download reloads it.
+function downloadsBusy(on){
+  $$('[data-dl],[data-dl-fam]').forEach(b=>{ b.disabled=on });
+}
+
+// One follower for every queued download. "This family's missing weights" and
+// any other list differ only in which keys the server put in the queue — same
+// record, same phases, same Cancel — so they get one loop rather than one each.
+function followQueue(jobId, box, doneText){
+  const bar=box.querySelector('i'), msg=box.querySelector('p');
+  wireCancel(box, jobId);
   const t=setInterval(async()=>{
-    const s=await api('/api/status/dl_all');
+    const s=await api('/api/status/'+jobId);
     bar.style.width=(s.percent||0)+'%';
     msg.textContent=[s.phase||'Downloading…',s.mb_s&&`${s.mb_s} MB/s`].filter(Boolean).join(' · ');
     if(s.status==='completed'){ clearInterval(t); bar.style.width='100%';
-      msg.innerHTML='<span class="ok">All models downloaded.</span>'; b.disabled=false; loadState(); }
+      msg.innerHTML='<span class="ok">'+doneText+'</span>'; downloadsBusy(false); loadState(); }
+    else if(s.status==='stopped'){ clearInterval(t);
+      // Names what did land. A queue stopped four files in has done real work,
+      // and "Cancelled." alone throws away the only record of which four.
+      msg.textContent='Cancelled'+((s.downloaded||[]).length?` — ${s.downloaded.length} downloaded, ${(s.remaining||[]).length} not`:'.');
+      downloadsBusy(false); }
     else if(s.status==='failed'){ clearInterval(t);
-      msg.innerHTML='<span class="err">'+(s.error||'Download failed')+'</span>'; b.disabled=false; loadState(); }
+      msg.innerHTML='<span class="err">'+esc(s.error||'Download failed')+'</span>'; downloadsBusy(false); }
   },3000);
-};
+}
+
+async function startFamilyDownload(fam, btn){
+  const box=btn.closest('.fam').querySelector('.fam-prog'), msg=box.querySelector('p');
+  downloadsBusy(true);
+  box.classList.remove('hide'); box.querySelector('i').style.width='0%';
+  msg.textContent='Starting…';
+  // Token rides along, same as the old catalogue-wide button: pasting a key and
+  // pressing Download is one action, and the gated families are exactly the
+  // ones you paste it for.
+  const r=await post('/api/download-missing',{family:fam.name,hf_token:$('#tok').value});
+  $('#tok').value='';
+  if(r.error){ msg.innerHTML='<span class="err">'+esc(r.error)+'</span>'; downloadsBusy(false); return }
+  if(!r.job_id){ msg.textContent=r.note||'Nothing missing.'; downloadsBusy(false); loadState(); return }
+  if(!r.mine){ msg.textContent=(r.busy_with||'Another download')+' is running.'; downloadsBusy(false); return }
+  followQueue(r.job_id, box, `${fam.name} downloaded.`);
+}
 // ---------- Google Drive ----------
 // Same poll loop as the weights above, against the same job record. The one
 // thing it says that they do not is which files landed: a Drive folder's
@@ -5599,6 +7359,7 @@ $('#gd-go').onclick=async()=>{
   msg.textContent='Starting…';
   const r=await post('/api/gdrive',{url,folder:$('#gd-folder').value.trim()});
   if(r.error){ msg.innerHTML='<span class="err">'+esc(r.error)+'</span>'; b.disabled=false; return }
+  wireCancel(box,'dl_gdrive');
   const t=setInterval(async()=>{
     const s=await api('/api/status/dl_gdrive');
     if(s.status==='completed'){
@@ -5611,6 +7372,9 @@ $('#gd-go').onclick=async()=>{
       // The picker reads loraIndex, which only a state refresh rebuilds — so
       // without this the LoRA you just pulled is on the volume and untypeable.
       loadState();
+    } else if(s.status==='stopped'){
+      clearInterval(t); b.disabled=false;
+      msg.textContent='Cancelled.';
     } else if(s.status==='failed'){
       clearInterval(t); b.disabled=false;
       msg.innerHTML='<span class="err">'+esc(s.error||'Download failed')+'</span>';
@@ -5623,12 +7387,25 @@ $('#gd-url').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#gd-go').cli
 $('#gd-folder').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#gd-go').click() });
 
 async function startDownload(key,btn){
-  btn.disabled=true; const el=$('#dl-'+key); el.textContent='Starting…';
-  await post('/api/download',{key});
+  const el=$('#dl-'+key); el.textContent='Starting…';
+  const cancelBtn=document.querySelector('[data-dl-cancel="'+key+'"]');
+  downloadsBusy(true);
+  const r=await post('/api/download',{key});
+  // Unknown key is still an error; being busy is not one any more. `mine` false
+  // means something else holds the uplink, which the disabled buttons should
+  // have prevented — so it is a plain sentence on this row, not a red box.
+  if(r&&r.error){ el.innerHTML='<span class="err">'+esc(r.error)+'</span>'; downloadsBusy(false); return }
+  if(r&&!r.mine){ el.textContent=(r.busy_with||'Another download')+' is running.'; downloadsBusy(false); return }
+  if(cancelBtn){
+    cancelBtn.classList.remove('hide'); cancelBtn.disabled=false; cancelBtn.textContent='Cancel';
+    cancelBtn.onclick=async()=>{ cancelBtn.disabled=true; cancelBtn.textContent='Stopping…'; await post('/api/stop/dl_'+key); };
+  }
+  const done=()=>{ if(cancelBtn)cancelBtn.classList.add('hide'); downloadsBusy(false); };
   const t=setInterval(async()=>{
     const s=await api('/api/status/dl_'+key);
-    if(s.status==='completed'){clearInterval(t);el.innerHTML='<span class="ok">Done</span>';loadState();}
-    else if(s.status==='failed'){clearInterval(t);el.innerHTML='<span class="err">'+esc(s.error||'Failed')+'</span>';btn.disabled=false;}
+    if(s.status==='completed'){clearInterval(t);el.innerHTML='<span class="ok">Done</span>';done();loadState();}
+    else if(s.status==='stopped'){clearInterval(t);el.textContent='Cancelled.';done();}
+    else if(s.status==='failed'){clearInterval(t);el.innerHTML='<span class="err">'+esc(s.error||'Failed')+'</span>';done();}
     // The rate, not just the phase. "Downloading…" is true of a transfer moving
     // at 90 MB/s and of one that has not moved a byte in four minutes, and
     // telling those apart without opening the Modal logs is the whole reason
@@ -5645,7 +7422,7 @@ async function startDownload(key,btn){
 // sessionStorage, not localStorage, because it survives a reload and dies with
 // the tab — which is exactly the lifetime an unsaved thing should have. The
 // heartbeat is what the server reads as "still open"; without it a draft is
-// swept to drafts/.trash/ once the grace period passes.
+// deleted once the grace period passes.
 const SESSION=(()=>{
   let s=null;
   try{ s=sessionStorage.getItem('vis-session') }catch{}
@@ -5692,7 +7469,7 @@ async function loadDatasets(){
           </div>
         </div>
       </button>
-      <button class="ds-x" data-del="${esc(d.name)}" title="Move to .trash">×</button>
+      <button class="ds-x" data-del="${esc(d.name)}" title="Delete">×</button>
     </div>`;
   // Drafts first: they are the set you are working on, and the reason they are
   // labelled at all is that the label is a promise about what happens to them.
@@ -5787,11 +7564,13 @@ $('#ds-save-name').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#d
 // Confirm on anything with images in it, saved or not. A draft is disposable by
 // design, but forty files you just waited on an upload for are not, and the
 // dashed border does not make a stray click on a small round × any less easy.
+// The dialog is now the whole safety net — there is no .trash behind it — so it
+// says how much is going and that it is not coming back.
 async function deleteSet(name){
   const d=trainDatasets.find(x=>x.name===name)||{};
-  if(d.count && !confirm(`Move “${name}” to .trash?\n\n`
-    + `${d.count} image${d.count===1?'':'s'} and their captions move to `
-    + `${d.saved?'datasets':'drafts'}/.trash — nothing is unlinked.`)) return;
+  if(d.count && !confirm(`Permanently delete “${name}”?\n\n`
+    + `${d.count} image${d.count===1?'':'s'} and their captions are unlinked `
+    + `from the volume. This cannot be undone.`)) return;
   const r=await post('/api/datasets/'+encodeURIComponent(name)+'/delete');
   if(r.error){ errInto('#ds-err',r.error); return }
   if(name===dsName){ dsName=null; dsSaved=false; showSheet(false) }
@@ -5838,7 +7617,7 @@ function renderTiles(){
         <img loading="lazy" src="/api/thumb/${encodeURIComponent(dsName)}/${encodeURIComponent(i.name)}"
              alt="" data-full="${esc(i.name)}">
         <div class="dim">${px}${sz}</div>
-        <button class="rm" data-rm="${esc(i.name)}" title="Move to .trash">×</button>
+        <button class="rm" data-rm="${esc(i.name)}" title="Delete">×</button>
       </div>
       <textarea data-n="${esc(i.name)}" placeholder="No caption" spellcheck="false">${esc(i.caption)}</textarea>
     </div>`;
@@ -6185,8 +7964,8 @@ $('#toggle-adv').onclick=()=>{
 //
 // Strength is optional and defaults to 1. A second number is the text encoder
 // weight, which the backend already defaults to the UNet weight when omitted —
-// so `<lora:x:0.8>` is exactly Forge's one-weight behaviour, not an
-// approximation of it. On the video side the third field is the expert instead,
+// so `<lora:x:0.8>` sets both, which is what one number has always meant here.
+// On the video side the third field is the expert instead,
 // because that is what Wan's A14B pair needs and a text-encoder weight is not a
 // thing its model-only loader has.
 //
@@ -6203,11 +7982,31 @@ const LORA_RE=/<lora:([^<>]*)>/gi;
 // `<lora:k3nan:1>` works while two files called `high.safetensors` in different
 // folders still have to be told apart — which is the exact case the video side
 // hits with the matched speed pairs.
+//
+// Case is part of a filename, not noise. This folded it away before comparing,
+// so `K3nan.safetensors` and `k3nan.safetensors` — two real files, two real
+// LoRAs, which is exactly what the volume holds after a Drive pull and a
+// training run disagree about capitalisation — collided into one ambiguous
+// name. The result was not "picked the wrong one", it was worse: neither
+// resolved, so both went untypeable and the note blamed a missing file for a
+// file that is sitting right there. Nothing in the backend folds case; it
+// addresses LoRAs by exact path, and ComfyUI validates them against a directory
+// listing, so this was the only place on the path where two distinct files
+// became one name.
+//
+// Exact first, then case-insensitively and only while that still points at one
+// file: typing lowercase keeps working on every volume that does not actually
+// hold a collision, and on one that does, the exact spelling always wins.
 function resolveLora(name){
-  const n=String(name||'').trim().replace(/\.safetensors$/i,'').toLowerCase();
-  if(!n) return null;
+  const raw=String(name||'').trim().replace(/\.safetensors$/i,'');
+  if(!raw) return null;
+  const n=raw.toLowerCase();
+  const exactRel=loraIndex.filter(l=>l.rel===raw);
+  if(exactRel.length) return exactRel[0];
+  const exactStem=loraIndex.filter(l=>l.stem===raw);
+  if(exactStem.length===1) return exactStem[0];
   const byRel=loraIndex.filter(l=>l.rel.toLowerCase()===n);
-  if(byRel.length) return byRel[0];
+  if(byRel.length===1) return byRel[0];
   const byStem=loraIndex.filter(l=>l.stem.toLowerCase()===n);
   return byStem.length===1 ? byStem[0] : null;
 }
@@ -6217,6 +8016,12 @@ function resolveLora(name){
 // missing file — it is two files and no way to tell which — and sending you to
 // look for a LoRA that is sitting right there is the worse of the two wrong
 // answers.
+//
+// This one stays case-insensitive, and that is not an oversight left behind by
+// the fix above: it only ever runs on a name that already failed to resolve, so
+// its job is near-misses. A mistyped `<lora:K3NAN:1>` on a volume holding both
+// casings answers "use K3nan or k3nan", which is the message that makes the
+// difference between the two files visible.
 function loraAlternatives(name){
   const n=String(name||'').trim().replace(/\.safetensors$/i,'').toLowerCase();
   return loraIndex.filter(l=>l.stem.toLowerCase()===n).map(l=>l.token);
@@ -6243,10 +8048,14 @@ function parseLoras(text){
 
 // What the text encoders see. The tokens are markup for this page, not
 // language — leaving them in would have the model rendering the word "lora".
-function promptText(){
-  return $('#prompt').value.replace(LORA_RE,' ').replace(/\s+/g,' ')
+// Takes its text as an argument because region rows use the same syntax in
+// their own field, and a second copy of this regex dance is a second place for
+// the punctuation cleanup to drift.
+function stripLoras(text){
+  return text.replace(LORA_RE,' ').replace(/\s+/g,' ')
     .replace(/\s+([,.;:!?])/g,'$1').trim();
 }
+function promptText(){ return stripLoras($('#prompt').value) }
 
 const loraNum=(v,d)=>{ const n=parseFloat(v); return Number.isFinite(n) ? n : d };
 
@@ -6289,42 +8098,108 @@ function vidExpert(t){
 // after which the prompt is the stack and this button is a shortcut.
 function loraMenu(btn){
   if(!loraIndex.length) return;
-  openMenu(btn, loraIndex.map(l=>({label:l.label, run:()=>insertLora(l)})));
+  // Ticked means "already in the prompt", and the tick is what makes the
+  // second click legible as a removal rather than a click that did nothing.
+  const on=new Set(parseLoras(caretEl().value).filter(t=>t.hit).map(t=>t.hit.path));
+  // Labelled with the token, which is the string this item is about to write
+  // into the prompt. It used to be `folder · filename`, which spelled the same
+  // word twice for every LoRA training produced — "my_style · my_style
+  // .safetensors" — and spelled an extension that is true of every row. The
+  // token is already the shortest name that points at one file, so it drops
+  // both without losing the one case that needs the folder: the matched Wan
+  // speed pairs, whose files are both called `high`.
+  openMenu(btn, loraIndex.map(l=>({label:l.token, on:on.has(l.path), run:()=>insertLora(l)})));
 }
 $('#add-lora').onclick=e=>loraMenu(e.currentTarget);
 $('#v-add-lora').onclick=e=>loraMenu(e.currentTarget);
 
-// Where the caret was when the prompt last had it. Clicking + LoRA takes focus
-// away, and the menu takes it again, so by the time an item is chosen
-// selectionStart is meaningless — it would put every pick at the end of the
-// sentence, which is the one place the syntax makes no difference.
-let promptCaret=0;
-['keyup','click','select','focus','blur'].forEach(ev=>
-  $('#prompt').addEventListener(ev,e=>{ promptCaret=e.target.selectionStart??0 }));
+// Where the caret was when a prompt field last had it, and which field that
+// was. Clicking + LoRA takes focus away, and the menu takes it again, so by the
+// time an item is chosen selectionStart is meaningless — it would put every
+// pick at the end of the sentence, which is the one place the syntax makes no
+// difference.
+//
+// Two fields, not one, since a region's prompt takes the same syntax at a
+// smaller scope. Tracking which was last touched is what makes "select a box,
+// click + LoRA, pick a name" put that character in that box — the shortest path
+// this feature has, and the only one that involves no typing at all.
+let promptCaret=0, caretTarget='#prompt';
+const caretEl=()=>$(caretTarget)||$('#prompt');
+['#prompt','#r-prompt'].forEach(sel=>
+  ['keyup','click','select','focus','blur'].forEach(ev=>
+    $(sel).addEventListener(ev,e=>{
+      caretTarget=sel; promptCaret=e.target.selectionStart??0;
+    })));
 
+// Picking a LoRA that is already in the prompt takes it out again, rather than
+// writing a second copy. Two tokens for one file is not a stack: apply_stack()
+// patches both onto the clone chain, so the strengths compound into a number
+// nobody chose and the picker looks like it silently did nothing. There is no
+// prompt that wants the duplicate, so the second pick is free to mean the
+// other thing.
 function insertLora(l){
-  const el=$('#prompt');
-  // The trigger word first, so the caret arithmetic below is done against the
-  // final string. Prepending afterwards shifted the caret off the strength by
-  // exactly the length of the trigger, which is a bug you only see on the
-  // LoRAs that have one. A LoRA loaded without its trigger is a LoRA doing
-  // nothing, for a reason nothing on screen explains.
-  if(l.trigger&&!el.value.includes(l.trigger)){
-    const add=l.trigger+(el.value.trim()?', ':'');
-    el.value=add+el.value; promptCaret+=add.length;
-  }
-  const v=el.value, at=Math.min(promptCaret,v.length);
+  const el=caretEl();
+  const present=parseLoras(el.value).filter(t=>t.hit&&t.hit.path===l.path);
+  if(present.length) return removeLora(l,present);
+  // No trigger word is written. The picker used to prepend one, and the reason
+  // it no longer does is that the right destination stopped being answerable:
+  // the token goes where the caret is, but on the regional path the node
+  // encodes the main prompt and nothing else — V12's caption compiler, the
+  // thing that reads a box's words, only runs inside `_apply_edit_mode`. So a
+  // trigger auto-written into a box would silently never reach the encoder,
+  // and one auto-written into the main prompt instead would be the picker
+  // editing a sentence the caret was nowhere near. Triggers are typed.
+  const v=el.value;
+  let at=Math.min(promptCaret,v.length);
+  // Never inside another token. A pick deliberately leaves the caret on its own
+  // strength so ⌘↑ can walk it, and clicking + LoRA again does not move it — so
+  // two picks in a row wrote `<lora:alxcn: <lora:my_style:1> 1>`. Nothing on the
+  // page says that is malformed; it silently loads one LoRA where you asked for
+  // two, which is the failure this whole file exists to avoid.
+  const inside=parseLoras(v).find(t=>at>t.start&&at<t.end);
+  if(inside) at=inside.end;
   // Never welded to the neighbouring word: `<lora:x:1>` glued to the end of a
   // sentence survives the strip but reads as a typo while you are writing.
   const before=v.slice(0,at), after=v.slice(at);
-  const tok=(before&&!/\s$/.test(before)?' ':'')+`<lora:${l.token}:1>`
+  // 1.3 in a region, 1 everywhere else. The node pack's guidance for a
+  // character LoRA is 1.3–1.4, and a picker that writes the known-weak value
+  // into the one field where it is known to be weak is doing the wrong thing
+  // quietly. The main prompt is a style stack far more often than a character,
+  // so it keeps 1.
+  const dflt=el.id==='r-prompt'?'1.3':'1';
+  const tok=(before&&!/\s$/.test(before)?' ':'')+`<lora:${l.token}:${dflt}>`
            +(after&&!/^\s/.test(after)?' ':'');
   el.value=before+tok+after;
   // Caret onto the strength, selected, so the next thing you can do is ⌘↑ it
   // or type over it.
-  const cur=before.length+tok.indexOf(':1>')+1;
+  const cur=before.length+tok.indexOf(':'+dflt+'>')+1;
   promptCaret=cur;
-  el.focus(); el.setSelectionRange(cur,cur+1);
+  el.focus(); el.setSelectionRange(cur,cur+dflt.length);
+  el.dispatchEvent(new Event('input',{bubbles:true}));
+  syncLoraNote();
+}
+
+function removeLora(l,toks){
+  const el=caretEl();
+  let v=el.value;
+  // Back to front, so each splice leaves the earlier offsets valid.
+  [...toks].sort((a,b)=>b.start-a.start).forEach(t=>{
+    let s=t.start, e=t.end;
+    // Take the space the token was welded to as well, or removing it leaves a
+    // double gap mid-sentence. `[^\S\n]` and not `\s`: a prompt written across
+    // several lines should not have its line breaks eaten by a picker click.
+    if(/[^\S\n]/.test(v[e]||'')) e++;
+    else if(/[^\S\n]/.test(v[s-1]||'')) s--;
+    v=v.slice(0,s)+v.slice(e);
+  });
+  // Only the token. The trigger used to be stripped here as well, on the
+  // grounds that this function had put it there — nothing puts it there now,
+  // so every trigger in the field is something you typed, and a picker click
+  // that deletes a word out of your sentence is the worse surprise.
+  el.value=v;
+  promptCaret=Math.min(promptCaret,v.length);
+  el.focus(); el.setSelectionRange(promptCaret,promptCaret);
+  el.dispatchEvent(new Event('input',{bubbles:true}));
   syncLoraNote();
 }
 
@@ -6344,21 +8219,33 @@ function nudgeLora(el,delta){
   el.value=el.value.slice(0,t.start)+tok+el.value.slice(t.end);
   const num=t.start+tok.indexOf(':'+next)+1;
   el.setSelectionRange(num,num+String(next).length);
+  // So a region's box redraws and its Strength cell follows: both are driven by
+  // the token, and this is the one place that rewrites it without an keystroke.
+  el.dispatchEvent(new Event('input',{bubbles:true}));
   syncLoraNote();
   return true;
 }
-$('#prompt').addEventListener('keydown',e=>{
+// Both fields, because both hold the same syntax at different scopes and a
+// strength you can walk in one but not the other is the kind of asymmetry
+// nothing on screen would explain.
+['#prompt','#r-prompt'].forEach(sel=>$(sel).addEventListener('keydown',e=>{
   if(!(e.metaKey||e.ctrlKey)||(e.key!=='ArrowUp'&&e.key!=='ArrowDown')) return;
   // Only swallowed when the caret was actually in a token; outside one, ⌘↑ is
   // still the caret-to-top the rest of the OS says it is.
   if(nudgeLora(e.target, e.key==='ArrowUp'?0.05:-0.05)) e.preventDefault();
-});
+}));
 
 // Only ever a complaint. What is loaded is legible in the prompt; what is not
 // loaded, and why, is the part the prompt cannot show.
 function syncLoraNote(){
+  // Region fields carry the same syntax, so an unresolvable name typed into a
+  // box has to be reported by the same note — it is the one place on the page
+  // that says a LoRA names no file, and a region silently rendering without
+  // its character is exactly the failure it exists to catch.
+  const regionToks=(typeof regions!=='undefined'?regions:[])
+    .flatMap(r=>parseLoras(r.prompt||''));
   const toks=parseLoras($('#prompt').value);
-  const bad=[...new Set(toks.filter(t=>!t.hit).map(t=>t.name))];
+  const bad=[...new Set([...toks,...regionToks].filter(t=>!t.hit).map(t=>t.name))];
   const max=window.MAX_LORAS||6;
   const sup=(typeof videoModel==='function'&&videoModel()||{supports:{}}).supports;
   const bits=[];
@@ -6375,6 +8262,32 @@ function syncLoraNote(){
   }
   if(toks.filter(t=>t.hit).length>max)
     bits.push(`Only the first ${max} LoRAs are applied.`);
+  // One per box is the node's shape, and the backend rejects the rest rather
+  // than applying the first — so say it here, while the second token is still
+  // under the caret, instead of after a round trip.
+  const rgn=(typeof regions!=='undefined'?regions:[]);
+  rgn.forEach((r,i)=>{
+    if(parseLoras(r.prompt||'').filter(t=>t.hit).length>1)
+      bits.push(`Region ${i+1} names more than one LoRA — a region takes one.`);
+  });
+  // The same LoRA in the prompt and in a box is the one combination that
+  // quietly undoes the feature: the prompt copy goes onto the global
+  // LoraLoader chain and patches the whole canvas, so the box's mask is still
+  // there and no longer separating anything. It looks like regional bleeding
+  // rather than like two copies of one LoRA, which is why it has to be named.
+  if(typeof regionOn==='function'&&regionOn()){
+    const boxed=new Set(rgn.flatMap(r=>parseLoras(r.prompt||'').filter(t=>t.hit).map(t=>t.hit.path)));
+    const both=[...new Set(toks.filter(t=>t.hit&&boxed.has(t.hit.path)).map(t=>t.hit.token))];
+    both.forEach(n=>bits.push(
+      `"${n}" is in the prompt and in a box — the prompt copy applies to the whole canvas and cancels the masking.`));
+    // Region weight multiplies every box's own strength, so a zero here is not
+    // a weak render — it is every boxed LoRA switched off. The node answers
+    // that by returning the model unpatched, and a picture still comes back,
+    // placed by the caption alone. That is what earns the line: nothing else on
+    // the page tells that render apart from one the LoRAs actually ran in.
+    if(parseFloat($('#g-region-base').value)===0&&boxed.size)
+      bits.push('Region weight is 0 — every box’s LoRA is switched off.');
+  }
   // The prompt is shared by image and video, so a stack typed for one is still
   // sitting there when you switch to the other. Saying that beats letting a
   // guidance-distilled checkpoint quietly ignore four of them.
@@ -6383,6 +8296,9 @@ function syncLoraNote(){
   $('#lora-note').textContent=bits.join(' ');
 }
 $('#prompt').addEventListener('input',syncLoraNote);
+// The weight is the one input that can silence every box without touching a
+// token, so the note has to follow it as well as the prompt.
+$('#g-region-base').addEventListener('input',syncLoraNote);
 
 // Written back into the prompt, which is now the only place a stack lives. The
 // canonical form goes in — full path when the bare name is ambiguous — so a
@@ -6413,8 +8329,14 @@ function loraTokens(list,video){
 // typed. It still carries the numbers, so the strip tells the truth about the
 // size even with Advanced collapsed, which is the state it will be in most of
 // the time.
-const SNAP=16;  // pipeline.py floors to the DiT patch grid; snapping here means
-                // the box never claims a size the model is not going to render.
+// 8, the VAE's downscale — the finest grid a pixel size can actually land on.
+// It was 16 (VAE 8x, then patch 2 in the DiT), which is the grid the DiT wants
+// but not the one it needs: `SingleStreamDiT.forward` pads the latent up to the
+// patch size and crops the result back to the unpadded shape, so an odd latent
+// dimension costs one row of patches and nothing else. 16 was throwing away
+// half the sizes that work. What has to stay true is only that the box never
+// claims a size the model will not render, which 8 still guarantees.
+const SNAP=8;
 const snap=(v,d)=>{
   const n=parseInt(v,10);
   return Number.isFinite(n) ? Math.max(64,Math.min(2048,Math.floor(n/SNAP)*SNAP)) : d;
@@ -6444,8 +8366,33 @@ function syncSize(fromBoxes){
   const custom=[...sel.options].find(o=>o.value==='custom');
   custom.textContent = sel.value==='custom'
     ? ['Custom',ratio(w,h),`${w}×${h}`].filter(Boolean).join(' · ') : 'Custom';
+  // The frame is drawn at the render aspect, so it is wrong the moment that
+  // changes — the ratio picker and the frame are one control too. The boxes
+  // hold their fractions and get reshaped with it, which is the whole reason
+  // they are stored normalised.
+  //
+  // Guarded on a window flag rather than `typeof drawRegions`, which is the
+  // guard used elsewhere in this file and is the wrong one here: drawRegions is
+  // a hoisted declaration, so typeof passes during the bootstrap call below —
+  // and then it reads `regionOn`, a const whose initializer has not run, and
+  // the whole script dies on a temporal-dead-zone error. A property on window
+  // is the one thing that is safe to read before anything is initialised.
+  if(window.REGIONS_READY) drawRegions();
 }
 $('#g-aspect').onchange=()=>syncSize(false);
+// The picker and the boxes are one control, so the swap has to be one too:
+// 1152×896 flips to a 3:4 that is on the menu and gets selected there, rather
+// than to a Custom that spells out a ratio the page could have named. It falls
+// through to Custom only when the transpose really has no preset — which,
+// since 3:4 landed, means only a size you typed yourself.
+function swapSize(){
+  const [w,h]=readSize();
+  $('#g-w').value=h; $('#g-h').value=w;
+  const preset=[...$('#g-aspect').options].some(o=>o.value===`${h}x${w}`);
+  if(preset) $('#g-aspect').value=`${h}x${w}`;
+  syncSize(!preset);
+}
+$('#g-swap').onclick=swapSize;
 // On input, not change: switching the picker to Custom while you are still
 // typing is what makes the two halves read as one control.
 ['#g-w','#g-h'].forEach(s=>{
@@ -6458,59 +8405,618 @@ $('#g-aspect').onchange=()=>syncSize(false);
 syncSize(false);
 
 // ---------- regions ----------
-// Rectangles in normalised canvas coordinates. Columns/Rows lay them out
-// automatically; the x/y/w/h fields are there when a strip is not what you want.
-function regionRow(prompt){
-  const row=document.createElement('div');
-  row.className='region'; row.dataset.region='1';
-  row.innerHTML=`
-    <div class="row" style="gap:6px">
-      <input class="grow" data-f="prompt" placeholder="Region prompt" value="${esc(prompt||'')}">
-      <button class="s" data-f="rm" title="Remove">✕</button>
-    </div>
-    <div class="cells">
-      <input data-f="x" inputmode="decimal" placeholder="x" title="x">
-      <input data-f="y" inputmode="decimal" placeholder="y" title="y">
-      <input data-f="width" inputmode="decimal" placeholder="w" title="width">
-      <input data-f="height" inputmode="decimal" placeholder="h" title="height">
-      <input data-f="weight" inputmode="decimal" value="1" title="weight">
-    </div>`;
-  row.querySelector('[data-f=rm]').onclick=()=>{row.remove();autoLayout()};
-  return row;
+// A region is a rectangle on the canvas with an identity in it, so it is drawn
+// on the canvas. The identity is a LoRA written into the box's own prompt in
+// the same `<lora:name:1.3>` syntax the main prompt takes — a token in the main
+// prompt is the whole canvas, a token in a box is that rectangle, and nothing
+// has to explain which is which — or a reference photograph dropped onto the
+// box, or both. One LoRA per box, because that is the node's shape; the backend
+// rejects a second rather than applying the first and looking like it took both.
+//
+// State is an array with a render function, the same shape `refs`/`drawRefs`
+// already uses, rather than the DOM-as-state the old rows were. The boxes are
+// drawn rather than typed into, so reading values back off the DOM would buy
+// nothing — and array order is load-bearing: V9's `_pair_boxes` matches box i
+// to row i by original index, so the boxes and the rows have to come out of one
+// list in one order or every face lands in the wrong rectangle with no error.
+let regions=[], rsel=-1;
+
+const MIN_SIDE=0.04;          // below this a box is not grabbable, and 0 is rejected
+const SNAP_TO=[0,1/4,1/3,1/2,2/3,3/4,1];
+const SNAP_EPS=0.015;         // fraction of the frame, so it feels the same at any size
+
+const clamp01=v=>Math.max(0,Math.min(1,Number.isFinite(v)?v:0));
+const regionOn=()=>$('#g-regional').classList.contains('on');
+
+// A box is "armed" when it holds an identity: a LoRA name that resolves to a
+// file, or a photograph. That is the distinction that decides what comes out —
+// an empty rectangle is filled by the scene prompt, a box with an identity in
+// it is a person — and it is the same one the old 32px plots drew.
+const regionArmed=r=>!!(r.ref||parseLoras(r.prompt||'').some(t=>t.hit));
+
+// What the box calls itself. The LoRA name is the identity, so it wins; the
+// prompt is the fallback because a photo-only box still has words worth showing.
+function regionTag(r){
+  const hit=parseLoras(r.prompt||'').find(t=>t.hit);
+  if(hit) return esc(hit.hit.token);
+  const words=stripLoras(r.prompt||'').trim();
+  if(words) return esc(words.length>28?words.slice(0,27)+'…':words);
+  return r.ref?'<em>photo</em>':'';
 }
-function autoLayout(){
-  // Blank x/y/w/h means "let the direction decide"; a typed value is kept.
-  const rows=$$('#region-stack [data-region]'), n=rows.length, cols=$('#g-region-dir').value==='columns';
-  rows.forEach((r,i)=>{
-    const set=(f,v)=>{const el=r.querySelector('[data-f='+f+']'); if(!el.dataset.touched) el.value=v};
-    set('x',cols?(i/n).toFixed(3):'0'); set('y',cols?'0':(i/n).toFixed(3));
-    set('width',cols?(1/n).toFixed(3):'1'); set('height',cols?'1':(1/n).toFixed(3));
+
+// ---------- the frame ----------
+// Sized off the canvas, never off the viewport — the console under it grows and
+// shrinks with what is open, so a dvh sum is wrong the moment anyone opens
+// Advanced. Same measurement `layoutShots` does, and for the same reason.
+function layoutFrame(){
+  const f=$('#frame');
+  if(f.classList.contains('hide')) return;
+  const [rw,rh]=readSize(), ar=(rw&&rh)?rw/rh:1;
+  const box=$('#canvas'), cs=getComputedStyle(box);
+  // Every subtrahend measured, none guessed — same reasoning as layoutShots,
+  // and the caption is a real element with a real height.
+  const availH=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)
+               -($('#gen-meta').offsetHeight||0)-12;
+  const availW=box.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
+  // A container with no width has not been laid out yet — a hidden view, a tab
+  // restored in the background. Writing that measurement through would set the
+  // frame to 0×0 and every drag on it would divide by zero; keeping the last
+  // real numbers costs nothing, because the ResizeObserver fires again the
+  // moment it does have a size.
+  if(availW<=0) return;
+  // Whichever axis runs out first. A floor, because a console with everything
+  // open can leave less height than a frame you could actually drag inside —
+  // at that point letting the canvas scroll beats offering a 40px target.
+  let h=Math.max(160,Math.min(availH,availW/ar));
+  let w=h*ar;
+  if(w>availW){ w=availW; h=w/ar }
+  f.style.setProperty('--frame-w',Math.round(w)+'px');
+  f.style.setProperty('--frame-h',Math.round(h)+'px');
+}
+
+// Where the boxes are drawn right now. One layer, reparented — every coordinate
+// in it is a percentage, so it does not care which element it is inside.
+//
+// A still wins over the frame because adjusting boxes against the picture you
+// actually got is the whole point of them still being there after a render; a
+// plate wins over the still because a plate is what you are composing *into*,
+// so the last render is no longer the subject. With a batch it is the first
+// still only: one set of boxes applies to the whole batch, and drawing them
+// four times would say otherwise.
+function regionHost(){
+  if(kind!=='image') return null;
+  const shot=$('#gen-out').children.length&&!plate.scene&&!plate.outfit
+    ? $('#gen-out').querySelector('.shot') : null;
+  return shot||$('#frame');
+}
+
+function drawRegions(){
+  const layer=$('#region-layer'), host=regionHost(), on=regionOn();
+  // Defensive, because losing this element once cost three bugs that looked
+  // like three features breaking. Anything that replaces the innerHTML of a
+  // container the layer has been re-homed into deletes it, and the symptom is
+  // never "the layer is gone" — it is every caller of drawRegions dying at its
+  // first statement. Fail quiet and visible rather than taking setRegional,
+  // syncCanvasView and syncRegionNote down with it.
+  if(!layer){ console.warn('[regions] layer element is gone'); return }
+  // The frame only shows when it is the host: with a render on the canvas the
+  // boxes live on that instead, and an empty frame beside it would be a second
+  // place to look.
+  $('#frame').classList.toggle('hide',!(on&&host===$('#frame')));
+  $('#canvas-empty').classList.toggle('hide',
+    !!$('#gen-out').children.length||!!$('#vid-out').children.length||(on&&kind==='image'));
+  layer.classList.toggle('off',!on||!host);
+  // Before the early return, not after it. The no-host case is exactly the one
+  // that has to hide the inspector — switching to video leaves the toggle's
+  // `on` class alone, so returning first left a region row floating over the
+  // video composer with no boxes anywhere to explain it.
+  if(!on||!host){ syncInspector(); syncRegionNote(); return }
+  if(layer.parentElement!==host) host.appendChild(layer);
+  layoutFrame();
+
+  // Updated in place, not rebuilt. A drag calls this on every pointermove, and
+  // replacing eight subtrees at that rate throws away focus, hover and the
+  // keyboard's own target sixty times a second — one arrow key moved a box and
+  // the next went nowhere, because the element it was aimed at no longer
+  // existed.
+  const els=[...layer.querySelectorAll('.rbox')];
+  while(els.length>regions.length) els.pop().remove();
+  while(els.length<regions.length){
+    const el=document.createElement('div');
+    el.className='rbox'; el.tabIndex=0;
+    el.innerHTML='<img class="face hide" alt=""><span class="tag hide"></span>'
+      +['nw','n','ne','e','se','s','sw','w'].map(h=>`<i data-h="${h}"></i>`).join('');
+    layer.appendChild(el); els.push(el);
+  }
+  regions.forEach((r,i)=>{
+    const el=els[i];
+    el.dataset.i=i;
+    el.classList.toggle('armed',regionArmed(r));
+    el.classList.toggle('sel',i===rsel);
+    el.style.left=(clamp01(r.x)*100)+'%'; el.style.top=(clamp01(r.y)*100)+'%';
+    el.style.width=(Math.min(1-clamp01(r.x),clamp01(r.width))*100)+'%';
+    el.style.height=(Math.min(1-clamp01(r.y),clamp01(r.height))*100)+'%';
+    const face=el.querySelector('.face'), src=r.ref?'data:image/png;base64,'+r.ref:'';
+    face.classList.toggle('hide',!r.ref);
+    if(src&&face.getAttribute('src')!==src) face.setAttribute('src',src);
+    const tag=el.querySelector('.tag'), t=regionTag(r);
+    if(tag.innerHTML!==t) tag.innerHTML=t;
+    tag.classList.toggle('hide',!t);
+  });
+  syncInspector(); syncRegionNote();
+}
+
+// ---------- selection and the inspector ----------
+function selectRegion(i,focusPrompt){
+  rsel=(i>=0&&i<regions.length)?i:-1;
+  drawRegions();
+  if(rsel<0) return;
+  // A new box wants the caret in the field, because the next thing you do is
+  // say who is in it. Clicking an existing one focuses the box itself: the
+  // pointerdown handler calls preventDefault to own the drag, which also
+  // suppresses the focus the click would normally have given it — so without
+  // this the arrow keys and ⌫ only ever reached a box you had Tabbed to, and
+  // clicking one then pressing delete did nothing at all.
+  if(focusPrompt) $('#r-prompt').focus();
+  else $('#region-layer').querySelector('.rbox[data-i="'+rsel+'"]')?.focus();
+}
+
+// The strength field is a *view* of the first number in the box's `<lora:…>`
+// token, not a second place the number lives — the same relationship the ratio
+// picker has to the width and height boxes. Blank when there is no token to
+// read, because a strength with nothing to apply to is a number that lies.
+function tokenStrength(text){
+  const t=parseLoras(text||'').find(t=>t.hit);
+  return t?loraNum(t.a,1):null;
+}
+function setTokenStrength(text,val){
+  const t=parseLoras(text||'').find(t=>t.hit);
+  if(!t) return text;
+  const parts=t.name.split(':');
+  parts[1]=String(val);
+  if(parts[2]===undefined&&t.b==='') parts.length=2;
+  return text.slice(0,t.start)+'<lora:'+parts.join(':')+'>'+text.slice(t.end);
+}
+
+// Which box the inspector is currently showing. Not the same as `rsel`: the
+// fields are only rewritten when the selection actually moves, so that a
+// redraw mid-keystroke does not yank the caret to the end of what you are
+// typing.
+let rshown=-1;
+function syncInspector(){
+  const bar=$('#region-bar'), r=regions[rsel];
+  // Selection moved, so every field belongs to a different box now and the
+  // focus guards below have to be overridden. Without this, clicking box 2
+  // while the caret was still in the prompt left box 1's words on screen —
+  // and the next keystroke wrote them into box 2, because the input handler
+  // sends whatever is in the field to whatever `rsel` now points at. A stale
+  // display would have been a nuisance; copying one performer's direction
+  // onto another is the bug.
+  const moved=rshown!==rsel;
+  rshown=rsel;
+  // `kind` as well as the toggle: the toggle lives inside the image composer,
+  // which hides on a switch to video while keeping its `on` class — so without
+  // this the inspector row outlives the feature it belongs to and floats above
+  // the video controls.
+  bar.classList.toggle('hide',!(regionOn()&&kind==='image'&&r));
+  if(!r) return;
+  // Never while it is being typed into: rewriting the field under the caret
+  // moves it to the end of the line on every keystroke.
+  if(moved||document.activeElement!==$('#r-prompt')) $('#r-prompt').value=r.prompt||'';
+  const s=tokenStrength(r.prompt);
+  const sf=$('#r-strength');
+  if(moved||document.activeElement!==sf){ sf.value=s===null?'':String(s) }
+  sf.disabled=s===null;
+  sf.placeholder=s===null?'—':'';
+  $$('#region-bar [data-r]').forEach(el=>{
+    if(moved||document.activeElement!==el)
+      el.value=(+r[el.dataset.r]).toFixed(3).replace(/0+$/,'').replace(/\.$/,'');
+  });
+  const img=$('#r-ref-thumb'), hint=$('#r-ref-hint');
+  img.classList.toggle('hide',!r.ref);
+  hint.classList.toggle('hide',!!r.ref);
+  $('#r-ref').classList.toggle('set',!!r.ref);
+  if(r.ref) img.src='data:image/png;base64,'+r.ref;
+}
+
+$('#r-prompt').addEventListener('input',()=>{
+  if(!regions[rsel]) return;
+  regions[rsel].prompt=$('#r-prompt').value;
+  drawRegions(); syncLoraNote();
+});
+$('#r-strength').addEventListener('input',()=>{
+  const r=regions[rsel]; if(!r) return;
+  const v=parseFloat($('#r-strength').value);
+  if(!Number.isFinite(v)) return;
+  r.prompt=setTokenStrength(r.prompt,v);
+  drawRegions(); syncLoraNote();
+});
+$$('#region-bar [data-r]').forEach(el=>el.addEventListener('input',()=>{
+  const r=regions[rsel]; if(!r) return;
+  const v=parseFloat(el.value);
+  if(!Number.isFinite(v)) return;
+  r[el.dataset.r]=clamp01(v);
+  drawRegions();
+}));
+$('#r-del').onclick=()=>{
+  if(rsel<0) return;
+  regions.splice(rsel,1);
+  selectRegion(Math.min(rsel,regions.length-1));
+  syncLoraNote();
+};
+
+// ---------- drawing ----------
+// The first pointer-drag code in this page. Pointer Events with capture, so a
+// drag that leaves the frame still tracks and still ends — with mouse events a
+// release outside the window leaves a box stuck to the cursor.
+function frameXY(e,host){
+  const b=host.getBoundingClientRect();
+  return [clamp01((e.clientX-b.left)/b.width), clamp01((e.clientY-b.top)/b.height)];
+}
+// Snap to the frame's own landmarks and to the other boxes' edges. This is what
+// makes clean columns a gesture instead of a menu; Alt turns it off for the
+// times when the tidy answer is the wrong one.
+// `snapEdge`, not `snap` — the size control already owns that name for rounding
+// pixels to the VAE grid, and two of them in one script scope is a page that
+// does not load at all.
+function snapEdge(v,axis,skip,alt){
+  if(alt) return v;
+  let best=v, dist=SNAP_EPS;
+  const cands=SNAP_TO.slice();
+  regions.forEach((r,i)=>{
+    if(i===skip) return;
+    cands.push(axis==='x'?r.x:r.y, axis==='x'?r.x+r.width:r.y+r.height);
+  });
+  cands.forEach(c=>{ const d=Math.abs(v-c); if(d<dist){ dist=d; best=c } });
+  return best;
+}
+function showGuides(r){
+  const layer=$('#region-layer');
+  layer.querySelectorAll('.guide').forEach(g=>g.remove());
+  if(!r) return;
+  const near=(v,axis)=>SNAP_TO.some(c=>Math.abs(v-c)<1e-6);
+  [['x',r.x],['x',r.x+r.width]].forEach(([a,v])=>{
+    if(!near(v,a)) return;
+    const g=document.createElement('div'); g.className='guide v';
+    g.style.left=(v*100)+'%'; layer.appendChild(g);
+  });
+  [['y',r.y],['y',r.y+r.height]].forEach(([a,v])=>{
+    if(!near(v,a)) return;
+    const g=document.createElement('div'); g.className='guide h';
+    g.style.top=(v*100)+'%'; layer.appendChild(g);
   });
 }
-document.addEventListener('input',e=>{
-  if(e.target.closest('[data-region]')&&['x','y','width','height'].includes(e.target.dataset.f))
-    e.target.dataset.touched='1';
-});
-$('#add-region').onclick=()=>{ $('#region-stack').appendChild(regionRow()); autoLayout(); };
-$('#g-region-dir').onchange=autoLayout;
-$('#g-regional').onchange=()=>{
-  const on=$('#g-regional').checked;
-  ['#region-stack','#add-region','#g-region-dir'].forEach(s=>$(s).classList.toggle('hide',!on));
-  if(on&&!$$('#region-stack [data-region]').length){
-    $('#region-stack').appendChild(regionRow());
-    $('#region-stack').appendChild(regionRow());
-    autoLayout();
+
+$('#region-layer').addEventListener('pointerdown',e=>{
+  if(e.button!==0) return;
+  const host=regionHost(); if(!host) return;
+  // ⌘ means "a new one, here" and skips the hit test on purpose. Once a few
+  // performers are placed there is often no bare canvas left to start a drag
+  // on, and the alternative — move something out of the way, draw, move it
+  // back — is three gestures to express one.
+  const fresh=e.metaKey||e.ctrlKey;
+  const boxEl=fresh?null:e.target.closest('.rbox');
+  const handle=fresh?null:(e.target.dataset.h||null);
+  const [px,py]=frameXY(e,host);
+  let idx, mode, orig, grab;
+
+  if(boxEl){
+    idx=+boxEl.dataset.i;
+    mode=handle||'move';
+    orig={...regions[idx]};
+    grab=[px-orig.x, py-orig.y];
+    selectRegion(idx);
+  }else{
+    // A drag on bare canvas draws a new box. Capped, and silently — the cap is
+    // the backend's and there is nothing useful to say about it mid-gesture.
+    if(regions.length>=(window.MAX_REGIONS||8)) return;
+    regions.push({prompt:'',ref:null,x:px,y:py,width:0,height:0});
+    idx=regions.length-1; mode='se'; orig={...regions[idx]};
+    grab=[0,0];
+    rsel=idx;
+    drawRegions();
   }
-};
-function readRegions(){
-  if(!$('#g-regional').checked) return [];
-  return $$('#region-stack [data-region]').map(r=>{
-    const g=f=>r.querySelector('[data-f='+f+']').value;
-    return {prompt:g('prompt'),x:parseFloat(g('x'))||0,y:parseFloat(g('y'))||0,
-            width:parseFloat(g('width'))||1,height:parseFloat(g('height'))||1,
-            weight:parseFloat(g('weight'))||1};
-  }).filter(r=>r.prompt.trim());
+
+  e.preventDefault();
+  // Capture so a drag that leaves the frame still tracks and still ends: with
+  // plain listeners a release outside the window leaves the box stuck to the
+  // cursor. Guarded because a pointer already gone by the time we ask throws
+  // NotFoundError, and losing the capture is survivable where losing the rest
+  // of this handler is not.
+  try{ $('#region-layer').setPointerCapture(e.pointerId) }catch(_){}
+
+  const move=ev=>{
+    const [x,y]=frameXY(ev,host);
+    const r=regions[idx]; if(!r) return;
+    const alt=ev.altKey;
+    if(mode==='move'){
+      r.x=Math.min(Math.max(snapEdge(x-grab[0],'x',idx,alt),0),1-orig.width);
+      r.y=Math.min(Math.max(snapEdge(y-grab[1],'y',idx,alt),0),1-orig.height);
+      r.width=orig.width; r.height=orig.height;
+    }else{
+      let l=orig.x, t=orig.y, rt=orig.x+orig.width, bt=orig.y+orig.height;
+      if(mode.includes('w')) l=snapEdge(x,'x',idx,alt);
+      if(mode.includes('e')) rt=snapEdge(x,'x',idx,alt);
+      if(mode.includes('n')) t=snapEdge(y,'y',idx,alt);
+      if(mode.includes('s')) bt=snapEdge(y,'y',idx,alt);
+      // Sorted rather than clamped, so dragging a handle past its opposite
+      // flips the box the way every other editor does instead of jamming.
+      r.x=Math.min(l,rt); r.width=Math.abs(rt-l);
+      r.y=Math.min(t,bt); r.height=Math.abs(bt-t);
+    }
+    drawRegions(); showGuides(r);
+  };
+  const up=ev=>{
+    $('#region-layer').removeEventListener('pointermove',move);
+    $('#region-layer').removeEventListener('pointerup',up);
+    $('#region-layer').removeEventListener('pointercancel',up);
+    try{ $('#region-layer').releasePointerCapture(ev.pointerId) }catch(_){}
+    showGuides(null);
+    const r=regions[idx];
+    if(r){
+      // A click rather than a drag on bare canvas leaves a zero-area box, which
+      // the backend rejects outright. Grow it to something usable instead of
+      // erroring at Generate about a rectangle nobody meant to make.
+      if(r.width<MIN_SIDE||r.height<MIN_SIDE){
+        if(mode==='se'&&!orig.width){
+          r.width=Math.max(r.width,0.28); r.height=Math.max(r.height,0.6);
+          r.x=Math.min(r.x,1-r.width); r.y=Math.min(r.y,1-r.height);
+        }else{
+          r.width=Math.max(r.width,MIN_SIDE); r.height=Math.max(r.height,MIN_SIDE);
+        }
+      }
+      selectRegion(idx, mode==='se'&&!orig.width);
+    }
+    syncLoraNote();
+  };
+  $('#region-layer').addEventListener('pointermove',move);
+  $('#region-layer').addEventListener('pointerup',up);
+  $('#region-layer').addEventListener('pointercancel',up);
+});
+
+// Keyboard is the whole non-pointer path, so it has to move and delete, not
+// just select. Steps match the inspector cells' own data-step/data-bigstep.
+$('#region-layer').addEventListener('keydown',e=>{
+  const el=e.target.closest('.rbox'); if(!el) return;
+  const r=regions[+el.dataset.i]; if(!r) return;
+  if(e.key==='Backspace'||e.key==='Delete'){
+    e.preventDefault();
+    regions.splice(+el.dataset.i,1);
+    selectRegion(Math.min(+el.dataset.i,regions.length-1));
+    syncLoraNote(); return;
+  }
+  const d={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];
+  if(!d) return;
+  e.preventDefault();
+  const step=(e.metaKey||e.ctrlKey)?0.1:0.01;
+  r.x=Math.min(Math.max(r.x+d[0]*step,0),1-r.width);
+  r.y=Math.min(Math.max(r.y+d[1]*step,0),1-r.height);
+  drawRegions();
+  $('#region-layer').querySelector(`.rbox[data-i="${el.dataset.i}"]`)?.focus();
+});
+$('#region-layer').addEventListener('focusin',e=>{
+  const el=e.target.closest('.rbox');
+  if(el&&+el.dataset.i!==rsel) selectRegion(+el.dataset.i);
+});
+
+// ---------- reference photos ----------
+// Downscaled before encoding, because eight photographs in one JSON body is the
+// payload this feature invites. Deliberately the only cap: the node's own
+// `ref_max_side` is set to 0 in the graph so the resizing happens in exactly one
+// place and the two cannot end up fighting over which one shrank the picture.
+const REF_MAX=1536;
+function shrinkB64(file){
+  return new Promise(res=>{
+    const img=new Image(), url=URL.createObjectURL(file);
+    img.onload=()=>{
+      URL.revokeObjectURL(url);
+      const s=Math.min(1,REF_MAX/Math.max(img.width,img.height));
+      const c=document.createElement('canvas');
+      c.width=Math.round(img.width*s); c.height=Math.round(img.height*s);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      res(c.toDataURL('image/png').split(',')[1]);
+    };
+    img.onerror=()=>{ URL.revokeObjectURL(url); res(null) };
+    img.src=url;
+  });
 }
+
+const refInput=document.createElement('input');
+refInput.type='file'; refInput.accept='image/*'; refInput.className='hide';
+$('#r-ref').appendChild(refInput);
+$('#r-ref-hint').innerHTML=ICON.photo;
+$('#r-ref').onclick=e=>{
+  if(e.target===refInput) return;
+  const r=regions[rsel]; if(!r) return;
+  if(!r.ref) return refInput.click();
+  r.ref=null; drawRegions();
+};
+refInput.onchange=async e=>{
+  const f=e.target.files[0]; refInput.value='';
+  if(!f||!f.type.startsWith('image/')||!regions[rsel]) return;
+  regions[rsel].ref=await shrinkB64(f);
+  drawRegions();
+};
+
+// Dropping onto a box is the gesture the box exists for; dropping onto bare
+// canvas is the scene, which is a different thing entirely and gated on a
+// weight that may not be downloaded. One listener, because the target decides.
+function wireCanvasDrop(el){
+  el.addEventListener('dragover',e=>{
+    if(!regionOn()) return;
+    e.preventDefault();
+    const hit=e.target.closest('.rbox');
+    el.classList.toggle('hot',!hit);
+    $$('#region-layer .rbox').forEach(b=>b.classList.toggle('sel',b===hit||+b.dataset.i===rsel));
+  });
+  // Guarded on relatedTarget: without it every child under the cursor fires a
+  // dragleave and the highlight strobes across a surface this large.
+  el.addEventListener('dragleave',e=>{
+    if(!el.contains(e.relatedTarget)) el.classList.remove('hot');
+  });
+  el.addEventListener('drop',async e=>{
+    if(!regionOn()) return;
+    e.preventDefault(); el.classList.remove('hot');
+    const f=e.dataTransfer.files[0];
+    if(!f||!f.type.startsWith('image/')) return;
+    const hit=e.target.closest('.rbox');
+    const b64=await shrinkB64(f);
+    if(!b64) return;
+    if(hit){
+      regions[+hit.dataset.i].ref=b64;
+      selectRegion(+hit.dataset.i);
+    }else if(window.HAS_EDIT_LORA){
+      setPlate('scene',b64);
+    }
+    drawRegions();
+  });
+}
+wireCanvasDrop($('#region-layer'));
+
+// ---------- the two plates ----------
+// Held as base64 the way the video keyframes are. A scene plate also becomes the
+// frame's backdrop, because a frame you can see the background in is the
+// difference between placing people in a room and placing rectangles in a void.
+const plate={scene:null,outfit:null};
+function setPlate(slot,b64){
+  plate[slot]=b64;
+  const img=$('#g-thumb-'+slot), hint=$('#g-hint-'+slot), box=$('#g-drop-'+slot);
+  img.classList.toggle('hide',!b64);
+  hint.classList.toggle('hide',!!b64);
+  box.classList.toggle('set',!!b64);
+  if(b64) img.src='data:image/png;base64,'+b64;
+  syncFrameBackdrop();
+  drawRegions();
+}
+function syncFrameBackdrop(){
+  const f=$('#frame');
+  let el=f.querySelector('.plate');
+  if(plate.scene){
+    if(!el){ el=document.createElement('img'); el.className='plate'; f.prepend(el) }
+    el.src='data:image/png;base64,'+plate.scene;
+  }else if(el) el.remove();
+  // Thirds are a viewfinder for an empty frame; over a photograph they are
+  // just lines on someone's picture.
+  f.querySelector('.thirds').classList.toggle('hide',!!plate.scene);
+}
+function wirePlate(slot){
+  const box=$('#g-drop-'+slot), hint=$('#g-hint-'+slot);
+  hint.innerHTML=ICON[slot];
+  const input=document.createElement('input');
+  input.type='file'; input.accept='image/*'; input.className='hide';
+  box.appendChild(input);
+  const take=async f=>{
+    if(!f||!f.type.startsWith('image/'))return;
+    setPlate(slot,await shrinkB64(f));
+  };
+  // A second click on a filled tile clears it. There is no ✕ because the tile
+  // is 36px and a hit target inside it would be smaller than a fingertip —
+  // the same reason the keyframe tiles do not carry one either.
+  box.onclick=e=>{
+    if(e.target===input) return;
+    if(!plate[slot]) return input.click();
+    setPlate(slot,null);
+  };
+  input.onchange=e=>{ take(e.target.files[0]); input.value='' };
+  box.ondragover=e=>{e.preventDefault();box.classList.add('hot')};
+  box.ondragleave=()=>box.classList.remove('hot');
+  box.ondrop=e=>{e.preventDefault();box.classList.remove('hot');take(e.dataTransfer.files[0])};
+}
+wirePlate('scene'); wirePlate('outfit');
+
+// ---------- arrange ----------
+// Overwrites, unlike the Columns/Rows select it replaces: that filled only the
+// coordinates nobody had typed into, and once boxes are drawn there is no such
+// thing as an untouched coordinate.
+function distribute(cols){
+  const n=regions.length; if(!n) return;
+  regions.forEach((r,i)=>{
+    r.x=cols?i/n:0; r.y=cols?0:i/n;
+    r.width=cols?1/n:1; r.height=cols?1:1/n;
+  });
+  drawRegions();
+}
+$('#g-arrange').onclick=e=>openMenu(e.currentTarget,[
+  {label:'Distribute in columns',run:()=>distribute(true)},
+  {label:'Distribute in rows',run:()=>distribute(false)},
+]);
+
+// What the boxes cannot show: which engine this run is about to take. They are
+// genuinely different — one sampling pass against masked LoRA deltas, or a
+// krea2edit compose that regenerates the whole frame around the plate — and
+// the second is several times slower, which is worth knowing before you press
+// Generate rather than after. A region's own photo is neither: it is a latent
+// mold on the fast path, so it never moves the run onto the slow one.
+function syncRegionNote(){
+  const n=readRegions().length;
+  const el=$('#region-note');
+  el.classList.toggle('hide',!regionOn());
+  if(!regionOn()||!n){ el.textContent=''; return }
+  const molds=regions.filter(r=>r.ref).length;
+  const tail=molds?` ${molds} with a reference photo.`:'';
+  // A box with words but no identity is placed by the description alone —
+  // there is no LoRA delta to mask, so it is a soft placement rather than a
+  // guaranteed one. Worth saying, because the two kinds of box look identical
+  // on the canvas and do not hold their ground equally.
+  const soft=regions.filter(r=>stripLoras(r.prompt||'').trim()
+    && !r.ref && !parseLoras(r.prompt||'').some(t=>t.hit)).length;
+  const softNote=soft
+    ? ` ${soft} described only — placed by the words, not held by a mask.` : '';
+  el.textContent = (plate.scene||plate.outfit)
+    ? `${n} region${n>1?'s':''} composed into the reference — slower, and it re-renders the whole frame.${tail}`
+    : `${n} region${n>1?'s':''}, one pass. Each LoRA is masked to its box.${tail}${softNote}`;
+}
+
+// Set, not toggle: `reuse()` and the edit-LoRA refresh both need to put the
+// mode into a known state, and a flip called from those would turn regional
+// *off* on a card that has regions whenever it happened to already be on.
+function setRegional(on){
+  $('#g-regional').classList.toggle('on',on);
+  ['#g-arrange','#g-region-base-wrap','#g-region-vr']
+    .forEach(s=>$(s).classList.toggle('hide',!on));
+  // The plates ride on two conditions, not one: regions on, and the weight
+  // they need actually downloaded. Region photos ride on neither — a mold is
+  // not an extra_ref plate, so it needs no edit LoRA and never switches paths.
+  ['#g-drop-scene','#g-drop-outfit']
+    .forEach(s=>$(s).classList.toggle('hide',!(on&&window.HAS_EDIT_LORA)));
+  // Two half-width columns, seeded. Two rectangles appearing on the canvas is
+  // the whole instruction — a sentence telling you to drag would be read on
+  // every visit forever to be useful once.
+  if(on&&!regions.length){
+    regions=[{prompt:'',ref:null,x:0,y:0,width:0.5,height:1},
+             {prompt:'',ref:null,x:0.5,y:0,width:0.5,height:1}];
+    rsel=0;
+  }
+  drawRegions(); syncCanvasView(); syncLoraNote();
+}
+$('#g-regional').onclick=()=>setRegional(!regionOn());
+
+function readRegions(){
+  if(!regionOn()) return [];
+  return regions.map(r=>{
+    const toks=parseLoras(r.prompt||'').filter(t=>t.hit);
+    return {
+      // Stripped, same as the main prompt: the token is markup for this page,
+      // and a text encoder handed the word "lora" renders it.
+      prompt:stripLoras(r.prompt||''),
+      // Sent as a stack even though a region takes one, so the backend can say
+      // "a region takes one" about the second rather than this quietly
+      // dropping it.
+      loras:toks.map(t=>({path:t.hit.path,unet:loraNum(t.a,1)})),
+      ref:r.ref||null,
+      x:r.x, y:r.y, width:r.width, height:r.height,
+    };
+  // A box with no words, no LoRA and no photograph is an empty rectangle, and
+  // dropping it here is safe in a way filtering server-side would not be: the
+  // boxes and the rows are built from this one list in this one order, so they
+  // stay paired by index whatever comes out.
+  }).filter(r=>r.prompt||r.loras.length||r.ref);
+}
+
+// Everything the region code needs now exists, so the callers that run before
+// this point — syncSize's bootstrap, syncCanvasView — are free to redraw.
+window.REGIONS_READY=true;
+drawRegions();
 
 // One image gets the room to be looked at; a batch gets two columns, because
 // four stills side by side are thumbnails and you cannot judge a thumbnail.
@@ -6538,6 +9044,9 @@ function layoutShots(n){
 new ResizeObserver(()=>{
   const n=$('#gen-out').children.length;
   if(n) layoutShots(n);
+  // The frame is measured off the canvas the same way the stills are, so it
+  // has to be remeasured on the same signal.
+  layoutFrame();
 }).observe(document.querySelector('#canvas'));
 
 $('#go-gen').onclick=async()=>{
@@ -6549,32 +9058,57 @@ $('#go-gen').onclick=async()=>{
   const [w,h]=readSize();
   const r=await post('/api/generate',{
     prompt:p, negative_prompt:$('#g-neg').value, model:$('#g-model').value,
-    loras:readLoras(), regions,
+    loras:readLoras(), regions, region_weight:$('#g-region-base').value,
+    // Only when there are boxes to compose around — the backend rejects a
+    // plate without regions, and sending one anyway would turn a hidden tile
+    // that still holds an image into an error nobody could see the cause of.
+    scene:regions.length?plate.scene:null, outfit:regions.length?plate.outfit:null,
     width:w, height:h, num_images:$('#g-n').value, seed:$('#g-seed').value,
     sampler:$('#g-sampler').value, scheduler:$('#g-scheduler').value,
     steps:$('#g-steps').value, cfg_scale:$('#g-cfg').value, shift:$('#g-shift').value,
     gpu:$('#g-gpu').value,
   });
   if(r.error){$('#gen-err').innerHTML='<div class="err-box">'+r.error+'</div>';btn.disabled=false;box.classList.add('hide');return}
+  wireCancel(box, r.job_id);
   const t=setInterval(async()=>{
     const s=await api('/api/status/'+r.job_id);
     box.querySelector('i').style.width=(s.percent||0)+'%';
     box.querySelector('p').textContent=s.step?`Step ${s.step}/${s.total_steps}`:(s.phase||'Working…');
     if(s.status==='completed'){
       clearInterval(t); btn.disabled=false; box.classList.add('hide');
-      const out=await api('/api/outputs/'+r.job_id);
+      // Streamed by filename, not fetched as base64 first. The status record
+      // already carries `files`, so the extra /api/outputs round trip was
+      // buying nothing except a JSON body with megabytes of base64 in it —
+      // which has to arrive whole, and be decoded, before any of the four
+      // stills can paint. The gallery was moved off that inlining for exactly
+      // this reason; the canvas, the one surface where the wait is being
+      // watched, was still doing it. Now each <img> paints as its own bytes
+      // land, off the same route and the same cache the gallery uses.
+      const files=s.files||[];
+      layoutShots(files.length);
+      // The region layer lives *inside* the first `.shot` while there are
+      // results, so the boxes land on the picture with no measurement. That
+      // makes the innerHTML below its executioner: replacing the contents of
+      // #gen-out deletes the layer and every pointer and keyboard listener
+      // bound to it, and `$('#region-layer')` is null from then on. What that
+      // looked like was three unrelated bugs — the boxes vanished after a
+      // render, the inspector row would not close, and the Regional toggle
+      // appeared dead — because `drawRegions()` threw on its first line and
+      // took the rest of `setRegional` with it, including the note that would
+      // have said the boxes had no LoRA in them. Park it somewhere the wipe
+      // cannot reach; `drawRegions` re-homes it a few lines down.
+      $('#canvas').appendChild($('#region-layer'));
       // Each still carries its own way into video. Two, because they are
       // genuinely different jobs: a first frame is the shot the clip starts on,
       // a reference is a subject the clip is about.
-      const imgs=out.images||[];
-      layoutShots(imgs.length);
-      $('#gen-out').innerHTML=imgs.map((i,n)=>
-        `<figure class="shot"><img src="${i.data}" alt="">`+
+      $('#gen-out').innerHTML=files.map((f,n)=>
+        `<figure class="shot"><img src="/api/file/${r.job_id}/${encodeURIComponent(f)}" alt=""`+
+        ` decoding="async" fetchpriority="high">`+
         `<span class="acts"><button class="s" data-n="${n}" data-as="first">Animate</button>`+
         `<button class="s" data-n="${n}" data-as="reference">As reference</button></span></figure>`).join('')
         || '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
       $$('#gen-out .acts button').forEach(b=>b.onclick=()=>
-        toVideo(imgs[+b.dataset.n].data.split(',')[1], b.dataset.as));
+        handoffFile(r.job_id, files[+b.dataset.n], b.dataset.as));
       // The same viewer the gallery card opens. A still on the canvas is fitted
       // to whatever the console left it — at four-up, half of that — so the one
       // thing you want next is to see it at size, and it should not cost a trip
@@ -6582,7 +9116,16 @@ $('#go-gen').onclick=async()=>{
       $$('#gen-out img').forEach(im=>im.onclick=()=>lightbox(im.src,false));
       // Surface which LoRAs actually matched — a stack that silently no-ops
       // looks identical to a stack that had no effect.
-      const skipped=(s.loras||[]).filter(l=>!l.applied);
+      //
+      // `===false`, not `!l.applied`. The image report emits {name, unet,
+      // text_encoder} and no `applied` key at all, so the falsy test called
+      // every LoRA on every render unapplied — a warning that is always on is
+      // worse than no warning, and this one cost real time during a debug by
+      // pointing at a healthy LoRA while the actual fault was elsewhere. The
+      // other two readers of this field already default the other way:
+      // `_infotext` uses `l.get("applied", True)` and the gallery card uses
+      // `l.applied===false`.
+      const skipped=(s.loras||[]).filter(l=>l.applied===false);
       $('#gen-meta').textContent=[
         (s.seeds||[]).join(', ')&&('seed '+(s.seeds||[]).join(', ')),
         s.sampler&&`${s.sampler} · ${s.steps} steps · CFG ${s.cfg_scale}`,
@@ -6592,12 +9135,40 @@ $('#go-gen').onclick=async()=>{
       syncCanvasView(); loadGallery();
     } else if(s.status==='stopped'){
       clearInterval(t); btn.disabled=false; box.classList.add('hide');
+      // Said out loud. A cancelled run used to just hide the bar, which is the
+      // same thing the screen does when a run finishes with nothing to show.
+      $('#gen-meta').textContent='Cancelled.';
     } else if(s.status==='failed'){
       clearInterval(t); btn.disabled=false; box.classList.add('hide');
       $('#gen-err').innerHTML='<div class="err-box">'+(s.error||'Generation failed')+'</div>';
     }
-  },2000);
+  },POLL_MS);
 };
+
+// A run is cancellable from the moment it has an id, which is the moment the
+// spawn returns — before that there is nothing to name. The stop is cooperative:
+// the job unwinds at the next step boundary and the container stays warm, so the
+// button reports that it asked rather than claiming the run is already over.
+// Disabled rather than removed, because a Cancel that vanishes on click reads as
+// a click that missed.
+// The gap between "the image exists" and "the image is on screen" is bounded by
+// how often this asks. At 2s a still that finished the instant after a poll sat
+// on the volume for the better part of two seconds with the bar showing the last
+// step — which is most of the perceived wait on an 8-step Turbo run that samples
+// in four. A poll is a Dict read in the web container, so this is one of the
+// cheapest seconds in the application to buy back.
+const POLL_MS=400;
+
+function wireCancel(box, jobId){
+  const b=box.querySelector('[data-cancel]');
+  if(!b) return;
+  b.disabled=false; b.textContent='Cancel';
+  b.onclick=async()=>{
+    b.disabled=true; b.textContent='Stopping…';
+    const r=await post('/api/stop/'+jobId);
+    if(r&&r.error){ b.disabled=false; b.textContent='Cancel' }
+  };
+}
 
 // ---------- gpu ----------
 // One warning, once per card, and only when you actually change it. Switching
@@ -6856,6 +9427,7 @@ $('#go-vid').onclick=async()=>{
     $('#vid-err').innerHTML='<div class="err-box">'+r.error+'</div>';
     btn.disabled=false; box.classList.add('hide'); return;
   }
+  wireCancel(box, r.job_id);
 
   const t=setInterval(async()=>{
     const s=await api('/api/status/'+r.job_id);
@@ -6889,11 +9461,12 @@ $('#go-vid').onclick=async()=>{
       syncCanvasView(); loadGallery();
     } else if(s.status==='stopped'){
       clearInterval(t); syncVideoModel(); box.classList.add('hide');
+      $('#vid-meta').textContent='Cancelled.';
     } else if(s.status==='failed'){
       clearInterval(t); syncVideoModel(); box.classList.add('hide');
       $('#vid-err').innerHTML='<div class="err-box">'+(s.error||'Generation failed')+'</div>';
     }
-  },2000);
+  },POLL_MS);
 };
 
 // ==================== GALLERY ====================
@@ -6939,7 +9512,7 @@ function galCard(it,i){
   return `<div class="gal" data-i="${i}">${media}
     <div class="quick">
       <button data-act="download" title="Download">${ICON.download}</button>
-      <button data-act="del" title="Move to trash">${ICON.close}</button>
+      <button data-act="del" title="Delete">${ICON.close}</button>
     </div>
     <div class="foot">
       <span class="kind">${it.kind==='video'?ICON.play:ICON.photo}</span>
@@ -6972,10 +9545,11 @@ function drawDrawer(){
 }
 
 function drawGallery(){
-  const rows=galItems.filter(i=>galFilter==='all'||i.kind===galFilter);
+  const rows=galShown();
   $('#gal-empty').textContent=rows.length?'':
     (galItems.length?'Nothing of that kind yet.':'Nothing generated yet.');
   $('#gal-grid').innerHTML=rows.map(galCard).join('');
+  syncPurge();
   wireCards($('#gal-grid'),rows);
 }
 
@@ -6990,6 +9564,35 @@ $$('#gal-full [data-filter]').forEach(b=>b.onclick=()=>{
   drawGallery();
 });
 
+// What the purge would take, in the words the filter is already using.
+// A declaration, not a const: drawGallery() above calls it, and a const here
+// would sit in the temporal dead zone for any path that draws before this line
+// runs. Hoisting costs nothing and removes the ordering constraint.
+function galShown(){ return galItems.filter(i=>galFilter==='all'||i.kind===galFilter) }
+function syncPurge(){
+  const n=galShown().length, b=$('#gal-purge');
+  b.disabled=!n;
+  b.textContent = !n ? 'Delete all'
+    : `Delete ${n} ${galFilter==='all'?'result':galFilter}${n===1?'':'s'}`;
+}
+$('#gal-purge').onclick=async()=>{
+  const rows=galShown(), n=rows.length;
+  if(!n) return;
+  // Spells out the count and the scope, because a filtered gallery and an
+  // unfiltered one put the same button in the same place over very different
+  // amounts of work.
+  const what=galFilter==='all' ? `all ${n} results` : `${n} ${galFilter}${n===1?'':'s'}`;
+  if(!confirm(`Permanently delete ${what}?\n\n`
+    + `The files are unlinked from the volume. This cannot be undone.`)) return;
+  const b=$('#gal-purge'); b.disabled=true; b.textContent='Deleting…';
+  // The ids, not the filter: what goes is exactly what was counted in the
+  // dialog, even if a run lands while it is open.
+  const r=await post('/api/outputs/purge',
+    {confirm:'delete', job_ids:rows.map(i=>i.job_id)});
+  if(r.error) alert(r.error);
+  await loadGallery();
+};
+
 // ---------- card actions ----------
 function download(it){
   it.files.forEach(f=>{
@@ -7000,17 +9603,21 @@ function download(it){
 }
 
 async function remove(it){
-  if(!confirm('Move this result to the trash?')) return;
+  if(!confirm('Permanently delete this result?\n\nThe files are unlinked from the volume. This cannot be undone.')) return;
   await post(`/api/outputs/${it.job_id}/delete`);
   loadGallery();
 }
 
 // Fetch the bytes rather than reusing a data URL: the card is a streamed
 // <img src>, so the base64 the video side needs does not exist client-side.
-async function handoff(it,as){
-  const blob=await (await fetch(`/api/file/${it.job_id}/${it.files[0]}`)).blob();
+async function handoffFile(jobId,file,as){
+  const blob=await (await fetch(`/api/file/${jobId}/${encodeURIComponent(file)}`)).blob();
   toVideo(await toB64(blob), as);
 }
+// The canvas hands off by (job, file) because that is all it has now that the
+// stills are streamed rather than inlined; a gallery card hands off the same
+// bytes through the same route, so it is the same call with the fields dug out.
+const handoff=(it,as)=>handoffFile(it.job_id, it.files[0], as);
 
 function menuFor(it){
   const m=[{label:'Reuse prompt & settings',run:()=>reuse(it)}];
@@ -7048,11 +9655,46 @@ function reuse(it){
       // or "reuse" would silently render a different picture than the card.
       $('#g-w').value=it.width; $('#g-h').value=it.height; syncSize(true);
     }
-    set('#g-seed',(it.seeds||[])[0]);
+    // `seed` is what this backend records; `seeds` is what the Forge one did,
+    // and sidecars written by it are still on the volume. Reading both keeps
+    // every card in the gallery reusable rather than only the ones made since.
+    set('#g-seed',it.seed??(it.seeds||[])[0]);
     set('#g-sampler',it.sampler); set('#g-scheduler',it.scheduler);
     set('#g-steps',it.steps); set('#g-cfg',it.cfg_scale); set('#g-shift',it.shift);
+
+    // Regions come back or the reuse is a lie: which LoRA sat in which box is
+    // the whole result of a regional render, and restoring the prompt without
+    // them would put a one-subject picture behind a card showing two people.
+    // The plates deliberately do not come back — they were uploaded bytes, not
+    // something the sidecar keeps, and the note under the stack will say the
+    // run is the one-pass kind until one is dropped again.
+    // Not `regions` — that is the live array this writes into, and a local of
+    // the same name here would shadow it and restore nothing.
+    const saved=it.regions||[];
+    regions=saved.map(r=>{
+      // `r.lora` is the path relative to loras/, which is what resolveLora
+      // matches first — no need to reduce it to a stem here, and reducing it
+      // would break exactly the ambiguous names the full path exists to
+      // disambiguate.
+      const tok=r.lora&&r.lora!=='None'
+        ? loraTokens([{name:r.lora,unet:r.strength}],false) : '';
+      const box=r.box||[];
+      return {
+        prompt:[r.prompt,tok].filter(Boolean).join(' '),
+        // The sidecar records whether a box had a photo, never the photo — it
+        // was uploaded bytes staged into a container that is long gone. Same
+        // as the plates, which do not come back either.
+        ref:null,
+        x:+box[0]||0, y:+box[1]||0,
+        width:box[2]!=null?+box[2]:1, height:box[3]!=null?+box[3]:1,
+      };
+    });
+    rsel=regions.length?0:-1;
+    set('#g-region-base',it.region_weight);
+    setRegional(regions.length>0);
+
     syncModelLine(); syncLoraNote();
-    if(it.negative_prompt||it.steps||$('#g-aspect').value==='custom')
+    if(it.negative_prompt||it.steps||saved.length||$('#g-aspect').value==='custom')
       $('#gen-adv').classList.remove('hide');
     $('#prompt').focus();
   } else {

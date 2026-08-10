@@ -85,9 +85,11 @@ Point it at a folder of images, get a `.safetensors` back.
 **Caption.** Datasets are named folders of images with `.txt` sidecars beside
 them, which is exactly what the trainer reads.
 
-**Generate stills.** Krea 2 inference on a vendored
-[sd-webui-forge-classic](https://github.com/Haoming02/sd-webui-forge-classic)
-backend, with LoRA stacking and regional prompting.
+**Generate stills.** Krea 2 inference through the same driven ComfyUI the video
+side uses, with LoRA stacking and regional multi-character LoRA — a box per
+character, each LoRA masked to its own rectangle so two trained identities do
+not blend into one another. Drop a photo in and the scene is regenerated around
+the boxes instead of the subjects being pasted into it.
 
 **Generate video.** Two families through a driven ComfyUI:
 
@@ -208,8 +210,13 @@ Each job type picks its own class, and most are switchable in the UI:
 | ---------------- | --------- | ------------------------------ |
 | Training         | A100-40GB | —                              |
 | Captioning       | A100-40GB | —                              |
-| Image generation | A100-40GB | A100-40GB, A100-80GB, H100     |
+| Image generation | H100      | H100, H200                     |
 | Video generation | H100      | H100, H200                     |
+
+Image generation was an A100-40GB until it moved onto ComfyUI. Both inference
+paths now share one image, and its SageAttention kernels are compiled for
+Hopper — an A100 would load the weights, find no kernel, and quietly run slow.
+The regional path wants the headroom regardless.
 
 Containers stay warm between requests (10 minutes for images, 15 for video) so
 consecutive takes skip the model load, then scale to zero. You are billed for
@@ -226,20 +233,21 @@ or a missing weight is rejected on CPU in milliseconds, before a GPU is rented.
 Two smoke tests, both cheap, both runnable against your own account:
 
 ```bash
-modal run tools/smoke_video.py
+modal run tools/smoke_graphs.py
 ```
 
-Checks every video graph — all twelve variants across both families — against
-the real ComfyUI node schema on a **CPU** container with no weights present.
-Catches a renamed node, a moved input, a dangling link, and a sampler the UI
-offers that ComfyUI does not have. It does not run a sampler, so it says
-nothing about whether a clip looks right.
+Checks every graph the app can build — the three Krea 2 shapes and all twelve
+video variants across both families — against the real ComfyUI node schema on a
+**CPU** container with no weights present. Catches a renamed node, a moved
+input, a dangling link, a sampler the UI offers that ComfyUI does not have, and
+a custom node that failed to import. It does not run a sampler, so it says
+nothing about whether the picture looks right.
 
 ```bash
-modal run tools/smoke_krea2.py --gpu --lora any
+modal run tools/smoke_caption.py
 ```
 
-Exercises the Krea 2 loader, the LoRA stack and the regional prompting path.
+Runs the captioner over a couple of images and prints what it wrote.
 
 ### What has actually been run end to end
 
@@ -273,10 +281,10 @@ uncaptioned dataset, a prompt too long to belong in a gallery card.
 ## Layout
 
 ```
-app.py     the whole application — images, jobs, API, and the UI
-forge/     vendored sd-webui-forge-classic backend (see forge/VENDOR.md)
-tools/     smoke tests and the local UI preview server
-CLAUDE.md  the design rationale — why the code is shaped the way it is
+app.py        the whole application — images, jobs, API, and the UI
+comfy_nodes/  our own ComfyUI nodes — one shim, see visionary_boxes
+tools/        smoke tests and the local UI preview server
+CLAUDE.md     the design rationale — why the code is shaped the way it is
 ```
 
 `app.py` is deliberately one file. It is long, but the alternative — a package
@@ -291,23 +299,30 @@ you know what they are avoiding.
 
 ## Licensing
 
-**[AGPL-3.0](LICENSE).** Not a preference — an inheritance, and worth
-understanding before you fork this or run it for anyone but yourself.
+**[AGPL-3.0](LICENSE).** Worth understanding before you fork this or run it for
+anyone but yourself.
 
-`forge/` is a vendored slice of
-[sd-webui-forge-classic](https://github.com/Haoming02/sd-webui-forge-classic),
-which is AGPL-3.0, and it is imported and executed as part of the image
-generation path rather than sitting there unused. AGPL-3.0 is strong copyleft
-with a network-use clause: section 13 means that if you modify this and let
-other people use it over a network, you owe those users the corresponding
-source — deploying rather than distributing is not the loophole it is under
-the GPL. `forge/modules_forge/packages/comfy/` carries GPL-3.0 on top of that.
-
+This used to be an inheritance rather than a choice: `forge/` was a vendored
+slice of [sd-webui-forge-classic](https://github.com/Haoming02/sd-webui-forge-classic),
+which is AGPL-3.0, imported and executed on the image path. That tree is gone —
+see CLAUDE.md for why — so the AGPL now comes from this repository's own
+[LICENSE](LICENSE) and not from a dependency. AGPL-3.0 is strong copyleft with
+a network-use clause: section 13 means that if you modify this and let other
+people use it over a network, you owe those users the corresponding source —
+deploying rather than distributing is not the loophole it is under the GPL.
 Since this deploys as a web application by design, that clause is the normal
 case here, not an edge one. Running your own private instance triggers nothing.
 
-`forge/VENDOR.md` records the exact upstream commit and every local change, so
-a sync is a diff rather than an archaeology exercise.
+What the images now install, rather than vendor:
+
+- **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)** — GPL-3.0. Cloned into
+  the container at the commit in `COMFY_SHA`, run as its own process, and
+  driven over its HTTP API. Nothing here is linked against it or patched.
+- **[Krea2 Regional Multi-LoRA](https://github.com/CliffNodes/Krea2-Multi-Character-Lora-Node-with-bounding-box-Scene-and-Outfit-Edit)**
+  — MIT. Cloned at `CLIFF_SHA` into ComfyUI's `custom_nodes/`, unmodified.
+
+None of that is legal advice, and the combination is worth a look of your own
+if you plan to distribute this or run it for other people.
 
 Model weights carry their own separate licences — Krea 2's in particular is
 gated and has terms you accept on HuggingFace. Nothing here grants you rights
