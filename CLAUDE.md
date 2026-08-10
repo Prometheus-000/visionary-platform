@@ -235,6 +235,29 @@ still writing cannot be swept out from under itself.
   the new speed: an eager stall detector used to cost the bytes since the
   stall and now costs all of them.
 
+- **A dead ComfyUI is diagnosed and replaced, never re-raised as a socket
+  error.** A GPU that faults takes the process with it — Xid 31, an MMU fault,
+  is the one that has happened — and the first thing that reaches us is a
+  `ConnectionResetError` from the history poll, or a `ConnectionRefused` from
+  the next `/prompt`. `_await` already had the right thing to say about a dead
+  process, log tail and all; the check simply sat *downstream* of the call that
+  could not survive to reach it, so the job record got urllib's exception
+  instead: no CUDA error, no log, no mention of the GPU. `_check_alive()` runs
+  before anything blames the transport, and it `wait()`s rather than `poll()`s
+  because the socket resets a beat before the process is reaped and a bare poll
+  in that gap reports the corpse alive.
+
+  The second half is that the container outlives the process. `@modal.enter`
+  runs once, so with `max_containers=1` a dead ComfyUI is not a degraded
+  install — it is every render refused until the scaledown window expires,
+  which is what three consecutive `ConnectionRefused` jobs on one container
+  looked like. Xid 31 is an illegal address in a kernel, not a dead card, so
+  the device runs the next graph perfectly well and `_revive()` starts a fresh
+  process at the top of `run()`. A drop against a process that is demonstrably
+  still alive is the third case and is a blip: retried, `COMFY_RESET_TRIES`
+  times, because failing a forty-minute clip over one socket is the wrong
+  trade.
+
 - **A family downloads itself; there is no button for the whole catalogue.**
   The group is the unit you decide in — you want the Wan stack or you do not —
   and clicking its files one at a time meant watching a 4 GB file finish to be

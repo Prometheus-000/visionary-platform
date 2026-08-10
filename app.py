@@ -2115,6 +2115,17 @@ KREA2_DEFAULTS = {
 # else, which is the same line the job contract already draws.
 # --------------------------------------------------------------------------
 
+# How long a dropped connection is allowed to mean "still starting to die".
+# ComfyUI's sockets reset the moment the process is signalled, and it is not
+# reaped for a beat after that, so a `poll()` taken at the reset reports the
+# corpse alive and the diagnosis goes to the wrong branch.
+COMFY_DEATH_GRACE_S = 5.0
+# Consecutive dropped polls against a process that is demonstrably alive before
+# the run is given up on. One is a blip; a server resetting every connection
+# forever is a hang, and a poll loop that tolerates it without bound is worse
+# than one that fails with the log tail in hand.
+COMFY_RESET_TRIES = 5
+
 
 class _Comfy:
     """
@@ -2278,7 +2289,42 @@ class _Comfy:
                 + "\n".join(list(self._log)[-40:])
             )
 
+    def _died(self) -> RuntimeError:
+        """The one thing worth saying about a ComfyUI that is no longer there."""
+        code = self._proc.poll() if self._proc else None
+        return RuntimeError(
+            f"ComfyUI exited mid-generation (exit code {code}). Its last output "
+            "is below; a CUDA error or an OOM there is the cause. If there is no "
+            "Python traceback at all, the GPU faulted under it — Modal's "
+            "[gpu-health] Xid line in the container log is the record of that, "
+            "and the run is worth retrying on a fresh container.\n"
+            + "\n".join(list(self._log)[-25:])
+        )
+
+    def _check_alive(self) -> None:
+        """
+        Ask whether ComfyUI is still there before blaming the socket.
+
+        A GPU that faults — Xid 31, an MMU fault, is the one that has actually
+        happened here — takes the process with it, and every request in flight
+        resets. `_await` already knew what to say about a dead ComfyUI, log tail
+        and all, but that check sat *downstream* of the poll that could not
+        survive to reach it: what reached the job record was urllib's
+        `ConnectionResetError`, which names no CUDA error, carries no log and
+        does not mention the GPU. Every caller asks this first now.
+
+        `wait` rather than `poll`, for COMFY_DEATH_GRACE_S: see the constant.
+        """
+        if self._proc is None:
+            return
+        try:
+            self._proc.wait(timeout=COMFY_DEATH_GRACE_S)
+        except subprocess.TimeoutExpired:
+            return
+        raise self._died()
+
     def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        import urllib.error
         import urllib.request
 
         req = urllib.request.Request(
@@ -2286,15 +2332,54 @@ class _Comfy:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        return json.loads(urllib.request.urlopen(req, timeout=30).read() or b"{}")
+        try:
+            return json.loads(urllib.request.urlopen(req, timeout=30).read() or b"{}")
+        except urllib.error.HTTPError:
+            # A status code is ComfyUI answering: the transport is fine and the
+            # graph is what it is complaining about. Nothing to diagnose here.
+            raise
+        except OSError:
+            self._check_alive()
+            raise
 
     def get(self, path: str) -> Any:
+        import urllib.error
         import urllib.request
 
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{COMFY_PORT}{path}", timeout=30
-        ) as r:
-            return json.loads(r.read() or b"{}")
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{COMFY_PORT}{path}", timeout=30
+            ) as r:
+                return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError:
+            raise
+        except OSError:
+            self._check_alive()
+            raise
+
+    def _revive(self) -> None:
+        """
+        Replace a ComfyUI that died under the last take, before starting this one.
+
+        `@modal.enter` runs once per container, so the process it starts is the
+        only one the container will ever have — and `max_containers=1` means a
+        dead one is not a degraded install, it is the whole platform refusing
+        every render until the scaledown window expires ten or fifteen minutes
+        later. The GPU faults that kill it (Xid 31 is an illegal address in the
+        kernel, not a dead card) leave the device perfectly able to run the next
+        graph, so what stood between the user and a working render was nothing
+        but a process nobody restarted.
+
+        The old log goes with the old process: its tail was already delivered as
+        the last job's error, and keeping it would attach a stale traceback to
+        whatever fails next.
+        """
+        if self._proc is None or self._proc.poll() is None:
+            return
+        print(f"[{self.tag}] ComfyUI died (exit code {self._proc.poll()}); "
+              "starting a fresh one", flush=True)
+        self._log.clear()
+        self.start()
 
     def stage(self, job_id: str, blob: str, slot: str, ext: str = "png") -> str:
         """
@@ -2316,6 +2401,7 @@ class _Comfy:
         reported success, and the run is about to be thrown away by a job that
         says it produced no files.
         """
+        self._revive()
         self.job_id = job_id
         try:
             prompt_id = self.post("/prompt", {"prompt": graph})["prompt_id"]
@@ -2325,6 +2411,7 @@ class _Comfy:
 
     def _await(self, job_id: str, prompt_id: str, what: str) -> list[str]:
         assert self._proc is not None
+        drops = 0
         while True:
             if _stop_requested(job_id):
                 # ComfyUI unwinds the sampler itself and stays warm, which a
@@ -2333,7 +2420,25 @@ class _Comfy:
                 self.post("/interrupt", {})
                 raise StopRequested("generate")
 
-            entry = (self.get(f"/history/{prompt_id}") or {}).get(prompt_id)
+            try:
+                entry = (self.get(f"/history/{prompt_id}") or {}).get(prompt_id)
+            except OSError as exc:
+                # get() has already established the process is alive, so this
+                # is one request dropped by a server that is still running —
+                # the next poll normally finds it recovered, and failing a
+                # forty-minute clip over a single socket would be the wrong
+                # trade. Bounded: see COMFY_RESET_TRIES.
+                drops += 1
+                if drops > COMFY_RESET_TRIES:
+                    raise RuntimeError(
+                        f"ComfyUI is running but dropped {drops} polls in a row "
+                        f"({type(exc).__name__}: {exc}).\n"
+                        + "\n".join(list(self._log)[-25:])
+                    ) from exc
+                time.sleep(1.5)
+                continue
+            drops = 0
+
             if entry:
                 status = entry.get("status", {})
                 if status.get("status_str") == "error" or not status.get("completed", True):
@@ -2369,9 +2474,7 @@ class _Comfy:
                 )
 
             if self._proc.poll() is not None:
-                raise RuntimeError(
-                    "ComfyUI exited mid-generation.\n" + "\n".join(list(self._log)[-25:])
-                )
+                raise self._died()
             time.sleep(1.5)
 
     @staticmethod
