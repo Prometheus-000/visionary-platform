@@ -401,6 +401,29 @@ two domains, and the page follows the domains.
   dropped, or the last render — adjusting boxes against the picture you actually
   got is the reason they are still there afterwards.
 
+- **Every picture the model can be given sits in one row, and the two halves
+  dim each other.** Keyframes and references are the same decision made two
+  ways — they load different transformers, so one excludes the other — and they
+  used to be two rows: keyframes parked at the right of the strip among the
+  numeric controls, references in their own row below. Two pairs of unlabelled
+  36px dashed tiles, one row apart, telling each other apart by tooltip.
+
+  What that cost was not tidiness. The keyframe tiles were never found at all,
+  and dropping photos into the reference tray *looked* like filling keyframe
+  slots that kept growing — which is exactly what the tray does and exactly what
+  a fixed pair must never look like. Side by side with a rule between them, the
+  tray that grows and the two slots that do not are told apart by shape, which
+  is the thing a tooltip could not do. Whichever half is out of play goes dim
+  rather than disappearing: the row's job is to show that these are
+  alternatives, and a control that vanishes when you fill its neighbour teaches
+  nothing except that the page lost it. References win when both are attached,
+  because that is what the run does, so they are the half that stays live.
+
+  The note under the field says "keyframes are ignored" only when there is a
+  keyframe to ignore. It said it unconditionally, which made the page's one
+  mention of keyframes a warning about something you did not have, pointing at
+  a control this layout had already made unfindable.
+
 - **A box takes a photograph as well as a LoRA.** `regions_json.ref_image` is a
   latent mold: it pulls that rectangle toward that face during sampling, stacks
   with the box's LoRA, and runs on the fast single-pass path. It is not an

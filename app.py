@@ -6175,6 +6175,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .drop.mini>span{padding:0;display:grid;place-items:center;width:16px;height:16px}
 .drop.mini img{width:100%;height:100%;max-height:none;object-fit:cover;border-radius:0}
 .drop.mini.set{border-style:solid;border-color:rgba(255,255,255,.28)}
+/* Out of play this run because its opposite number is filled. Dimmed rather
+   than removed: the row's whole job is to show that keyframes and references
+   are alternatives, and a control that disappears when you use its neighbour
+   teaches nothing except that the page lost it. */
+.drop.mini.off{opacity:.3;pointer-events:none}
 .pad{padding:26px}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
@@ -6535,16 +6540,6 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         <div class="opt" data-lb="Seed"><input id="v-seed" placeholder="random" inputmode="numeric"
           title="Fix the noise so a prompt reproduces. Blank draws a new one."></div>
         <div class="opt"><select id="v-gpu"></select></div>
-        <span class="vr"></span>
-        <!-- Keyframes are what make this image-to-video; with neither, the
-             same checkpoint runs text-to-video. Two tiles side by side, in the
-             order they play — a filled first tile is the whole explanation. -->
-        <button class="drop mini" id="v-drop-first" title="First frame">
-          <img id="v-thumb-first" class="hide" alt=""><span id="v-hint-first"></span>
-        </button>
-        <button class="drop mini hide" id="v-drop-last" title="Last frame">
-          <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
-        </button>
         <!-- Wan only, and the same picker the image side uses. The one thing
              the A14B pair forces — which expert a LoRA patches — rides in the
              token as a third field, and is read off the filename when the
@@ -6557,14 +6552,33 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         </span>
       </div>
 
-      <!-- References are the other way to condition a clip, and they exclude
-           keyframes because they load a different transformer. H3 only — Wan
-           has no reference checkpoint, so the row is not there at all. The
-           chips carry their own <Picture n> labels, which is the part the
+      <!-- Every picture this model can be given, in one row, because keyframes
+           and references are the same decision made two ways and choosing one
+           excludes the other — they load different transformers.
+
+           They used to be two rows: keyframes among the numeric controls at
+           the far right of the strip above, references down here. Two pairs of
+           unlabelled 36px dashed tiles, forty-five pixels and one row apart,
+           telling each other apart by tooltip. What that cost was not
+           aesthetic — the keyframe tiles were never found at all, and dropping
+           photos into the reference tray looked like filling keyframe slots
+           that kept growing, which is exactly what the reference tray does and
+           exactly what a keyframe pair must never look like. Side by side with
+           a rule between them, the tray that grows and the two fixed slots are
+           told apart by shape, which is the thing a tooltip could not do.
+
+           The chips carry their own <Picture n> labels, which is the part the
            prompt actually refers to and the only part worth spelling out. -->
-      <div class="opts" id="v-ref-sec">
+      <div class="opts" id="v-src-sec">
+        <button class="drop mini" id="v-drop-first" title="First frame — the clip starts on this image">
+          <img id="v-thumb-first" class="hide" alt=""><span id="v-hint-first"></span>
+        </button>
+        <button class="drop mini hide" id="v-drop-last" title="Last frame — the clip ends on this image">
+          <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
+        </button>
+        <span class="vr" id="v-src-vr"></span>
         <span class="wrap" id="v-refs"></span>
-        <button class="drop mini" id="v-add-ref" title="Add image reference"></button>
+        <button class="drop mini" id="v-add-ref" title="Add image reference — the subject, redrawn in a new shot"></button>
         <button class="drop mini" id="v-add-vid" title="Add video reference"></button>
         <div class="opt" id="v-ref-size-wrap"><select id="v-ref-size">
           <option value="match">match canvas</option><option value="max">max detail</option>
@@ -9342,7 +9356,12 @@ function syncVideoModel(){
   $('#v-shift').placeholder=String(d.shift??'');
 
   $('#v-add-lora').classList.toggle('hide',!sup.loras);
-  $('#v-ref-sec').classList.toggle('hide',!sup.references);
+  // The row itself always stands: every video model takes a first frame, so
+  // there is no model whose sources row is empty. It is the reference half
+  // that comes and goes, and the rule with it — a divider with nothing on one
+  // side of it is a line that means nothing.
+  ['#v-add-ref','#v-add-vid','#v-ref-size-wrap','#v-src-vr'].forEach(
+    s=>$(s).classList.toggle('hide',!sup.references));
   $('#v-neg').classList.toggle('hide',!sup.negative);
   $('#v-cfg-wrap').classList.toggle('hide',!sup.cfg);
   $('#v-shift-wrap').classList.toggle('hide',!sup.cfg);
@@ -9398,14 +9417,28 @@ function drawRefs(){
   $$('#v-refs button').forEach(b=>b.onclick=()=>{
     (b.dataset.k==='img'?refs:refVids).splice(+b.dataset.i,1); drawRefs();
   });
-  // On H3 references and keyframes load different transformers, so saying
-  // which one is going to run beats letting the two sections look
-  // simultaneously active. On Wan the same sentence has a different job: a
-  // first frame is what makes it an i2v run, on a different 28.6 GB pair.
+  // Exclusivity, shown where the choice is made rather than described under
+  // it: whichever half is out of play this run goes inert. It is the same fact
+  // the note carries, but the note is read after the click and this is read
+  // before it. Nothing is hidden — a control that vanishes when you fill its
+  // neighbour reads as a bug, and both halves have to stay visible for the row
+  // to keep teaching that they are alternatives.
   const n=refs.length+refVids.length;
   const sup=(videoModel()||{supports:{}}).supports;
+  const framed=!!(keyframe.first||keyframe.last);
+  // References win when both are somehow attached, because that is what the
+  // run does — so they are the half that stays live. Dimming both, which the
+  // symmetric version did, left the gallery's "As reference" hand-off in a
+  // state where a keyframe could not be cleared and a second reference could
+  // not be added: the two controls locked each other out.
+  ['first','last'].forEach(s=>$('#v-drop-'+s).classList.toggle('off',!!n));
+  ['#v-add-ref','#v-add-vid'].forEach(s=>$(s).classList.toggle('off',framed&&!n));
+  // "Keyframes are ignored" only when there is a keyframe to ignore. Said
+  // unconditionally, it was the page's one mention of a control this layout
+  // had already made unfindable — a warning about something you do not have,
+  // pointing at somewhere you cannot see.
   $('#vid-note').textContent = n
-    ? `${n} reference${n>1?'s':''} — keyframes are ignored for this run.`
+    ? (framed ? `${n} reference${n>1?'s':''} — keyframes are ignored for this run.` : '')
     : (keyframe.first
         ? (sup.references?'':'Image-to-video. ')+'Canvas follows the first frame’s aspect ratio.'
         : '');
@@ -9440,8 +9473,20 @@ function wireDrop(slot){
     if(!f||!f.type.startsWith('image/'))return;
     setFrame(slot, await toB64(f));
   };
-  box.onclick=()=>input.click();
-  input.onchange=e=>take(e.target.files[0]);
+  // A second click on a filled tile clears it, exactly as the scene and outfit
+  // plates do — whose comment has always claimed these tiles behave the same
+  // way. They did not: a keyframe could be replaced but never removed, so the
+  // only route back to text-to-video was switching model and back. Harmless
+  // while the two halves were unrelated rows; now that a keyframe puts the
+  // reference tray out of play, a keyframe you cannot clear is a corner you
+  // cannot get out of.
+  box.onclick=e=>{
+    if(e.target===input) return;
+    if(!keyframe[slot]) return input.click();
+    clearFrame(slot);
+    if(slot==='first') syncFrameCanvas(); else drawRefs();
+  };
+  input.onchange=e=>{ take(e.target.files[0]); input.value='' };
   box.ondragover=e=>{e.preventDefault();box.classList.add('hot')};
   box.ondragleave=()=>box.classList.remove('hot');
   box.ondrop=e=>{e.preventDefault();box.classList.remove('hot');take(e.dataTransfer.files[0])};
@@ -9458,7 +9503,10 @@ function setFrame(slot,b64){
   $('#v-thumb-'+slot).classList.remove('hide');
   $('#v-hint-'+slot).classList.add('hide');
   $('#v-drop-'+slot).classList.add('set');
-  if(slot==='first') syncFrameCanvas();
+  // Either slot puts the reference tray out of play, and drawRefs() is what
+  // paints that — reached through the full sync for a first frame, which also
+  // re-picks the checkpoint and locks the aspect, and directly for a last one.
+  if(slot==='first') syncFrameCanvas(); else drawRefs();
 }
 wireDrop('first'); wireDrop('last');
 
