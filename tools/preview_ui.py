@@ -26,6 +26,7 @@ torch, no modal, and no credentials.
 
 import base64
 import json
+import os
 import re
 import sys
 import time
@@ -36,7 +37,11 @@ from pathlib import Path
 from _from_app import SHOT, pull
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8777
+# Argument first, then $PORT, then a default. The env var is what lets a launcher
+# hand out a free port instead of this file naming one: two of these cannot share
+# 8777, so working on the page from two windows meant the second one refusing to
+# start against a port the first had taken.
+PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT") or 8777)
 
 # The one thing here that is not a stub. The shot palette is eighty-odd tiles
 # built from a table in app.py, and a hand-written copy of that table would be a
@@ -109,7 +114,7 @@ GALLERY = [
              # LoRA and one with only a photo, because the photo-only box is the
              # one a filter is most likely to drop on the way back in.
              "regions": ([
-                 {"box": [0.04, 0.08, 0.42, 0.86], "lora": "k3nan.safetensors",
+                 {"box": [0.04, 0.08, 0.42, 0.86], "lora": "portrait.safetensors",
                   "strength": 1.35, "prompt": "a man in a long coat",
                   "ref": False},
                  {"box": [0.54, 0.08, 0.42, 0.86], "lora": "None",
@@ -180,22 +185,63 @@ STATE = {
     # names differ only in case, which is what a Drive pull and a training run
     # disagreeing about capitalisation leaves behind. Both of the last two have
     # to stay typeable: resolution is exact-first for exactly this reason.
+    #
+    # `root`, `bytes` and `catalogue` are what the Settings list reads: the row
+    # to delete, what it costs, and whether the catalogue can put it back. The
+    # speed pairs carry a `catalogue` and nothing else does, which is the pair of
+    # confirm dialogs worth being able to read side by side — one says the delete
+    # is a download and the other says it is permanent.
     "loras": [
-        {"name": "my_style", "trigger_word": "ohwx_style", "files": [
+        {"name": "my_style", "trigger_word": "ohwx_style",
+         "root": "/workspace/loras/my_style", "bytes": 613_400_000, "catalogue": "",
+         "files": [
             {"path": "/workspace/loras/my_style/my_style.safetensors",
              "name": "my_style"},
             {"path": "/workspace/loras/my_style/my_style-000020.safetensors",
              "name": "my_style-000020"}]},
-        {"name": "alxcn", "trigger_word": "", "files": [
-            {"path": "/workspace/loras/alxcn.safetensors", "name": "alxcn.safetensors"}]},
-        {"name": "K3nan", "trigger_word": "", "files": [
-            {"path": "/workspace/loras/K3nan.safetensors", "name": "K3nan.safetensors"}]},
-        {"name": "k3nan", "trigger_word": "", "files": [
-            {"path": "/workspace/loras/k3nan.safetensors", "name": "k3nan.safetensors"}]},
-        {"name": "wan22-speed-t2v", "trigger_word": "", "files": [
+        # Two of the catalogue's Krea style LoRAs, named as they really land:
+        # loose files at the top of loras/, because a folder would make the nine
+        # of them one LoRA with nine epochs. They are here rather than invented
+        # placeholders so a screenshot taken against this server names weights a
+        # reader can actually download.
+        {"name": "darkbrush", "trigger_word": "monochrome ink wash style",
+         "root": "/workspace/loras/darkbrush.safetensors", "bytes": 469_291_992,
+         "catalogue": "Krea 2 style LoRAs", "files": [
+            {"path": "/workspace/loras/darkbrush.safetensors", "name": "darkbrush.safetensors"}]},
+        {"name": "sunsetblur", "trigger_word": "ethereal motion blur style",
+         "root": "/workspace/loras/sunsetblur.safetensors", "bytes": 469_291_992,
+         "catalogue": "Krea 2 style LoRAs", "files": [
+            {"path": "/workspace/loras/sunsetblur.safetensors", "name": "sunsetblur.safetensors"}]},
+        # The case collision, which is the awkward state this pair exists to
+        # hold: two real files whose names differ only in capitalisation, which
+        # is what a Drive pull and a training run disagreeing leaves behind.
+        # Folding case before comparing made both untypeable, so the resolver
+        # must match exactly first — see the note in CLAUDE.md.
+        {"name": "Portrait", "trigger_word": "",
+         "root": "/workspace/loras/Portrait.safetensors", "bytes": 306_700_000,
+         "catalogue": "", "files": [
+            {"path": "/workspace/loras/Portrait.safetensors", "name": "Portrait.safetensors"}]},
+        {"name": "portrait", "trigger_word": "",
+         "root": "/workspace/loras/portrait.safetensors", "bytes": 76_400_000,
+         "catalogue": "", "files": [
+            {"path": "/workspace/loras/portrait.safetensors", "name": "portrait.safetensors"}]},
+        # The catalogue's own loose file. It was missing from this list while
+        # `edit_lora` below said it was on the volume, which the real /api/state
+        # cannot do — it lands in loras/ and is listed like anything else there,
+        # picker included.
+        {"name": "krea2_identity_edit_v1_2", "trigger_word": "",
+         "root": "/workspace/loras/krea2_identity_edit_v1_2.safetensors",
+         "bytes": 1_790_000_000, "catalogue": "Krea 2 — images", "files": [
+            {"path": "/workspace/loras/krea2_identity_edit_v1_2.safetensors",
+             "name": "krea2_identity_edit_v1_2.safetensors"}]},
+        {"name": "wan22-speed-t2v", "trigger_word": "",
+         "root": "/workspace/loras/wan22-speed-t2v", "bytes": 1_060_000_000,
+         "catalogue": "Wan 2.2 speed LoRAs", "files": [
             {"path": "/workspace/loras/wan22-speed-t2v/high.safetensors", "name": "high"},
             {"path": "/workspace/loras/wan22-speed-t2v/low.safetensors", "name": "low"}]},
-        {"name": "wan22-speed-i2v", "trigger_word": "", "files": [
+        {"name": "wan22-speed-i2v", "trigger_word": "",
+         "root": "/workspace/loras/wan22-speed-i2v", "bytes": 1_060_000_000,
+         "catalogue": "Wan 2.2 speed LoRAs", "files": [
             {"path": "/workspace/loras/wan22-speed-i2v/high.safetensors", "name": "high"},
             {"path": "/workspace/loras/wan22-speed-i2v/low.safetensors", "name": "low"}]},
     ],
@@ -395,6 +441,27 @@ class Handler(BaseHTTPRequestHandler):
             row["name"], row["saved"] = new, True
             return self.reply({"ok": True, **row})
 
+        # Mutates the list in memory for the same reason the dataset routes do:
+        # what this is judged by is what the card does next — the row leaving,
+        # the header's count and total going down with it, and the empty state
+        # appearing once the last one goes. A flat {"ok": true} leaves the page
+        # redrawing exactly what it started with.
+        if path == "/api/loras/delete":
+            try:
+                root = str(json.loads(body or b"{}").get("path") or "")
+            except json.JSONDecodeError:
+                root = ""
+            row = next((l for l in STATE["loras"] if l["root"] == root), None)
+            if not row:
+                # The stale-tab answer, worded as app.py words it: a basename,
+                # because a full volume path in an error box is the thing you
+                # have to read twice to find the one word that identifies it.
+                return self.reply({
+                    "error": f"No LoRA named {root.rsplit('/', 1)[-1]!r} on the "
+                             "volume — reopen Settings to refresh the list."})
+            STATE["loras"].remove(row)
+            return self.reply({"ok": True})
+
         if path == "/api/datasets":
             try:
                 new = json.loads(body or b"{}").get("name") or "set_x"
@@ -568,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "downloaded_gb": gb})
             return self.reply({
                 "status": "completed", "percent": 100, "size_gb": 0.43,
-                "files": ["alxcn.safetensors", "k3nan.safetensors"],
+                "files": ["darkbrush.safetensors", "sunsetblur.safetensors"],
                 "skipped": ["preview_grid.png", "README.md"],
                 "folder": GDRIVE["folder"],
             })

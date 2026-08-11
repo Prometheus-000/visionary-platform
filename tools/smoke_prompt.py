@@ -221,12 +221,12 @@ check("roles are positional and padded to the reference count",
 # The one place the compiler's ordinary tidying would corrupt the user's text.
 print("\npunctuation", flush=True)
 check("a lowercase fragment continues the clause rather than following a stop",
-      G["_compile_image_prompt"]("a portrait of k3nan",
+      G["_compile_image_prompt"]("a portrait of ohwx_subject",
                                  G["_validate_shot"]([{"key": "framing.mcu"}])),
-      "A medium close-up, a portrait of k3nan.")
+      "A medium close-up, a portrait of ohwx_subject.")
 check("a trigger word's case is never changed",
-      "k3nan" in G["_compile_image_prompt"](
-          "k3nan sits by a window",
+      "ohwx_subject" in G["_compile_image_prompt"](
+          "ohwx_subject sits by a window",
           G["_validate_shot"]([{"key": "framing.cu"}])), True)
 check("a sentence that closes itself is not closed twice",
       G["_compile_image_prompt"]("She reads a letter.",

@@ -762,6 +762,57 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
     },
 }
 
+# Krea's own style LoRAs — nine repos, one 0.47 GB file each, ungated.
+#
+# Built by loop rather than written out nine times because they differ in two
+# fields and agree on the other six; the alternative is ninety lines where the
+# only thing worth reading is a name and a trigger. This is the one place in
+# the catalogue where that is true — every other entry differs in repo, path,
+# size and family at once, and a loop over those would hide more than it saved.
+#
+# Each lands as a *loose file at the top of loras/*, not in a shared folder.
+# That is the storage contract doing real work: a folder is one LoRA and the
+# files in it are that LoRA's epochs, so `loras/krea-styles/` holding nine
+# unrelated styles would collapse to a single picker row offering nine
+# "epochs" of a LoRA that does not exist. Loose, each is its own row and its
+# own `<lora:darkbrush:1>`.
+#
+# They are here because regional multi-character LoRA is the hardest thing
+# this app does to *show*. Two character LoRAs in two boxes produce a picture
+# of two people, and nothing in that picture distinguishes "each LoRA was
+# masked to its rectangle" from "the model drew two people". Two styles do:
+# ink wash on the left, motion blur on the right and a hard seam between them
+# is the activation delta being zeroed outside the box, which is the actual
+# claim. A first-party, ungated set that anyone can download is what makes
+# that demonstrable on someone else's install rather than only on this one.
+KREA_STYLE_LORAS: dict[str, str] = {
+    "darkbrush": "monochrome ink wash style",
+    "retroanime": "Purple retro anime style",
+    "vintagetarot": "vintage tarot style",
+    "sunsetblur": "ethereal motion blur style",
+    "softwatercolor": "Art Deco watercolor style",
+    "neondrip": "Textured abstract style",
+    "dotmatrix": "Monochrome stippling style",
+    "kidsdrawing": "naive expressive sketch style",
+    "rainywindow": "rainy window style",
+}
+MODEL_CATALOGUE.update({
+    f"krea_style_{name}": {
+        "label": name,
+        # The trigger, not a description of the look. It is the thing you have
+        # to type for the weight to do anything, and the catalogue card is the
+        # only place on the page it appears before you have downloaded it.
+        "note": trigger,
+        "family": "Krea 2 style LoRAs",
+        "repo_id": f"krea/Krea-2-LoRA-{name}",
+        "filename": f"{name}.safetensors",
+        "dest": LORAS / f"{name}.safetensors",
+        "gated": False,
+        "approx_gb": 0.47,
+    }
+    for name, trigger in KREA_STYLE_LORAS.items()
+})
+
 # The video weights keep their upstream filenames, unlike every other entry
 # above. ComfyUI addresses models by basename inside a search path, so a
 # renamed file would have to be renamed again in every graph that names it —

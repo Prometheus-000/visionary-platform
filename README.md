@@ -22,13 +22,66 @@ gallery. The switch is a chip inside the prompt field, and the sentence survives
 it — because a shot you described as a still is the same sentence you would
 describe as a clip. There is no mode to navigate to and nothing to retype.
 
-![The console rebuilds itself for the model you chose](docs/video.png)
-
 **The controls follow the model.** Wan 2.2 takes LoRAs, a negative prompt and
 CFG; MiniMax-H3 is guidance-distilled and carries its own soundtrack, so it
 offers none of those and offers references instead. Only the controls the chosen
 model actually reads are on screen — a control that is present but ignored is
 worse than one that is absent.
+
+![Eighty-seven tiles, each animating the move it names](docs/shot-palette.png)
+
+**The empty prompt box is the worst control on the page, so it is not the only
+one.** MiniMax-H3 does not read a paragraph. It reads a document with named
+fields, published in the model repo — and a textarea in front of that is why
+nobody knows where camera direction goes, whether tone and genre matter, or
+what to do with a reference image you were told not to describe. A documented
+grammar presented as free prose reads as superstition, and a take is two to
+three minutes, so every guess is paid for at that rate.
+
+So the closed vocabulary is a palette: one icon in the strip, a popover of
+small animated tiles, and a rail of pills under the prompt. The prompt field
+keeps only what nothing else can say — who is in the shot and what happens.
+This is the "a control that shows its own value gets no label" rule applied to
+words instead of numbers, and it is the one place on the page where an icon can
+teach: a tile *shows* a dolly-out, which is the thing neither the word nor a
+static picture does. A dolly changes the relationship between subject and
+background and a zoom does not, so push-in scales the subject faster than the
+horizon and zoom scales both — a distinction no dropdown makes.
+
+![What you picked, and the document it compiles to](docs/video.png)
+
+Pick nothing and the compiler returns your typed text byte for byte, so every
+prompt written before this still means what it meant. Pick something and the
+document appears — and `what the model reads` shows the exact string the
+encoder will be handed, compiled by the same route that compiles the real run,
+so a preview cannot disagree with what happens. `non_diegetic_music: N/A` is
+the default, and is worth the feature on its own: H3 invented a soundtrack for
+every clip because nothing had ever told it not to.
+
+One vocabulary, three destinations. Wan 2.2 gets prose with the audio pills
+dropped, because it is silent and a sidecar recording an input the model never
+read is a sidecar that lies. Krea 2 gets prose with camera, action and sound
+filtered out — dimmed in the palette rather than hidden, with the group heading
+saying why.
+
+![A box per character, each LoRA masked to its own rectangle](docs/regional.png)
+
+**Regional multi-character LoRA.** Draw a rectangle on the frame and write a
+`<lora:name:1.3>` into it, and that LoRA's activation delta is multiplied by
+zero everywhere outside the box — so there is no pathway left for one
+character's identity to reach another's. The boxes *are* the list: drag to
+place one, drag to move it, drag a handle to size it, and they snap to halves,
+thirds and quarters and to each other. The console keeps one inspector row for
+whichever box is selected, which is the same height at eight boxes as at one.
+
+A box takes a photograph as well as a LoRA — a latent mold that pulls that
+rectangle toward that face during sampling, which is worth having on a platform
+whose other half is a trainer. Drop a photo on the bare canvas instead and it
+becomes the **scene**: the picture is generated inside it, with lighting,
+perspective and shadows integrated rather than the subjects pasted in. A second
+tile takes an outfit. Both need the Krea 2 identity-edit weight, so without it
+they are dimmed rather than hidden — a weight-gated control is a purchase you
+have not made yet, and hiding it hides the decision rather than the capability.
 
 **LoRAs are written in the prompt.** `<lora:my_style:0.8>`, the syntax anyone who
 has trained these models already types. Strength defaults to 1 and the token
@@ -132,6 +185,13 @@ wants all of it. Open the deployed URL, click the gear, and pick what you need.
 | MiniMax-H3 — video           |  64 GB | no    | video **with a soundtrack**, references   |
 | Wan 2.2 — video              |  76 GB | no    | silent video, CFG, LoRA support           |
 | Wan 2.2 speed LoRAs          |   5 GB | no    | fewer steps per clip                      |
+| Krea 2 style LoRAs           |   4 GB | no    | Krea's own nine styles, for the prompt    |
+
+The style LoRAs are the cheapest way to see regional prompting actually work.
+Two character LoRAs in two boxes produce a picture of two people, and nothing
+in that picture distinguishes "each LoRA was masked to its rectangle" from
+"the model drew two people". Two *styles* do: ink wash on one side, motion blur
+on the other and a hard seam between them is the masking, visible.
 
 You do not need a whole family. The smallest useful video setup is Wan 2.2
 TI2V 5B at **18 GB** — the 5B checkpoint, umT5-XXL and the 2.2 VAE — which does
@@ -249,14 +309,30 @@ modal run tools/smoke_caption.py
 
 Runs the captioner over a couple of images and prints what it wrote.
 
+```bash
+python3 tools/smoke_prompt.py
+```
+
+Checks the shot compiler against the format MiniMax published: the alignment
+sentences verbatim for each of the four tasks, the three field labels once each
+in order, and a line of dialogue with commas, an ellipsis and a trailing
+exclamation surviving byte for byte inside `<d>…</d>`. Pure stdlib and no
+network — it reads the real compiler out of `app.py` by AST rather than
+importing it, because importing `app.py` builds Modal image definitions at
+module scope and wants credentials to answer a question about a string.
+
 ### What has actually been run end to end
 
 Being honest about coverage, since "it deploys" is not "it works":
 
 - **Wan 2.2 TI2V 5B** — text-to-video and image-to-video both verified on an
   H100, output inspected frame by frame.
-- **MiniMax-H3** — graphs validate structurally; no full run yet, so the audio
-  path is unproven.
+- **MiniMax-H3** — text-to-video run end to end on an H100 and clips returned.
+  The shot compiler's output has been checked against the published format by
+  `smoke_prompt.py`, and `/api/compile` shows the same string the run is given.
+  What is still unverified by ear is the audio: whether
+  `non_diegetic_music: N/A` actually silences the invented soundtrack is an
+  observation nobody has written down yet.
 - **Wan 2.2 A14B** — graphs validate structurally. The two-expert handover
   cannot be checked structurally: wrong noise flags give a washed-out clip
   rather than an error, so only a real run will show it.
@@ -281,11 +357,17 @@ uncaptioned dataset, a prompt too long to belong in a gallery card.
 ## Layout
 
 ```
-app.py        the whole application — images, jobs, API, and the UI
-comfy_nodes/  our own ComfyUI nodes — one shim, see visionary_boxes
-tools/        smoke tests and the local UI preview server
-CLAUDE.md     the design rationale — why the code is shaped the way it is
+app.py              the whole application — images, jobs, API, and the UI
+comfy_nodes/        our own ComfyUI nodes — one shim, see visionary_boxes
+tools/              smoke tests and the local UI preview server
+tools/_from_app.py  pulls plain-Python pieces out of app.py by AST
+CLAUDE.md           the design rationale — why the code is shaped the way it is
 ```
+
+`_from_app.py` exists because two tools need the *real* thing rather than a
+copy: a compiler checked against a reimplementation is checking the
+reimplementation, and a palette previewed from a hand-written vocabulary is a
+preview of a palette that does not exist.
 
 `app.py` is deliberately one file. It is long, but the alternative — a package
 whose modules are imported by Modal image builds — trades one long file for a
