@@ -5869,8 +5869,8 @@ svg{width:100%;height:100%;display:block}
    every label in the strip quietly became a full-screen black overlay. Same
    class of bug as `.blank` above: a selector that collides is invisible in the
    markup and total on the page. */
-.opt>.lead{font-size:11.5px;line-height:1;color:var(--dim);flex:none;white-space:nowrap;
-  cursor:default;-webkit-user-select:none;user-select:none}
+.opt>.lead,.drop.mini>.lead{font-size:11.5px;line-height:1;color:var(--dim);flex:none;
+  white-space:nowrap;cursor:default;-webkit-user-select:none;user-select:none}
 .opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:34px;border-radius:8px}
 .opt input{width:76px}
 /* Named numerics do not need the width an unlabelled one did: the label
@@ -5886,6 +5886,16 @@ svg{width:100%;height:100%;display:block}
 .opt.ib:hover{background:rgba(255,255,255,.1);color:var(--fg)}
 .opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
 .opt.ib>svg{width:16px;height:16px;color:inherit}
+/* An icon button that arms a whole subsystem carries its name as well. :has()
+   rather than a modifier class so the shell cannot disagree with whether
+   data-lb is actually there — the two would drift, and the failure is a label
+   clipped to a 36px box, which is what happened to `.drop.mini`. */
+.opt.ib:has(>.lead){width:auto;padding:0 11px 0 9px;gap:7px}
+/* order:2 puts the word after the glyph, matching the Train door in the header
+   and `.drop.mini`; label() inserts afterbegin, so without it the word lands in
+   front. color:inherit so the label brightens with the button on hover and .on
+   instead of staying at --dim while the icon lights up. */
+.opt.ib>.lead{order:2;color:inherit}
 .adv{margin-top:9px;padding-top:10px;border-top:1px solid var(--line)}
 /* Not an inline style, which is what this was: an empty <p> is zero-height but
    still spends its margin, and the :empty rule that reclaims it cannot outrank
@@ -5975,8 +5985,17 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    gallery card does. A result you have to send to the gallery to look at
    properly is a result the canvas is only pretending to show you. */
 .shot img{display:block;max-width:100%;max-height:var(--shot-h,none);width:auto;height:auto;cursor:zoom-in}
-.shot .acts{position:absolute;right:10px;bottom:10px;display:flex;gap:6px;opacity:0;transition:opacity .12s}
-.shot:hover .acts{opacity:1}
+/* Quiet at rest rather than absent. These two are the whole "a still flows into
+   a clip without a round trip through the filesystem" claim, and at opacity:0
+   they were a feature you had to already know about to find — nothing on the
+   canvas suggested there was anything under the pointer. A third of an opacity
+   is enough to read as "something is here" from across the picture and not
+   enough to compete with it. :focus-within because `.gal .quick` has had it all
+   along and these did not, so the keyboard could reach a control it could never
+   see. */
+.shot .acts{position:absolute;right:10px;bottom:10px;display:flex;gap:6px;opacity:.35;
+  transition:opacity .12s}
+.shot:hover .acts,.shot .acts:focus-within{opacity:1}
 #vid-out{position:relative}
 #vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
   border:1px solid var(--line);background:#000}
@@ -6123,6 +6142,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .tile .rm{position:absolute;top:6px;right:6px;width:24px;height:24px;border:0;border-radius:50%;
   background:rgba(0,0,0,.62);color:#eee;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .12s}
 .tile:hover .rm{opacity:1}
+/* The third line is cut through the glyphs rather than between them, and that
+   is left alone deliberately. It is not a rendering fault dressed as a feature:
+   a sliced line appears exactly when the caption runs past the box and never
+   otherwise, so it is a perfectly correlated "there is more" that costs no
+   pixels and no element. Snapping the height to whole lines was tried and
+   reverted — it buys a tidier edge and pays for it by making a four-line
+   caption end flush, indistinguishable from one that really stops there. */
 .tile textarea{border:0;border-top:1px solid var(--line);border-radius:0;background:none;resize:none;
   font-size:12px;padding:8px 9px;min-height:66px;line-height:1.45}
 .tile textarea.dirty{background:rgba(56,189,248,.08)}
@@ -6158,9 +6184,17 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .drop.hot{border-color:rgba(255,255,255,.45);background:rgba(255,255,255,.05)}
 .drop>span{display:block;padding:22px 12px;color:var(--dim);font-size:12px}
 .drop img{display:block;width:100%;max-height:150px;object-fit:contain;border-radius:15px}
-/* The strip's version: a 36px square that is a dashed outline when empty and
-   the frame itself once filled. The thumbnail is the label — a filled first
-   tile says "image-to-video" more directly than the words do. */
+/* The strip's version: a dashed outline when empty and the frame itself once
+   filled. The thumbnail is the label — a filled first tile says
+   "image-to-video" more directly than the words do.
+
+   That was only ever true of the filled half. Empty, the row was four 36px
+   dashed squares of near-identical weight — two fixed keyframe slots and two
+   add-buttons for a tray — told apart by tooltip and a 1px rule, which is the
+   same hover-to-find-out failure `.opt>.lead` was added to fix on the numeric
+   fields. So an empty tile is named and a filled one collapses back to the
+   square: the words are scaffolding for a picture that is not there yet, and
+   the moment it arrives they are in its way. */
 /* The way most sets begin, so it is the size of that fact: the whole canvas
    when nothing is chosen, and a target you can hit without aiming. */
 .drop.hero{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;
@@ -6169,17 +6203,31 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .drop.hero .drop-face input{pointer-events:auto}
 .drop.hero .glyph{width:40px;height:40px;margin:0 auto 16px;opacity:.4}
 .drop.hero b{font-size:15px;font-weight:600}
-.drop.mini{width:36px;height:36px;flex:none;padding:0;border-radius:10px;overflow:hidden;
-  background:rgba(255,255,255,.03);display:grid;place-items:center;color:var(--dim)}
+.drop.mini{height:36px;flex:none;padding:0 11px 0 9px;border-radius:10px;overflow:hidden;
+  background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:center;
+  gap:7px;color:var(--dim)}
 .drop.mini:hover{border-color:rgba(255,255,255,.4);color:var(--fg)}
-.drop.mini>span{padding:0;display:grid;place-items:center;width:16px;height:16px}
+/* :not(.lead), because label() inserts a <span> too and this rule pinned it to
+   the icon's 16px box — every label was clipped to "Pictu" by the overflow the
+   tile needs for its thumbnail. */
+.drop.mini>span:not(.lead){padding:0;display:grid;place-items:center;width:16px;height:16px;flex:none}
+/* After the icon, not before it: label() inserts afterbegin, and the glyph is
+   what the eye lands on first. */
+.drop.mini>.lead{order:2}
 .drop.mini img{width:100%;height:100%;max-height:none;object-fit:cover;border-radius:0}
-.drop.mini.set{border-style:solid;border-color:rgba(255,255,255,.28)}
+.drop.mini.set{width:36px;padding:0;border-style:solid;border-color:rgba(255,255,255,.28)}
+.drop.mini.set>.lead{display:none}
 /* Out of play this run because its opposite number is filled. Dimmed rather
    than removed: the row's whole job is to show that keyframes and references
    are alternatives, and a control that disappears when you use its neighbour
    teaches nothing except that the page lost it. */
 .drop.mini.off{opacity:.3;pointer-events:none}
+/* Dimmed like .off and, unlike it, still hoverable. .off means "the choice you
+   already made put this out of play for this run", which the row's own shape
+   explains; this means "the weight it needs is not on the volume", which
+   nothing explains — and a tile with pointer-events:none cannot be hovered, so
+   it could not deliver the one sentence that would. */
+.drop.mini.locked{opacity:.3;cursor:default}
 .pad{padding:26px}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
@@ -6277,6 +6325,53 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #region-layer>.guide{position:absolute;background:rgba(255,255,255,.55);pointer-events:none}
 #region-layer>.guide.v{top:0;bottom:0;width:1px}
 #region-layer>.guide.h{left:0;right:0;height:1px}
+
+/* Drag-intent reveal -----------------------------------------------------
+   Every one of this app's best gestures is a drop, and every one of them was
+   invisible until you had already guessed it: a photo onto a region box is
+   that character's likeness, a photo onto the bare canvas is the world the
+   render happens inside, files onto an open contact sheet join the set. None
+   of those can be advertised at rest without putting furniture on a canvas
+   the whole layout exists to keep clear.
+
+   So they are advertised at the only moment they are relevant. Dragging a file
+   over the window *is* the question "where can this go", and this block is the
+   answer to it. `dragging` is on the body only while a file is actually over
+   the page, so at rest every selector here matches nothing and the page is
+   exactly what it was.
+
+   Two levels, because "you may drop here" and "here is what dropping does" are
+   different questions. Everything eligible outlines itself; only the target
+   under the cursor says what it is. Naming all of them at once would put eight
+   captions on a picture at eight boxes, which is the wall of text the region
+   rows were deleted for, redrawn on the canvas. */
+body.dragging .drop:not(.hot):not(.locked){border-color:rgba(255,255,255,.34)}
+body.dragging .frame:not(.hot),body.dragging .shot:not(.hot),
+body.dragging #ds-sheet:not(.hot){outline:1px dashed rgba(255,255,255,.2);outline-offset:-4px}
+#ds-sheet{position:relative}
+#ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:-4px}
+/* The caption. Generated content, so at rest it is not an element that exists
+   and is hidden — it is an element that was never built. */
+body.dragging .frame.hot::after,body.dragging .shot.hot::after,
+body.dragging .rbox.drop-hit::after,body.dragging #ds-sheet.hot::after{
+  content:attr(data-drop);position:absolute;left:50%;top:50%;
+  transform:translate(-50%,-50%);padding:5px 11px;border-radius:999px;
+  background:rgba(0,0,0,.74);backdrop-filter:blur(8px);color:#f5f5f5;
+  font:500 12px/1 inherit;white-space:nowrap;max-width:calc(100% - 12px);
+  overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:6}
+/* The contact sheet is the one target taller than the window — it is the thing
+   that scrolls — so centring on the element puts the caption at the middle of
+   forty images, which is off-screen for all but the shortest sets. Fixed to the
+   viewport instead, low enough to clear the tile under the cursor and high
+   enough to clear the training bar. */
+body.dragging #ds-sheet.hot::after{position:fixed;top:auto;bottom:104px;
+  transform:translateX(-50%);z-index:50}
+/* A box under the cursor is lit the way a selected one is, and additionally
+   pulled to full opacity — an unarmed box sits at .34, which is legible as
+   "nothing in this one yet" and illegible as "this is the one you are about to
+   drop on". */
+body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
+
 .wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
 /* Train ----------------------------------------------------------------- */
@@ -6367,7 +6462,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
          hatch, and while you drag they are the readout that teaches what they
          mean. -->
     <div id="region-bar" class="opts hide">
-      <button class="drop mini" id="r-ref"
+      <button class="drop mini" id="r-ref" data-lb="Photo"
         title="A photo of this character. Pulls the box toward that likeness during sampling — stacks with the LoRA, and works without one.">
         <img id="r-ref-thumb" class="hide" alt=""><span id="r-ref-hint"></span>
       </button>
@@ -6437,8 +6532,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
              hiding the feature this backend was swapped for. It belongs beside
              + LoRA because both answer "who is in this picture"; the difference
              is only whether it matters where they stand. -->
-        <button class="opt ib" id="g-regional" data-ico="regions"
-          title="Regional — place each character in their own box on the canvas"></button>
+        <!-- Named, not just iconed. Moving it out of Advanced fixed where it
+             was; it did not fix that a glyph cannot announce a capability
+             nobody knows the app has. `+ LoRA` sits immediately to the left
+             with a word on it, which made the asymmetry the thing you noticed
+             about this button rather than the feature behind it. -->
+        <button class="opt ib" id="g-regional" data-ico="regions" data-lb="Regions"
+          title="Place each character in their own box on the canvas — one LoRA, or one photo, per box."></button>
         <span class="actions">
           <span class="muted" id="gen-model-line"></span>
           <button class="opt ib" id="toggle-adv" data-ico="sliders" title="Advanced"></button>
@@ -6505,11 +6605,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
                LoRA, so both stay hidden until it is on the volume — a tile that
                silently renders a picture with nothing to do with the photo you
                dropped is the failure this hiding prevents. -->
-          <button class="drop mini hide" id="g-drop-scene"
+          <button class="drop mini hide" id="g-drop-scene" data-lb="Scene"
             title="Scene photo. The picture is generated inside it — lighting, perspective and shadows integrate.">
             <img id="g-thumb-scene" class="hide" alt=""><span id="g-hint-scene"></span>
           </button>
-          <button class="drop mini hide" id="g-drop-outfit"
+          <button class="drop mini hide" id="g-drop-outfit" data-lb="Outfit"
             title="Outfit or object photo. Transferred onto the subjects rather than pasted into the frame.">
             <img id="g-thumb-outfit" class="hide" alt=""><span id="g-hint-outfit"></span>
           </button>
@@ -6570,16 +6670,23 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
            The chips carry their own <Picture n> labels, which is the part the
            prompt actually refers to and the only part worth spelling out. -->
       <div class="opts" id="v-src-sec">
-        <button class="drop mini" id="v-drop-first" title="First frame — the clip starts on this image">
+        <button class="drop mini" id="v-drop-first" data-lb="First frame"
+                title="The clip starts on this image. Drop or click; click again to clear.">
           <img id="v-thumb-first" class="hide" alt=""><span id="v-hint-first"></span>
         </button>
-        <button class="drop mini hide" id="v-drop-last" title="Last frame — the clip ends on this image">
+        <button class="drop mini hide" id="v-drop-last" data-lb="Last frame"
+                title="The clip ends on this image. Drop or click; click again to clear.">
           <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
         </button>
         <span class="vr" id="v-src-vr"></span>
         <span class="wrap" id="v-refs"></span>
-        <button class="drop mini" id="v-add-ref" title="Add image reference — the subject, redrawn in a new shot"></button>
-        <button class="drop mini" id="v-add-vid" title="Add video reference"></button>
+        <!-- Named for the token they produce, not for what they take: what you
+             attach here is what the prompt then calls <Picture 1> / <Video 1>,
+             and the chips are already lettered P1/V1 to match. -->
+        <button class="drop mini" id="v-add-ref" data-lb="Picture"
+                title="Add an image reference — the subject, redrawn in a new shot. The prompt refers to it as &lt;Picture 1&gt;."></button>
+        <button class="drop mini" id="v-add-vid" data-lb="Video"
+                title="Add a video reference. The prompt refers to it as &lt;Video 1&gt;."></button>
         <div class="opt" id="v-ref-size-wrap"><select id="v-ref-size">
           <option value="match">match canvas</option><option value="max">max detail</option>
         </select></div>
@@ -6685,7 +6792,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
     </div>
 
     <!-- A set is chosen: its contact sheet, which is the thing that scrolls. -->
-    <div id="ds-sheet" class="hide">
+    <!-- data-drop, because the whole sheet has always accepted a file drop and
+         nothing on it said so — the browser's own default is to drop the file
+         into whichever caption box happens to be under the cursor, which is
+         what this overrides. -->
+    <div id="ds-sheet" class="hide" data-drop="Add to this set">
       <div class="opts sheet-bar">
         <!-- A saved set states its name; a draft is still asking for one, so
              for a draft the name field *is* the title rather than sitting
@@ -6705,7 +6816,14 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
         <button class="s" id="dens-up" title="Larger tiles">+</button>
         <span class="actions">
           <span class="muted" id="ins-summary"></span>
-          <button class="opt ib" id="ins-toggle" data-ico="sliders" title="Captions"></button>
+          <!-- The sliders glyph is already spoken for: #toggle-adv and
+               #t-toggle-adv both wear it for "more settings". A rebus that
+               stands for two unrelated things is not naming either of them,
+               and what is behind this one — write every caption with a vision
+               model, then read back what the set is actually teaching — is
+               not a settings drawer. So it says the word. -->
+          <button class="opt ib" id="ins-toggle" data-ico="sliders" data-lb="Captions"
+                  title="Write captions with a vision model, and see what this set is actually teaching."></button>
           <button class="s" id="ds-add">+ Images</button>
         </span>
       </div>
@@ -6917,8 +7035,21 @@ const ICON={
 // markup names the idea ("dice") and only this table knows the path data.
 $$('[data-ico]').forEach(el=>el.insertAdjacentHTML('afterbegin',ICON[el.dataset.ico]));
 // And every control that asked for the word. Same mechanism as data-ico, and
-// mutually exclusive with it by construction: a pill carries one or the other,
-// never both, because a labelled icon is two ways to say one thing.
+// *nearly* exclusive with it: a pill carries one or the other, because a
+// labelled icon is usually two ways to say one thing.
+//
+// Two buttons carry both, deliberately. The rule holds when the glyph draws
+// something you already have a word for — nobody needs "Delete" written under
+// a bin. It fails when the glyph is the only announcement of a capability the
+// user does not know exists, which is the same distinction that put names back
+// on the hyperparameters: an icon is a rebus for a word you already know, so
+// it cannot teach you the word. #g-regional draws two boxes in a frame very
+// well and still cannot say "this app does regional multi-character LoRA",
+// and it sits next to `+ LoRA`, which spells itself out. #ins-toggle is the
+// clincher: it wears the same sliders glyph as #toggle-adv and #t-toggle-adv,
+// so that one glyph is standing for three unrelated panels and is therefore
+// naming none of them.
+//
 // Factored out of the one-shot pass rather than left inline, because region
 // rows are built long after load: a label injected only at startup is a label
 // every dynamically-added pill silently goes without.
@@ -6928,10 +7059,13 @@ function label(root){
       el.insertAdjacentHTML('afterbegin','<span class="lead">'+esc(el.dataset.lb)+'</span>');
   });
 }
-label(document);
-$('#drop-glyph').innerHTML=ICON.upload;
+// Before label(), not after: these two write innerHTML rather than appending,
+// so running them second silently deleted the .lead label() had just inserted
+// and left the two add-buttons the only unnamed tiles in the row.
 $('#v-add-ref').innerHTML='<span>'+ICON.photo+'</span>';
 $('#v-add-vid').innerHTML='<span>'+ICON.film+'</span>';
+label(document);
+$('#drop-glyph').innerHTML=ICON.upload;
 $('#gal-back').innerHTML=ICON.back;
 $('#gal-refresh').innerHTML=ICON.refresh;
 $('#gal-expand').innerHTML=ICON.expand;
@@ -7137,6 +7271,44 @@ $$('#c-image,#c-video,#region-bar').forEach(sec=>sec.addEventListener('keydown',
   if(!e.target.matches('input[inputmode=numeric],input[inputmode=decimal]')) return;
   if(nudgeNumber(e.target, e.key==='ArrowUp'?1:-1, e.metaKey||e.ctrlKey)) e.preventDefault();
 }));
+
+// A file is over the window: light every place it could go. See the
+// drag-intent block in the stylesheet for what that means and why it is the
+// only moment this app is willing to spend pixels explaining itself.
+//
+// Driven off `dragover` and a timer rather than dragenter/dragleave counting.
+// The counting version is the textbook one and it is wrong here for the reason
+// already recorded on wireCanvasDrop's own dragleave: every child element the
+// cursor crosses fires its own leave, and on a page whose targets contain
+// images, boxes and eight resize handles the depth counter drifts and the
+// reveal strobes. dragover repeats while the drag is alive, so "still dragging"
+// is a fact the browser re-states every few hundred milliseconds, and the only
+// thing that needs guessing is when it stopped.
+let dragEnd=null;
+addEventListener('dragover',e=>{
+  // Files only. Dragging a text selection out of the prompt field must not
+  // make the page look like it wants to eat it.
+  if(![...(e.dataTransfer?.types||[])].includes('Files')) return;
+  document.body.classList.add('dragging');
+  clearTimeout(dragEnd);
+  dragEnd=setTimeout(dropOff,300);
+});
+// dragend fires on a drag that started inside the page; drop fires on one that
+// came from outside and landed. Neither fires when a drag leaves the window
+// entirely, which is what the timer is for.
+['drop','dragend'].forEach(k=>addEventListener(k,dropOff));
+function dropOff(){
+  clearTimeout(dragEnd);
+  document.body.classList.remove('dragging');
+  // Every target's own dragleave clears its own highlight, and that is enough
+  // right up until a drag leaves the window faster than the events describing
+  // it — then a tile stays lit with nothing over it, which is a control
+  // claiming to be a live drop target on a page where no drag is happening.
+  // This is the one handler that knows the drag is over no matter how it
+  // ended, so it is the one that owns the sweep.
+  $$('.hot').forEach(el=>el.classList.remove('hot'));
+  if(typeof clearCanvasDrop==='function') clearCanvasDrop();
+}
 
 // One placeholder, three states: it has to name the kind, and on the H3
 // checkpoints it also has to ask for the soundtrack, which is denoised from
@@ -8641,6 +8813,11 @@ function drawRegions(){
   while(els.length<regions.length){
     const el=document.createElement('div');
     el.className='rbox'; el.tabIndex=0;
+    // What dropping a photo here does, read by the drag-reveal caption. Set on
+    // the element rather than written into the CSS so the two gestures a box
+    // answers to — a photo for the likeness, a token for the LoRA — stay
+    // described in the same place the box is built.
+    el.dataset.drop='This character';
     el.innerHTML='<img class="face hide" alt=""><span class="tag hide"></span>'
       +['nw','n','ne','e','se','s','sw','w'].map(h=>`<i data-h="${h}"></i>`).join('');
     layer.appendChild(el); els.push(el);
@@ -8959,33 +9136,77 @@ refInput.onchange=async e=>{
 // canvas is the scene, which is a different thing entirely and gated on a
 // weight that may not be downloaded. One listener, because the target decides.
 function wireCanvasDrop(el){
+  // The outline goes on the host, not on the layer. `hot` was being set here
+  // for as long as this function has existed and the rule that draws it is
+  // `.frame.hot,.shot.hot` — but #region-layer is a *child* of the frame or the
+  // still, and carries no classes at all, so the selector never matched and the
+  // canvas drop shipped with no feedback whatsoever. The one gesture that turns
+  // a photograph into the world the render happens inside looked, to anyone who
+  // had not read this file, like dragging a file onto a dead surface.
+  const host=()=>el.parentElement;
+  const paint=on=>{
+    const h=host(); if(!h) return;
+    h.classList.toggle('hot',on);
+    // Named before the drop, not after. Without the weight this still lights
+    // and still captions — the point of showing it at all is that the feature
+    // exists and is one download away, which is a thing worth learning while
+    // you are holding the photograph it would have used.
+    h.dataset.drop = window.HAS_EDIT_LORA ? 'Scene' : 'Scene — needs a download';
+  };
   el.addEventListener('dragover',e=>{
     if(!regionOn()) return;
     e.preventDefault();
     const hit=e.target.closest('.rbox');
-    el.classList.toggle('hot',!hit);
-    $$('#region-layer .rbox').forEach(b=>b.classList.toggle('sel',b===hit||+b.dataset.i===rsel));
+    paint(!hit);
+    // Only the box under the cursor names itself. Eight captions on eight boxes
+    // is the same wall of text the per-region rows were removed for, drawn on
+    // the picture this time.
+    $$('#region-layer .rbox').forEach(b=>{
+      b.classList.toggle('sel',b===hit||+b.dataset.i===rsel);
+      b.classList.toggle('drop-hit',b===hit);
+    });
   });
   // Guarded on relatedTarget: without it every child under the cursor fires a
   // dragleave and the highlight strobes across a surface this large.
   el.addEventListener('dragleave',e=>{
-    if(!el.contains(e.relatedTarget)) el.classList.remove('hot');
+    if(!el.contains(e.relatedTarget)) clearCanvasDrop();
   });
   el.addEventListener('drop',async e=>{
     if(!regionOn()) return;
-    e.preventDefault(); el.classList.remove('hot');
+    e.preventDefault(); clearCanvasDrop();
     const f=e.dataTransfer.files[0];
     if(!f||!f.type.startsWith('image/')) return;
     const hit=e.target.closest('.rbox');
+    // Said, not swallowed. Without the edit LoRA this branch used to return in
+    // silence, which is indistinguishable from a drop the page never received —
+    // and the drop target is now visibly lit, so refusing quietly would be a
+    // promise the page made and then broke.
+    if(!hit&&!window.HAS_EDIT_LORA){
+      const note=$('#region-note');
+      note.classList.remove('hide'); note.textContent=NEED_EDIT_LORA;
+      return;
+    }
     const b64=await shrinkB64(f);
     if(!b64) return;
     if(hit){
       regions[+hit.dataset.i].ref=b64;
       selectRegion(+hit.dataset.i);
-    }else if(window.HAS_EDIT_LORA){
+    }else{
       setPlate('scene',b64);
     }
     drawRegions();
+  });
+}
+function clearCanvasDrop(){
+  const el=$('#region-layer');
+  if(el.parentElement) el.parentElement.classList.remove('hot');
+  // `sel` too, and back to whichever box actually is selected. dragover paints
+  // the box under the cursor as selected so you can see what you are aiming at;
+  // a drag abandoned over that box used to leave the paint behind, so the
+  // console was inspecting one box while two looked chosen.
+  $$('#region-layer .rbox').forEach(b=>{
+    b.classList.remove('drop-hit');
+    b.classList.toggle('sel',+b.dataset.i===rsel);
   });
 }
 wireCanvasDrop($('#region-layer'));
@@ -9029,15 +9250,21 @@ function wirePlate(slot){
   // A second click on a filled tile clears it. There is no ✕ because the tile
   // is 36px and a hit target inside it would be smaller than a fingertip —
   // the same reason the keyframe tiles do not carry one either.
+  // `locked` is visible and hoverable so it can say why, which means it is also
+  // clickable and droppable unless every entry point checks. A locked tile that
+  // opened a file picker and then swallowed the picture would be worse than the
+  // hidden tile this replaced.
+  const locked=()=>box.classList.contains('locked');
   box.onclick=e=>{
-    if(e.target===input) return;
+    if(e.target===input||locked()) return;
     if(!plate[slot]) return input.click();
     setPlate(slot,null);
   };
   input.onchange=e=>{ take(e.target.files[0]); input.value='' };
-  box.ondragover=e=>{e.preventDefault();box.classList.add('hot')};
+  box.ondragover=e=>{ if(locked())return; e.preventDefault();box.classList.add('hot') };
   box.ondragleave=()=>box.classList.remove('hot');
-  box.ondrop=e=>{e.preventDefault();box.classList.remove('hot');take(e.dataTransfer.files[0])};
+  box.ondrop=e=>{ if(locked())return;
+    e.preventDefault();box.classList.remove('hot');take(e.dataTransfer.files[0]) };
 }
 wirePlate('scene'); wirePlate('outfit');
 
@@ -9084,6 +9311,14 @@ function syncRegionNote(){
     : `${n} region${n>1?'s':''}, one pass. Each LoRA is masked to its box.${tail}${softNote}`;
 }
 
+// Captured from the markup before anything overwrites them, so the sentence
+// describing what a scene plate does still lives beside the tile that takes one
+// rather than in a second table here that has to be kept in step with it.
+const PLATE_TITLE={'#g-drop-scene':$('#g-drop-scene').title,
+                   '#g-drop-outfit':$('#g-drop-outfit').title};
+const NEED_EDIT_LORA=
+  'Scene and outfit transfer need the Krea 2 identity-edit LoRA — download it under Settings.';
+
 // Set, not toggle: `reuse()` and the edit-LoRA refresh both need to put the
 // mode into a known state, and a flip called from those would turn regional
 // *off* on a card that has regions whenever it happened to already be on.
@@ -9094,8 +9329,23 @@ function setRegional(on){
   // The plates ride on two conditions, not one: regions on, and the weight
   // they need actually downloaded. Region photos ride on neither — a mold is
   // not an extra_ref plate, so it needs no edit LoRA and never switches paths.
-  ['#g-drop-scene','#g-drop-outfit']
-    .forEach(s=>$(s).classList.toggle('hide',!(on&&window.HAS_EDIT_LORA)));
+  //
+  // The two conditions get two different treatments, and the split is the
+  // point. Regions off: the tiles are gone, because there is nothing to put a
+  // scene behind. Weight missing: the tiles are *dimmed*, the same `.off` the
+  // keyframe pair uses for "out of play this run", because an install without
+  // the edit LoRA is one download away from scene and outfit transfer and had
+  // no way of learning either existed — the controls were absent, so there was
+  // nothing to be curious about. This is the line: a model-gated control the
+  // model will never read stays hidden, since a control that is present and
+  // ignored is worse than one that is absent. A weight-gated control is not
+  // that; it is a purchase you have not made yet, and hiding it hides the
+  // decision rather than the capability.
+  ['#g-drop-scene','#g-drop-outfit'].forEach(s=>{
+    $(s).classList.toggle('hide',!on);
+    $(s).classList.toggle('locked',!window.HAS_EDIT_LORA);
+    $(s).title = window.HAS_EDIT_LORA ? PLATE_TITLE[s] : NEED_EDIT_LORA;
+  });
   // Two half-width columns, seeded. Two rectangles appearing on the canvas is
   // the whole instruction — a sentence telling you to drag would be read on
   // every visit forever to be useful once.
@@ -9243,11 +9493,17 @@ $('#go-gen').onclick=async()=>{
       // `_infotext` uses `l.get("applied", True)` and the gallery card uses
       // `l.applied===false`.
       const skipped=(s.loras||[]).filter(l=>l.applied===false);
-      $('#gen-meta').textContent=[
-        (s.seeds||[]).join(', ')&&('seed '+(s.seeds||[]).join(', ')),
-        s.sampler&&`${s.sampler} · ${s.steps} steps · CFG ${s.cfg_scale}`,
-        s.duration_s&&`${s.duration_s}s`,
-        skipped.length&&('not applied: '+skipped.map(l=>l.name+(l.reason?` (${l.reason})`:'')).join(', ')),
+      // The one clause here that is not a fact about the render but a report
+      // that something you asked for did not happen, so it carries `.warn` —
+      // the same amber #lora-note uses for a name that resolves to no file.
+      // Set in the same grey as "6.2s" it was a caption the eye reads past,
+      // which is the wrong place to hide "your LoRA did nothing".
+      $('#gen-meta').innerHTML=[
+        (s.seeds||[]).join(', ')&&esc('seed '+(s.seeds||[]).join(', ')),
+        s.sampler&&esc(`${s.sampler} · ${s.steps} steps · CFG ${s.cfg_scale}`),
+        s.duration_s&&esc(`${s.duration_s}s`),
+        skipped.length&&('<span class="warn">'+esc('not applied: '+skipped
+          .map(l=>l.name+(l.reason?` (${l.reason})`:'')).join(', '))+'</span>'),
       ].filter(Boolean).join(' · ');
       syncCanvasView(); loadGallery();
     } else if(s.status==='stopped'){
