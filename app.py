@@ -7124,10 +7124,46 @@ svg{width:100%;height:100%;display:block}
    they are two things the same sentence can become, so the choice belongs
    inside the field you are already typing in, at the smallest size that still
    reads. Everything below the field is options for that choice. */
-.field{border:1px solid var(--line);background:rgba(255,255,255,.05);border-radius:13px;padding:2px 2px 0}
+.field{position:relative;border:1px solid var(--line);background:rgba(255,255,255,.05);
+  border-radius:13px;padding:2px 2px 0}
 .field:focus-within{border-color:rgba(255,255,255,.28)}
-.field textarea{border:0;background:none;border-radius:0;padding:9px 10px 2px}
+/* One row, and it grows into what you type. It was two rows fixed, with the
+   native resize grip in the corner — which is a control that asks you to do by
+   hand, every session, the one thing the box can measure for itself. Two rows
+   is also wrong in both directions at once: a line and a half of empty box for
+   the short prompt that is most of them, and a scrollbar for the long one.
+   resize:none rather than resize:vertical from the base rule, because with
+   autoGrow() driving the height a drag would be overwritten by the next
+   keystroke — a grip that silently undoes itself is worse than no grip. */
+.field textarea{border:0;background:none;border-radius:0;padding:9px 10px 2px;
+  resize:none;overflow-y:auto}
 .field .bar2{display:flex;align-items:center;gap:8px;padding:2px 5px 5px}
+/* The negative prompt, which used to be a permanent two-row box at the top of
+   Advanced — on Krea 2 Turbo, whose CFG is 1.0, that is a control the sampler
+   cannot read sitting above every control it can. Not hidden behind the model's
+   name either: it is the same sentence field in a different sign, so it is a
+   mode on the field rather than a second box under it, and it costs the console
+   nothing until you switch into it.
+
+   Text, not a chip: a chip reads as a thing to press among other things to
+   press, and this is a corner marker for a mode you are usually not in. It
+   sits in the corner the resize grip just vacated. */
+.neg-t{position:absolute;top:6px;right:8px;z-index:2;border:0;background:none;padding:3px 4px;
+  color:var(--dim);font:500 10.5px/1 inherit;letter-spacing:.02em;cursor:pointer;
+  border-radius:7px;-webkit-user-select:none;user-select:none}
+.neg-t:hover{color:var(--fg);background:rgba(255,255,255,.07)}
+.field.on-neg .neg-t{color:#fca5a5}
+/* Reserved only while the toggle is there, so a model that reads no negative
+   prompt gets the full width back rather than a permanent gutter for a control
+   it is not showing. */
+.field.has-neg textarea{padding-right:62px}
+/* Something is written on the other side. Without it the negative is invisible
+   from the positive — you would be looking at a prompt that renders differently
+   than it reads, with nothing on screen saying why. */
+.neg-t::after{content:'';display:inline-block;width:4px;height:4px;margin-left:5px;
+  border-radius:50%;background:#f87171;vertical-align:1px;opacity:0;transition:opacity .12s}
+.neg-t.filled::after{opacity:1}
+.field.on-neg .neg-t::after{opacity:0}
 .kinds{display:inline-flex;gap:2px;background:rgba(255,255,255,.05);border-radius:999px;padding:2px}
 .kinds button{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--mut);
   border-radius:999px;padding:4px 10px 4px 8px;font:500 12px/1 inherit;cursor:pointer;
@@ -7967,7 +8003,17 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
     <div id="gen-err"></div>
     <div id="vid-err"></div>
     <div class="field">
-      <textarea id="prompt" rows="2" placeholder="Describe an image…"></textarea>
+      <textarea id="prompt" rows="1" placeholder="Describe an image…"></textarea>
+      <!-- The same field in a different sign. One buffer for both kinds, like
+           the prompt above it and for the same reason: what you are steering
+           away from does not stop being true when the sentence becomes a clip.
+           Hidden outright on a model that reads no negative — H3 is
+           guidance-distilled, Krea 2 Turbo runs at CFG 1.0, and on both of
+           those a negative prompt is a promise the sampler will not keep. -->
+      <textarea id="neg" rows="1" class="hide"
+                placeholder="Negative prompt — what to steer away from"></textarea>
+      <button type="button" id="neg-toggle" class="neg-t hide"
+              title="Write what to steer away from. Only read at CFG above 1."></button>
       <div class="bar2">
         <div class="kinds" id="kinds">
           <button data-kind="image" class="on">Image</button>
@@ -8089,7 +8135,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
       </div>
 
       <div id="gen-adv" class="hide adv">
-        <textarea id="g-neg" rows="2" placeholder="Negative prompt"></textarea>
         <div class="opts">
           <div class="opt" data-lb="Sampler"><select id="g-sampler"></select></div>
           <div class="opt" data-lb="Scheduler"><select id="g-scheduler"></select></div>
@@ -8244,10 +8289,10 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
       </div>
 
       <div id="vid-adv" class="hide adv">
-        <!-- Shown only for the models that read them. H3 is guidance-distilled,
-             so on H3 a negative prompt and a CFG dial would be controls the
-             model never looks at. -->
-        <textarea id="v-neg" rows="2" class="hide" placeholder="Negative prompt"></textarea>
+        <!-- The CFG dial is still gated here, for the reason the negative
+             prompt used to be: H3 is guidance-distilled and never looks at it.
+             The negative itself has moved into the prompt field, where it is a
+             mode rather than a box that has to be scrolled past. -->
         <div class="opts">
           <div class="opt" data-lb="Sampler"><select id="v-sampler"></select></div>
           <div class="opt" data-lb="Scheduler"><select id="v-scheduler"></select></div>
@@ -8725,6 +8770,7 @@ function setKind(k){
   // The rail survives the switch along with the prompt, so what changes is
   // which of its pills the thing on the other side of the switch can read.
   drawShotRail();
+  syncNeg();
   syncCanvasView();
 }
 $$('#kinds button').forEach(b=>{
@@ -8816,11 +8862,80 @@ function moveClause(el,dir){
 // The negatives take it as well: they are the same kind of comma-separated
 // prose, and a chord that works in one box and not the one under it is a chord
 // nobody trusts.
-['#prompt','#g-neg','#v-neg'].forEach(sel=>$(sel).addEventListener('keydown',e=>{
+['#prompt','#neg'].forEach(sel=>$(sel).addEventListener('keydown',e=>{
   if(!e.altKey||e.metaKey||e.ctrlKey||e.isComposing) return;
   if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight') return;
   if(moveClause(e.target,e.key==='ArrowRight'?1:-1)) e.preventDefault();
 }));
+
+// ---------- the prompt field ----------
+// Measured, not asked for. The box opens at one row and grows with the text,
+// which is the whole reason the resize grip could go: the height was never a
+// preference, it was an observation the box can make itself.
+//
+// Capped, because the console is what the canvas is sized against — layoutFrame
+// and the --shot-h sum both measure #canvas, and a field free to grow without
+// limit is a field that can push the picture off screen one keystroke at a
+// time. Past the cap it scrolls, which is the one place a scrollbar is the
+// right answer: the prompt has stopped being glanceable anyway.
+const FIELD_MAX = 168;
+function autoGrow(el){
+  if(!el) return;
+  el.style.height='auto';
+  el.style.height=Math.min(el.scrollHeight, FIELD_MAX)+'px';
+}
+['#prompt','#neg'].forEach(sel=>$(sel).addEventListener('input',e=>autoGrow(e.target)));
+
+// Whether this model reads a negative prompt at all.
+//
+// On the video side the model says so. On the image side nothing did, and that
+// is the gap this closes: Krea 2 Turbo is distilled to CFG 1.0, where a
+// negative prompt is not weak but *unread*, and the box sat at the top of
+// Advanced regardless. Read off the effective CFG rather than the checkpoint
+// name, so a Turbo run with CFG typed up to 5 gets the control back — the rule
+// is about the number the sampler uses, not about which file is loaded.
+function negAllowed(){
+  if(kind==='video'){
+    const m=videoModel();
+    return !!(m&&m.supports&&m.supports.negative);
+  }
+  const typed=parseFloat($('#g-cfg').value);
+  const def=((window.KREA2_DEFAULTS||{})[$('#g-model').value]||{}).cfg;
+  const cfg=Number.isFinite(typed)?typed:def;
+  return Number.isFinite(cfg)&&cfg>1;
+}
+
+// Which of the two textareas is showing, plus the dot that says the other one
+// is not empty.
+function setNegMode(on){
+  const f=$('.field');
+  f.classList.toggle('on-neg',on);
+  $('#prompt').classList.toggle('hide',on);
+  $('#neg').classList.toggle('hide',!on);
+  $('#neg-toggle').textContent = on ? 'prompt' : 'negative';
+  autoGrow($(on?'#neg':'#prompt'));
+  syncNeg();
+}
+function syncNeg(){
+  const ok=negAllowed(), f=$('.field'), t=$('#neg-toggle');
+  f.classList.toggle('has-neg',ok);
+  t.classList.toggle('hide',!ok);
+  // Switched away from under you: a model that reads no negative must not
+  // leave you typing into the field it will not read. The text is kept — the
+  // next model may well read it, and silently emptying a box someone wrote in
+  // is the one thing worse than ignoring it.
+  if(!ok&&f.classList.contains('on-neg')) return setNegMode(false);
+  t.classList.toggle('filled', !!$('#neg').value.trim());
+}
+$('#neg-toggle').onclick=()=>{
+  const to=!$('.field').classList.contains('on-neg');
+  setNegMode(to);
+  $(to?'#neg':'#prompt').focus();
+};
+$('#neg').addEventListener('input',syncNeg);
+// A typed CFG can turn the control on for a checkpoint whose default is 1.0,
+// so the box that decides has to say when it changes.
+$('#g-cfg').addEventListener('input',syncNeg);
 
 // ---------- ↑ / ↓ on a number ----------
 // Every numeric box in the composer takes the arrows, ⌘ (or Ctrl) for the
@@ -9448,7 +9563,14 @@ async function loadState(){
     ? 'No DiT on the volume — download Krea 2 Turbo under Settings.'
     : (s.models.find(m=>m.key==='vae')?.present && s.models.find(m=>m.key==='text_encoder')?.present
         ? '' : 'The VAE and text encoder are also required.');
-  syncModelLine();
+  // Both, because both read the model this line just chose. Setting `.value`
+  // fires no change event, so the pair bound to `#g-model`'s onchange has to be
+  // called by hand here — and syncNeg is the half that would go missing without
+  // a symptom on the install that opens on Turbo. On a volume holding only RAW
+  // it is `avail[0]` that selects a CFG of 5.5, and the negative prompt is a
+  // control the sampler reads with nothing on the page offering it until you
+  // touch the model select it is already on.
+  syncModelLine(); syncNeg();
 }
 
 // GB past a gigabyte and MB under it, because a 1.8 GB weight and a 144 MB LoRA
@@ -10155,7 +10277,7 @@ function syncModelLine(){
   $('#gen-model-line').textContent = !v ? 'No model downloaded'
     : v==='turbo' ? '8 steps · CFG 1.0' : '28 steps · CFG 5.5';
 }
-$('#g-model').onchange=syncModelLine;
+$('#g-model').onchange=()=>{ syncModelLine(); syncNeg() };
 $('#toggle-adv').onclick=()=>{
   $('#toggle-adv').classList.toggle('on',!$('#gen-adv').classList.toggle('hide'));
 };
@@ -11364,7 +11486,7 @@ $('#go-gen').onclick=async()=>{
   const box=$('#gen-prog'); box.classList.remove('hide'); box.querySelector('p').textContent='Queued…';
   const [w,h]=readSize();
   const r=await post('/api/generate',{
-    prompt:p, negative_prompt:$('#g-neg').value, model:$('#g-model').value,
+    prompt:p, negative_prompt:negAllowed()?$('#neg').value:'', model:$('#g-model').value,
     shot:readShot(),
     loras:readLoras(), regions, region_weight:$('#g-region-base').value,
     // Only when there are boxes to compose around — the backend rejects a
@@ -11559,7 +11681,7 @@ function syncVideoModel(){
   // side of it is a line that means nothing.
   ['#v-add-ref','#v-add-vid','#v-ref-size-wrap','#v-src-vr'].forEach(
     s=>$(s).classList.toggle('hide',!sup.references));
-  $('#v-neg').classList.toggle('hide',!sup.negative);
+  syncNeg();
   $('#v-cfg-wrap').classList.toggle('hide',!sup.cfg);
   $('#v-shift-wrap').classList.toggle('hide',!sup.cfg);
   $('#v-switch-wrap').classList.toggle('hide',!sup.experts);
@@ -11805,7 +11927,7 @@ $('#go-vid').onclick=async()=>{
 
   const r=await post('/api/video',{
     model:$('#v-model').value,
-    prompt:p, negative_prompt:$('#v-neg').value,
+    prompt:p, negative_prompt:negAllowed()?$('#neg').value:'',
     aspect:$('#v-aspect').value, tier:$('#v-tier').value,
     seconds:$('#v-seconds').value, steps:$('#v-steps').value, seed:$('#v-seed').value,
     cfg:$('#v-cfg').value, shift:$('#v-shift').value, switch_at:$('#v-switch').value,
@@ -12048,7 +12170,7 @@ function reuse(it){
     // A LoRA deleted since the run simply does not come back — the same thing
     // the old row-matching did, minus a row left behind to explain it.
     set('#prompt',[it.prompt_typed||it.prompt,loraTokens(it.loras,false)].filter(Boolean).join(' '));
-    set('#g-neg',it.negative_prompt);
+    set('#neg',it.negative_prompt);
     if(it.model) $('#g-model').value=it.model;
     const size=`${it.width}x${it.height}`;
     if([...$('#g-aspect').options].some(o=>o.value===size)){
@@ -12096,8 +12218,9 @@ function reuse(it){
     set('#g-region-base',it.region_weight);
     setRegional(regions.length>0);
 
-    syncModelLine(); syncLoraNote();
-    if(it.negative_prompt||it.steps||saved.length||$('#g-aspect').value==='custom')
+    syncModelLine(); syncLoraNote(); syncNeg();
+    autoGrow($('#prompt')); autoGrow($('#neg'));
+    if(it.steps||saved.length||$('#g-aspect').value==='custom')
       $('#gen-adv').classList.remove('hide');
     $('#prompt').focus();
   } else {
@@ -12114,7 +12237,7 @@ function reuse(it){
     // t2v LoRA into an i2v run without a word about it. loraTokens() writes
     // whichever name is unambiguous, which is the folder-qualified one here.
     set('#prompt',[it.prompt_typed||it.prompt,loraTokens(it.loras,true)].filter(Boolean).join(' '));
-    set('#v-neg',it.negative_prompt);
+    set('#neg',it.negative_prompt);
     set('#v-seed',it.seed); set('#v-steps',it.steps);
     set('#v-cfg',it.cfg_scale); set('#v-shift',it.shift); set('#v-switch',it.switch_at);
     // Marked as chosen, not defaulted: restoring a clip's settings and then
@@ -12135,8 +12258,9 @@ function reuse(it){
       }).sort((x,y)=>x.d-y.d)[0];
       if(near) $('#v-aspect').value=near.v;
     }
-    syncLoraNote();
-    if(it.negative_prompt||it.steps||it.cfg_scale) $('#vid-adv').classList.remove('hide');
+    syncLoraNote(); syncNeg();
+    autoGrow($('#prompt')); autoGrow($('#neg'));
+    if(it.steps||it.cfg_scale) $('#vid-adv').classList.remove('hide');
     $('#prompt').focus();
   }
 }
@@ -12205,6 +12329,7 @@ function metaSheet(it){
   el.querySelector('#m-reuse').onclick=()=>{ el.remove(); reuse(it) };
 }
 
+setNegMode(false);
 setKind('image');
 setMode('generate');
 // Sequenced, and in this order. Both of these reload the volume server-side,
