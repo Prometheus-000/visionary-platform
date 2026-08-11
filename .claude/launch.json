@@ -2,10 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "visionary-ui",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["tools/preview_ui.py", "8779"],
-      "port": 8779
+      "name": "preview-ui",
+      "runtimeExecutable": "/opt/homebrew/bin/python3.11",
+      "runtimeArgs": ["tools/preview_ui.py"],
+      "autoPort": true,
+      "port": 8791
     }
   ]
 }
