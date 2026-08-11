@@ -783,6 +783,34 @@ WAN_MODEL_KEYS: dict[tuple[str, str], tuple[str, ...]] = {
     ("5b", "i2v"): ("wan_ti2v_5b", "wan_te", "wan_vae_22"),
 }
 
+def _catalogue_lora_roots() -> dict[str, str]:
+    """
+    {listing row -> family} for every catalogue weight that lands in loras/.
+
+    Keyed on the row rather than on the dest, because those are not the same
+    thing: the identity-edit weight is a loose file at the top of loras/ and each
+    Wan speed pair is a folder holding two files, and it is the folder that one
+    line of the LoRA listing stands for.
+
+    What reads it is the delete confirmation. Deleting a LoRA you trained costs
+    however many hours the run took and there is nothing behind the unlink;
+    deleting one of these costs a download, and the dialog is the only place that
+    difference can be said *before* the fact rather than discovered after.
+    """
+    out: dict[str, str] = {}
+    for spec in MODEL_CATALOGUE.values():
+        dest: Path = spec["dest"]
+        if LORAS not in dest.parents:
+            continue
+        root = dest
+        while root.parent != LORAS:
+            root = root.parent
+        out[str(root)] = spec["family"]
+    return out
+
+
+CATALOGUE_LORA_ROOTS = _catalogue_lora_roots()
+
 # The three weights musubi is handed on the command line. Turbo used to have an
 # alias here too, for the Forge pipeline that took absolute paths; ComfyUI's
 # loaders take a basename inside a search path, so the graph builders read
@@ -2651,6 +2679,34 @@ def _drop_legacy_trash(root: Path) -> None:
     victim = root / LEGACY_TRASH_DIR
     if victim.is_dir():
         shutil.rmtree(victim, ignore_errors=True)
+
+
+def _tree_bytes(root: Path) -> int:
+    """
+    Every byte a delete of `root` would reclaim, whether it is a file or a folder.
+
+    Walked rather than summed off the listing that calls it. A trained LoRA's
+    folder is flat and holds only checkpoints and `visionary.json`, so the two
+    agree on everything this app writes — but the number's whole job is to be
+    what the confirm dialog says is going, and a dialog that undersells the blast
+    radius is the failure the .trash removal was answering. A folder that arrived
+    some other way, with a preview subdirectory in it, is exactly the case where
+    "sum the files I was already going to list" quietly reports less than it
+    unlinks.
+    """
+    try:
+        if root.is_file():
+            return root.stat().st_size
+    except OSError:
+        return 0
+    total = 0
+    for dirpath, _, names in os.walk(root):
+        for name in names:
+            try:
+                total += (Path(dirpath) / name).stat().st_size
+            except OSError:
+                pass
+    return total
 
 
 def _sweep_drafts() -> int:
@@ -5524,6 +5580,18 @@ def web():
                     loras.append({
                         "name": d.name, "trigger_word": trigger,
                         "path": str(files[0]),
+                        # `root` is served rather than left for the page to
+                        # rebuild from a file path, for the same reason the LoRA
+                        # index derives `rel` by splitting on `/loras/` instead
+                        # of joining two labels: the layout allows any nesting
+                        # under a folder, so `dirname(files[0])` is the folder
+                        # for a flat training output and one level too deep for
+                        # anything else. It is what Delete addresses, and a
+                        # delete that addresses the wrong directory is the one
+                        # kind of bug this file cannot take back.
+                        "root": str(d),
+                        "bytes": _tree_bytes(d),
+                        "catalogue": CATALOGUE_LORA_ROOTS.get(str(d), ""),
                         "files": [{"name": f.name, "path": str(f)} for f in files],
                     })
                 elif d.suffix == ".safetensors":
@@ -5532,6 +5600,9 @@ def web():
                     loras.append({
                         "name": d.stem, "trigger_word": "",
                         "path": str(d),
+                        "root": str(d),
+                        "bytes": _tree_bytes(d),
+                        "catalogue": CATALOGUE_LORA_ROOTS.get(str(d), ""),
                         "files": [{"name": d.name, "path": str(d)}],
                     })
         loras.sort(key=lambda l: l["name"].lower())
@@ -5580,6 +5651,45 @@ def web():
             "shot_langs": H3_LANGUAGES,
             "shot_roles": [dict(spec, key=k) for k, spec in SHOT_REF_ROLES.items()],
         }
+
+    @api.post("/api/loras/delete")
+    def delete_lora(payload: dict) -> dict[str, Any]:
+        """
+        Delete one LoRA — the folder with its epochs in it, or the loose file.
+
+        The unit is the row `state()` lists, which is the unit the storage layout
+        already says a LoRA is: a folder is one, and so is a bare file. An epoch
+        inside a folder is deliberately not addressable here. It is a real thing
+        to want — twenty checkpoints of one run is most of what fills this volume
+        — but it is a second verb with a second confirmation, and offering it
+        through the same route as "delete this LoRA" would mean one request whose
+        blast radius is a file or a training run depending on how deep the path
+        goes. That is the argument for the guard below.
+
+        `parent != LORAS` is stricter than `_lora_path`'s confinement and is
+        strict on purpose. It rejects every `../` escape, and it also rejects
+        `loras/{name}/{epoch}.safetensors` — a real file, under loras/, that this
+        route must not take on its own.
+        """
+        _reload_volume()
+        raw = str(payload.get("path") or "")
+        root = Path(raw).resolve()
+        if not raw or root.parent != LORAS.resolve():
+            return {"error": f"Not a LoRA: {raw!r}"}
+
+        if root.is_dir():
+            shutil.rmtree(root, ignore_errors=True)
+        elif root.suffix == ".safetensors" and root.is_file():
+            root.unlink()
+        else:
+            # The stale-tab case, and the one worth naming: a second window
+            # deleted it, or a training run was renamed out from under this list.
+            return {"error": f"No LoRA named {root.name!r} on the volume — "
+                             "reopen Settings to refresh the list."}
+
+        _drop_legacy_trash(LORAS)
+        volume.commit()
+        return {"ok": True}
 
     @api.post("/api/token")
     def set_token(payload: dict) -> dict[str, Any]:
@@ -7178,6 +7288,19 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    than in one shared strip at the top of Settings — with a button per family
    there is no longer a single place that "the download" means. */
 .fam-prog{margin:0 2px 12px}
+/* A row per LoRA, not a card per LoRA. The catalogue below is cards because each
+   entry there is a decision with a size, a repo and a licence attached; this is
+   a list you scan for a name you recognise, and at a dozen LoRAs the card's
+   16px of padding is the difference between reading it and scrolling it. */
+.lora-row{display:flex;align-items:center;gap:12px;padding:9px 2px;border-top:1px solid var(--line)}
+.lora-row:first-child{border-top:0;padding-top:2px}
+.lora-row b{font-size:13px;font-weight:600}
+/* Always visible, unlike the dataset card's ×, which only appears on hover
+   because it sits on top of a picture it would otherwise cover. There is nothing
+   under this one, and the whole reason to open this card is to find it. */
+.lora-x{border:0;background:none;color:var(--dim);cursor:pointer;font:15px/1 inherit;
+  padding:6px 8px;border-radius:9px;flex:none}
+.lora-x:hover{background:rgba(248,113,113,.14);color:#f87171}
 .kv{display:grid;grid-template-columns:132px 1fr;gap:5px 14px;font-size:13px}
 .kv dt{color:var(--mut)}
 .kv dd{color:#e8e8e8;word-break:break-word}
@@ -8107,6 +8230,23 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
       <div id="gd-prog" class="hide"><div class="row" style="gap:10px"><p class="muted grow" style="margin:0"></p><button class="s" data-cancel>Cancel</button></div></div>
     </div>
 
+    <!-- What the two cards above write into, and what the trainer writes into,
+         listed once. Until now the only view of loras/ was the `+ LoRA` picker,
+         which offers files to type and has nothing to say about what they cost
+         or how to be rid of one — so a LoRA that turned out badly stayed on the
+         volume forever, and the only way off it was the Modal CLI. Under the
+         gear rather than beside the picker for the same reason the weights are:
+         this is plumbing, decided once, and not a thing to trip over while
+         writing a prompt. -->
+    <div class="card">
+      <div class="row" style="align-items:baseline;margin-bottom:4px">
+        <label class="grow" style="margin:0">LoRAs</label>
+        <span class="muted" id="lora-total"></span>
+      </div>
+      <div id="lora-err" style="margin-top:10px"></div>
+      <div id="lora-list"></div>
+    </div>
+
     <div id="models"></div>
   </div>
 </div>
@@ -8932,6 +9072,10 @@ async function loadState(){
   $('#add-lora').disabled=!loraIndex.length;
   $('#v-add-lora').disabled=!loraIndex.length;
   syncLoraNote();
+  // Same payload, the other view of it: what you can type, and what you can
+  // throw away. Redrawn on every state load rather than only when Settings
+  // opens, so the count in the header is never one training run out of date.
+  drawLoras(s.loras);
 
   // Built once, and only once: the guard is what keeps a poll landing between
   // two clicks from resetting a sampler you just picked. Which also means the
@@ -8989,6 +9133,58 @@ async function loadState(){
     : (s.models.find(m=>m.key==='vae')?.present && s.models.find(m=>m.key==='text_encoder')?.present
         ? '' : 'The VAE and text encoder are also required.');
   syncModelLine();
+}
+
+// GB past a gigabyte and MB under it, because a 1.8 GB weight and a 144 MB LoRA
+// are both normal here and "0.14 GB" reads as a rounding error rather than a
+// file. Two decimals to match what the catalogue's own sizes are rounded to.
+const fmtBytes=b=>(b=+b||0)>=1e9?(b/1e9).toFixed(2)+' GB':Math.max(1,Math.round(b/1e6))+' MB';
+
+// Everything under loras/, drawn from the same /api/state the picker's index is
+// built from — so a LoRA that has just finished training is deletable without a
+// reload, for the same reason it is typeable without one.
+//
+// The trigger word is here and nowhere else on the page. The picker stopped
+// writing it into prompts, but "which one is alxcn" is precisely the question
+// standing between you and a delete, and the answer was already in the payload.
+function drawLoras(list){
+  const total=list.reduce((a,l)=>a+(+l.bytes||0),0);
+  $('#lora-total').textContent=list.length
+    ? `${list.length} · ${fmtBytes(total)}` : '';
+  $('#lora-list').innerHTML = list.length ? list.map((l,i)=>`
+    <div class="lora-row">
+      <div class="grow" style="min-width:0">
+        <b>${esc(l.name)}</b>${l.trigger_word?` <code>${esc(l.trigger_word)}</code>`:''}
+        <div class="muted">${l.files.length} file${l.files.length===1?'':'s'} · ${fmtBytes(l.bytes)}${l.catalogue?' · '+esc(l.catalogue):''}</div>
+      </div>
+      <button class="lora-x" data-del-lora="${i}" title="Delete">✕</button>
+    </div>`).join('')
+    // Both ways in are directly above this card, so the empty state points at
+    // them rather than saying "nothing here" and leaving you to find them.
+    : '<p class="muted" style="margin:2px 0 0">Nothing in <code>loras/</code> yet — train one, or paste a Drive link above.</p>';
+  $$('[data-del-lora]').forEach(b=>b.onclick=()=>deleteLora(list[+b.dataset.delLora]));
+}
+
+// The dialog is the entire safety net: the route unlinks, and there is nothing
+// behind it. So it says how much is going, and it says whether it can come back
+// — those are two different sentences, because a Wan speed pair is a download
+// and a LoRA you trained is however many hours that run took.
+async function deleteLora(l){
+  const n=l.files.length;
+  if(!confirm(`Permanently delete “${l.name}”?\n\n`
+    + `${n} file${n===1?'':'s'} (${fmtBytes(l.bytes)}) unlinked from the volume.\n`
+    + (l.catalogue
+        ? `It is part of ${l.catalogue} in the catalogue below, so it can be downloaded again.`
+        : `This cannot be undone.`))) return;
+  const r=await post('/api/loras/delete',{path:l.root});
+  if(r.error){ errInto('#lora-err',r.error); return }
+  errInto('#lora-err','');
+  // The whole sheet, not just this list. Deleting a catalogue LoRA moves it back
+  // to "missing" in the cards below and, for the identity-edit weight, takes the
+  // two plate tiles off the strip — all of which loadState() already knows how
+  // to do. Redrawing only the row that went would leave the page claiming a
+  // weight it no longer has.
+  loadState();
 }
 $('#tok-save').onclick=async()=>{
   const r=await post('/api/token',{hf_token:$('#tok').value});
