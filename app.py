@@ -3837,7 +3837,7 @@ class ImageGenerator:
             out_dir, kind="image", job_id=job_id, model=model,
             prompt=str(params.get("prompt") or ""),
             negative_prompt=str(params.get("negative_prompt") or ""),
-            created=time.time(), **report,
+            created=time.time(), **_shot_meta(params), **report,
         )
         volume.commit()
 
@@ -4275,6 +4275,736 @@ def _wan_task(first_frame: Any, last_frame: Any) -> str:
     return "i2v" if (first_frame or last_frame) else "t2v"
 
 
+# --------------------------------------------------------------------------
+# The shot palette
+#
+# H3 does not read a paragraph. It reads a document with named fields, and
+# MiniMax publishes the format in the model repo — VIDEO_PROMPT_WRITING_GUIDE
+# _base_en.md and _ref_en.md. The composer offered one textarea for it, which is
+# the whole reason a first-time user has to guess where camera direction goes,
+# whether tone belongs in the sentence, and what a comma does. It is not a
+# grammar anyone could infer; it is a schema, and the app can simply emit it.
+#
+# No LLM. A closed vocabulary is a table, the structure is a form, and the
+# user's own sentence is the one part that was never the problem. An LLM here
+# would be a GPU cold start or an external key to do work a dict does.
+#
+# Two rules this whole section is built on:
+#
+# - **A pill is a word you did not have to guess.** Anything with a closed
+#   vocabulary — camera, framing, lens, light, tone, action, foley, score —
+#   is a pill, never a second box to type in. The prompt field keeps only what
+#   nothing else can say: who is in the shot and what happens.
+# - **No pills, no document.** With nothing chosen the compiler returns the
+#   typed text byte-for-byte, so this is strictly additive: every prompt that
+#   worked yesterday is still exactly what reaches the encoder. The document
+#   only appears once you have said something that needs one.
+# --------------------------------------------------------------------------
+
+# Verbatim from the base guide. These are a contract with the checkpoint rather
+# than phrasing we chose, so they are quoted exactly and not tidied — including
+# the guide's own inconsistency, which is worth knowing about before someone
+# "fixes" it: i2va and l2va bracket their labels (`<Picture 1>`, `[Shot 1]`)
+# and fl2va does not. Both spellings are the guide's, in the same file.
+#
+# `S.SS` is the clip length the composer already knows, so it is filled rather
+# than left literal — a placeholder that reaches the encoder is a placeholder
+# the encoder conditions on.
+H3_ALIGN = {
+    "t2va": "",
+    "i2va": ("For the target video, at 0.00 seconds into the target video, "
+             "<Picture 1> (from [Shot 1]) is fully referenced."),
+    "fl2va": ("How the reference pictures align with the target video — "
+              "Picture 1 (from Shot 1) aligns with the 0.00-second mark of the "
+              "target video; Picture 2 (from Shot N) aligns with the "
+              "{s}-second mark of the target video."),
+    "l2va": ("How the reference pictures align with the target video — "
+             "<Picture 1> (from [Shot N]) aligns with the {s}-second mark of "
+             "the target video."),
+}
+
+# The eleven the model card calls stable support. Deliberately not free text:
+# the tag is a thing you cannot know to write, which is the entire reason
+# dialogue is a pill instead of something you type into the prompt. The guide
+# itself only ever demonstrates [English] and never enumerates the rest, so the
+# list comes from the model card's "System Overview" — if that changes, this is
+# the line to change with it.
+H3_LANGUAGES = ["English", "Chinese", "Spanish", "French", "German", "Italian",
+                "Portuguese", "Russian", "Japanese", "Korean", "Arabic"]
+
+# A valued pill holds a line of dialogue or a foley description, and neither is
+# a place to accept unbounded text: the whole document is one conditioner
+# input, and a pill is not the field to discover that in.
+SHOT_VALUE_MAX = 400
+
+# Reference roles. A chip's role is what finally makes "do not describe your
+# reference image" enforceable rather than advice — there is now somewhere for
+# that description to go which is not the prompt field, and it is one click.
+#
+# `noun` builds the guide's own subject_definitions construction, whose shape is
+# `<Subject N> is the {noun} in <Picture M>`; `retain` builds the sentence in
+# retention_analysis that says which features of it must survive.
+SHOT_REF_ROLES = {
+    "identity": {"label": "Identity",
+                 "noun": "person", "retain": "facial structure, hair and build"},
+    "wardrobe": {"label": "Wardrobe",
+                 "noun": "wardrobe", "retain": "garments, their cut and colour"},
+    "location": {"label": "Location",
+                 "noun": "location", "retain": "architecture, materials and layout"},
+    "style": {"label": "Style",
+              "noun": "visual style", "retain": "palette, contrast and grain"},
+    "prop": {"label": "Prop",
+             "noun": "prop", "retain": "shape, material and markings"},
+    "action": {"label": "Action",
+               "noun": "action", "retain": "the motion and its timing"},
+}
+
+# The vocabulary itself.
+#
+# `phrase` is the exact wording that gets written, so a pill teaches the
+# phrasing it produces rather than standing in for it — "slow push-in", "stable
+# rear tracking shot". Camera phrases in particular carry the guide's three
+# required dimensions (motion type + amplitude + speed) because a bare "push in"
+# is the half of a camera instruction H3 reads worst.
+#
+# Per group:
+#   pick   "one" replaces within the group, "many" stacks. The guide is explicit
+#          that a clip gets one camera move unless the timing is spelled out,
+#          and framing and angle are single-valued by physics.
+#   join   "list" folds into one comma-separated sentence; "sentence" stands
+#          alone. This is where the punctuation question is answered once, in
+#          code, instead of being guessed per prompt.
+#   slot   position relative to the typed sentence, which sits at 0. Camera goes
+#          last because the guide's rule is to describe the move after the thing
+#          it is moving around. Groups that share a slot share a sentence, which
+#          is why framing, angle, light and tone are all at -10: they are four
+#          groups on the palette because that is how you pick them, and one
+#          clause in the document because that is how a shot is described.
+#   field  which of H3's three audio/visual fields it compiles into.
+#   image  whether Krea 2 reads it at all. Camera, action and both audio groups
+#          do not exist on the image side.
+#   needs  a `supports` key the video model must carry. Wan is silent, so its
+#          sound and score pills dim rather than disappear — the established
+#          rule from the keyframes/references row. An item may carry its own,
+#          which then stands in for the group's: see `say.dialogue`.
+#   glyph  the CSS class that animates the shared tile skeleton. Not a drawing:
+#          forty bespoke SVGs would drift apart, one skeleton plus a class per
+#          move does not.
+SHOT_VOCAB: list[dict[str, Any]] = [
+    {"key": "framing", "label": "Framing", "pick": "one", "join": "list",
+     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+        {"key": "xwide", "label": "extreme wide", "glyph": "fr-xw",
+         "phrase": "an extreme wide shot"},
+        {"key": "wide", "label": "wide", "glyph": "fr-w",
+         "phrase": "a wide shot"},
+        {"key": "medium", "label": "medium", "glyph": "fr-m",
+         "phrase": "a medium shot"},
+        {"key": "mcu", "label": "medium close-up", "glyph": "fr-mcu",
+         "phrase": "a medium close-up"},
+        {"key": "cu", "label": "close-up", "glyph": "fr-cu",
+         "phrase": "a close-up"},
+        {"key": "xcu", "label": "extreme close-up", "glyph": "fr-xcu",
+         "phrase": "an extreme close-up"},
+        {"key": "ots", "label": "over-the-shoulder", "glyph": "fr-ots",
+         "phrase": "an over-the-shoulder shot"},
+        {"key": "pov", "label": "POV", "glyph": "fr-pov",
+         "phrase": "a first-person point-of-view shot"},
+    ]},
+    {"key": "angle", "label": "Angle", "pick": "one", "join": "list",
+     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+        {"key": "eye", "label": "eye level", "glyph": "an-eye",
+         "phrase": "shot at eye level"},
+        {"key": "low", "label": "low", "glyph": "an-low",
+         "phrase": "shot from a low angle"},
+        {"key": "high", "label": "high", "glyph": "an-high",
+         "phrase": "shot from a high angle"},
+        {"key": "bird", "label": "bird's eye", "glyph": "an-bird",
+         "phrase": "shot from directly overhead, a bird's-eye view"},
+        {"key": "worm", "label": "worm's eye", "glyph": "an-worm",
+         "phrase": "shot from ground level looking up, a worm's-eye view"},
+        {"key": "dutch", "label": "Dutch", "glyph": "an-dutch",
+         "phrase": "shot on a canted Dutch angle"},
+    ]},
+    {"key": "light", "label": "Light", "pick": "many", "join": "list",
+     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+        {"key": "window", "label": "window light", "glyph": "li-window",
+         "phrase": "lit by soft daylight from a window"},
+        {"key": "golden", "label": "golden hour", "glyph": "li-golden",
+         "phrase": "lit by low golden-hour sun"},
+        {"key": "overcast", "label": "overcast", "glyph": "li-overcast",
+         "phrase": "lit by flat overcast daylight"},
+        {"key": "hardsun", "label": "hard sun", "glyph": "li-hardsun",
+         "phrase": "lit by hard direct sunlight with sharp shadows"},
+        {"key": "neon", "label": "neon", "glyph": "li-neon",
+         "phrase": "lit by coloured neon"},
+        {"key": "candle", "label": "candlelight", "glyph": "li-candle",
+         "phrase": "lit by warm, flickering candlelight"},
+        {"key": "practical", "label": "practicals", "glyph": "li-practical",
+         "phrase": "lit by practical lamps visible in the frame"},
+        {"key": "silhouette", "label": "silhouette", "glyph": "li-silhouette",
+         "phrase": "backlit so the subject reads as a silhouette"},
+        {"key": "top", "label": "top light", "glyph": "li-top",
+         "phrase": "lit from directly above"},
+    ]},
+    {"key": "tone", "label": "Tone", "pick": "many", "join": "list",
+     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+        {"key": "doc", "label": "documentary", "glyph": "to-doc",
+         "phrase": "shot with documentary realism"},
+        {"key": "noir", "label": "noir", "glyph": "to-noir",
+         "phrase": "in high-contrast film noir"},
+        {"key": "s16", "label": "16mm", "glyph": "to-s16",
+         "phrase": "on grainy 16mm film"},
+        {"key": "anamorphic", "label": "anamorphic", "glyph": "to-anamorphic",
+         "phrase": "on anamorphic widescreen lenses"},
+        {"key": "highkey", "label": "high-key", "glyph": "to-highkey",
+         "phrase": "high-key and bright"},
+        {"key": "desat", "label": "desaturated", "glyph": "to-desat",
+         "phrase": "desaturated, close to monochrome"},
+        {"key": "contrast", "label": "high contrast", "glyph": "to-contrast",
+         "phrase": "in high contrast with deep blacks"},
+    ]},
+    {"key": "action", "label": "Action", "pick": "many", "join": "sentence",
+     "slot": 10, "field": "visual", "image": False, "needs": None, "items": [
+        {"key": "fight", "label": "fight", "glyph": "ac-fight",
+         "phrase": "They fight, trading fast, tightly choreographed blows."},
+        {"key": "kiss", "label": "kiss", "glyph": "ac-kiss",
+         "phrase": "They move together and kiss."},
+        {"key": "talk", "label": "conversation", "glyph": "ac-talk",
+         "phrase": "They talk to each other, taking turns to speak."},
+        {"key": "walktalk", "label": "walk and talk", "glyph": "ac-walktalk",
+         "phrase": "They walk side by side, talking as they go."},
+        {"key": "embrace", "label": "embrace", "glyph": "ac-embrace",
+         "phrase": "They embrace and hold each other."},
+        {"key": "chase", "label": "chase", "glyph": "ac-chase",
+         "phrase": "One runs and the other chases, closing the distance."},
+        {"key": "reveal", "label": "reveal", "glyph": "ac-reveal",
+         "phrase": "The subject is revealed as the frame clears."},
+        {"key": "handoff", "label": "hand-off", "glyph": "ac-handoff",
+         "phrase": "One hands an object to the other."},
+        {"key": "turn", "label": "turn to camera", "glyph": "ac-turn",
+         "phrase": "The subject turns to face the camera."},
+        {"key": "laugh", "label": "laugh", "glyph": "ac-laugh",
+         "phrase": "They laugh together."},
+    ]},
+    # Valued, and the reason the rail can hold a line of dialogue at all: a
+    # closed vocabulary cannot contain "Take the morning with you", so choosing
+    # the pill reveals a place to write and nothing before that.
+    {"key": "say", "label": "Speech & text", "pick": "many", "join": "sentence",
+     "slot": 20, "field": "visual", "image": False, "needs": None, "items": [
+        # The one item that needs what its group does not. On-screen text is a
+        # picture of words and any video model can render it; a spoken line is
+        # audio, and on a silent family `<d>[English] …</d>` is H3's syntax
+        # arriving at umT5, which reads it as literal angle brackets rather
+        # than ignoring it. So `needs` is per item as well as per group.
+        {"key": "dialogue", "label": "dialogue", "glyph": "sa-dialogue",
+         "valued": "dialogue", "phrase": "", "needs": "audio",
+         "hint": "What they say — kept word for word"},
+        {"key": "screen", "label": "on-screen text", "glyph": "sa-screen",
+         "valued": "text", "phrase": "",
+         "hint": "The exact words on screen"},
+    ]},
+    {"key": "camera", "label": "Camera", "pick": "one", "join": "sentence",
+     "slot": 40, "field": "visual", "image": False, "needs": None, "items": [
+        {"key": "pushin", "label": "push in", "glyph": "ca-push",
+         "phrase": "The camera pushes in slowly, a small and steady move."},
+        {"key": "pullout", "label": "pull out", "glyph": "ca-pull",
+         "phrase": "The camera pulls out slowly, a small and steady move."},
+        {"key": "panl", "label": "pan left", "glyph": "ca-panl",
+         "phrase": "The camera pans left at a moderate speed, a medium-amplitude move."},
+        {"key": "panr", "label": "pan right", "glyph": "ca-panr",
+         "phrase": "The camera pans right at a moderate speed, a medium-amplitude move."},
+        {"key": "tiltu", "label": "tilt up", "glyph": "ca-tiltu",
+         "phrase": "The camera tilts up slowly, a small move."},
+        {"key": "tiltd", "label": "tilt down", "glyph": "ca-tiltd",
+         "phrase": "The camera tilts down slowly, a small move."},
+        {"key": "truckl", "label": "truck left", "glyph": "ca-truckl",
+         "phrase": "The camera trucks left at a steady, moderate speed."},
+        {"key": "truckr", "label": "truck right", "glyph": "ca-truckr",
+         "phrase": "The camera trucks right at a steady, moderate speed."},
+        {"key": "pedu", "label": "pedestal up", "glyph": "ca-pedu",
+         "phrase": "The camera pedestals up slowly, a small move."},
+        {"key": "pedd", "label": "pedestal down", "glyph": "ca-pedd",
+         "phrase": "The camera pedestals down slowly, a small move."},
+        {"key": "orbit", "label": "orbit", "glyph": "ca-orbit",
+         "phrase": "The camera orbits the subject at a slow, steady speed."},
+        {"key": "arc", "label": "arc", "glyph": "ca-arc",
+         "phrase": "The camera arcs around the subject in a slow, wide move."},
+        {"key": "craneu", "label": "crane up", "glyph": "ca-craneu",
+         "phrase": "The camera cranes up in a large, slow move."},
+        {"key": "craned", "label": "crane down", "glyph": "ca-craned",
+         "phrase": "The camera cranes down in a large, slow move."},
+        {"key": "trackside", "label": "track side", "glyph": "ca-trackside",
+         "phrase": "A stable side-tracking shot keeps pace with the subject."},
+        {"key": "trackrear", "label": "track rear", "glyph": "ca-trackrear",
+         "phrase": "A stable rear tracking shot follows the subject from behind."},
+        {"key": "handheld", "label": "handheld", "glyph": "ca-handheld",
+         "phrase": "The camera is handheld, with small, constant, organic movement."},
+        {"key": "whip", "label": "whip pan", "glyph": "ca-whip",
+         "phrase": "The camera whip-pans, a large and fast move."},
+        {"key": "rack", "label": "rack focus", "glyph": "ca-rack",
+         "phrase": "The focus racks from the foreground to the subject."},
+        {"key": "zoom", "label": "zoom in", "glyph": "ca-zoom",
+         "phrase": "The lens zooms in slowly, a small and steady move."},
+        {"key": "static", "label": "locked off", "glyph": "ca-static",
+         "phrase": "The camera is locked off and does not move."},
+    ]},
+    {"key": "sound", "label": "Sound", "pick": "many", "join": "list",
+     "slot": 0, "field": "sound", "image": False, "needs": "audio", "items": [
+        {"key": "roomtone", "label": "room tone", "glyph": "so-room",
+         "phrase": "quiet room tone"},
+        {"key": "footsteps", "label": "footsteps", "glyph": "so-steps",
+         "phrase": "footsteps on the floor"},
+        {"key": "wind", "label": "wind", "glyph": "so-wind",
+         "phrase": "wind moving through the space"},
+        {"key": "rain", "label": "rain", "glyph": "so-rain",
+         "phrase": "rain falling steadily"},
+        {"key": "traffic", "label": "traffic", "glyph": "so-traffic",
+         "phrase": "distant traffic"},
+        {"key": "crowd", "label": "crowd", "glyph": "so-crowd",
+         "phrase": "a low crowd murmur"},
+        {"key": "breathing", "label": "breathing", "glyph": "so-breath",
+         "phrase": "audible breathing"},
+        {"key": "cloth", "label": "cloth", "glyph": "so-cloth",
+         "phrase": "cloth rustling with every movement"},
+        {"key": "water", "label": "water", "glyph": "so-water",
+         "phrase": "running water"},
+        {"key": "fire", "label": "fire", "glyph": "so-fire",
+         "phrase": "a fire crackling"},
+        {"key": "other", "label": "other", "glyph": "so-other",
+         "valued": "text", "phrase": "",
+         "hint": "e.g. ice tapping the side of a crystal glass"},
+    ]},
+    {"key": "score", "label": "Score", "pick": "many", "join": "list",
+     "slot": 0, "field": "score", "image": False, "needs": "audio", "items": [
+        # First in its own group, because it is the one worth the whole feature:
+        # H3 invents a soundtrack for every clip, and it does that because
+        # nothing has ever told it not to. `non_diegetic_music: N/A` is the
+        # guide's own value for "no score", and it is also what any document
+        # with no score pill emits — this pill exists so that "silent" is a
+        # thing you can choose on its own, without stacking four other pills to
+        # get a document built.
+        {"key": "silent", "label": "no score", "glyph": "sc-silent",
+         "solo": True, "phrase": ""},
+        {"key": "piano", "label": "solo piano", "glyph": "sc-piano",
+         "phrase": "solo piano"},
+        {"key": "strings", "label": "strings", "glyph": "sc-strings",
+         "phrase": "sustained strings"},
+        {"key": "synth", "label": "synth pad", "glyph": "sc-synth",
+         "phrase": "a synth pad"},
+        {"key": "perc", "label": "percussion", "glyph": "sc-perc",
+         "phrase": "percussion"},
+        {"key": "guitar", "label": "guitar", "glyph": "sc-guitar",
+         "phrase": "acoustic guitar"},
+        {"key": "slow", "label": "slow", "glyph": "sc-slow",
+         "phrase": "at a slow tempo"},
+        {"key": "mid", "label": "mid tempo", "glyph": "sc-mid",
+         "phrase": "at a mid tempo"},
+        {"key": "driving", "label": "driving", "glyph": "sc-driving",
+         "phrase": "at a driving tempo"},
+        {"key": "swelling", "label": "swelling", "glyph": "sc-swell",
+         "phrase": "swelling through the clip"},
+        {"key": "steady", "label": "steady", "glyph": "sc-steady",
+         "phrase": "holding a steady level"},
+        {"key": "fading", "label": "fading", "glyph": "sc-fade",
+         "phrase": "fading out towards the end"},
+        {"key": "other", "label": "other", "glyph": "sc-other",
+         "valued": "text", "phrase": "",
+         "hint": "e.g. a lone cello, barely there"},
+    ]},
+]
+
+# `group.item`, not `item` — `static`, `other` and `low` each occur in more than
+# one group, and a flat key space would have made two different pills the same
+# pill. The compound key is also what makes a payload readable in a sidecar a
+# year later without this table in front of you.
+SHOT_ITEMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
+    f"{g['key']}.{it['key']}": (g, it) for g in SHOT_VOCAB for it in g["items"]
+}
+
+
+def _validate_shot(raw: Any) -> list[dict[str, Any]]:
+    """
+    Normalise the pill rail into what the compiler takes, or say what is wrong.
+
+    Importable from the CPU web container for the same reason `_validate_loras`
+    is: an unknown pill key is a form error in milliseconds, not a cold H100
+    discovering it after 42 GB of weights are resident.
+
+    Unknown keys are rejected rather than dropped. A pill silently ignored is
+    the failure this whole feature exists to remove — the user picked a word and
+    the model never saw it, which is indistinguishable from the model ignoring
+    the word.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, dict):          # {"pills": [...]} as well as a bare list
+        raw = raw.get("pills") or []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in list(raw)[:len(SHOT_ITEMS)]:
+        if isinstance(entry, str):
+            entry = {"key": entry}
+        if not isinstance(entry, dict):
+            raise ValueError(f"Not a shot pill: {entry!r}")
+        key = str(entry.get("key") or "")
+        if key not in SHOT_ITEMS:
+            raise ValueError(f"No such shot pill: {key!r}")
+        if key in seen:
+            continue
+        seen.add(key)
+        item = SHOT_ITEMS[key][1]
+
+        pill: dict[str, Any] = {"key": key}
+        if item.get("valued"):
+            # Verbatim, punctuation included — the guide is explicit that what
+            # is inside <d>…</d> is preserved as written, and sentence-casing or
+            # re-punctuating a line of dialogue is exactly the silent corruption
+            # that rule is about.
+            #
+            # Whitespace is the one exception, and it is not a softening of the
+            # rule but a requirement of the format: the document is one field
+            # per line, so a pasted line break inside a value ends the field and
+            # turns the rest of the sentence into what looks like another one.
+            # Collapsing runs of whitespace keeps every word and every mark and
+            # cannot produce that. The field is an <input>, so this only ever
+            # fires on a paste or a client that is not this page.
+            pill["value"] = _oneline(str(entry.get("value") or ""))[:SHOT_VALUE_MAX]
+        if item.get("valued") == "dialogue":
+            lang = str(entry.get("lang") or "English")
+            if lang not in H3_LANGUAGES:
+                raise ValueError(f"No such dialogue language: {lang!r}. "
+                                 f"One of: {', '.join(H3_LANGUAGES)}")
+            pill["lang"] = lang
+        out.append(pill)
+
+    # One camera move, one framing, one angle — the guide's rule, and the page
+    # enforces it by replacing rather than stacking. Enforced again here because
+    # a stale tab is a client that can send anything, and because the rule that
+    # matters is not "the page prevents it" but "the encoder never sees two".
+    #
+    # Last wins throughout, which is what clicking a second tile does on screen:
+    # a `pick:"one"` group keeps only its newest, and a `solo` item (no score)
+    # and the rest of its group evict each other in whichever direction the
+    # clicks arrived.
+    kept: dict[str, dict[str, Any]] = {}
+    for pill in out:
+        group, item = SHOT_ITEMS[pill["key"]]
+        drop = group["pick"] == "one" or item.get("solo")
+        kept = {k: v for k, v in kept.items()
+                if SHOT_ITEMS[k][0]["key"] != group["key"]
+                or not (drop or SHOT_ITEMS[k][1].get("solo"))}
+        kept[pill["key"]] = pill
+    return list(kept.values())
+
+
+def _validate_ref_roles(raw: Any, count: int) -> list[str]:
+    """One role per image reference, positional, blank where none was chosen."""
+    roles = [str(r or "") for r in (list(raw) if raw else [])][:count]
+    for r in roles:
+        if r and r not in SHOT_REF_ROLES:
+            raise ValueError(f"No such reference role: {r!r}. "
+                             f"One of: {', '.join(SHOT_REF_ROLES)}")
+    return roles + [""] * (count - len(roles))
+
+
+def _h3_task(first_frame: Any, last_frame: Any,
+             references: Any, ref_videos: Any) -> str:
+    """
+    Which of the guide's four tasks a request is.
+
+    Deliberately a second, finer read than the one `/api/video` makes. That one
+    collapses to `ref2va` or `fl2va`, which is exactly right for *which
+    checkpoint loads* — first-only, last-only and both are the same weights —
+    and too coarse for *which alignment instruction*, where they are three
+    different sentences and getting it wrong tells the model a picture sits at a
+    timestamp it does not.
+    """
+    if references or ref_videos:
+        return "ref2va"
+    if first_frame and last_frame:
+        return "fl2va"
+    if first_frame:
+        return "i2va"
+    if last_frame:
+        return "l2va"
+    return "t2va"
+
+
+def _shot_phrases(pills: list[dict[str, Any]], *, side: str,
+                  audio: bool = True) -> dict[tuple[int, str, str], list[str]]:
+    """
+    Fold the chosen pills into (slot, join) buckets, in vocabulary order.
+
+    Vocabulary order, not click order, is the entire point: clause position is
+    the one thing you cannot get wrong by hand any more. Two pills from the same
+    group keep the order the table lists them in, so "close-up, low angle" never
+    comes back as "low angle, close-up" because of the order they were clicked.
+
+    `audio=False` is the silent families. It drops by `needs` rather than by
+    field, because dialogue is the case that breaks the simpler rule: it lands
+    in the *visual* description and is still audio, and `<d>[English] …</d>`
+    reaching umT5 is a pair of angle brackets in the prompt rather than a line
+    anybody says.
+    """
+    chosen = {p["key"]: p for p in pills}
+    buckets: dict[tuple[int, str, str], list[str]] = {}
+    for group in SHOT_VOCAB:
+        if side == "image" and not group["image"]:
+            continue
+        for item in group["items"]:
+            if not audio and (item.get("needs") or group["needs"]) == "audio":
+                continue
+            key = f"{group['key']}.{item['key']}"
+            pill = chosen.get(key)
+            if pill is None:
+                continue
+            text = _shot_text(group, item, pill)
+            if not text:
+                continue
+            buckets.setdefault(
+                (group["slot"], group["join"], group["field"]), []).append(text)
+    return buckets
+
+
+def _shot_text(group: dict[str, Any], item: dict[str, Any],
+               pill: dict[str, Any]) -> str:
+    """One pill's contribution, which for a valued pill is whatever was typed."""
+    kind = item.get("valued")
+    if not kind:
+        return item["phrase"]
+    value = pill.get("value") or ""
+    # An empty valued pill compiles to nothing and is never a validation error.
+    # It is a decision you have started and not finished, which is a state the
+    # rail can simply show by being visibly empty.
+    if not value:
+        return ""
+    if kind == "dialogue":
+        # (S1) unconditionally: a second speaker is only worth having once there
+        # are shots to cut between, and multi-shot prompting is not in this pass.
+        return (f"<Subject 1> (S1) says: "
+                f"<d>[{pill.get('lang') or 'English'}] {value}</d>")
+    if group["key"] == "say":
+        return (f'On-screen text reads "{value}", rendered exactly as written '
+                f'and not translated.')
+    return value
+
+
+def _shot_sentence(parts: list[str]) -> str:
+    """A comma list, capitalised once and closed once."""
+    if not parts:
+        return ""
+    body = ", ".join(parts)
+    return body[0].upper() + body[1:] + "."
+
+
+def _oneline(text: str) -> str:
+    """
+    Runs of whitespace collapsed to single spaces, and nothing else touched.
+
+    The document is one field per line, so any newline that reaches it ends a
+    field early and leaves the rest of the sentence looking like the start of
+    another. The prompt box is a textarea and a two-line prompt is a thing this
+    page deliberately supports — see the clause-reordering chord — so this is
+    not a rare paste, it is the ordinary case.
+    """
+    return " ".join(text.split())
+
+
+def _close(text: str) -> str:
+    """Someone's sentence, closed if they did not close it — and not otherwise."""
+    text = text.strip()
+    return text + "." if text and text[-1] not in ".!?…\"'" else text
+
+
+def _shot_join(parts: list[str]) -> str:
+    """
+    Sentences, joined so a lowercase fragment does not follow a full stop.
+
+    The image side is where this bites: people type "a portrait of k3nan", not
+    "A portrait of k3nan", and "A medium close-up. a portrait of k3nan." reads
+    as a bug. The obvious fix — capitalise it — is the one thing that must not
+    happen here. `k3nan` typed as a plain trigger word is a token the text
+    encoder distinguishes from `K3nan`, and silently upper-casing the first
+    character of someone's prompt would weaken the LoRA they trained. So no
+    character of the user's text is touched; only the separator in front of it
+    is chosen, and the preceding clause's full stop softens to a comma.
+    """
+    out = ""
+    for part in [p for p in parts if p]:
+        if not out:
+            out = part
+        elif part[:1].islower() and out.endswith("."):
+            out = out[:-1] + ", " + part
+        else:
+            out += " " + part
+    return out
+
+
+def _shot_body(typed: str, buckets: dict[tuple[int, str, str], list[str]],
+               *, field: str = "visual") -> str:
+    """
+    The typed sentence with its pills folded in around it, in slot order.
+
+    The typed text is closed with a full stop if it does not close itself, and
+    otherwise left alone: it is the one part of the document the user wrote, and
+    rewriting someone's sentence is not something a compiler gets to do.
+    """
+    typed = _close(_oneline(typed))
+    out: list[str] = []
+    for slot, join, fld in sorted(k for k in buckets if k[2] == field):
+        if slot >= 0 and typed:
+            out.append(typed)
+            typed = ""
+        parts = buckets[(slot, join, fld)]
+        out.append(_shot_sentence(parts) if join == "list" else " ".join(parts))
+    if typed:
+        out.append(typed)
+    return _shot_join(out)
+
+
+def _first_sentence(text: str) -> str:
+    """Up to the first sentence end, for the one field that wants a précis."""
+    for i, ch in enumerate(text):
+        if ch in ".!?" and (i + 1 >= len(text) or text[i + 1] == " "):
+            return text[:i + 1]
+    return text
+
+
+def _shot_audio(buckets: dict[tuple[int, str, str], list[str]],
+                field: str) -> str:
+    """The soundscape or the score, as one sentence over its pills."""
+    parts = [p for k in sorted(k for k in buckets if k[2] == field)
+             for p in buckets[k]]
+    if not parts:
+        return ""
+    lead = "The soundtrack is " if field == "score" else "The scene carries "
+    return lead + ", ".join(parts) + "."
+
+
+def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
+                       task: str, seconds: float,
+                       roles: list[str] | None = None) -> str:
+    """
+    The document H3 actually reads, assembled from a sentence and some pills.
+
+    Returns `typed` untouched when there is nothing to compile — no pills, no
+    reference roles. That is not a shortcut, it is the contract: this feature
+    must not change what a prompt written before it meant, and a bare sentence
+    wrapped in field labels is a different input to the encoder than the bare
+    sentence.
+    """
+    roles = [r for r in (roles or [])]
+    if not pills and not any(roles):
+        return typed
+    buckets = _shot_phrases(pills, side="video")
+
+    lines: list[str] = []
+    if task == "ref2va":
+        # The six-field reference form. `summary` and `retention_analysis` are
+        # derived rather than invented: the summary is the description's own
+        # first sentence, and retention is read straight off the chip roles,
+        # which is the only place in this app that knows what each picture was
+        # attached *for*.
+        subjects, retain = [], []
+        for i, role in enumerate(roles):
+            spec = SHOT_REF_ROLES.get(role)
+            if not spec:
+                continue
+            n = len(subjects) + 1
+            subjects.append(f"<Subject {n}> is the {spec['noun']} in "
+                            f"<Picture {i + 1}>.")
+            retain.append(f"<Subject {n}> must retain its {spec['retain']}.")
+        if not subjects:
+            # Roles are optional and references are not. With none set, the
+            # honest thing to say is the one thing attaching a picture always
+            # means, rather than leaving a labelled field empty.
+            n = len(roles)
+            picture = ", ".join(f"<Picture {i + 1}>" for i in range(n))
+            subjects = [f"The reference pictures are {picture}."] if n else []
+            retain = [f"Retain the appearance of {picture}."] if n else []
+        body = _shot_body(typed, buckets)
+        # The typed line is the summary — it is the one sentence in the document
+        # that says what happens. Taking the description's first sentence
+        # instead, which is what this did first, summarised a shot as "A
+        # close-up, shot from a low angle": true, and about the lens rather than
+        # the scene. The first sentence is the fallback for a prompt built
+        # entirely out of pills.
+        lines += [
+            f"subject_definitions: {' '.join(subjects)}",
+            f"summary: {_first_sentence(_close(typed)) or _first_sentence(body)}",
+            f"retention_analysis: {' '.join(retain)}",
+            f"detailed_description: {body}",
+        ]
+    else:
+        align = H3_ALIGN[task].format(s=f"{float(seconds):.2f}")
+        if align:
+            lines.append(align)
+        lines.append(f"integrated_multimodal_description: "
+                     f"{_shot_body(typed, buckets)}")
+
+    lines.append(f"overall_soundscape: "
+                 f"{_shot_audio(buckets, 'sound') or 'N/A'}")
+    # The default, and the line worth the whole feature: with no score pill the
+    # document says there is no score, which is the one thing free prose could
+    # never say and the reason every clip came back scored.
+    lines.append(f"non_diegetic_music: "
+                 f"{_shot_audio(buckets, 'score') or 'N/A'}")
+    return "\n".join(lines)
+
+
+def _compile_image_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
+    """
+    The same pills as prose, because Krea 2 has no document to fill in.
+
+    Camera, action and the two audio groups never reach here at all — they are
+    filtered by `image` in the vocabulary rather than dropped, so a pill the
+    image side does not read is dim on the palette rather than silently ignored.
+    """
+    if not pills:
+        return typed
+    return _shot_body(typed, _shot_phrases(pills, side="image"))
+
+
+def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
+    """
+    What to put in the sidecar beside `prompt`, which is only ever what ran.
+
+    Only when the compiler did something, which is exactly when the typed text
+    and the compiled prompt differ. A sidecar that gains `prompt_typed` equal to
+    `prompt` and `shot: []` on every plain run is two fields of noise on the
+    file that has to still make sense in a year.
+    """
+    typed = str(params.get("prompt_typed") or "")
+    if not typed or typed == params.get("prompt"):
+        return {}
+    out: dict[str, Any] = {"prompt_typed": typed, "shot": params.get("shot") or []}
+    roles = params.get("ref_roles") or []
+    if any(roles):
+        # The whole positional list, blanks included: a role's index is the
+        # <Picture n> it belongs to, so compacting it would renumber the
+        # subjects on the way back in.
+        out["ref_roles"] = list(roles)
+    return out
+
+
+def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
+    """
+    The same pills as prose again, for the family that reads no document.
+
+    Wan is the middle case and it is worth naming rather than folding into one
+    of the other two: it takes the camera and action pills the image side has no
+    use for, and it is silent, so the sound and score pills are dropped here the
+    same way a negative prompt is dropped for H3 — a sidecar that records an
+    input the model never read is a sidecar that lies about how the clip was
+    made. Dropped by `needs`, not by field: dialogue is the case that breaks the
+    simpler rule, landing in the visual description and still being audio.
+    """
+    if not pills:
+        return typed
+    return _shot_body(typed, _shot_phrases(pills, side="video", audio=False))
+
+
 def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
     """
     Validate the video LoRA stack, and resolve each path to the name ComfyUI
@@ -4569,7 +5299,8 @@ class VideoGenerator:
         shutil.copyfile(COMFY / "output" / out_names[0], out_dir / name)
         _write_output_meta(
             out_dir, kind="video", job_id=job_id, model=model,
-            prompt=params["prompt"], created=time.time(), **info, **plan["meta"],
+            prompt=params["prompt"], created=time.time(),
+            **_shot_meta(params), **info, **plan["meta"],
         )
         volume.commit()
 
@@ -4840,6 +5571,14 @@ def web():
             # the deployment. The composer builds itself from this.
             "video_models": _video_model_status(),
             "wan_experts": list(WAN_EXPERTS),
+            # The shot palette builds itself from these, for the same reason
+            # the composer builds itself from `video_models`: a copy of the
+            # vocabulary in UI_HTML would be a second source of truth, and the
+            # first pill added on one side and not the other would compile to
+            # "No such shot pill" against the page that offered it.
+            "shot_vocab": SHOT_VOCAB,
+            "shot_langs": H3_LANGUAGES,
+            "shot_roles": [dict(spec, key=k) for k, spec in SHOT_REF_ROLES.items()],
         }
 
     @api.post("/api/token")
@@ -5418,6 +6157,48 @@ def web():
         )
         return {"ok": True, "job_id": job_id}
 
+    @api.post("/api/compile")
+    def compile_prompt(payload: dict) -> dict[str, Any]:
+        """
+        What the encoder would be given, without renting anything to find out.
+
+        A take is two to three minutes, so before this every question about the
+        format — where does the camera direction go, does the score line appear,
+        did the dialogue survive its commas — was answered at that price. It is
+        the same compiler the run uses, called from the same web container: a
+        preview with its own implementation is a preview that can disagree with
+        what runs, which is worse than no preview at all.
+
+        No volume reload and no base64. This is re-fetched on every pill and
+        every keystroke, and what the compiler needs from a reference is only
+        that there is one — the pictures themselves would make a route polled
+        four times a second carry megabytes.
+        """
+        typed = str(payload.get("prompt") or "").strip()
+        try:
+            shot = _validate_shot(payload.get("shot"))
+            n_refs = max(0, min(MAX_H3_REFS, int(payload.get("references") or 0)))
+            n_vids = max(0, min(MAX_H3_REF_VIDEOS, int(payload.get("ref_videos") or 0)))
+            roles = _validate_ref_roles(payload.get("ref_roles"), n_refs)
+        except (TypeError, ValueError) as exc:
+            return {"error": str(exc)}
+
+        if str(payload.get("kind") or "video") == "image":
+            return {"prompt": _compile_image_prompt(typed, shot)}
+        if str(payload.get("model") or "h3") != "h3":
+            return {"prompt": _compile_wan_prompt(typed, shot)}
+
+        d = VIDEO_MODELS["h3"]["defaults"]
+        try:
+            seconds = float(payload.get("seconds") or d["seconds"])
+        except (TypeError, ValueError):
+            seconds = float(d["seconds"])
+        return {"prompt": _compile_h3_prompt(
+            typed=typed, pills=shot, seconds=seconds, roles=roles,
+            task=_h3_task(payload.get("first_frame"), payload.get("last_frame"),
+                          n_refs, n_vids),
+        )}
+
     @api.post("/api/generate")
     def generate(payload: dict) -> dict[str, Any]:
         prompt = str(payload.get("prompt") or "").strip()
@@ -5447,6 +6228,7 @@ def web():
         try:
             stack = _validate_loras(stack)
             regions = _validate_regions(regions)
+            shot = _validate_shot(payload.get("shot"))
         except ValueError as exc:
             return {"error": str(exc)}
 
@@ -5462,7 +6244,13 @@ def web():
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(ImageGenerator, payload.get("gpu"), IMAGE_GPUS, GPU)
         runner().generate.spawn(job_id=job_id, params={
-            "prompt": prompt,
+            # Prose, not a document: Krea 2 has no fields to fill in, so the
+            # same pills append their clauses to the sentence in the same order.
+            # The rail is shared with the video side and the vocabulary decides
+            # what crosses — camera, action, foley and score never reach here.
+            "prompt": _compile_image_prompt(prompt, shot),
+            "prompt_typed": prompt,
+            "shot": shot,
             "negative_prompt": str(payload.get("negative_prompt") or ""),
             "model": str(payload.get("model") or "turbo"),
             "loras": stack,
@@ -5529,6 +6317,16 @@ def web():
             return {"error": f"{MAX_H3_REF_TOTAL} references in total is the "
                              f"model's limit ({len(refs)} images + {len(vids)} videos)."}
 
+        # The pill rail, checked before anything is rented. A pill the backend
+        # does not know is a stale tab, and the answer to it is a form error
+        # naming the key — not a clause quietly missing from the document, which
+        # is indistinguishable from the model having ignored the word.
+        try:
+            shot = _validate_shot(payload.get("shot"))
+            roles = _validate_ref_roles(payload.get("ref_roles"), len(refs))
+        except ValueError as exc:
+            return {"error": str(exc)}
+
         _reload_volume()
         try:
             stack = _validate_video_loras(payload.get("loras")) if supports["loras"] else []
@@ -5571,11 +6369,36 @@ def web():
             return {"error": f"ref_size must be one of: {', '.join(H3_REF_SIZES)}"}
 
         d = spec["defaults"]
+        seconds = num("seconds", float(d["seconds"]), float)
+
+        # Compiled here rather than in the client, so there is one
+        # implementation of the format, an unknown pill is a form error, and the
+        # sidecar records exactly what the encoder was given.
+        #
+        # The task read here is finer than the one above. That one is right for
+        # which checkpoint loads — first-only, last-only and both are the same
+        # weights — and too coarse for the alignment instruction, where they are
+        # three different sentences about where a picture sits in time.
+        if model == "h3":
+            compiled = _compile_h3_prompt(
+                typed=prompt, pills=shot, seconds=seconds, roles=roles,
+                task=_h3_task(first, last, refs, vids),
+            )
+        else:
+            compiled = _compile_wan_prompt(prompt, shot)
+
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
         runner().generate.spawn(job_id=job_id, params={
             "model": model,
-            "prompt": prompt,
+            # Both travel. `prompt` is what runs and is the only one the graph
+            # sees; the other two are what you chose, and they exist so a
+            # gallery card can show a sentence instead of a six-field document
+            # and so Reuse puts the pills back rather than the output of them.
+            "prompt": compiled,
+            "prompt_typed": prompt,
+            "shot": shot,
+            "ref_roles": roles,
             # Dropped rather than passed through for a model that cannot read
             # it: a negative prompt that reaches a guidance-distilled checkpoint
             # is not applied, and a sidecar that records one is a sidecar that
@@ -5584,7 +6407,7 @@ def web():
                                 if supports["negative"] else ""),
             "aspect": aspect,
             "tier": tier,
-            "seconds": num("seconds", float(d["seconds"]), float),
+            "seconds": seconds,
             "steps": max(1, min(60, num("steps", d["steps"], int))),
             "cfg": num("cfg", d.get("cfg", 1.0), float),
             "shift": num("shift", d.get("shift", WAN_DEFAULT_SHIFT), float),
@@ -6052,6 +6875,293 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .menu.checks button{position:relative}
 .menu hr{border:0;border-top:1px solid rgba(255,255,255,.1);margin:5px 7px}
 
+/* The shot palette ------------------------------------------------------
+   A popover of tiles, sharing openMenu's element lifecycle. Grouped, because
+   the groups are the question — you are choosing a shot size, then a move —
+   and a flat grid of eighty tiles is a vocabulary list rather than a palette. */
+.pal{position:fixed;z-index:80;width:min(576px,94vw);max-height:min(62vh,520px);
+  overflow:auto;padding:13px;border-radius:16px;border:1px solid rgba(255,255,255,.14);
+  background:#111;box-shadow:0 18px 48px rgba(0,0,0,.6)}
+/* Longhands, not the `font:` shorthand. `font:600 10.5px/1 inherit` is
+   invalid — `inherit` is a CSS-wide keyword and cannot stand in for the family
+   the shorthand requires — so the whole declaration is dropped and the element
+   silently keeps the browser default. It is spelled that way elsewhere in this
+   stylesheet and gets away with it because 13px is what those elements wanted
+   anyway; at 9.5px it is the difference between a label and a clipped label. */
+.pal h4{display:flex;align-items:baseline;gap:8px;margin:0 0 8px 3px;
+  font-size:10.5px;font-weight:600;line-height:1;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+/* Why a whole group is out of play. The pills themselves dim, which says that
+   they are unavailable; only the heading can say what would make them
+   available, and that is a sentence about the model rather than about them. */
+.pal h4 i{font-size:10px;font-weight:400;font-style:normal;line-height:1;
+  letter-spacing:.02em;text-transform:none;color:var(--dim)}
+.pal section+section{margin-top:15px;padding-top:13px;border-top:1px solid rgba(255,255,255,.08)}
+.pal .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:5px}
+.pal .tl{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 3px 7px;
+  border:1px solid transparent;border-radius:11px;background:none;color:#ddd;cursor:pointer;
+  font-size:11.5px;line-height:1.25;text-align:center}
+.pal .tl:hover{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.13)}
+.pal .tl.on{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff}
+.pal .tl.off{opacity:.26;cursor:default}
+
+/* One skeleton, eighty behaviours -----------------------------------------
+   Every tile is the same nine shapes — a frame, a horizon, its posts, two
+   subjects, an object, a light wedge, bars, grain — and what makes a push-in
+   look like a push-in is a class on the <svg> plus a keyframe rule. Eighty
+   bespoke drawings is the version that drifts: the frame ends up 1px in thirty
+   of them and 1.5 in the rest, and nobody ever sees all eighty side by side to
+   notice. It is also the version nobody finishes.
+
+   The posts are what make lateral motion visible at all. A horizontal line
+   translated horizontally is a horizontal line, so panning without them is a
+   perfectly correct animation of nothing happening; they are spaced exactly
+   20 apart so a 20px stream loops seamlessly.
+
+   Only an open palette animates. It is removed from the DOM on close, the same
+   reason openMenu is one element that moves, and the copies of these glyphs
+   that live on the pill rail are frozen — see `.spill .gl` below. So the page
+   at rest is running nothing. */
+.gl{width:44px;height:30px;display:block;color:#eee;overflow:hidden}
+.gl *{transform-box:view-box;transform-origin:50% 50%}
+.gl .fr{fill:none;stroke:currentColor;stroke-width:1;opacity:.42}
+.gl .hz{stroke:currentColor;stroke-width:1;opacity:.28}
+.gl .tk path{stroke:currentColor;stroke-width:1;opacity:.24}
+.gl .s1,.gl .s2,.gl .ob,.gl .lt,.gl .gr circle,.gl .bu{fill:currentColor}
+.gl .s2,.gl .ob,.gl .pv,.gl .bu,.gl .tx{display:none}
+.gl .pv,.gl .tx{stroke:currentColor;stroke-width:1.4;stroke-linecap:round;fill:none}
+.gl .bu{opacity:.75}
+.gl .lt,.gl .gr{opacity:0}
+.gl .bars rect{fill:#000;opacity:0}
+
+/* Framing. The entire vocabulary of shot size is how much of the frame a
+   person takes up, so that is literally the only thing that varies. */
+.gl-fr-xw .s1{transform:scale(.3) translateY(14px)}
+.gl-fr-w .s1{transform:scale(.58) translateY(7px)}
+.gl-fr-mcu .s1{transform:scale(1.5) translateY(2px)}
+.gl-fr-cu .s1{transform:scale(2.4) translateY(3px)}
+.gl-fr-xcu .s1{transform:scale(4) translateY(1px)}
+.gl-fr-ots .s2{display:block;transform:scale(2.9) translate(-5px,3px);opacity:.4}
+.gl-fr-ots .s1{transform:scale(1.35) translateX(4px)}
+.gl-fr-pov .s1{display:none}
+.gl-fr-pov .pv{display:block}
+
+/* Angle, told by where the horizon sits. Looking up puts it low in the frame
+   and looking down puts it high, which is the fact the words name. */
+.gl-an-low .hz,.gl-an-low .tk{transform:translateY(5px)}
+.gl-an-low .s1{transform:scale(1.2) translateY(-2px)}
+.gl-an-high .hz,.gl-an-high .tk{transform:translateY(-9px)}
+.gl-an-high .s1{transform:scale(.85) translateY(3px)}
+.gl-an-bird .hz,.gl-an-bird .tk{opacity:0}
+.gl-an-bird .s1{transform:scaleY(.66)}
+.gl-an-bird .s2{display:block;opacity:.18;transform:scale(2.8)}
+.gl-an-worm .hz,.gl-an-worm .tk{transform:translateY(8px)}
+.gl-an-worm .s1{transform:scale(1,1.5) translateY(-3px)}
+.gl-an-dutch .wo{transform:rotate(-13deg)}
+
+/* Light, as one wedge moved around the frame. */
+.gl-li-window .lt{opacity:.2}
+.gl-li-golden .lt{opacity:.26;transform:translate(19px,5px) rotate(30deg) scaleY(.85)}
+.gl-li-overcast .lt{opacity:.1;transform:scaleX(5)}
+.gl-li-hardsun .lt{opacity:.44;transform:scaleX(.5) translateX(-11px)}
+.gl-li-neon .lt{opacity:.32;transform:scaleX(.36) translateX(-26px)}
+.gl-li-neon .hz{opacity:.85;stroke-dasharray:4 3}
+.gl-li-candle .lt{opacity:.3;transform:rotate(180deg) scale(.5) translateY(12px)}
+.gl-li-practical .s2{display:block;transform:scale(.3) translate(40px,-16px)}
+.gl-li-practical .lt{opacity:.15;transform:translateX(19px) scale(.75)}
+.gl-li-silhouette .lt{opacity:.5;transform:scaleX(6)}
+.gl-li-silhouette .s1{fill:#0d0d0d}
+.gl-li-top .lt{opacity:.24;transform:translateY(-9px) scale(1.8,.5)}
+
+/* Tone. The one group where the tile is a treatment rather than a geometry. */
+.gl-to-doc .s2{display:block;transform:scale(.24) translate(60px,-42px)}
+.gl-to-doc .hz{opacity:.46}
+.gl-to-noir .bars{transform:rotate(-26deg) scale(1.6,.42)}
+.gl-to-noir .bars rect{opacity:.72}
+.gl-to-noir .lt{opacity:.3;transform:scaleX(.45) translateX(-13px)}
+.gl-to-s16 .gr{opacity:.6}
+.gl-to-s16 .hz,.gl-to-s16 .tk path{opacity:.16}
+.gl-to-anamorphic .bars rect{opacity:.95}
+.gl-to-anamorphic .lt{opacity:.3;transform:scale(3,.12) translateY(-52px)}
+.gl-to-highkey .lt{opacity:.4;transform:scaleX(6)}
+.gl-to-highkey .s1{opacity:.45}
+.gl-to-desat .s1{opacity:.36}
+.gl-to-desat .hz,.gl-to-desat .tk path{opacity:.13}
+.gl-to-contrast .s1{fill:#0d0d0d}
+.gl-to-contrast .lt{opacity:.62;transform:scaleX(1.15) translateX(-6px)}
+
+/* Speech and on-screen text. */
+.gl-sa-dialogue .bu{display:block}
+.gl-sa-dialogue .s1{transform:scale(1.15) translate(-7px,2px)}
+.gl-sa-screen .tx{display:block}
+.gl-sa-screen .s1{opacity:.3;transform:scale(1.3) translateY(-3px)}
+
+/* Camera. Three of these pairs are the distinctions a word alone never makes,
+   and the tile is the only place the app can make them: a dolly changes the
+   relationship between subject and background and a zoom does not, so the
+   push-in tile scales the subject faster than the horizon and the zoom tile
+   scales both together. Truck against pan is the same argument sideways. */
+.gl-ca-push .s1{animation:gScale 2.4s ease-in-out infinite alternate}
+.gl-ca-push .tk{animation:gCreep 2.4s ease-in-out infinite alternate}
+.gl-ca-pull .s1{animation:gScale 2.4s ease-in-out infinite alternate-reverse}
+.gl-ca-pull .tk{animation:gCreep 2.4s ease-in-out infinite alternate-reverse}
+.gl-ca-zoom .wo{animation:gScale 2.4s ease-in-out infinite alternate}
+.gl-ca-panl,.gl-ca-truckl,.gl-ca-orbit{--d:-1}
+.gl-ca-panr,.gl-ca-truckr,.gl-ca-arc{--d:1}
+.gl-ca-panl .wo,.gl-ca-panr .wo{animation:gPan 2.6s ease-in-out infinite alternate}
+.gl-ca-truckl .tk,.gl-ca-truckr .tk{animation:gPanHalf 2.6s ease-in-out infinite alternate}
+.gl-ca-truckl .s1,.gl-ca-truckr .s1{animation:gPan 2.6s ease-in-out infinite alternate}
+.gl-ca-tiltu,.gl-ca-pedu,.gl-ca-craneu{--v:1}
+.gl-ca-tiltd,.gl-ca-pedd,.gl-ca-craned{--v:-1}
+.gl-ca-tiltu .wo,.gl-ca-tiltd .wo{animation:gTilt 2.6s ease-in-out infinite alternate}
+.gl-ca-pedu .s1,.gl-ca-pedd .s1{animation:gTilt 2.6s ease-in-out infinite alternate}
+.gl-ca-pedu .tk,.gl-ca-pedd .tk{animation:gTiltHalf 2.6s ease-in-out infinite alternate}
+.gl-ca-craneu .wo,.gl-ca-craned .wo{animation:gCrane 3s ease-in-out infinite alternate}
+.gl-ca-orbit .tk,.gl-ca-arc .tk{animation:gPan 3s ease-in-out infinite alternate}
+.gl-ca-orbit .s1,.gl-ca-arc .s1{animation:gSquash 3s ease-in-out infinite}
+.gl-ca-arc .wo{animation:gPanHalf 3s ease-in-out infinite alternate}
+.gl-ca-trackside .tk,.gl-ca-trackrear .tk{animation:gStream 1.7s linear infinite}
+.gl-ca-trackrear .s1{animation:gBob 1.7s ease-in-out infinite}
+.gl-ca-handheld .wo{animation:gJit .9s steps(1,end) infinite}
+.gl-ca-whip .wo{animation:gWhip 2.4s ease-in-out infinite}
+.gl-ca-rack .s2{display:block;transform:scale(2.3) translate(-6px,4px);
+  animation:gFocusA 3s ease-in-out infinite alternate}
+.gl-ca-rack .s1{animation:gFocusB 3s ease-in-out infinite alternate}
+/* Locked off is the one tile that does nothing, and it is not an omission:
+   beside twenty moving tiles, stillness is the clearest available statement of
+   what "the camera does not move" means. */
+
+/* Action. Two subjects, which is what separates this group from every other
+   one on the palette — the whole reason it exists is what happens between
+   them. `[class*=]` rather than a second class from the builder: the glyph
+   name is the data, and a shadow flag alongside it is a thing to keep in step. */
+.gl[class*="gl-ac-"] .s2{display:block;transform:translateX(6px)}
+.gl[class*="gl-ac-"] .s1{transform:translateX(-6px)}
+.gl-ac-fight .s1{animation:gJabA .62s ease-in-out infinite}
+.gl-ac-fight .s2{animation:gJabB .62s ease-in-out infinite}
+.gl-ac-kiss .s1{animation:gCloseA 2.6s ease-in-out infinite}
+.gl-ac-kiss .s2{animation:gCloseB 2.6s ease-in-out infinite}
+.gl-ac-embrace .s1{animation:gCloseA 3.2s ease-in-out infinite;opacity:.8}
+.gl-ac-embrace .s2{animation:gCloseB 3.2s ease-in-out infinite;opacity:.8}
+.gl-ac-talk .s1{animation:gSayA 2.2s ease-in-out infinite}
+.gl-ac-talk .s2{animation:gSayB 2.2s ease-in-out infinite}
+.gl-ac-laugh .s1{animation:gLaughA 1.1s ease-in-out infinite}
+.gl-ac-laugh .s2{animation:gLaughB 1.1s ease-in-out infinite}
+.gl-ac-walktalk .tk{animation:gStream 2.4s linear infinite}
+.gl-ac-walktalk .s1{animation:gStepA 1s ease-in-out infinite}
+.gl-ac-walktalk .s2{animation:gStepB 1s ease-in-out infinite}
+.gl-ac-chase .tk{animation:gStream 1.1s linear infinite}
+.gl-ac-chase .s1{animation:gStepA .7s ease-in-out infinite;opacity:.5}
+.gl-ac-chase .s2{animation:gStepB .7s ease-in-out infinite}
+.gl-ac-handoff .ob{display:block;animation:gPass 2.8s ease-in-out infinite}
+/* `.gl.` on these two, and only these two. The group's base rule is
+   `.gl[class*="gl-ac-"] .s2` — an attribute selector, so (0,3,0) — and a plain
+   `.gl-ac-reveal .s2` is (0,2,0) and loses. Both of these are the actions with
+   one performer rather than two, so losing meant the two tiles that are not
+   about a pair were the only evidence that the base rule outranked them. */
+.gl.gl-ac-reveal .s2,.gl.gl-ac-turn .s2{display:none}
+.gl.gl-ac-reveal .s1{transform:none;animation:gReveal 3s ease-in-out infinite}
+.gl-ac-reveal .lt{opacity:.22;animation:gWipe 3s ease-in-out infinite}
+.gl.gl-ac-turn .s1{transform:none;animation:gTurn 2.6s ease-in-out infinite}
+
+@keyframes gScale{to{transform:scale(1.5)}}
+@keyframes gCreep{to{transform:scale(1.08)}}
+@keyframes gPan{to{transform:translateX(calc(var(--d,1) * 11px))}}
+@keyframes gPanHalf{to{transform:translateX(calc(var(--d,1) * 4.5px))}}
+@keyframes gTilt{to{transform:translateY(calc(var(--v,1) * 7px))}}
+@keyframes gTiltHalf{to{transform:translateY(calc(var(--v,1) * 2.5px))}}
+@keyframes gCrane{to{transform:translateY(calc(var(--v,1) * 9px)) scale(.84)}}
+@keyframes gSquash{0%,100%{transform:scaleX(1)}50%{transform:scaleX(.55)}}
+/* Exactly one post spacing, so the loop has no seam to see. */
+@keyframes gStream{from{transform:translateX(10px)}to{transform:translateX(-10px)}}
+@keyframes gBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.1px)}}
+@keyframes gJit{0%{transform:translate(0,0)}20%{transform:translate(.9px,-.6px)}
+  40%{transform:translate(-.8px,.5px)}60%{transform:translate(.5px,.9px)}
+  80%{transform:translate(-.6px,-.5px)}}
+@keyframes gWhip{0%,26%{transform:translateX(13px);filter:none}
+  46%,54%{transform:translateX(0);filter:blur(1.7px)}
+  74%,100%{transform:translateX(-13px);filter:none}}
+@keyframes gFocusA{from{filter:blur(0);opacity:.85}to{filter:blur(1.4px);opacity:.4}}
+@keyframes gFocusB{from{filter:blur(1.4px);opacity:.4}to{filter:blur(0);opacity:.95}}
+@keyframes gJabA{0%,100%{transform:translateX(-6px)}50%{transform:translateX(-2.2px)}}
+@keyframes gJabB{0%,100%{transform:translateX(6px)}50%{transform:translateX(2.2px)}}
+@keyframes gCloseA{0%{transform:translateX(-8px)}45%,100%{transform:translateX(-2.4px)}}
+@keyframes gCloseB{0%{transform:translateX(8px)}45%,100%{transform:translateX(2.4px)}}
+@keyframes gSayA{0%,44%,100%{transform:translateX(-6px) scale(1)}
+  20%{transform:translateX(-6px) scale(1.14)}}
+@keyframes gSayB{0%,60%,100%{transform:translateX(6px) scale(1)}
+  78%{transform:translateX(6px) scale(1.14)}}
+@keyframes gLaughA{0%,100%{transform:translate(-6px,0)}50%{transform:translate(-6px,-1.6px)}}
+@keyframes gLaughB{0%,100%{transform:translate(6px,0)}50%{transform:translate(6px,-1.4px)}}
+@keyframes gStepA{0%,100%{transform:translate(-6px,0)}50%{transform:translate(-6px,-1.2px)}}
+@keyframes gStepB{0%,100%{transform:translate(6px,-1.2px)}50%{transform:translate(6px,0)}}
+@keyframes gPass{0%,10%{transform:translateX(-5px)}55%,100%{transform:translateX(5px)}}
+@keyframes gReveal{0%,15%{opacity:0}55%,100%{opacity:.9}}
+@keyframes gWipe{0%,10%{transform:scaleX(7) translateX(1px)}60%,100%{transform:scaleX(7) translateX(-9px)}}
+@keyframes gTurn{0%,100%{transform:scaleX(1)}45%,55%{transform:scaleX(.28)}}
+/* Frozen mid-move rather than switched off: a still diagram is still a
+   diagram, and a tile that reverts to the neutral skeleton would make half the
+   camera group identical to each other. */
+@media (prefers-reduced-motion:reduce){
+  .gl *{animation-play-state:paused !important;animation-delay:-1.2s !important}
+}
+
+/* The pill rail ----------------------------------------------------------
+   One rail, shared by Image and Video, because the prompt is shared and a pill
+   is part of the prompt. It costs nothing while empty — not a collapsed row, no
+   element at all — which is the condition for putting anything above the
+   options strip at all. */
+#shot-rail{margin:8px 2px 0;gap:6px}
+#shot-rail:empty{display:none;margin:0}
+.spill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:3px 5px 3px 7px;
+  color:#ddd;font-size:12.5px;max-width:100%}
+.spill>.gl{width:26px;height:18px;flex:none;opacity:.85}
+/* Frozen in the rail. The tile is the animated version because motion is what
+   teaches a move you have not picked yet; a pill is the record of a decision
+   already made, and twenty of them moving under the prompt is motion competing
+   with the canvas for information you already have — the word is right there.
+   Paused mid-move rather than switched off, and for the same reason
+   reduced-motion pauses instead of cancelling: a camera glyph reverted to the
+   neutral skeleton is the same drawing for all twenty-one of them. */
+.spill .gl *{animation-play-state:paused;animation-delay:-1.2s}
+.spill b{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* An empty valued pill is a decision started and not finished, and it says so
+   by staying visibly empty rather than by erroring. */
+.spill.val b{color:var(--dim)}
+.spill.val b.set{color:#ddd;font-style:italic}
+.spill.val:not(.open){cursor:text}
+.spill.open{background:rgba(255,255,255,.11);border-color:rgba(255,255,255,.2)}
+/* width:auto and flex:none on both, because the base rule three hundred lines
+   up is `input,textarea,select{width:100%}` — inside a flex pill that made the
+   language select 245px of a 480px pill and squeezed the line of dialogue,
+   which is the only thing in there anyone is reading, down to 156. */
+.spill input{border:0;background:none;color:#fff;font-size:12.5px;padding:2px 0;
+  flex:1 1 250px;width:auto;min-width:110px;max-width:min(38vw,340px)}
+.spill select{border:0;background:rgba(255,255,255,.09);color:#ccc;font-size:11px;
+  border-radius:6px;padding:0 3px;height:19px;flex:none;width:auto}
+.spill .x{border:0;background:none;color:var(--mut);cursor:pointer;font-size:13px;
+  line-height:1;width:19px;height:19px;border-radius:50%;flex:none}
+.spill .x:hover{background:rgba(255,255,255,.15);color:#fff}
+/* Dim, never gone. The rail is shared and the models are not: a pill this
+   model does not read has to stay where you put it, because switching back is
+   one click and a rail that forgets is worse than a rail that dims. */
+.spill.off{opacity:.32}
+
+/* What the model will actually read. Collapsed to one 11px line, which is the
+   whole argument for it existing: the alternative to showing the compiled
+   document is a three-minute render to find out. */
+#shot-peek{margin:7px 2px 0}
+#shot-peek>button{border:0;background:none;color:var(--dim);font-size:11.5px;
+  cursor:pointer;padding:2px 0;display:inline-flex;align-items:center;gap:5px}
+#shot-peek>button:hover{color:var(--fg)}
+#shot-peek>button::before{content:"";width:0;height:0;border:4px solid transparent;
+  border-left-color:currentColor;border-right:0;transition:transform .12s}
+#shot-peek.open>button::before{transform:rotate(90deg) translateX(1px)}
+#shot-peek pre{margin:7px 0 0;padding:10px 12px;border-radius:11px;background:rgba(255,255,255,.04);
+  border:1px solid var(--line);font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:#c8c8c8;white-space:pre-wrap;word-break:break-word;max-height:184px;overflow:auto}
+
 /* Sheets: settings, metadata, lightbox ---------------------------------- */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:60;display:grid;place-items:center;padding:32px}
 .sheet{width:100%;max-width:720px;max-height:100%;overflow:auto;background:#0b0b0b;
@@ -6235,10 +7345,21 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .ref{position:relative;width:64px;height:64px;border-radius:11px;overflow:hidden;border:1px solid var(--line);
   background:rgba(255,255,255,.04)}
 .ref img,.ref video{width:100%;height:100%;object-fit:cover;display:block}
-.ref b{position:absolute;left:4px;bottom:3px;font-size:10px;font-weight:600;color:#fff;
+.ref b{position:absolute;left:4px;top:3px;font-size:10px;font-weight:600;color:#fff;
   background:rgba(0,0,0,.7);padding:1px 5px;border-radius:4px}
-.ref button{position:absolute;top:3px;right:3px;width:19px;height:19px;border:0;border-radius:50%;
+.ref button.x{position:absolute;top:3px;right:3px;width:19px;height:19px;border:0;border-radius:50%;
   background:rgba(0,0,0,.66);color:#eee;font-size:11px;line-height:1;cursor:pointer}
+/* What this picture is *for*, across the foot of the chip it belongs to.
+   Always present, never empty, because this is the control that finally makes
+   "do not describe your reference image" something other than advice — there
+   is somewhere for that description to go now, and it is one click. A tile that
+   only appeared once a role was set would be a feature you had to already know
+   about to find, which is the state the keyframe pair was rescued from. */
+.ref .role{position:absolute;left:0;right:0;bottom:0;border:0;padding:2px 3px;
+  background:rgba(0,0,0,.72);color:#e8e8e8;font-size:9.5px;line-height:1.3;text-align:center;
+  cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ref .role:hover{background:rgba(0,0,0,.88)}
+.ref .role.none{color:var(--dim)}
 /* Regions --------------------------------------------------------------- */
 /* A region is a rectangle on the canvas, so it is drawn on the canvas. The
    four coordinates were the right parameter and the wrong primary: "0.5 0 0.5
@@ -6450,6 +7571,17 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
         </div>
       </div>
     </div>
+    <!-- What you picked off the shot palette. One rail for both kinds, because
+         the prompt is shared and a pill is part of the prompt; empty, it is not
+         a collapsed row but no element at all, which is the condition for
+         anything being allowed to sit above the options strip. -->
+    <div class="wrap" id="shot-rail"></div>
+    <!-- And what those pills turn into. H3 reads a six-field document, and
+         until this line existed the only way to find out what it was going to
+         be given was to spend three minutes rendering it. Collapsed it is
+         eleven pixels of grey text; the compiled document comes from the same
+         route that compiles the real run, so it cannot drift from it. -->
+    <div id="shot-peek" class="hide"><button type="button">what the model reads</button></div>
     <!-- Only ever says what is wrong. A line confirming the LoRAs you can
          already read in the prompt above it would be the page telling you
          what you can see; a name that resolves to nothing is the one thing
@@ -6528,6 +7660,12 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
              syntax you have never seen — and after that the prompt is the
              stack, so a fifth LoRA costs the canvas nothing. -->
         <button class="s" id="add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
+        <!-- One icon for the whole vocabulary. It is next to + LoRA because
+             both write into the prompt rather than beside it — the difference
+             is only that this one writes words the model was trained on and
+             you would otherwise have to guess. -->
+        <button class="opt ib" id="g-shot" data-ico="shot" data-lb="Shot"
+          title="Framing, angle, light and tone, as words this model reads."></button>
         <!-- Out of Advanced, which is collapsed by default and was therefore
              hiding the feature this backend was swapped for. It belongs beside
              + LoRA because both answer "who is in this picture"; the difference
@@ -6645,6 +7783,8 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
              token as a third field, and is read off the filename when the
              matched `high`/`low` pair names it. -->
         <button class="s hide" id="v-add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
+        <button class="opt ib" id="v-shot" data-ico="shot" data-lb="Shot"
+          title="Shot size, camera move, light, action and sound — the fields H3 reads."></button>
         <span class="actions">
           <span class="muted" id="v-model-line"></span>
           <button class="opt ib" id="v-toggle-adv" data-ico="sliders" title="Advanced"></button>
@@ -7028,6 +8168,11 @@ const ICON={
   // The feature, drawn: a frame with two boxes standing in it. Nothing more
   // abstract survived the test of being recognisable at 16px.
   regions:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5" opacity=".45"/><rect x="6" y="8.5" width="5" height="8" rx="1.4" fill="currentColor" stroke="none"/><rect x="13" y="8.5" width="5" height="8" rx="1.4" fill="currentColor" stroke="none" opacity=".55"/></svg>',
+  // A frame with a subject in it and a move around it, which is the whole of
+  // what is behind this button. Drawn as a viewfinder rather than a
+  // clapperboard: a clapperboard means "video", and this button is on the
+  // image side too.
+  shot:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5" opacity=".45"/><ellipse cx="10" cy="12.5" rx="2.1" ry="3" fill="currentColor" stroke="none"/><path d="M14.6 9.4a4.4 4.4 0 0 1 0 6.2"/><path d="M17.4 7.6a7.2 7.2 0 0 1 0 9.8"/></svg>',
   arrange:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="6" width="5" height="12" rx="1.4"/><rect x="9.5" y="6" width="5" height="12" rx="1.4"/><rect x="15.5" y="6" width="5" height="12" rx="1.4"/></svg>',
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15"/><path d="M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7"/><path d="M6.5 7l.8 11.3A1.7 1.7 0 0 0 9 20h6a1.7 1.7 0 0 0 1.7-1.7L17.5 7"/></svg>',
 };
@@ -7121,6 +8266,9 @@ function setKind(k){
   $('#gen-err').classList.toggle('hide',k!=='image');
   $('#vid-err').classList.toggle('hide',k!=='video');
   syncPromptHint();
+  // The rail survives the switch along with the prompt, so what changes is
+  // which of its pills the thing on the other side of the switch can read.
+  drawShotRail();
   syncCanvasView();
 }
 $$('#kinds button').forEach(b=>{
@@ -7368,23 +8516,32 @@ window.addEventListener('resize',closeMenu);
 // "the picker cannot scroll" rather than "the picker is closing".
 document.addEventListener('scroll',e=>{ if(!(menuEl&&menuEl.contains(e.target))) closeMenu() },true);
 
-function openMenu(btn,items){
+// Anchoring and teardown, shared by the menu and the shot palette. Factored
+// out rather than copied: the scroll-close guard above is a bug that was fixed
+// once, and a second floating element with its own copy of this is a second
+// place for it to come back.
+function floatBy(btn,el){
   closeMenu();
-  const m=document.createElement('div'); m.className='menu';
-  m.innerHTML=items.map((it,i)=>it.sep?'<hr>':
-    `<button data-i="${i}" class="${it.danger?'danger':''}${it.on?' on':''}">${esc(it.label)}</button>`).join('');
-  if(items.some(it=>it.on)) m.classList.add('checks');
-  document.body.appendChild(m);
-  const r=btn.getBoundingClientRect(), w=m.offsetWidth, h=m.offsetHeight;
-  m.style.left=Math.max(8,Math.min(r.right-w,innerWidth-w-8))+'px';
+  document.body.appendChild(el);
+  const r=btn.getBoundingClientRect(), w=el.offsetWidth, h=el.offsetHeight;
+  el.style.left=Math.max(8,Math.min(r.right-w,innerWidth-w-8))+'px';
   // Clamped, because a menu tall enough to need flipping above its button is
   // also tall enough for r.top-h to land off the top of the window, and the
   // rows that go past the edge are unreachable — the scrollbar is inside the
   // menu, so nothing scrolls them back.
   const top=(r.bottom+h+10>innerHeight ? r.top-h-6 : r.bottom+6);
-  m.style.top=Math.max(8,Math.min(top,innerHeight-h-8))+'px';
+  el.style.top=Math.max(8,Math.min(top,innerHeight-h-8))+'px';
+  menuEl=el;
+  return el;
+}
+
+function openMenu(btn,items){
+  const m=document.createElement('div'); m.className='menu';
+  m.innerHTML=items.map((it,i)=>it.sep?'<hr>':
+    `<button data-i="${i}" class="${it.danger?'danger':''}${it.on?' on':''}">${esc(it.label)}</button>`).join('');
+  if(items.some(it=>it.on)) m.classList.add('checks');
+  floatBy(btn,m);
   m.querySelectorAll('button').forEach(b=>b.onclick=()=>{ const it=items[+b.dataset.i]; closeMenu(); it.run() });
-  menuEl=m;
 }
 
 // ---------- sheets ----------
@@ -7410,6 +8567,250 @@ function lightbox(src,video){
   document.addEventListener('keydown',onKey);
   document.body.appendChild(el);
 }
+
+// ==================== THE SHOT PALETTE ====================
+// One icon opens a vocabulary. H3 reads a document with named fields and the
+// composer offered a textarea for it, so where camera direction goes, whether
+// tone belongs in the sentence, and what a comma does were all things you found
+// out by spending three minutes rendering. None of that is a grammar anyone
+// could infer — it is a schema, published in the model repo — so the page emits
+// it and the pills are how you say what goes in it.
+//
+// The vocabulary is served, never written into this file. A copy here would be
+// a second source of truth, and the first pill added on one side and not the
+// other would compile to "No such shot pill" against the page that offered it.
+let shotVocab=[], shotLangs=['English'], shotRoleDefs=[];
+let shot=[];        // [{key,value?,lang?}] — the rail, in the order you built it
+let shotOpen=null;  // which valued pill is expanded, if any
+let refRoles=[];    // one role per image reference, positional
+
+const shotGroup=k=>shotVocab.find(g=>g.key===k.split('.')[0]);
+const shotItem=k=>{ const g=shotGroup(k);
+  return g&&g.items.find(it=>it.key===k.split('.').slice(1).join('.')) };
+
+// Whether the thing in front of you reads this pill at all. Two different
+// reasons it might not, and they are worth different words: the image side has
+// no camera and no soundtrack, and Wan is silent.
+//
+// Per item as well as per group, because one item disagrees with its group and
+// it is the one that matters: on-screen text is a picture of words and every
+// model can draw it, while a spoken line is audio. Given a group and no item,
+// the answer is whether *any* of its items is live — which is what decides
+// whether the whole section is dim.
+function shotLive(g,it){
+  if(kind==='image') return !!g.image;
+  if(!it) return g.items.some(x=>shotLive(g,x));
+  const need=it.needs||g.needs;
+  return !need || !!((videoModel()||{supports:{}}).supports||{})[need];
+}
+function shotWhy(g){
+  if(kind==='image') return 'video only';
+  const m=videoModel();
+  return m?m.label+' is silent':'';
+}
+
+// The tile skeleton. Nine shapes, and the class on the <svg> is what turns them
+// into a push-in or a candle — see the stylesheet for why it is one drawing
+// rather than eighty. The posts are spaced exactly 20 so a 20px stream loops
+// with no seam, and they are what makes lateral movement visible at all: a
+// horizontal line translated horizontally is a correct animation of nothing.
+const GL_TICKS=[-34,-14,6,26,46,66];
+const GL_GRAIN=[[7,6],[16,11],[27,6],[35,14],[10,20],[21,25],[38,22],[30,17],[5,13]];
+function glyph(cls){
+  return `<svg class="gl gl-${cls}" viewBox="0 0 44 30" aria-hidden="true">`
+    +'<path class="lt" d="M4 -2H20L11 32H-8Z"/>'
+    +'<g class="wo"><line class="hz" x1="-40" y1="21" x2="84" y2="21"/>'
+    +'<g class="tk">'+GL_TICKS.map(x=>`<path d="M${x} 21v-4.5"/>`).join('')+'</g>'
+    +'<ellipse class="s2" cx="22" cy="16" rx="3.2" ry="4.8"/>'
+    +'<ellipse class="s1" cx="22" cy="16" rx="3.2" ry="4.8"/>'
+    +'<circle class="ob" cx="22" cy="17.5" r="1.7"/></g>'
+    +'<path class="pv" d="M3 30 13 21M41 30 31 21"/>'
+    +'<path class="bu" d="M26 5h13a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-7l-4 3v-3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/>'
+    +'<path class="tx" d="M12 22h20M17 26h10"/>'
+    +'<g class="gr">'+GL_GRAIN.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r=".75"/>`).join('')+'</g>'
+    +'<g class="bars"><rect x="-8" y="-1" width="60" height="4.6"/>'
+    +'<rect x="-8" y="26.4" width="60" height="4.6"/></g>'
+    +'<rect class="fr" x=".5" y=".5" width="43" height="29" rx="2.5"/></svg>';
+}
+
+function openPalette(btn){
+  const el=document.createElement('div'); el.className='pal';
+  // Live groups first, dead ones after. Dimming rather than hiding is the
+  // established call — a control that vanishes teaches only that the page lost
+  // it, and "this app moves the camera on video" is worth learning while you
+  // are on the image side. But on Krea 2 that is fifty-seven of eighty-seven
+  // tiles, and leaving them in vocabulary order meant scrolling through two
+  // dead groups to reach a live one. Display order only: the compiler still
+  // reads SHOT_VOCAB in its own order, which is what decides clause position.
+  el.innerHTML=shotVocab.slice()
+    .sort((a,b)=>(shotLive(a)?0:1)-(shotLive(b)?0:1))
+    .map(g=>{
+    const off=!shotLive(g);
+    return `<section class="${off?'off':''}"><h4>${esc(g.label)}`
+      +(off?`<i>${esc(shotWhy(g))}</i>`:'')+'</h4><div class="tiles">'
+      // The tooltip is the phrase the pill writes, so hovering a tile shows the
+      // exact wording it puts in the document. That is the one thing a glyph
+      // and a two-word label between them still cannot say, and it is what
+      // makes the palette teach the phrasing rather than replace it.
+      +g.items.map(it=>{
+        const k=g.key+'.'+it.key, dead=!shotLive(g,it);
+        return `<button class="tl${shot.some(p=>p.key===k)?' on':''}${dead?' off':''}"`
+          +` data-k="${esc(k)}" title="${esc(it.phrase||it.hint||'')}"${dead?' disabled':''}>`
+          +glyph(it.glyph)+`<span>${esc(it.label)}</span></button>`;
+      }).join('')+'</div></section>';
+  }).join('');
+  floatBy(btn,el);
+  el.querySelectorAll('.tl:not(.off)').forEach(b=>b.onclick=()=>{
+    const it=shotItem(b.dataset.k), added=!shot.some(p=>p.key===b.dataset.k);
+    toggleShot(b.dataset.k);
+    // A valued pill arrives with somewhere to type, and that is on the rail —
+    // so adding one closes the palette rather than leaving a caret behind a
+    // popover. Everything else leaves it open, because you are picking several
+    // and a palette that shuts on the first click is one you reopen five times.
+    if(added&&it.valued) return closeMenu();
+    el.querySelectorAll('.tl').forEach(t=>
+      t.classList.toggle('on',shot.some(p=>p.key===t.dataset.k)));
+  });
+}
+
+function toggleShot(key){
+  const g=shotGroup(key), it=shotItem(key);
+  if(!g||!it) return;
+  const at=shot.findIndex(p=>p.key===key);
+  if(at>=0){ shot.splice(at,1); if(shotOpen===key) shotOpen=null }
+  else{
+    // The same exclusions `_validate_shot` applies, for a different reason.
+    // There they make the rule true; here they make it legible — the guide
+    // allows one camera move per clip, and a palette that let you stack three
+    // would be teaching the opposite of what it compiles.
+    const same=p=>shotGroup(p.key)===g;
+    if(g.pick==='one'||it.solo) shot=shot.filter(p=>!same(p));
+    else shot=shot.filter(p=>!(same(p)&&(shotItem(p.key)||{}).solo));
+    const p={key};
+    if(it.valued){ p.value=''; if(it.valued==='dialogue') p.lang=shotLangs[0]||'English' }
+    shot.push(p);
+    if(it.valued) shotOpen=key;
+  }
+  drawShotRail();
+}
+
+function drawShotRail(){
+  const rail=$('#shot-rail');
+  rail.innerHTML=shot.map(p=>{
+    const g=shotGroup(p.key), it=shotItem(p.key);
+    if(!g||!it) return '';
+    const off=shotLive(g,it)?'':' off';
+    if(it.valued&&shotOpen===p.key){
+      // The language is a select, not a field, because the guide names the
+      // eleven and forbids inventing one — and because a language tag is a
+      // thing you cannot know to write, which is the whole reason dialogue is
+      // a pill instead of something you type into the prompt.
+      const langs=it.valued==='dialogue'
+        ? '<select class="lang">'+shotLangs.map(l=>
+            `<option${l===p.lang?' selected':''}>${esc(l)}</option>`).join('')+'</select>'
+        : '';
+      return `<span class="spill val open${off}" data-k="${esc(p.key)}">`+glyph(it.glyph)+langs
+        +`<input class="v" value="${esc(p.value||'')}" placeholder="${esc(it.hint||it.label)}">`
+        +'<button class="x" title="Remove">×</button></span>';
+    }
+    // Collapsed, a valued pill reads as what you chose rather than as a form.
+    const words=it.valued?(p.value||it.label):it.label;
+    return `<span class="spill${it.valued?' val':''}${off}" data-k="${esc(p.key)}">`+glyph(it.glyph)
+      +`<b class="${it.valued&&p.value?'set':''}">${esc(words)}</b>`
+      +'<button class="x" title="Remove">×</button></span>';
+  }).join('');
+
+  // mousedown, not click. An expanded pill's input has focus and its focusout
+  // redraws the rail, so by the time a click on ✕ would fire, the button it was
+  // aimed at has been replaced and the click lands on nothing.
+  rail.querySelectorAll('.x').forEach(b=>b.addEventListener('mousedown',e=>{
+    e.preventDefault(); toggleShot(b.parentElement.dataset.k);
+  }));
+  rail.querySelectorAll('.spill.val:not(.open)').forEach(el=>el.onclick=e=>{
+    if(e.target.closest('.x')) return;
+    shotOpen=el.dataset.k; drawShotRail();
+  });
+
+  const box=rail.querySelector('.spill.open');
+  if(box){
+    const input=box.querySelector('input'), sel=box.querySelector('select');
+    const p=shot.find(x=>x.key===box.dataset.k);
+    input.oninput=()=>{ p.value=input.value; syncShotPeek() };
+    if(sel) sel.onchange=()=>{ p.lang=sel.value; syncShotPeek() };
+    // focusout on the pill rather than blur on the input: the language select
+    // is inside the same pill, and a blur handler collapsed it the moment you
+    // reached for the one control the expansion exists to offer. This is the
+    // keyboard half — tabbing away — and it is not enough on its own; see the
+    // mousedown listener below.
+    box.addEventListener('focusout',e=>{
+      if(box.contains(e.relatedTarget)) return;
+      shotOpen=null; drawShotRail();
+    });
+    input.focus();
+    input.setSelectionRange(input.value.length,input.value.length);
+  }
+  $$('#g-shot,#v-shot').forEach(b=>b.classList.toggle('on',shot.length>0));
+  syncShotPeek();
+}
+
+// What the model will actually be given. This is the answer to the expensive
+// half of the problem: a take costs two to three minutes, so every question
+// about the format used to be paid for at that rate. Compiled by the same route
+// that compiles the real run — never a second implementation in here, which
+// would be a preview that can disagree with what runs.
+let peekOpen=false, peekTimer=null;
+function syncShotPeek(){
+  const box=$('#shot-peek');
+  // Offered only when there is something to compile. With no pills the compiled
+  // prompt is the typed one, and a disclosure that opens to show you your own
+  // sentence back is a control with nothing to say.
+  const has=shot.length>0||refRoles.some(Boolean);
+  box.classList.toggle('hide',!has);
+  box.classList.toggle('open',peekOpen&&has);
+  const pre=box.querySelector('pre');
+  if(!has||!peekOpen){ if(pre) pre.remove(); return }
+  clearTimeout(peekTimer);
+  peekTimer=setTimeout(async()=>{
+    const r=await post('/api/compile',{
+      kind, model:$('#v-model').value, prompt:promptText(), shot:readShot(),
+      seconds:$('#v-seconds').value,
+      // Never the bytes. This is re-fetched on every pill and every keystroke,
+      // and what the compiler needs from a reference is that there is one.
+      first_frame:!!keyframe.first, last_frame:!!keyframe.last,
+      references:refs.length, ref_videos:refVids.length,
+      ref_roles:refRoles.slice(0,refs.length),
+    });
+    let el=box.querySelector('pre');
+    if(!el){ el=document.createElement('pre'); box.appendChild(el) }
+    el.textContent=r&&r.prompt!=null?r.prompt:((r&&r.error)||'—');
+  },220);
+}
+// The pointer half of collapsing an expanded pill, and the load-bearing one.
+// focusout is the obvious mechanism and it only covers the case where focus
+// lands somewhere that takes it: click a canvas, a label, a dead area of the
+// bar, and focus does not move at all, so nothing fires and the pill stays a
+// form. This is the same capture-phase mousedown that closes the menu, which
+// is the pattern in this file that is known to hold. One listener, not one per
+// redraw — the rail is rebuilt on every keystroke's worth of state change.
+document.addEventListener('mousedown',e=>{
+  if(!shotOpen) return;
+  const box=$('#shot-rail .spill.open');
+  if(box&&!box.contains(e.target)){ shotOpen=null; drawShotRail() }
+},true);
+
+$('#shot-peek>button').onclick=()=>{ peekOpen=!peekOpen; syncShotPeek() };
+
+function readShot(){
+  return shot.map(p=>{
+    const o={key:p.key};
+    if(p.value!==undefined) o.value=p.value;
+    if(p.lang) o.lang=p.lang;
+    return o;
+  });
+}
+
+$('#g-shot').onclick=e=>openPalette(e.currentTarget);
+$('#v-shot').onclick=e=>openPalette(e.currentTarget);
 
 // ==================== MODELS (settings) ====================
 // The volume check is a page-load thing, not a Settings thing: what it decides
@@ -7489,6 +8890,14 @@ async function loadState(){
   window.MAX_LORAS=s.max_loras||6;
   window.MAX_REGIONS=s.max_regions||8;
   window.WAN_EXPERTS=s.wan_experts||['both','high','low'];
+  // The palette's whole vocabulary, served rather than written into this file.
+  // Rebuilt on each poll like the LoRA index, and the rail is redrawn from it:
+  // a pill whose group has just changed which models read it has to re-dim
+  // without a reload.
+  shotVocab=s.shot_vocab||[];
+  shotLangs=s.shot_langs||['English'];
+  shotRoleDefs=s.shot_roles||[];
+  drawShotRail();
   // Per-checkpoint steps and CFG. The boxes show "auto" rather than these, so
   // this is what ↑ on an empty one counts from — the number the backend would
   // have used, which is the only base that makes the first press mean anything.
@@ -8585,6 +9994,10 @@ function syncLoraNote(){
   $('#lora-note').textContent=bits.join(' ');
 }
 $('#prompt').addEventListener('input',syncLoraNote);
+// The preview is of the whole document, and the typed sentence is most of it —
+// so it has to follow the typing. Debounced inside syncShotPeek, and it does
+// nothing at all while the disclosure is shut, which is nearly always.
+$('#prompt').addEventListener('input',syncShotPeek);
 // The weight is the one input that can silence every box without touching a
 // token, so the note has to follow it as well as the prompt.
 $('#g-region-base').addEventListener('input',syncLoraNote);
@@ -9425,6 +10838,7 @@ $('#go-gen').onclick=async()=>{
   const [w,h]=readSize();
   const r=await post('/api/generate',{
     prompt:p, negative_prompt:$('#g-neg').value, model:$('#g-model').value,
+    shot:readShot(),
     loras:readLoras(), regions, region_weight:$('#g-region-base').value,
     // Only when there are boxes to compose around — the backend rejects a
     // plate without regions, and sending one anyway would turn a hidden tile
@@ -9624,13 +11038,16 @@ function syncVideoModel(){
   $('#v-switch-wrap').classList.toggle('hide',!sup.experts);
   $('#v-drop-last').classList.toggle('hide',!sup.last_frame);
   // The prompt survives a model change, and so do the LoRAs written in it — so
-  // whether this model reads them is something only the note can say.
+  // whether this model reads them is something only the note can say. The pills
+  // survive it too, and there the answer is visible rather than written: the
+  // ones this model does not read go dim where they are.
   syncLoraNote();
+  drawShotRail();
 
   // A model that cannot take what is already attached would fail at submit.
   // Dropping it here, where the section it came from is visibly gone, is the
   // only version of this that does not look like the request lost it.
-  if(!sup.references&&(refs.length||refVids.length)){ refs=[]; refVids=[]; }
+  if(!sup.references&&(refs.length||refVids.length)){ refs=[]; refVids=[]; refRoles=[]; }
   if(!sup.last_frame&&keyframe.last){
     clearFrame('last');
   }
@@ -9660,19 +11077,45 @@ const toB64=f=>new Promise(res=>{
 function drawRefs(){
   // Images are labelled with the <Picture n> the prompt will use, videos with
   // <Video n> — the label is the thing you type, so it is worth showing.
-  const img=refs.map((b,i)=>
-    `<div class="ref"><img src="data:image/png;base64,${b}" alt="">`+
-    `<b>P${i+1}</b><button data-k="img" data-i="${i}" title="Remove">×</button></div>`).join('');
+  // Each image chip also carries what it is *for*. The role compiles into the
+  // prompt's `subject_definitions` — "<Subject 1> is the person in <Picture 1>"
+  // — which is the whole answer to "you should not describe the picture you
+  // attached, but there is nowhere else to put it so everyone does". Now there
+  // is somewhere, and it is a menu rather than a sentence.
+  const img=refs.map((b,i)=>{
+    const spec=shotRoleDefs.find(r=>r.key===refRoles[i]);
+    return `<div class="ref"><img src="data:image/png;base64,${b}" alt="">`+
+    `<b>P${i+1}</b><button class="x" data-k="img" data-i="${i}" title="Remove">×</button>`+
+    `<button class="role${spec?'':' none'}" data-r="${i}" `+
+    `title="What this picture defines. It goes into the prompt as a subject, `+
+    `so you never have to describe the photograph itself.">`+
+    `${esc(spec?spec.label:'role')}</button></div>`;
+  }).join('');
   const vid=refVids.map((b,i)=>
     // Same media fragment as the gallery card, and for the same reason: a
     // reference tile with no frame painted is an unlabelled black square,
     // which defeats the point of showing the reference you attached.
+    // No role bar: the compiler builds subjects out of <Picture n> only, and a
+    // menu that set something nothing reads is worse than no menu.
     `<div class="ref"><video src="data:video/mp4;base64,${b}#t=0.04" muted></video>`+
-    `<b>V${i+1}</b><button data-k="vid" data-i="${i}" title="Remove">×</button></div>`).join('');
+    `<b>V${i+1}</b><button class="x" data-k="vid" data-i="${i}" title="Remove">×</button></div>`).join('');
   $('#v-refs').innerHTML=img+vid;
-  $$('#v-refs button').forEach(b=>b.onclick=()=>{
-    (b.dataset.k==='img'?refs:refVids).splice(+b.dataset.i,1); drawRefs();
+  $$('#v-refs button.x').forEach(b=>b.onclick=()=>{
+    const i=+b.dataset.i;
+    (b.dataset.k==='img'?refs:refVids).splice(i,1);
+    // The roles are positional — index i is <Picture i+1> — so removing the
+    // second chip has to remove the second role with it. Left alone, every role
+    // after the gap would have silently moved onto the wrong picture.
+    if(b.dataset.k==='img') refRoles.splice(i,1);
+    drawRefs();
   });
+  $$('#v-refs button.role').forEach(b=>b.onclick=e=>openMenu(e.currentTarget,
+    [{label:'No role',on:!refRoles[+b.dataset.r],
+      run:()=>{ refRoles[+b.dataset.r]=''; drawRefs() }}].concat(
+      shotRoleDefs.map(r=>({
+        label:r.label, on:refRoles[+b.dataset.r]===r.key,
+        run:()=>{ refRoles[+b.dataset.r]=r.key; drawRefs() },
+      })))));
   // Exclusivity, shown where the choice is made rather than described under
   // it: whichever half is out of play this run goes inert. It is the same fact
   // the note carries, but the note is read after the click and this is read
@@ -9698,6 +11141,9 @@ function drawRefs(){
     : (keyframe.first
         ? (sup.references?'':'Image-to-video. ')+'Canvas follows the first frame’s aspect ratio.'
         : '');
+  // A role and a keyframe both change which document gets built, so the
+  // preview has to follow them as well as the pills.
+  syncShotPeek();
 }
 
 function pickRefs(kindOf){
@@ -9825,7 +11271,7 @@ $('#go-vid').onclick=async()=>{
     seconds:$('#v-seconds').value, steps:$('#v-steps').value, seed:$('#v-seed').value,
     cfg:$('#v-cfg').value, shift:$('#v-shift').value, switch_at:$('#v-switch').value,
     sampler:$('#v-sampler').value, scheduler:$('#v-scheduler').value,
-    loras:readVidLoras(),
+    loras:readVidLoras(), shot:readShot(), ref_roles:refRoles.slice(0,refs.length),
     first_frame:keyframe.first, last_frame:keyframe.last,
     references:refs, ref_videos:refVids,
     ref_size:$('#v-ref-size').value, gpu:$('#v-gpu').value,
@@ -10046,12 +11492,23 @@ function menuFor(it){
 function reuse(it){
   closeGallery();
   const set=(sel,v)=>{ if(v!=null&&v!=='') $(sel).value=v };
+  // The pills, not the sentence they compiled into. A run whose prompt was a
+  // six-field document has to come back as the rail that built it — restoring
+  // the document into the prompt box would put a schema in a textarea and then
+  // compile *that*, which is the one way this feature could corrupt a reuse.
+  // `shot` is only in the sidecar when the compiler did something, so a card
+  // from before the palette existed clears the rail rather than keeping
+  // whatever happened to be on it.
+  shot=(it.shot||[]).filter(p=>p&&shotItem(p.key));
+  refRoles=(it.ref_roles||[]).slice();
+  shotOpen=null;
+  drawShotRail();
   if(it.kind==='image'){
     setKind('image');
     // Prompt and stack are one field now, so they are restored as one string.
     // A LoRA deleted since the run simply does not come back — the same thing
     // the old row-matching did, minus a row left behind to explain it.
-    set('#prompt',[it.prompt,loraTokens(it.loras,false)].filter(Boolean).join(' '));
+    set('#prompt',[it.prompt_typed||it.prompt,loraTokens(it.loras,false)].filter(Boolean).join(' '));
     set('#g-neg',it.negative_prompt);
     if(it.model) $('#g-model').value=it.model;
     const size=`${it.width}x${it.height}`;
@@ -10117,7 +11574,7 @@ function reuse(it){
     // is the filename of both speed pairs, so a stem match would restore the
     // t2v LoRA into an i2v run without a word about it. loraTokens() writes
     // whichever name is unambiguous, which is the folder-qualified one here.
-    set('#prompt',[it.prompt,loraTokens(it.loras,true)].filter(Boolean).join(' '));
+    set('#prompt',[it.prompt_typed||it.prompt,loraTokens(it.loras,true)].filter(Boolean).join(' '));
     set('#v-neg',it.negative_prompt);
     set('#v-seed',it.seed); set('#v-steps',it.steps);
     set('#v-cfg',it.cfg_scale); set('#v-shift',it.shift); set('#v-switch',it.switch_at);
@@ -10160,6 +11617,17 @@ function metaSheet(it){
       +(l.expert&&l.expert!=='both'?` (${l.expert} noise)`:'')
       +(l.applied===false?' (not applied)':'')).join(', ')],
     ['Regions',(it.regions||[]).map(r=>r.prompt).join(' | ')],
+    // The pills by name, so a run is readable without decompiling its
+    // document — and readable a year later, when the labels may have moved
+    // but `camera.pushin` still says what was picked.
+    ['Shot',(it.shot||[]).map(p=>{
+      const i=shotItem(p.key);
+      return (i?i.label:p.key)+(p.value?`: “${p.value}”`:'');
+    }).join(', ')],
+    ['Reference roles',(it.ref_roles||[]).map((r,n)=>{
+      const spec=shotRoleDefs.find(x=>x.key===r);
+      return spec?`P${n+1} ${spec.label}`:'';
+    }).filter(Boolean).join(', ')],
     ['Files',it.files.join(', ')],
     ['Created',it.created?new Date(it.created*1000).toLocaleString():''],
   ].filter(r=>r[1]!==undefined&&r[1]!==null&&r[1]!=='');
@@ -10169,7 +11637,14 @@ function metaSheet(it){
       <button class="ico" data-close>${ICON.close}</button>
     </div>
     <label>Prompt</label>
-    <textarea id="m-prompt" rows="5" readonly>${esc(it.prompt||'')}</textarea>
+    <textarea id="m-prompt" rows="5" readonly>${esc(it.prompt_typed||it.prompt||'')}</textarea>
+    ${it.prompt_typed&&it.prompt_typed!==it.prompt?`
+      <!-- Both, and in this order. What you wrote is what you recognise the
+           run by; what ran is the six-field document, and it is here because
+           the only other way to find out what the encoder was given is to
+           render again. -->
+      <label style="margin-top:12px">What the model read</label>
+      <textarea rows="7" readonly>${esc(it.prompt||'')}</textarea>`:''}
     ${it.negative_prompt?`<label style="margin-top:12px">Negative</label>
       <textarea rows="2" readonly>${esc(it.negative_prompt)}</textarea>`:''}
     <dl class="kv" style="margin-top:18px">
@@ -10182,7 +11657,10 @@ function metaSheet(it){
       <button class="s" data-close>Close</button>
     </div>`);
   el.querySelector('#m-copy').onclick=async e=>{
-    await navigator.clipboard.writeText(it.prompt||'');
+    // What the box above it shows. Copying the compiled document from under a
+    // button sitting beside a textarea containing the typed sentence is the
+    // button doing something other than what you can see.
+    await navigator.clipboard.writeText(it.prompt_typed||it.prompt||'');
     e.target.textContent='Copied';
   };
   el.querySelector('#m-reuse').onclick=()=>{ el.remove(); reuse(it) };

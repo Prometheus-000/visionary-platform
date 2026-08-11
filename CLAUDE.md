@@ -83,6 +83,15 @@ in for free.
     comfy_nodes/        our own ComfyUI nodes — one shim, see visionary_boxes
     ai-toolkit/         training reference
     tools/              smoke tests, the local UI preview
+    tools/_from_app.py  pulls plain-Python pieces out of app.py by AST
+
+`_from_app.py` exists because two tools need the *real* thing rather than a
+copy: `smoke_prompt.py` checking a compiler against a reimplementation would be
+checking the reimplementation, and `preview_ui.py` drawing the shot palette from
+a hand-written vocabulary would be a preview of a palette that does not exist.
+Importing app.py is what it avoids — that pulls in modal and builds image
+definitions at module scope, so it wants credentials and a network to answer a
+question about a string.
 
 `app.py` is deliberately one file. It is long, but the alternative — a package
 whose modules are imported by Modal image builds — trades one long file for a
@@ -447,6 +456,56 @@ two domains, and the page follows the domains.
   where they are and the text between them changes places, so a prompt written
   across two lines still has two lines however many times you press the chord.
 
+- **The empty prompt box is the worst control on the page, so it is not the
+  only one.** H3 does not read a paragraph; it reads a document with named
+  fields, published in the model repo. The composer offered a textarea for it,
+  and every symptom of that is the same symptom: there is no slot for camera
+  direction, so every position is a guess; tone and genre belong to a clause
+  with no name on screen; the place a reference image's description belongs is
+  not on the page, so it goes in the only box there is. A documented grammar
+  presented as free prose reads as superstition — whether a comma or "the woman"
+  versus "a woman" changes the take is not something anyone can infer — and a
+  take is two to three minutes, so every guess is paid for at that rate.
+
+  So the closed vocabulary is a **palette**: one icon in the strip, a popover of
+  small animated tiles, and a rail of pills under the prompt. The prompt field
+  keeps only what nothing else can say — who is in the shot and what happens.
+  This is the "a control that shows its own value gets no label" rule applied to
+  words instead of numbers, and it is the one place on the page where an icon
+  can teach: a tile *shows* a dolly-out, which is the thing neither the word nor
+  a static picture does.
+
+  Three rules hold the rest together:
+
+  - **No pills, no document.** With nothing chosen the compiler returns the
+    typed text byte-for-byte. Every prompt written before this still means what
+    it meant, and the document only appears once you have said something that
+    needs one.
+  - **The compiler never rewrites your sentence.** It closes it if you did not,
+    and it chooses the separator in front of it — a leading clause's full stop
+    softens to a comma before a lowercase fragment, so "A medium close-up, a
+    portrait of k3nan." rather than a capital that would silently turn a `k3nan`
+    trigger word into `K3nan`. That is the whole extent of it. What is inside
+    `<d>…</d>` is not touched at all, which is the guide's own rule and the one
+    place ordinary tidying would corrupt the output invisibly.
+  - **`non_diegetic_music: N/A` is the default, and is worth the feature on its
+    own.** H3 invented a soundtrack for every clip because nothing had ever told
+    it not to.
+
+  `/api/compile` is the same compiler on the same CPU container, so the
+  disclosure under the rail shows the exact document that would run. A preview
+  with its own implementation is a preview that can disagree with the run, which
+  is worse than none; and without it the only way to answer "where did my camera
+  direction go" was to render again.
+
+- **A reference chip carries what it is *for*.** Identity, wardrobe, location,
+  style, prop or action, from the chip's own menu, compiling to the guide's
+  `<Subject 1> is the person in <Picture 1>` and a matching retention line.
+  This is what makes "do not describe the picture you attached" enforceable
+  rather than advice: there is now somewhere for that description to go which is
+  not the prompt field, and it is one click. Roleless chips run exactly as they
+  did.
+
 - **The ratio picker and the pixel boxes are one control.** There is only ever
   a width and a height; the ratios are shortcuts to a pair of them. Picking one
   writes the boxes, typing in the boxes selects Custom, and Custom is the only
@@ -520,6 +579,38 @@ The A14B pair is the one thing with no image-side analogue: it is *two*
 checkpoints split by noise level, sampled in sequence by two `KSamplerAdvanced`
 nodes handing an unfinished latent over. So a video LoRA row carries an expert,
 and the `wan22-speed-*` folders hold a matched `high`/`low` pair.
+
+### One vocabulary, three destinations
+
+`SHOT_VOCAB` is a table, not three tables. Each group declares which side reads
+it and where its clause lands, and the three compilers differ only in what they
+do with the result:
+
+- **H3** gets the document — an alignment instruction and three named fields, or
+  the six-field reference form when pictures are attached. `H3_ALIGN` holds the
+  four instruction sentences verbatim, including the guide's own inconsistency
+  (i2va and l2va bracket their labels, fl2va does not), because they are a
+  contract with the checkpoint rather than phrasing we chose. `_h3_task()` is a
+  deliberately *finer* read than the one `/api/video` makes: that one collapses
+  to `ref2va` or `fl2va`, which is right for which checkpoint loads and too
+  coarse for the alignment instruction, where first-only, last-only and both are
+  three different sentences about where a picture sits in time.
+- **Wan** gets prose, and gets it with the audio pills dropped — the same way a
+  negative prompt is dropped for H3, because a sidecar recording an input the
+  model never read is a sidecar that lies. Dropped by `needs`, not by field:
+  dialogue is the case that breaks the simpler rule, landing in the *visual*
+  description and still being audio, and `<d>[English] …</d>` arriving at umT5
+  is a pair of angle brackets in the prompt rather than a line anyone says.
+  `needs` is therefore per item as well as per group.
+- **Krea 2** gets prose with camera, action and both audio groups filtered out
+  by `image` in the table. Filtered, not silently dropped — the palette dims
+  what the thing in front of you cannot read, and the group heading says why.
+
+The job carries `prompt` (what ran) and `prompt_typed` + `shot` (what you
+chose), and the sidecar only gains the second pair when the compiler did
+something. The gallery, Reuse and the metadata sheet all prefer the typed one: a
+card showing a six-field document is a card you cannot read, and restoring a
+document into the prompt box would compile *that* on the next run.
 
 ### The settled question: `forge/` is gone
 

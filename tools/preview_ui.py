@@ -33,8 +33,30 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from _from_app import SHOT, pull
+
 APP = Path(__file__).resolve().parent.parent / "app.py"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8777
+
+# The one thing here that is not a stub. The shot palette is eighty-odd tiles
+# built from a table in app.py, and a hand-written copy of that table would be a
+# preview of a palette that does not exist — the states worth looking at are
+# exactly the ones a copy would get wrong. The compiler comes with it, so
+# `/api/compile` shows the real document rather than a plausible one.
+#
+# Re-pulled when app.py changes, for the reason at the top of this file: reload
+# is the edit loop, so reload has to be honest, and a vocabulary captured at
+# import is exactly the staleness `ui_html()` refuses to have. Keyed on mtime
+# rather than re-parsed per request because every gallery thumbnail is a
+# request and an AST parse of ten thousand lines is not free.
+_SHOT_CACHE: dict = {}
+
+
+def shot_api() -> dict:
+    stamp = APP.stat().st_mtime_ns
+    if _SHOT_CACHE.get("stamp") != stamp:
+        _SHOT_CACHE.update(stamp=stamp, api=pull(SHOT))
+    return _SHOT_CACHE["api"]
 
 
 def ui_html() -> str:
@@ -230,6 +252,7 @@ STATE = {
          "ready": True},
     ],
     "wan_experts": ["both", "high", "low"],
+    # shot_vocab / shot_langs / shot_roles are added per request — see shot_api().
     "max_loras": 6, "max_refs": 9, "max_ref_videos": 3,
     "max_regions": 8,
     # ComfyUI's spellings, which is what the image side sends into a graph now.
@@ -410,6 +433,39 @@ class Handler(BaseHTTPRequestHandler):
             GDRIVE["polls"] = 0
             return self.reply({"ok": True, "job_id": "dl_gdrive"})
 
+        # Not stubbed: this route is pure and cheap, and what it answers is the
+        # only question the preview server cannot fake usefully. A hand-written
+        # reply here would let the rail look right while compiling to something
+        # else, which is the one bug this whole feature exists to prevent.
+        if path == "/api/compile":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            api = shot_api()
+            try:
+                pills = api["_validate_shot"](p.get("shot"))
+                n_refs = max(0, min(9, int(p.get("references") or 0)))
+                roles = api["_validate_ref_roles"](p.get("ref_roles"), n_refs)
+            except (TypeError, ValueError) as exc:
+                return self.reply({"error": str(exc)})
+            typed = str(p.get("prompt") or "").strip()
+            if p.get("kind") == "image":
+                return self.reply(
+                    {"prompt": api["_compile_image_prompt"](typed, pills)})
+            if str(p.get("model") or "h3") != "h3":
+                return self.reply(
+                    {"prompt": api["_compile_wan_prompt"](typed, pills)})
+            try:
+                seconds = float(p.get("seconds") or 5)
+            except (TypeError, ValueError):
+                seconds = 5.0
+            return self.reply({"prompt": api["_compile_h3_prompt"](
+                typed=typed, pills=pills, seconds=seconds, roles=roles,
+                task=api["_h3_task"](p.get("first_frame"), p.get("last_frame"),
+                                     n_refs, int(p.get("ref_videos") or 0)),
+            )})
+
         if path == "/api/generate":
             RUNS["gen000"] = {"polls": 0, "stopped": False}
             return self.reply({"ok": True, "job_id": "gen000"})
@@ -447,7 +503,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             return self.reply(ui_html(), "text/html; charset=utf-8")
         if path == "/api/state":
-            return self.reply(STATE)
+            api = shot_api()
+            return self.reply({
+                **STATE,
+                "shot_vocab": api["SHOT_VOCAB"],
+                "shot_langs": api["H3_LANGUAGES"],
+                "shot_roles": [dict(spec, key=k)
+                               for k, spec in api["SHOT_REF_ROLES"].items()],
+            })
         if path == "/api/gallery":
             return self.reply({"items": GALLERY})
         if path == "/api/datasets":
