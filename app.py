@@ -7229,7 +7229,8 @@ svg{width:100%;height:100%;display:block}
    the canvas that grows downward when it has more to say and collapses when it
    does not, so on a bare prompt the canvas has the whole room. */
 .stage{flex:1;min-width:0;display:flex;flex-direction:column}
-.canvas{flex:1;min-height:0;overflow:auto;padding:22px 28px;display:flex;flex-direction:column}
+.canvas{position:relative;flex:1;min-height:0;overflow:auto;padding:22px 28px;
+  display:flex;flex-direction:column}
 /* Capped, so a console with everything open can never push the canvas out of
    the frame — past the cap it scrolls itself instead. */
 .console{flex:none;max-height:54dvh;overflow:auto;padding:13px 28px 15px;
@@ -8041,6 +8042,12 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    nothing explains — and a tile with pointer-events:none cannot be hovered, so
    it could not deliver the one sentence that would. */
 .drop.mini.locked{opacity:.3;cursor:default}
+#canvas-acts{position:absolute;top:12px;right:12px;z-index:4;display:flex;gap:6px;
+  opacity:.32;transition:opacity .12s}
+#canvas:hover #canvas-acts,#canvas-acts:focus-within{opacity:1}
+#canvas-acts .ico{width:30px;height:30px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);
+  border-radius:9px}
+#canvas-acts .ico:hover{background:rgba(0,0,0,.78);color:var(--fg)}
 .pad{padding:26px}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
@@ -8253,6 +8260,14 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
     <!-- Lives here so it exists before anything reparents it; drawRegions()
          moves it onto whichever host is showing. -->
     <div id="region-layer" class="off"></div>
+    <!-- Clear, and full-screen. Both belong to the result rather than to the
+         composer, so they live on the canvas and not in the strip — and both
+         are quiet at rest for the reason `.shot .acts` is: a control on top of
+         the picture must not compete with it. -->
+    <div id="canvas-acts" class="hide">
+      <button class="ico" id="canvas-full" title="Full screen — Space"></button>
+      <button class="ico" id="canvas-clear" title="Clear the canvas"></button>
+    </div>
     <div id="gen-out" class="shots hide"></div>
     <p class="muted" id="gen-meta" style="margin:12px 2px"></p>
     <div id="vid-out" class="hide"></div>
@@ -8962,6 +8977,8 @@ $('#drop-glyph').innerHTML=ICON.upload;
 $('#gal-back').innerHTML=ICON.back;
 $('#gal-refresh').innerHTML=ICON.refresh;
 $('#gal-expand').innerHTML=ICON.expand;
+$('#canvas-full').innerHTML=ICON.expand;
+$('#canvas-clear').innerHTML=ICON.close;
 $('#t-settings').innerHTML=ICON.gear;
 $('#t-drawer').innerHTML=ICON.panel;
 $('#settings-x').innerHTML=ICON.close;
@@ -9342,6 +9359,7 @@ function syncCanvasView(){
   // window flag, not typeof — see the note in syncSize.
   if(window.REGIONS_READY) drawRegions();
   syncDropTargets();
+  syncCanvasActs();
 }
 
 // Which of the big surfaces would actually take a file right now. The video
@@ -9423,6 +9441,41 @@ function sheet(html){
   el.querySelectorAll('[data-close]').forEach(b=>b.onclick=close);
   return el;
 }
+
+// What is on the canvas right now, if anything — the thing both the full-screen
+// control and the key press act on. Read off the DOM rather than kept in a
+// variable, because the canvas is written from four places (a finished run,
+// Reuse, the gallery hand-off, a kind switch) and a fifth copy of the answer is
+// a fifth thing to forget to update.
+function canvasShot(){
+  if(kind==='video'){ const v=$('#vid-out video'); return v ? {src:v.src, video:true} : null }
+  const i=$('#gen-out .shot img'); return i ? {src:i.src, video:false} : null;
+}
+function syncCanvasActs(){
+  $('#canvas-acts').classList.toggle('hide', !canvasShot());
+}
+$('#canvas-full').onclick=()=>{ const s=canvasShot(); if(s) lightbox(s.src,s.video) };
+$('#canvas-clear').onclick=()=>{
+  // The canvas only. The prompt, the pills, the boxes and the settings are all
+  // still what you were working on — this clears the result, which is the one
+  // thing "clear" can mean when everything else is an input you are mid-edit of.
+  (kind==='video' ? $('#vid-out') : $('#gen-out')).innerHTML='';
+  $(kind==='video' ? '#vid-meta' : '#gen-meta').innerHTML='';
+  syncCanvasView(); syncCanvasActs();
+};
+// Space, because ⌘Space is Spotlight on a stock Mac and never reaches the page.
+// Both are bound: ⌘Space works for anyone who has remapped Spotlight, and the
+// bare key is the one that works out of the box. Guarded on where the caret is
+// rather than on a modifier — a space inside the prompt is a space.
+addEventListener('keydown',e=>{
+  if(e.key!==' '&&e.code!=='Space') return;
+  if(e.ctrlKey||e.altKey||e.shiftKey) return;
+  const t=e.target;
+  if(t&&(t.matches('input,textarea,select')||t.isContentEditable)) return;
+  if(document.querySelector('.lb')||menuEl) return;
+  const s=canvasShot(); if(!s) return;
+  e.preventDefault(); lightbox(s.src,s.video);
+});
 
 function lightbox(src,video){
   const el=document.createElement('div'); el.className='lb';
