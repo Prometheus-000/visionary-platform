@@ -7347,7 +7347,14 @@ svg{width:100%;height:100%;display:block}
 
    Text, not a chip: a chip reads as a thing to press among other things to
    press, and this is a corner marker for a mode you are usually not in. It
-   sits in the corner the resize grip just vacated. */
+   sits in the corner the resize grip just vacated.
+
+   It names the field you are looking at — "positive", then "negative" — and
+   not the one a click would take you to. A tag that reads as an instruction
+   has to be decoded every time it is seen: "negative" over an empty box is
+   equally readable as "this box is the negative" and "press to go there", and
+   those are opposite facts. A label that states the current state is never
+   ambiguous, and the click is discovered once. */
 .neg-t{position:absolute;top:6px;right:8px;z-index:2;border:0;background:none;padding:3px 4px;
   color:var(--dim);font:500 10.5px/1 inherit;letter-spacing:.02em;cursor:pointer;
   border-radius:7px;-webkit-user-select:none;user-select:none}
@@ -8106,8 +8113,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    under the cursor says what it is. Naming all of them at once would put eight
    captions on a picture at eight boxes, which is the wall of text the region
    rows were deleted for, redrawn on the canvas. */
-body.dragging .drop:not(.hot):not(.locked){border-color:rgba(255,255,255,.34)}
-body.dragging .frame:not(.hot),body.dragging .shot:not(.hot),
+body.dragging .can-drop:not(.hot):not(.locked){border-color:rgba(255,255,255,.34)}
+body.dragging .frame.can-drop:not(.hot),body.dragging .shot.can-drop:not(.hot),
 body.dragging #ds-sheet:not(.hot){outline:1px dashed rgba(255,255,255,.2);outline-offset:-4px}
 #ds-sheet{position:relative}
 #ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:-4px}
@@ -8213,7 +8220,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
       <textarea id="neg" rows="1" class="hide"
                 placeholder="Negative prompt — what to steer away from"></textarea>
       <button type="button" id="neg-toggle" class="neg-t hide"
-              title="Write what to steer away from. Only read at CFG above 1."></button>
+              title="Which prompt you are writing. Click to switch; the negative is only read at CFG above 1."></button>
       <div class="bar2">
         <div class="kinds" id="kinds">
           <button data-kind="image" class="on">Image</button>
@@ -9120,7 +9127,7 @@ function setNegMode(on){
   f.classList.toggle('on-neg',on);
   $('#prompt').classList.toggle('hide',on);
   $('#neg').classList.toggle('hide',!on);
-  $('#neg-toggle').textContent = on ? 'prompt' : 'negative';
+  $('#neg-toggle').textContent = on ? 'negative' : 'positive';
   autoGrow($(on?'#neg':'#prompt'));
   syncNeg();
 }
@@ -9263,6 +9270,16 @@ function syncCanvasView(){
   // canvas-empty toggle when regions are on, so it runs after this one.
   // window flag, not typeof — see the note in syncSize.
   if(window.REGIONS_READY) drawRegions();
+  syncDropTargets();
+}
+
+// Which of the big surfaces would actually take a file right now. The video
+// canvas always would; the still canvas only inside Regions, because that is
+// the only mode whose drop has a meaning — outside it there is no scene plate
+// to become and no box to land in.
+function syncDropTargets(){
+  const live = kind==='video' || (window.REGIONS_READY && regionOn());
+  $$('#canvas .frame, #canvas .shot').forEach(el=>el.classList.toggle('can-drop',live));
 }
 
 $('#t-drawer').onclick=()=>{
@@ -10373,6 +10390,7 @@ let uploading=false;
 drop.onclick=()=>{ if(!uploading) fin.click() };
 drop.ondragover=e=>{e.preventDefault();drop.classList.add('hot')};
 drop.ondragleave=()=>drop.classList.remove('hot');
+drop.classList.add('can-drop');
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove('hot');upload(e.dataTransfer.files)};
 // The open sheet takes a drop too, and `upload` appends whenever a set is open.
 // Adding to a set you already have was otherwise reachable only through the
@@ -11567,6 +11585,7 @@ function wirePlate(slot){
   // clickable and droppable unless every entry point checks. A locked tile that
   // opened a file picker and then swallowed the picture would be worse than the
   // hidden tile this replaced.
+  box.classList.add('can-drop');
   const locked=()=>box.classList.contains('locked');
   box.onclick=e=>{
     if(e.target===input||locked()) return;
@@ -11659,6 +11678,7 @@ function setRegional(on){
     $(s).classList.toggle('locked',!window.HAS_EDIT_LORA);
     $(s).title = window.HAS_EDIT_LORA ? PLATE_TITLE[s] : NEED_EDIT_LORA;
   });
+  syncDropTargets();
   // Two half-width columns, seeded. Two rectangles appearing on the canvas is
   // the whole instruction — a sentence telling you to drag would be read on
   // every visit forever to be useful once.
@@ -12076,8 +12096,83 @@ function pickRefs(kindOf){
 $('#v-add-ref').onclick=()=>pickRefs('img');
 $('#v-add-vid').onclick=()=>pickRefs('vid');
 
+// Everything that takes a file, wired one way.
+//
+// Written because the reference tray never had a drop handler at all — it was
+// a click-only picker sitting in a row of tiles that all take drops, and the
+// drag-intent reveal then lit it like the rest. A control that lights up under
+// a dragged file and refuses it is worse than one that stays dark: the dark one
+// is undiscovered, the lit one is a promise the page breaks while you watch.
+//
+// `can-drop` is set here rather than written into the markup so the two cannot
+// drift: the class that makes a target glow is applied by the same call that
+// gives it a handler, and an element with no handler has no way to get it.
+function wireDropTarget(el, {accept, take, label}){
+  if(!el) return;
+  el.classList.add('can-drop');
+  if(label) el.dataset.drop=label;
+  const off=()=>el.classList.remove('hot');
+  el.addEventListener('dragover',e=>{
+    if(el.classList.contains('locked')||el.classList.contains('off')) return;
+    // Files only, and only the kind this target takes. Without the type check
+    // a video dragged onto the picture tray lights it, and the drop then
+    // silently does nothing — which is the same broken promise one level down.
+    if(![...(e.dataTransfer?.types||[])].includes('Files')) return;
+    e.preventDefault(); el.classList.add('hot');
+  });
+  el.addEventListener('dragleave',e=>{ if(!el.contains(e.relatedTarget)) off() });
+  el.addEventListener('drop',async e=>{
+    if(el.classList.contains('locked')||el.classList.contains('off')) return;
+    e.preventDefault(); off();
+    const files=[...(e.dataTransfer?.files||[])].filter(f=>f.type.startsWith(accept));
+    // Said, not swallowed. A file of the wrong kind landing on a tile that
+    // just lit up for it has to say why nothing happened.
+    if(!files.length){
+      const want=accept==='image/'?'an image':'a video';
+      return alert(`That tile takes ${want}.`);
+    }
+    await take(files);
+  });
+}
+
+// The two halves of the reference tray, which is where this started.
+[['#v-add-ref','img','image/','#v-ref-max',refs,'Picture reference'],
+ ['#v-add-vid','vid','video/','#v-vid-max',refVids,'Video reference']]
+  .forEach(([sel,kindOf,accept,maxSel,,label])=>wireDropTarget($(sel),{
+    accept, label,
+    take:async files=>{
+      // Re-read the bucket and the cap at drop time rather than closing over
+      // them: `refs` and `refVids` are reassigned wholesale by reuse() and by
+      // syncVideoModel dropping references a model cannot take, so a captured
+      // array would be pushing into a detached one.
+      const isImg=kindOf==='img';
+      const bucket=isImg?refs:refVids;
+      const max=+$(maxSel).textContent;
+      if(bucket.length>=max)
+        return alert(`${max} ${isImg?'image':'video'} references is the model's limit.`);
+      for(const f of files.slice(0,max-bucket.length)){
+        const b=await(isImg?shrinkB64(f):toB64(f));
+        if(b) bucket.push(b); else alert('Could not read that file.');
+      }
+      drawRefs();
+    },
+  }));
+
+// The canvas itself. On the video side a dropped picture is the frame the clip
+// starts on, which is the one reading that needs no mode: it is what the tile
+// two rows down would have done, done on the largest target on screen.
+wireDropTarget($('#vid-out'),{
+  accept:'image/', label:'First frame',
+  take:async files=>{
+    const b=await toB64(files[0]);
+    if(!b) return alert('Could not read that image.');
+    setFrame('first',b); syncFrameCanvas(); drawRefs();
+  },
+});
+
 function wireDrop(slot){
   const box=$('#v-drop-'+slot), img=$('#v-thumb-'+slot), hint=$('#v-hint-'+slot);
+  box.classList.add('can-drop');
   hint.innerHTML=ICON[slot];
   const input=document.createElement('input');
   input.type='file'; input.accept='image/*'; input.className='hide';
