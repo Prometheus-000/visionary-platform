@@ -2268,6 +2268,14 @@ COMFY_DEATH_GRACE_S = 5.0
 # than one that fails with the log tail in hand.
 COMFY_RESET_TRIES = 5
 
+# ComfyUI's own wording for an out-of-memory failure, and the only marker worth
+# matching on. The exception underneath is `torch.OutOfMemoryError` down one
+# path and a bare `Allocation on device` from the allocator down another, and
+# the node blamed is whichever happened to ask for the last block — KSampler on
+# the image side, but only because that is where the sampling loop lives. The
+# tip is a constant in `execution.py`, so it is the stable half.
+COMFY_OOM_MARK = "ran out of memory on your GPU"
+
 
 class _Comfy:
     """
@@ -2531,6 +2539,72 @@ class _Comfy:
         self._log.clear()
         self.start()
 
+    def _note_headroom(self) -> None:
+        """
+        Print what is left on the card, before the graph is queued.
+
+        The one fact an out-of-memory failure never carries is whether the card
+        was already full when the job started. Krea 2 is 24 GB of an 80 GB card,
+        so a regional render that dies in step 0 is either a graph too big for
+        55 GB of headroom or a graph handed 5 GB by whatever ran before it, and
+        those want opposite fixes. ComfyUI prints its own memory summary only
+        once it has already failed, which is the wrong end: by then every number
+        describes the wreck rather than what it started with.
+
+        Best effort, and deliberately not on the failure path — the honest
+        "after" reading is the next run's "before", once ComfyUI's worker has
+        acted on `_reclaim`'s flag. A number taken a millisecond after asking
+        would mostly measure the asking.
+        """
+        try:
+            dev = ((self.get("/system_stats") or {}).get("devices") or [{}])[0]
+            free, total = dev.get("vram_free") or 0, dev.get("vram_total") or 0
+        except Exception:
+            return
+        if total:
+            print(f"[{self.tag}] vram before run: {free / 2**30:.1f} of "
+                  f"{total / 2**30:.1f} GiB free", flush=True)
+
+    def _reclaim(self) -> None:
+        """
+        Hand the card back after an out-of-memory failure, before the next take.
+
+        `_revive()` covers a ComfyUI that died. This is the other half of the
+        same idea: one that is alive and has nothing left to allocate, which is
+        a state the process does not leave on its own.
+
+        ComfyUI answers its own OOM with `unload_all_models()`, and on this
+        install that is not enough. The regional node moves every region's LoRA
+        onto the device in `_prepare()` and stores the copies on the patcher it
+        returns, so they are held by the *execution cache* — which model
+        management cannot see and `unload_all_models()` does not touch. They
+        come back when the cached node output is dropped, and `/free` is the
+        only thing that drops it (`e.reset()` in ComfyUI's prompt worker).
+
+        Which is the shape the failure actually had: not one configuration too
+        big, but a few in a row, none reproducible on its own. A run that ran
+        out of memory left behind the thing it ran out of memory on, and the
+        next one started with less room than the last.
+
+        The bill is a checkpoint reload on the following take, charged only to a
+        job that has already failed — against `max_containers=1`, where the
+        alternative is every render refused until the scaledown window expires.
+        Best effort: a container too far gone to answer this is one `_revive()`
+        replaces anyway.
+        """
+        try:
+            # `free_memory` implies `unload_models` upstream — the flag defaults
+            # to it — so this is both halves, and there is no way to reset the
+            # node cache without also dropping the checkpoint. That is the whole
+            # reason this is not simply done after every job.
+            self.post("/free", {"free_memory": True})
+        except Exception as exc:
+            print(f"[{self.tag}] could not reclaim after OOM: {exc}", flush=True)
+            return
+        print(f"[{self.tag}] out of memory — asked ComfyUI to unload its models "
+              "and drop the node cache; the next take reloads the checkpoint",
+              flush=True)
+
     def stage(self, job_id: str, blob: str, slot: str, ext: str = "png") -> str:
         """
         Drop one uploaded file where a LoadImage node can name it.
@@ -2554,8 +2628,15 @@ class _Comfy:
         self._revive()
         self.job_id = job_id
         try:
+            self._note_headroom()
             prompt_id = self.post("/prompt", {"prompt": graph})["prompt_id"]
             return self._await(job_id, prompt_id, what)
+        except RuntimeError as exc:
+            # StopRequested is not a RuntimeError, so a cancelled take does not
+            # come through here and does not pay for a reload it never earned.
+            if COMFY_OOM_MARK in str(exc):
+                self._reclaim()
+            raise
         finally:
             self.job_id = None
 

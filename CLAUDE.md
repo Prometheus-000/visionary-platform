@@ -267,6 +267,23 @@ still writing cannot be swept out from under itself.
   times, because failing a forty-minute clip over one socket is the wrong
   trade.
 
+  There is a fourth: alive, and with nothing left to allocate. ComfyUI answers
+  its own OOM with `unload_all_models()`, which on this install does not reach
+  the thing that filled the card — the regional node moves every region's LoRA
+  onto the device in `_prepare()` and stores the copies on the patcher it
+  returns, so they are held by the *execution cache*, which model management
+  cannot see. Only `/free` drops that (`e.reset()`), and `free_memory` implies
+  `unload_models` upstream, so there is no way to clear the node cache without
+  also dropping the 24 GB checkpoint. Hence `_reclaim()` runs on an OOM and
+  nowhere else: the reload is charged to a job that has already failed, rather
+  than to every job to prevent one. This is why the symptom was "a few times,
+  nothing reproducible" — a run that ran out of memory left behind the thing it
+  ran out of memory on, and the next one started with less room than the last.
+  `_note_headroom()` is the other half, because free VRAM at the *start* of a
+  run is the one number that separates "this graph is too big" from "the last
+  graph never gave the card back", and ComfyUI only prints its memory summary
+  after it has already failed.
+
 - **A family downloads itself; there is no button for the whole catalogue.**
   The group is the unit you decide in — you want the Wan stack or you do not —
   and clicking its files one at a time meant watching a 4 GB file finish to be
