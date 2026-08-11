@@ -108,11 +108,26 @@ download and a re-upload. Open it full-width when you want the whole room.
 ![Captioning is a workspace, not a batch job](docs/dataset.png)
 
 **Datasets are for reading, not just uploading.** Captions are written in prose
-by Qwen3-VL-8B-Instruct, because the text encoders these models use parse
-grammar — "red dress, blue jacket" cannot say which garment is which, and a
-sentence can. The panel beside the contact sheet reads the set back to you:
-trigger-word coverage, caption length, duplicates, and the clauses your captions
-repeat, so you can see what the LoRA is about to learn by accident.
+by Qwen3-VL-8B, because the text encoders these models use parse grammar — "red
+dress, blue jacket" cannot say which garment is which, and a sentence can. The
+panel beside the contact sheet reads the set back to you: trigger-word coverage,
+caption length, duplicates, and the clauses your captions repeat, so you can see
+what the LoRA is about to learn by accident.
+
+**A preset is what the caption leaves out.** Whatever the captions name is what
+the model learns to vary, and whatever they never name is what the trigger word
+ends up owning — so **Character** describes pose, wardrobe, framing and light
+and refuses to describe a face, **Style** describes the content and never the
+look, and **Concept** describes everything around the thing you are training.
+Each also names the flaws worth prompting away later: a watermark, a harsh
+flash, a hand at the edge of frame. Pick the intent; the instruction behind it
+lives on the server, so the run is reproducible from the job record.
+
+Beside it is a captioner picker, because a refusal here is not an error. The
+stock model declines on photographs of real people often enough to matter, and
+what comes back is a fluent sentence that would land in a `.txt` sidecar and
+train. Declines are detected and never written, and the second entry is the
+same checkpoint with the refusal direction removed.
 
 ---
 
@@ -307,7 +322,11 @@ nothing about whether the picture looks right.
 modal run tools/smoke_caption.py
 ```
 
-Runs the captioner over a couple of images and prints what it wrote.
+Checks that the pinned transformers has the class and that **every** repo id in
+the captioner picker resolves and parses, on a CPU container that downloads
+config files rather than weights. `--gpu` loads one and captions a real image;
+`--model` and `--preset` choose which captioner and which instruction, and the
+result says whether the model refused.
 
 ```bash
 python3 tools/smoke_prompt.py

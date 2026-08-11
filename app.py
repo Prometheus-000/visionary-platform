@@ -870,7 +870,7 @@ RAW_PATH = MODEL_CATALOGUE["raw"]["dest"]
 VAE_PATH = MODEL_CATALOGUE["vae"]["dest"]
 TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
 
-# Qwen3-VL-8B-Instruct, not a booru tagger and not JoyCaption.
+# Qwen3-VL, not a booru tagger and not JoyCaption.
 #
 # Krea 2 reads its prompt through Qwen3-VL-4B, a language model that parses
 # grammar — subordinate clauses, spatial prepositions, and the binding between
@@ -884,35 +884,186 @@ TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
 # describe the one you want is a gap the model has to guess across. Captioning
 # with the same model family the text encoder comes from closes that gap
 # further than a differently-trained captioner can.
-CAPTION_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
+#
+# Which *checkpoint* of it is a choice, because a refusal is not an error here.
+# The stock instruct model declines on photographs of real people often enough
+# to matter — "I can't identify or describe individuals in images" — and on a
+# character set that is every image. What arrives is not an exception: it is a
+# fluent, well-formed sentence that goes straight into a `.txt` sidecar and then
+# into a training run, so the failure surfaces as a LoRA that learned to say it
+# cannot describe someone. The abliterated repackage has the refusal direction
+# removed and is otherwise the same architecture and the same loader, so it
+# costs a repo id rather than a second code path. `_looks_like_refusal()` is the
+# other half: a caption that declines is never written, whichever model wrote it.
+CAPTION_MODELS: dict[str, dict[str, str]] = {
+    "qwen3vl": {
+        "repo": "Qwen/Qwen3-VL-8B-Instruct",
+        "label": "Qwen3-VL 8B",
+        "note": "The text encoder's own family, stock.",
+    },
+    "qwen3vl-uncensored": {
+        "repo": "prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2",
+        "label": "Qwen3-VL 8B uncensored",
+        # The size is in the note because this is the one control on the page
+        # that can start a 17 GB download without saying so: the captioner is
+        # pulled into the HF cache on first use, not chosen under the gear.
+        "note": "Same weights, refusal removed. First run pulls ~17 GB.",
+    },
+}
+DEFAULT_CAPTION_MODEL = "qwen3vl"
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"}
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_CAPTION_CHARS = 1024
 THUMB_PX = 320
 
-# All prose. The booru-tag style that used to live here is gone rather than
-# hidden: it existed to match CLIP's 77-token bag of words, and emitting it for
-# a grammar-parsing encoder would be actively worse than the default.
-CAPTION_STYLES = {
-    "descriptive": (
-        "Describe this image in plain, factual prose. Name the subject and what it is "
-        "doing, then its appearance, clothing, pose, setting, lighting and style. "
-        "Attach every adjective to the noun it belongs to, so it is unambiguous which "
-        "garment or object each colour and material describes. Do not speculate about "
-        "anything you cannot see. Do not begin with 'This image' or 'The photo'."
-    ),
-    "casual": (
-        "Describe this image in natural, conversational prose, the way you would "
-        "describe a photo to someone who cannot see it. Cover what is happening, how "
-        "it looks and the overall mood, keeping each adjective clearly attached to the "
-        "thing it describes. Do not begin with 'This image' or 'The photo'."
-    ),
+# What every caption obeys regardless of preset. Factored out rather than
+# repeated five times because these are the sentences the *parser* below
+# depends on — a preamble the model was never told to drop is a preamble
+# `_caption_images` has to strip by prefix, and that list only ever grows.
+CAPTION_RULES = (
+    " Write continuous prose in plain declarative English: no list, no bullet "
+    "points, no markdown, no headings, no labels. Do not open with 'This image', "
+    "'The photo', 'Here is' or any other preamble. Do not editorialise — no "
+    "'stunning', 'conveying a sense of', 'evoking a mood of'. Do not speculate "
+    "about anything you cannot see. Output the caption itself and nothing else."
+)
+
+# The instruction is the product, not the model.
+#
+# A preset is a training intent, and the intent decides the one thing that
+# matters: *what to leave out*. A caption teaches the model that whatever it
+# names is free to vary, and whatever it never names belongs to the trigger
+# word — so a character set that describes the jaw and the eye colour has spent
+# its trigger on a face the captions already supply, and a style set that says
+# "oil painting, thick impasto" has handed the model a phrase to hang the look
+# on instead of the token you are training. Same rule, inverted per preset.
+#
+# They are here rather than in the page for the reason `SHOT_VOCAB` is: the page
+# should send `character`, not four hundred words of instruction it could edit
+# into something the run cannot reproduce. What the page shows is the label and
+# the note.
+CAPTION_PRESETS: dict[str, dict[str, str]] = {
+    "general": {
+        "label": "General",
+        "note": "Everything in frame, each adjective bound to its noun.",
+        "instruction": (
+            "Describe this image in plain, factual prose. Name the subject and what "
+            "it is doing, then its appearance, clothing, pose, setting, lighting and "
+            "style. Attach every adjective to the noun it belongs to, so it is "
+            "unambiguous which garment or object each colour and material describes."
+        ),
+    },
+    "character": {
+        "label": "Character",
+        "note": "Describes everything except the face. Identity is the trigger's job.",
+        "instruction": (
+            "Write a training caption for this photograph of a recurring person. "
+            "Describe only what changes from shot to shot: pose and body position, "
+            "gaze direction, facial expression, shot type (close-up, medium, full "
+            "body), camera angle, clothing and accessories, hair when it is styled "
+            "differently, the setting behind them, the quality and direction of the "
+            "light, and anyone or anything else in frame. "
+            "Refer to the subject with a plain class noun — the woman, the man, the "
+            "person — and never invent a name. "
+            "Never describe permanent identity: face shape, eye colour, nose, jaw, "
+            "skin tone, age, ethnicity, build, or how attractive they are. Those are "
+            "constant across the set and naming them teaches the model they are free "
+            "to vary. "
+            "Do name anything you would want to remove later: a watermark, text "
+            "overlay, motion blur, harsh on-camera flash, a hand at the edge of "
+            "frame, a cluttered background. Anything named can be prompted away; "
+            "anything unnamed is baked into the character."
+        ),
+    },
+    "style": {
+        "label": "Style",
+        "note": "Describes the content, never the look. The look is the trigger.",
+        "instruction": (
+            "Write a training caption for an image in a recurring visual style. "
+            "Describe what the image is *of*: the subject, what it is doing, the "
+            "composition and framing, where things sit relative to each other, and "
+            "the setting. "
+            "Say nothing about how it is rendered — do not name the medium, the "
+            "brushwork, line quality, palette, grain, colour grade, era, artist, or "
+            "any word for the look itself such as cinematic, painterly, anime or "
+            "retro. Those are the style you are training, and a caption that names "
+            "them gives the model a phrase to hang the look on instead of the trigger "
+            "word. "
+            "Do name anything incidental you would want to prompt away later, such as "
+            "a watermark, signature, border or caption text."
+        ),
+    },
+    "concept": {
+        "label": "Concept",
+        "note": "For an object, garment or pose — describes the context around it.",
+        "instruction": (
+            "Write a training caption for an image of a recurring object, garment, "
+            "pose or effect. "
+            "Describe everything around it: the scene, who is holding or wearing it, "
+            "the angle it is seen from, its scale relative to the frame, what else is "
+            "present, the lighting and the background. "
+            "Refer to the concept itself with the shortest plain noun that fits, and "
+            "say nothing about what makes it distinctive — its shape, markings, "
+            "colour scheme, materials or construction. Those are constant across the "
+            "set and belong to the trigger word. "
+            "Do name anything incidental you would want to prompt away later."
+        ),
+    },
+    "casual": {
+        "label": "Casual",
+        "note": "Conversational prose, none of the dataset rules applied.",
+        "instruction": (
+            "Describe this image in natural, conversational prose, the way you would "
+            "describe a photo to someone who cannot see it. Cover what is happening, "
+            "how it looks and the overall mood, keeping each adjective clearly "
+            "attached to the thing it describes."
+        ),
+    },
 }
+DEFAULT_CAPTION_PRESET = "general"
+
 CAPTION_LENGTHS = {
     "short": " Keep it to one dense sentence.",
     "medium": " Keep it to two or three sentences.",
     "long": " Be thorough, four or more sentences.",
 }
+
+# Anchored at the start, like `prepend_trigger`'s `startswith` and for the same
+# reason: "I cannot" halfway through a caption is a sentence about the picture
+# ("a sign reads I CANNOT"), while a caption that *opens* this way is a model
+# talking about itself. A substring test would throw away real captions.
+REFUSAL_RE = re.compile(
+    r"^\W*(?:i(?:'|’)?m sorry|i am sorry|sorry[,.]|i (?:can(?:'|’)?t|cannot|won(?:'|’)?t)\b"
+    r"|i(?:'|’)?m (?:not able|unable)|i am (?:not able|unable)|unable to\b"
+    r"|as an ai\b|i (?:don(?:'|’)?t|do not) (?:have the ability|feel comfortable))",
+    re.I,
+)
+
+
+def _looks_like_refusal(caption: str) -> bool:
+    """A decline is a well-formed sentence, so nothing downstream would catch it."""
+    return bool(REFUSAL_RE.match(caption.strip()))
+
+
+def _caption_instruction(preset: str, length: str, trigger_word: str) -> str:
+    """
+    One prompt out of the preset, the length and the trigger word.
+
+    The trigger clause is added here rather than written into each preset
+    because it is a fact about *this run* — the token is prepended in Python
+    once the caption comes back, so the model has to be told both that the
+    subject has a name and that writing it would double it.
+    """
+    spec = CAPTION_PRESETS.get(preset) or CAPTION_PRESETS[DEFAULT_CAPTION_PRESET]
+    out = spec["instruction"]
+    if trigger_word:
+        out += (
+            f" Every caption in this set is prefixed with the trigger word "
+            f"'{trigger_word}' automatically, so never write '{trigger_word}' yourself."
+        )
+    out += CAPTION_LENGTHS.get(length, CAPTION_LENGTHS["medium"])
+    return out + CAPTION_RULES
 
 
 # --------------------------------------------------------------------------
@@ -1885,8 +2036,8 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
 
 def _caption_images(
     image_dir: Path, trigger_word: str, job_id: str,
-    style: str, length: str, overwrite: bool,
-) -> int:
+    preset: str, length: str, overwrite: bool, model_key: str,
+) -> tuple[int, int]:
     import torch
     from PIL import Image
     from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
@@ -1899,9 +2050,11 @@ def _caption_images(
         or not p.with_suffix(".txt").read_text().strip()
     ]
     if not todo:
-        return 0
+        return 0, 0
 
-    print(f"[caption] {len(todo)}/{len(every)} images")
+    spec = CAPTION_MODELS.get(model_key) or CAPTION_MODELS[DEFAULT_CAPTION_MODEL]
+    repo = spec["repo"]
+    print(f"[caption] {len(todo)}/{len(every)} images · {preset} · {repo}")
     _publish(job_id, phase="caption", step=0, total_steps=len(todo), percent=0)
 
     cache_dir = str(HF_CACHE)
@@ -1909,11 +2062,11 @@ def _caption_images(
     # resolution, so a 4000px training image would otherwise spend thousands of
     # tokens on detail that never reaches the caption — slow, and no better.
     processor = AutoProcessor.from_pretrained(
-        CAPTION_MODEL, cache_dir=cache_dir,
+        repo, cache_dir=cache_dir,
         min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
     )
     model = Qwen3VLForConditionalGeneration.from_pretrained(
-        CAPTION_MODEL, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
+        repo, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
     )
     model.eval()
     # Persist the downloaded weights now, on their own volume, so the next cold
@@ -1923,10 +2076,9 @@ def _caption_images(
     except Exception as exc:
         print(f"[caption] hf cache commit skipped: {exc}")
 
-    instruction = CAPTION_STYLES.get(style, CAPTION_STYLES["descriptive"])
-    instruction += CAPTION_LENGTHS.get(length, CAPTION_LENGTHS["medium"])
+    instruction = _caption_instruction(preset, length, trigger_word)
 
-    written = 0
+    written = refused = 0
     for i, img_path in enumerate(todo, 1):
         if _stop_requested(job_id):
             print("[caption] stop requested")
@@ -1959,9 +2111,17 @@ def _caption_images(
                     caption = caption[:1].upper() + caption[1:]
                     break
 
-            final = f"{trigger_word}, {caption}" if trigger_word else caption
-            img_path.with_suffix(".txt").write_text(final[:MAX_CAPTION_CHARS])
-            written += 1
+            # A decline is fluent prose, so it would pass every check below it
+            # and land in a sidecar the trainer reads. Leaving the file alone
+            # keeps the image in the Uncaptioned filter, which is where it can
+            # be found and re-run against the other captioner.
+            if _looks_like_refusal(caption):
+                print(f"[caption] {img_path.name} refused: {caption[:80]}")
+                refused += 1
+            else:
+                final = f"{trigger_word}, {caption}" if trigger_word else caption
+                img_path.with_suffix(".txt").write_text(final[:MAX_CAPTION_CHARS])
+                written += 1
         except Exception as exc:
             print(f"[caption] {img_path.name} failed: {exc}")
 
@@ -1971,7 +2131,7 @@ def _caption_images(
     del model
     torch.cuda.empty_cache()
     volume.commit()
-    return written
+    return written, refused
 
 
 @app.function(
@@ -1981,20 +2141,30 @@ def _caption_images(
     volumes={"/workspace": volume, str(HF_CACHE): hf_cache},
 )
 def caption_job(
-    job_id: str, dataset: str, trigger_word: str = "", style: str = "descriptive",
-    length: str = "medium", overwrite: bool = False,
+    job_id: str, dataset: str, trigger_word: str = "",
+    preset: str = DEFAULT_CAPTION_PRESET, length: str = "medium",
+    overwrite: bool = False, model: str = DEFAULT_CAPTION_MODEL,
 ) -> dict[str, Any]:
-    jobs[job_id] = {"status": "running", "phase": "caption", "stop": False}
+    spec = CAPTION_MODELS.get(model) or CAPTION_MODELS[DEFAULT_CAPTION_MODEL]
+    # The label rides the record because the first minute of this job is a cold
+    # start that may also be a 17 GB pull, and "Loading captioner…" for twenty
+    # minutes is the same UI state as a hang. Naming which one is loading is the
+    # difference between that and "it is fetching the uncensored weights".
+    jobs[job_id] = {"status": "running", "phase": "caption", "stop": False,
+                    "model": model, "model_label": spec["label"]}
     _reload_volume()
     src = _dataset_dir(dataset)
     if not src.is_dir():
         raise RuntimeError(f"No dataset named {dataset!r}.")
 
     started = time.time()
-    written = _caption_images(src, trigger_word.strip(), job_id, style, length, overwrite)
+    written, refused = _caption_images(
+        src, trigger_word.strip(), job_id, preset, length, overwrite, model)
     res = {
         "status": "completed", "job_id": job_id, "dataset": dataset,
-        "captioned": written, "duration_s": round(time.time() - started, 1),
+        "captioned": written, "refused": refused, "preset": preset,
+        "model": model, "model_label": spec["label"],
+        "duration_s": round(time.time() - started, 1),
     }
     _publish(job_id, **res)
     return res
@@ -5931,6 +6101,20 @@ def web():
             "shot_vocab": SHOT_VOCAB,
             "shot_langs": H3_LANGUAGES,
             "shot_roles": [dict(spec, key=k) for k, spec in SHOT_REF_ROLES.items()],
+            # Label and note only. The instruction itself stays on the server for
+            # the reason the shot vocabulary's phrasing does: what the page sends
+            # is a key, so the run is reproducible from the job record rather
+            # than from whatever text happened to be in a field.
+            "caption_presets": [
+                {"key": k, "label": p["label"], "note": p["note"]}
+                for k, p in CAPTION_PRESETS.items()
+            ],
+            "caption_models": [
+                {"key": k, "label": m["label"], "note": m["note"]}
+                for k, m in CAPTION_MODELS.items()
+            ],
+            "caption_defaults": {"preset": DEFAULT_CAPTION_PRESET,
+                                 "model": DEFAULT_CAPTION_MODEL},
         }
 
     @api.post("/api/loras/delete")
@@ -6500,10 +6684,26 @@ def web():
         if trigger:
             _write_dataset_meta(d, trigger_word=trigger)
             volume.commit()
+
+        # Named rather than defaulted. The page builds both menus out of the
+        # tables `/api/state` serves, so a key that is not in them is the two
+        # sides having drifted — and the cost of guessing is a cold GPU
+        # container that captions eighty images with the wrong instruction, or
+        # downloads 17 GB of the wrong checkpoint. Same argument as
+        # `_validate_loras()`: this is a form error in milliseconds.
+        preset = str(payload.get("preset") or DEFAULT_CAPTION_PRESET)
+        if preset not in CAPTION_PRESETS:
+            return {"error": f"No caption preset {preset!r}. "
+                             f"One of: {', '.join(CAPTION_PRESETS)}"}
+        model = str(payload.get("model") or DEFAULT_CAPTION_MODEL)
+        if model not in CAPTION_MODELS:
+            return {"error": f"No captioner {model!r}. "
+                             f"One of: {', '.join(CAPTION_MODELS)}"}
+
         job_id = f"cap{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         caption_job.spawn(
             job_id=job_id, dataset=name, trigger_word=trigger,
-            style=str(payload.get("style") or "descriptive"),
+            preset=preset, model=model,
             length=str(payload.get("length") or "medium"),
             overwrite=bool(payload.get("overwrite")),
         )
@@ -8430,11 +8630,19 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
           <div class="opt mid" data-ico="tag"><input id="ds-trig" placeholder="trigger word" spellcheck="false"></div>
           <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Fix</button>
           <span class="vr"></span>
-          <div class="opt"><select id="cap-style"><option value="descriptive">Descriptive</option><option value="casual">Casual</option></select></div>
+          <!-- Three menus, no labels: "Character", "Medium" and "Qwen3-VL 8B"
+               each name themselves, and none of them could be mistaken for
+               another. What a preset *does* is the one thing the word cannot
+               carry, so it goes in the note below rather than into a tooltip
+               nobody hovers. -->
+          <div class="opt"><select id="cap-preset"></select></div>
           <div class="opt"><select id="cap-len"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select></div>
+          <span class="vr"></span>
+          <div class="opt"><select id="cap-model"></select></div>
           <label class="row" style="gap:7px;margin:0;color:#ddd;font-size:13px"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
           <span class="actions"><button class="s" id="do-caption">Caption</button></span>
         </div>
+        <p class="muted" id="cap-note" style="margin:8px 2px 0"></p>
         <div id="cap-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><p class="muted" style="margin-top:6px"></p></div>
         <div id="ins-body" style="margin-top:13px"></div>
       </div>
@@ -9151,6 +9359,10 @@ function lightbox(src,video){
 // a second source of truth, and the first pill added on one side and not the
 // other would compile to "No such shot pill" against the page that offered it.
 let shotVocab=[], shotLangs=['English'], shotRoleDefs=[];
+// The captioner's menus, served for the same reason the palette is: the
+// instruction behind a preset lives on the server, so a copy of the labels here
+// would be a menu offering keys `/api/caption` rejects by name.
+let capPresets=[], capModels=[];
 let shot=[];        // [{key,value?,lang?}] — the rail, in the order you built it
 let shotOpen=null;  // which valued pill is expanded, if any
 let refRoles=[];    // one role per image reference, positional
@@ -9469,6 +9681,11 @@ async function loadState(){
   shotLangs=s.shot_langs||['English'];
   shotRoleDefs=s.shot_roles||[];
   drawShotRail();
+  capPresets=s.caption_presets||[]; capModels=s.caption_models||[];
+  const capDef=s.caption_defaults||{};
+  fillCapSel($('#cap-preset'),capPresets,capDef.preset);
+  fillCapSel($('#cap-model'),capModels,capDef.model);
+  capNote();
   // Per-checkpoint steps and CFG. The boxes show "auto" rather than these, so
   // this is what ↑ on an empty one counts from — the number the backend would
   // have used, which is the only base that makes the first press mean anything.
@@ -10095,22 +10312,56 @@ $('#do-prepend').onclick=async()=>{
   setTimeout(()=>{ b.textContent=was; b.disabled=false },1600);
 };
 
+// Refilled only when the served table changes. Unlike the LoRA index these two
+// hold a selection, and a rebuild on every poll would put the preset you picked
+// back to General somewhere between choosing it and pressing Caption.
+function fillCapSel(sel,rows,def){
+  const sig=rows.map(r=>r.key).join('|');
+  if(sel.dataset.sig===sig) return;
+  sel.dataset.sig=sig;
+  const keep=sel.value;
+  sel.innerHTML=rows.map(r=>`<option value="${esc(r.key)}">${esc(r.label)}</option>`).join('');
+  sel.value=rows.some(r=>r.key===keep)?keep:(def||(rows[0]||{}).key||'');
+}
+// What the two words cannot say: which half of the picture a preset throws away,
+// and that the second captioner is a download. Both come from the server, so the
+// note and the instruction behind it can never disagree.
+function capNote(){
+  const p=capPresets.find(r=>r.key===$('#cap-preset').value);
+  const m=capModels.find(r=>r.key===$('#cap-model').value);
+  $('#cap-note').textContent=[p&&p.note,m&&m.note].filter(Boolean).join(' · ');
+}
+$('#cap-preset').onchange=capNote;
+$('#cap-model').onchange=capNote;
+
 $('#do-caption').onclick=async()=>{
   const btn=$('#do-caption'); btn.disabled=true;
   const box=$('#cap-prog'); box.classList.remove('hide');
   errInto('#ds-edit-err','');
   const r=await post('/api/caption',{dataset:dsName,trigger_word:$('#ds-trig').value.trim(),
-    style:$('#cap-style').value,length:$('#cap-len').value,overwrite:$('#cap-over').checked});
+    preset:$('#cap-preset').value,model:$('#cap-model').value,
+    length:$('#cap-len').value,overwrite:$('#cap-over').checked});
   if(r.error){ errInto('#ds-edit-err',r.error); btn.disabled=false; box.classList.add('hide'); return }
   clearInterval(capPoll);
   capPoll=everyMs(async()=>{
     const s=await api('/api/status/'+r.job_id);
     box.querySelector('i').style.width=(s.percent||0)+'%';
-    box.querySelector('p').textContent=s.step?`Captioning ${s.step}/${s.total_steps}`:'Loading captioner…';
+    // Named while it loads. The first minute of a run against a captioner that
+    // is not in the cache yet is a 17 GB pull, and a bare "Loading captioner…"
+    // for twenty minutes is indistinguishable from a hang.
+    box.querySelector('p').textContent=s.step?`Captioning ${s.step}/${s.total_steps}`
+      :`Loading ${s.model_label||'captioner'}…`;
     // Refresh mid-run so captions land visibly rather than all at the end.
     if(s.step&&s.step%5===0) loadTiles();
     if(s.status==='completed'){ clearInterval(capPoll); box.classList.add('hide');
-      btn.disabled=false; loadTiles(); }
+      btn.disabled=false; loadTiles();
+      // A refusal wrote no file, so those images are still Uncaptioned and the
+      // run otherwise looks like it worked. Say how many, and say the one thing
+      // that fixes it — the other captioner is a menu away.
+      if(s.refused) errInto('#ds-edit-err',
+        `${s.refused} image${s.refused===1?'' :'s'} the captioner declined to describe`
+        +(s.model==='qwen3vl'?'. Try the uncensored captioner.':'.'));
+    }
     else if(s.status==='failed'){ clearInterval(capPoll); box.classList.add('hide');
       btn.disabled=false; errInto('#ds-edit-err',s.error||'Captioning failed'); }
   },2500);

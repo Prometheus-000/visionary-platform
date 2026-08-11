@@ -34,7 +34,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from _from_app import SHOT, pull
+from _from_app import CAPTION, SHOT, pull
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
 # Argument first, then $PORT, then a default. The env var is what lets a launcher
@@ -47,21 +47,23 @@ PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT") or 8777)
 # built from a table in app.py, and a hand-written copy of that table would be a
 # preview of a palette that does not exist — the states worth looking at are
 # exactly the ones a copy would get wrong. The compiler comes with it, so
-# `/api/compile` shows the real document rather than a plausible one.
+# `/api/compile` shows the real document rather than a plausible one. The
+# captioner's presets ride along for the same reason, in the same pull: two AST
+# parses to answer one request would be paying twice for the same file.
 #
 # Re-pulled when app.py changes, for the reason at the top of this file: reload
 # is the edit loop, so reload has to be honest, and a vocabulary captured at
 # import is exactly the staleness `ui_html()` refuses to have. Keyed on mtime
 # rather than re-parsed per request because every gallery thumbnail is a
 # request and an AST parse of ten thousand lines is not free.
-_SHOT_CACHE: dict = {}
+_APP_CACHE: dict = {}
 
 
-def shot_api() -> dict:
+def app_api() -> dict:
     stamp = APP.stat().st_mtime_ns
-    if _SHOT_CACHE.get("stamp") != stamp:
-        _SHOT_CACHE.update(stamp=stamp, api=pull(SHOT))
-    return _SHOT_CACHE["api"]
+    if _APP_CACHE.get("stamp") != stamp:
+        _APP_CACHE.update(stamp=stamp, api=pull(SHOT | CAPTION))
+    return _APP_CACHE["api"]
 
 
 def ui_html() -> str:
@@ -298,7 +300,7 @@ STATE = {
          "ready": True},
     ],
     "wan_experts": ["both", "high", "low"],
-    # shot_vocab / shot_langs / shot_roles are added per request — see shot_api().
+    # shot_vocab / shot_langs / shot_roles are added per request — see app_api().
     "max_loras": 6, "max_refs": 9, "max_ref_videos": 3,
     "max_regions": 8,
     # ComfyUI's spellings, which is what the image side sends into a graph now.
@@ -509,7 +511,7 @@ class Handler(BaseHTTPRequestHandler):
                 p = json.loads(body or b"{}")
             except json.JSONDecodeError:
                 p = {}
-            api = shot_api()
+            api = app_api()
             try:
                 pills = api["_validate_shot"](p.get("shot"))
                 n_refs = max(0, min(9, int(p.get("references") or 0)))
@@ -570,13 +572,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             return self.reply(ui_html(), "text/html; charset=utf-8")
         if path == "/api/state":
-            api = shot_api()
+            api = app_api()
             return self.reply({
                 **STATE,
                 "shot_vocab": api["SHOT_VOCAB"],
                 "shot_langs": api["H3_LANGUAGES"],
                 "shot_roles": [dict(spec, key=k)
                                for k, spec in api["SHOT_REF_ROLES"].items()],
+                # Shaped exactly as `state()` serves them — label and note, no
+                # instruction — so the preview shows what the note line will
+                # actually be able to say.
+                "caption_presets": [{"key": k, "label": p["label"], "note": p["note"]}
+                                    for k, p in api["CAPTION_PRESETS"].items()],
+                "caption_models": [{"key": k, "label": m["label"], "note": m["note"]}
+                                   for k, m in api["CAPTION_MODELS"].items()],
+                "caption_defaults": {"preset": api["DEFAULT_CAPTION_PRESET"],
+                                     "model": api["DEFAULT_CAPTION_MODEL"]},
             })
         if path == "/api/gallery":
             return self.reply({"items": GALLERY})

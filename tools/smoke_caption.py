@@ -3,10 +3,14 @@ Smoke test for the Qwen3-VL captioner.
 
     modal run tools/smoke_caption.py           # class + processor exist, no weights
     modal run tools/smoke_caption.py --gpu     # load the model and caption one image
+    modal run tools/smoke_caption.py --gpu --model qwen3vl-uncensored --preset character
 
 The cheap check is the one that matters after a transformers bump:
 Qwen3VLForConditionalGeneration only exists from 4.57, and the failure mode of
-pinning too low is an ImportError deep inside a paid GPU job.
+pinning too low is an ImportError deep inside a paid GPU job. It reads every
+entry in CAPTION_MODELS rather than the default one, because a second repo id
+in a table is a second thing that can be misspelt, and the spelling is not
+checked anywhere until a GPU container has already started.
 """
 
 import sys
@@ -18,9 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import (  # noqa: E402
     CAPTION_LENGTHS,
-    CAPTION_MODEL,
-    CAPTION_STYLES,
+    CAPTION_MODELS,
+    CAPTION_PRESETS,
+    DEFAULT_CAPTION_MODEL,
+    DEFAULT_CAPTION_PRESET,
     HF_CACHE,
+    _caption_instruction,
+    _looks_like_refusal,
     caption_image,
     hf_cache,
     volume,
@@ -36,17 +44,25 @@ def check() -> dict:
     import transformers
     from transformers import AutoProcessor, Qwen3VLForConditionalGeneration  # noqa: F401
 
-    # Config only: downloads a few KB, not 16 GB, but still proves the repo id
-    # is right and that this transformers can parse its architecture.
+    # Config only: downloads a few KB per repo, not 17 GB each, but still proves
+    # every repo id is right and that this transformers can parse each
+    # architecture. A captioner whose weights load through the same class is the
+    # whole basis for the picker being a repo id rather than a second code path,
+    # so `arch` is the assertion, not decoration.
     from transformers import AutoConfig
 
-    cfg = AutoConfig.from_pretrained(CAPTION_MODEL)
+    models = {}
+    for key, spec in CAPTION_MODELS.items():
+        try:
+            models[key] = {"repo": spec["repo"],
+                           "arch": AutoConfig.from_pretrained(spec["repo"]).architectures}
+        except Exception as exc:
+            models[key] = {"repo": spec["repo"], "error": f"{type(exc).__name__}: {exc}"}
 
     return {
         "transformers": transformers.__version__,
-        "model": CAPTION_MODEL,
-        "arch": cfg.architectures,
-        "styles": sorted(CAPTION_STYLES),
+        "models": models,
+        "presets": list(CAPTION_PRESETS),
         "lengths": sorted(CAPTION_LENGTHS),
     }
 
@@ -55,7 +71,8 @@ def check() -> dict:
     image=smoke_image, gpu="A100-40GB", cpu=4.0, timeout=60 * 60,
     volumes={"/workspace": volume, str(HF_CACHE): hf_cache},
 )
-def caption_one(dataset: str = "") -> dict:
+def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
+                preset: str = DEFAULT_CAPTION_PRESET, trigger: str = "") -> dict:
     """Caption a single real image end to end and hand back the prose."""
     import time
 
@@ -80,19 +97,22 @@ def caption_one(dataset: str = "") -> dict:
 
     img_path = candidates[0]
     cache_dir = str(HF_CACHE)
+    repo = CAPTION_MODELS[model]["repo"]
 
     started = time.time()
     processor = AutoProcessor.from_pretrained(
-        CAPTION_MODEL, cache_dir=cache_dir,
+        repo, cache_dir=cache_dir,
         min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
     )
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
-        CAPTION_MODEL, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
+    vlm = Qwen3VLForConditionalGeneration.from_pretrained(
+        repo, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
     )
-    model.eval()
+    vlm.eval()
     load_s = round(time.time() - started, 1)
 
-    instruction = CAPTION_STYLES["descriptive"] + CAPTION_LENGTHS["medium"]
+    # The real builder, not a reimplementation of it — the point of running this
+    # is to see what the preset actually sends.
+    instruction = _caption_instruction(preset, "medium", trigger)
     image = Image.open(img_path).convert("RGB")
     convo = [{
         "role": "user",
@@ -105,20 +125,30 @@ def caption_one(dataset: str = "") -> dict:
 
     started = time.time()
     with torch.no_grad():
-        out = model.generate(**inputs, max_new_tokens=320, do_sample=True,
-                             temperature=0.6, top_p=0.9)[0][inputs["input_ids"].shape[1]:]
+        out = vlm.generate(**inputs, max_new_tokens=320, do_sample=True,
+                           temperature=0.6, top_p=0.9)[0][inputs["input_ids"].shape[1]:]
     caption = processor.decode(out, skip_special_tokens=True).strip()
 
     volume.commit()
     return {
         "image": img_path.name, "size": image.size,
+        "model": model, "repo": repo, "preset": preset,
         "load_s": load_s, "caption_s": round(time.time() - started, 1),
+        # Reported rather than left to be read: a decline is fluent prose, so
+        # eyeballing the caption below is exactly how it gets missed.
+        "refused": _looks_like_refusal(caption),
         "caption": caption,
     }
 
 
 @smoke.local_entrypoint()
-def main(gpu: bool = False, dataset: str = ""):
+def main(gpu: bool = False, dataset: str = "",
+         model: str = DEFAULT_CAPTION_MODEL, preset: str = DEFAULT_CAPTION_PRESET,
+         trigger: str = ""):
+    if model not in CAPTION_MODELS:
+        raise SystemExit(f"--model must be one of: {', '.join(CAPTION_MODELS)}")
+    if preset not in CAPTION_PRESETS:
+        raise SystemExit(f"--preset must be one of: {', '.join(CAPTION_PRESETS)}")
     print(check.remote())
     if gpu:
-        print(caption_one.remote(dataset))
+        print(caption_one.remote(dataset, model, preset, trigger))

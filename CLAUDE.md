@@ -192,7 +192,38 @@ still writing cannot be swept out from under itself.
 - **Nothing downloads on its own.** Weights are chosen explicitly, under the
   gear.
 - **Prose, not tags.** Captions are sentences, because the text encoders these
-  models use parse grammar. See the `CAPTION_MODEL` comment.
+  models use parse grammar. See the `CAPTION_MODELS` comment.
+- **A caption preset is a decision about what to leave out, and a refusal is
+  not an error.** Both halves of the captioner row exist for reasons the other
+  cannot cover.
+
+  What a caption *names* is what the model learns is free to vary; what it never
+  names is what the trigger word ends up owning. So the presets in
+  `CAPTION_PRESETS` are one rule inverted per intent — Character describes pose,
+  wardrobe, framing and light and refuses to describe a face; Style describes
+  the content and never the look; Concept describes the context around the
+  thing. Each also names the flaws worth prompting away later, because a
+  watermark nobody mentioned is a watermark the LoRA learned. The instruction
+  stays on the server and the page sends a key, for the reason `SHOT_VOCAB`
+  does: a run has to be reproducible from the job record rather than from
+  whatever text was in a field at the time.
+
+  The captioner picker is the other half. A stock instruct model declines to
+  describe photographs of real people often enough to matter, and on a character
+  set that is *every* image — but a decline is not an exception. It is fluent
+  prose that passes every check downstream of it, lands in a `.txt` sidecar and
+  trains, so the symptom is a LoRA that learned to say it cannot describe
+  someone. `_looks_like_refusal()` therefore drops it before it is written,
+  which leaves the image in the Uncaptioned filter where it can be found, and
+  `CAPTION_MODELS` offers the abliterated repackage — same architecture, same
+  loader, so the fix costs a repo id rather than a second code path. The count
+  of refusals is reported by name and points at the other menu, because "run
+  finished, nineteen of twenty-four captioned" is not a diagnosis.
+
+  The regex is prefix-anchored for the same reason `prepend_trigger` uses
+  `startswith`: "I cannot" inside a caption is a sentence about the picture, and
+  a substring test would throw away real captions to catch a model talking about
+  itself.
 - **Reload through `_reload_volume()`, never `volume.reload()`.** Modal refuses
   a reload while anything on the volume is open, and a container holding a
   checkpoint always is — safetensors maps the weights straight off `/workspace`

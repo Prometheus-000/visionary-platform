@@ -58,3 +58,11 @@ SHOT = {
     "_first_sentence", "_shot_audio", "_shot_body",
     "_compile_h3_prompt", "_compile_image_prompt", "_compile_wan_prompt",
 }
+
+# The captioner's two menus, for the same reason the vocabulary is here: the
+# labels and the notes are what the preview draws, and a hand-written copy of
+# them is a picker whose options `/api/caption` would reject by name.
+CAPTION = {
+    "CAPTION_MODELS", "CAPTION_PRESETS",
+    "DEFAULT_CAPTION_MODEL", "DEFAULT_CAPTION_PRESET",
+}
