@@ -935,16 +935,38 @@ def _publish(job_id: str, /, **fields: Any) -> None:
     on every caller remembering to pop the key.
     """
     try:
-        cur = jobs.get(job_id) or {}
-        cur.update(fields)
-        # When this record last spoke. A status is a claim about a container
-        # that may no longer exist — the Dict is named and outlives every
-        # container, app and deploy that writes to it — so the claim is only
-        # worth what its age says. See `_download_alive`.
-        cur["beat"] = time.time()
-        jobs[job_id] = cur
+        # Locked, because two threads write this record and both of them do
+        # get-update-put against a *network* Dict — a window wide enough to
+        # lose a write on most runs rather than rarely. The job thread
+        # publishes phases and the terminal result; `_Comfy._drain` publishes
+        # step counts as ComfyUI's tqdm line scrolls past. Interleaved, the
+        # drain reads {step: 6}, the job thread reads {step: 6} and writes
+        # {step: 6, phase: ...} over the drain's {step: 7}, and the bar walks
+        # backwards — which is what "the progress bar goes nuts" was, on the
+        # server, where no amount of client-side care could reach it.
+        #
+        # The same interleaving on the last line is worse than cosmetic. A tqdm
+        # write that read the record before the job finished puts the whole
+        # stale dict back, `status: "running"` included, over a `completed`
+        # that was already there — and the page then polls a finished job until
+        # someone reloads it. Rare, and the one that costs a result.
+        with _PUBLISH_LOCK:
+            cur = jobs.get(job_id) or {}
+            cur.update(fields)
+            # When this record last spoke. A status is a claim about a container
+            # that may no longer exist — the Dict is named and outlives every
+            # container, app and deploy that writes to it — so the claim is only
+            # worth what its age says. See `_download_alive`.
+            cur["beat"] = time.time()
+            jobs[job_id] = cur
     except Exception as exc:  # progress must never take the job down
         print(f"[progress] {job_id}: {exc}")
+
+
+# Process-local, which is all it needs to be: a job record is written by the
+# one container running that job, and `max_containers=1` on the GPU classes
+# means there is no second writer to coordinate with.
+_PUBLISH_LOCK = threading.Lock()
 
 
 def _stop_requested(job_id: str) -> bool:
@@ -1128,12 +1150,53 @@ def _reload_volume() -> bool:
     the same volume returned an error for one of two simultaneous requests, and
     the canvas now asks for a batch of stills at once, all of which miss on the
     first look at a brand-new job. The lock turns that from a race into a queue.
+
+    And a queue of twelve identical reloads is the wrong end of that trade,
+    which is the half this used to be missing. A gallery is a grid and a canvas
+    is a batch, so the misses arrive together and every one of them wanted the
+    same thing: a view newer than the moment it asked. One reload gives that to
+    all of them. Twelve gives it to all of them too, eleven of them twice over,
+    while the browser's connection budget sits inside this function and the
+    `<video>` waiting on a range request behind it stutters.
+
+    So the sequence number is read *before* queueing: anyone who finds it moved
+    by the time they hold the lock has been overtaken by a reload that began
+    after they asked, which is the freshness they came for. Anyone who started
+    theirs earlier than we asked does not count, so the check is `>` and a
+    caller who arrives mid-reload still runs its own.
+
+    That is one reload per in-flight window rather than one overall, and the
+    difference is the whole correctness argument: a reload that began before
+    you asked cannot be evidence that the file the GPU container wrote after
+    that is visible. A burst of twelve costs two — one for whoever asked before
+    it started, one for whoever asked during it — and never twelve. Measured on
+    a 0.25s reload: 3.00s of queue becomes 0.51s.
     """
+    global _RELOAD_SEQ
+    asked_at = _RELOAD_SEQ
     with _RELOAD_LOCK:
-        return _reload_volume_locked()
+        if _RELOAD_SEQ > asked_at:
+            return _RELOAD_OK
+        # Bumped before the call, not after: it marks when a reload *began*,
+        # which is what the comparison above is asking about.
+        _RELOAD_SEQ += 1
+        return _remember_reload()
+
+
+def _remember_reload() -> bool:
+    """Reload and record the answer, so a coalesced caller can return it too."""
+    global _RELOAD_OK
+    _RELOAD_OK = _reload_volume_locked()
+    return _RELOAD_OK
 
 
 _RELOAD_LOCK = threading.Lock()
+# Reloads begun, and what the last one answered. `_RELOAD_OK` matters because
+# the skip path is not "assume it worked" — a reload that was skipped for open
+# files returns False, and a caller riding on it has to hear the same thing or
+# the coalescing quietly upgrades a stale view into a fresh one.
+_RELOAD_SEQ = 0
+_RELOAD_OK = True
 
 
 def _reload_volume_locked() -> bool:
@@ -2224,8 +2287,9 @@ class _Comfy:
     """
 
     def __init__(self, tag: str):
-        # Prefixes the readiness line so two containers' logs are tellable
-        # apart in Modal's stream, where they interleave.
+        # Prefixes every line this container mirrors, so two GPU classes
+        # printing the same ComfyUI format are tellable apart in Modal's
+        # stream, where they interleave. See `_drain`.
         self.tag = tag
         self.job_id: str | None = None
         self._log: deque[str] = deque(maxlen=200)
@@ -2311,7 +2375,14 @@ class _Comfy:
             line = line.rstrip()
             if not line:
                 continue
-            print(line, flush=True)
+            # Tagged on the way to Modal's logs, because there are two of these
+            # processes on two GPU classes printing the same format, and an OOM
+            # traceback that names KSampler, Krea2 and a CUDA device says
+            # nothing about which. Untagged, the only way to tell an image
+            # container's log from a video one was to recognise the model file
+            # names in it. The deque stays clean: it is spliced into errors that
+            # are already shown under the panel they belong to.
+            print(f"[{self.tag}] {line}", flush=True)
             self._log.append(line)
             m = TQDM_RE.search(line)
             if m and self.job_id:
@@ -8317,6 +8388,35 @@ const api=async(p,o)=>{
   catch{ return {error:`${r.status} ${r.statusText||''} ${body.slice(0,400)}`.trim()} }
 };
 const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+
+// setInterval for a poll, with the one thing setInterval cannot do: skip a tick
+// while the last one is still out. Drop-in — same argument order, same id, so
+// `clearInterval(t)` inside the body still ends it.
+//
+// Every poll here awaits a request, and setInterval fires on a clock rather
+// than on a reply. /api/status reads a *network* Dict, so at 400ms a slow reply
+// does not delay the next tick, it overlaps it, and three things follow.
+//
+// Responses land out of order, so the bar is painted by whichever reply arrives
+// last rather than whichever is newest: step 14 lands, then step 12 lands on
+// top of it and the bar walks backwards. That is the client half of "the
+// progress bar goes nuts"; `_publish` is the server half.
+//
+// And in-flight polls hold connections. A browser gives one origin about six,
+// and everything on this page comes off that origin — the gallery's covers, the
+// stills on the canvas, and a <video> that re-requests byte ranges for as long
+// as it plays. A pile of polls starves them: the clip stutters mid-playback and
+// the grid comes back half-painted, neither of which looks like a poll loop,
+// which is why this went unfound for so long.
+const everyMs=(fn,ms)=>{
+  let busy=false;
+  const id=setInterval(async()=>{
+    if(busy) return;
+    busy=true;
+    try{ await fn() } finally{ busy=false }
+  },ms);
+  return id;
+};
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 const errInto=(sel,msg)=>{ $(sel).innerHTML = msg ? '<div class="err-box">'+esc(msg)+'</div>' : ''; };
 let poll=null;
@@ -9260,7 +9360,7 @@ function downloadsBusy(on){
 function followQueue(jobId, box, doneText){
   const bar=box.querySelector('i'), msg=box.querySelector('p');
   wireCancel(box, jobId);
-  const t=setInterval(async()=>{
+  const t=everyMs(async()=>{
     const s=await api('/api/status/'+jobId);
     bar.style.width=(s.percent||0)+'%';
     msg.textContent=[s.phase||'Downloading…',s.mb_s&&`${s.mb_s} MB/s`].filter(Boolean).join(' · ');
@@ -9305,7 +9405,7 @@ $('#gd-go').onclick=async()=>{
   const r=await post('/api/gdrive',{url,folder:$('#gd-folder').value.trim()});
   if(r.error){ msg.innerHTML='<span class="err">'+esc(r.error)+'</span>'; b.disabled=false; return }
   wireCancel(box,'dl_gdrive');
-  const t=setInterval(async()=>{
+  const t=everyMs(async()=>{
     const s=await api('/api/status/dl_gdrive');
     if(s.status==='completed'){
       clearInterval(t); b.disabled=false;
@@ -9346,7 +9446,7 @@ async function startDownload(key,btn){
     cancelBtn.onclick=async()=>{ cancelBtn.disabled=true; cancelBtn.textContent='Stopping…'; await post('/api/stop/dl_'+key); };
   }
   const done=()=>{ if(cancelBtn)cancelBtn.classList.add('hide'); downloadsBusy(false); };
-  const t=setInterval(async()=>{
+  const t=everyMs(async()=>{
     const s=await api('/api/status/dl_'+key);
     if(s.status==='completed'){clearInterval(t);el.innerHTML='<span class="ok">Done</span>';done();loadState();}
     else if(s.status==='stopped'){clearInterval(t);el.textContent='Cancelled.';done();}
@@ -9716,7 +9816,7 @@ $('#do-caption').onclick=async()=>{
     style:$('#cap-style').value,length:$('#cap-len').value,overwrite:$('#cap-over').checked});
   if(r.error){ errInto('#ds-edit-err',r.error); btn.disabled=false; box.classList.add('hide'); return }
   clearInterval(capPoll);
-  capPoll=setInterval(async()=>{
+  capPoll=everyMs(async()=>{
     const s=await api('/api/status/'+r.job_id);
     box.querySelector('i').style.width=(s.percent||0)+'%';
     box.querySelector('p').textContent=s.step?`Captioning ${s.step}/${s.total_steps}`:'Loading captioner…';
@@ -9845,7 +9945,7 @@ $('#go-train').onclick=async()=>{
   if(r.error){$('#train-err').innerHTML='<div class="err-box">'+r.error+'</div>';return}
   trainJob=r.job_id;
   show('run'); $('#run-done').classList.add('hide');
-  poll=setInterval(pollTrain,3000); pollTrain();
+  poll=everyMs(pollTrain,3000); pollTrain();
 };
 async function pollTrain(){
   const s=await api('/api/status/'+trainJob);
@@ -11098,7 +11198,7 @@ $('#go-gen').onclick=async()=>{
   });
   if(r.error){$('#gen-err').innerHTML='<div class="err-box">'+r.error+'</div>';btn.disabled=false;box.classList.add('hide');return}
   wireCancel(box, r.job_id);
-  const t=setInterval(async()=>{
+  const t=everyMs(async()=>{
     const s=await api('/api/status/'+r.job_id);
     box.querySelector('i').style.width=(s.percent||0)+'%';
     box.querySelector('p').textContent=s.step?`Step ${s.step}/${s.total_steps}`:(s.phase||'Working…');
@@ -11529,7 +11629,7 @@ $('#go-vid').onclick=async()=>{
   }
   wireCancel(box, r.job_id);
 
-  const t=setInterval(async()=>{
+  const t=everyMs(async()=>{
     const s=await api('/api/status/'+r.job_id);
     box.querySelector('i').style.width=(s.percent||0)+'%';
     // The first minutes are 42.5 GB loading onto the card, with no step count
