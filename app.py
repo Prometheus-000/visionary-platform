@@ -7817,6 +7817,28 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    because that is the one representation of a ratio nobody has to read — the
    same argument the shot tiles make for a camera move, and the reason this is
    a palette rather than a longer select. */
+
+/* The sampling popover. A form, not a palette — a sampler name and a step count
+   are not things a picture of them could teach, which is the line the shot
+   tiles sit on the other side of. */
+.menu.form{padding:9px;width:auto;min-width:250px}
+.form .frow{display:grid;grid-template-columns:74px 1fr;align-items:center;gap:8px;
+  margin:0 0 7px;font-size:11.5px;color:var(--dim)}
+.form .frow>span{white-space:nowrap}
+.form .frow select,.form .frow input{height:30px;padding:0 7px;font-size:12px}
+/* The one control whose name explains nothing, so it gets the sentence the
+   others do not need. Spanning both columns because a hint indented under a
+   74px label is a hint shaped like a value. */
+.form .frow>i{grid-column:1/-1;font-style:normal;font-size:10.5px;color:var(--mut);line-height:1.4}
+.form .sz-reset{width:100%;margin-top:2px;padding:7px 0;border:1px solid var(--line);
+  border-radius:9px;background:none;color:var(--dim);cursor:pointer;font:500 11px/1 inherit}
+.form .sz-reset:hover{color:var(--fg);border-color:rgba(255,255,255,.3)}
+/* A dot, not a colour change: the button's text is the resolved numbers, and
+   recolouring those would say "warning" about a value you deliberately chose. */
+#g-sampling,#v-sampling{width:auto;padding:0 11px;font-size:11.5px;color:var(--fg);
+  font-variant-numeric:tabular-nums}
+#g-sampling.edited::after,#v-sampling.edited::after{content:'';display:inline-block;width:4px;height:4px;margin-left:6px;
+  border-radius:50%;background:var(--fg);opacity:.55;vertical-align:1.5px}
 .menu.sizer{padding:10px;width:auto;min-width:236px}
 .sizer .ars{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
 .sizer .ar{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
@@ -8312,11 +8334,30 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
       <div class="opt n" data-lb="H"><input data-r="height" inputmode="decimal"
         data-step="0.01" data-bigstep="0.1"
         title="How much of the canvas height this box covers, 0 to 1."></div>
+      <!-- Render-scoped, unlike everything to the left of the rule, which is
+           about whichever box is selected. They lived in Advanced, which meant
+           the two controls that only exist when regions are armed were behind a
+           drawer that had nothing else to do with regions. -->
+      <span class="vr" id="g-region-vr"></span>
+      <button class="opt ib" id="g-arrange" data-ico="arrange"
+        title="Distribute the boxes evenly"></button>
+      <div class="opt n" id="g-region-base-wrap" data-lb="Global"><input id="g-region-base"
+        value="1" inputmode="decimal" data-step="0.05" data-bigstep="0.25"
+        title="Multiplies every region's LoRA strength at once. 1 uses the strengths as written."></div>
+      <button class="drop mini hide" id="g-drop-scene" data-lb="Scene"
+        title="Scene photo. The picture is generated inside it — lighting, perspective and shadows integrate.">
+        <img id="g-thumb-scene" class="hide" alt=""><span id="g-hint-scene"></span>
+      </button>
+      <button class="drop mini hide" id="g-drop-outfit" data-lb="Outfit"
+        title="Outfit or object photo. Transferred onto the subjects rather than pasted into the frame.">
+        <img id="g-thumb-outfit" class="hide" alt=""><span id="g-hint-outfit"></span>
+      </button>
       <span class="actions">
         <button class="opt ib" id="r-del" data-ico="trash"
           title="Remove this box — or select it and press ⌫"></button>
       </span>
     </div>
+    <p class="muted hide" id="region-note" style="margin:7px 2px 0"></p>
     <div id="gen-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><div class="row" style="gap:10px;margin-top:6px"><p class="muted grow" style="margin:0"></p><button class="s" data-cancel>Cancel</button></div></div>
     <div id="vid-prog" class="hide" style="margin-top:9px"><div class="bar"><i style="width:0%"></i></div><div class="row" style="gap:10px;margin-top:6px"><p class="muted grow" style="margin:0"></p><button class="s" data-cancel>Cancel</button></div></div>
     <p class="muted warn" id="gen-note" style="margin:8px 2px 0"></p>
@@ -8364,6 +8405,16 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
           <input id="g-w" inputmode="numeric"><input id="g-h" inputmode="numeric">
           <button id="g-swap"></button>
         </div>
+        <!-- Sampling state. Same arrangement as #g-size-state: the popover is a
+             view over these, so fillSelect, the submit body, reuse() and the
+             arrow-key nudges are all unchanged by the drawer going away. -->
+        <div class="hide" id="g-samp-state">
+          <select id="g-sampler"></select>
+          <select id="g-scheduler"></select>
+          <input id="g-steps" placeholder="auto" inputmode="numeric">
+          <input id="g-cfg" placeholder="auto" inputmode="decimal" data-step="0.1" data-bigstep="1">
+          <input id="g-shift" placeholder="1.15" inputmode="decimal" data-step="0.05" data-bigstep="0.5">
+        </div>
         <div class="opt n" data-lb="Images"><select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
         <div class="opt" data-lb="Seed"><input id="g-seed" placeholder="random" inputmode="numeric"
           title="Fix the noise so a prompt reproduces. Blank draws a new one per image."></div>
@@ -8393,70 +8444,15 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
           title="Place each character in their own box on the canvas — one LoRA, or one photo, per box."></button>
         <span class="actions">
           <span class="muted" id="gen-model-line"></span>
-          <button class="opt ib" id="toggle-adv" data-ico="sliders" title="Advanced"></button>
+          <!-- "Advanced" was a drawer, which is a name for where something is
+               rather than what it does — and behind it sat five controls that
+               are not advanced, they are just rarely changed. A drawer also
+               charges the console a whole row the moment you open it to read
+               one number. This is the shot palette's shape again: one button
+               showing the value it resolved to, everything behind it. -->
+          <button class="opt ib" id="g-sampling" title="Sampler, steps and guidance"></button>
           <button class="b" id="go-gen">Generate</button>
         </span>
-      </div>
-
-      <div id="gen-adv" class="hide adv">
-        <div class="opts">
-          <div class="opt" data-lb="Sampler"><select id="g-sampler"></select></div>
-          <div class="opt" data-lb="Scheduler"><select id="g-scheduler"></select></div>
-          <div class="opt n" data-lb="Steps"><input id="g-steps" placeholder="auto" inputmode="numeric"
-            title="Denoising steps. More is slower; past the model's trained range it stops helping."></div>
-          <!-- data-step, because ↑/↓ default to 1 and ⌘ to 8, and a CFG of 1.0
-               stepped by 8 is not a coarser version of the same gesture — it is
-               a number no checkpoint here accepts. Same for Shift below. -->
-          <div class="opt n" data-lb="CFG"><input id="g-cfg" placeholder="auto" inputmode="decimal"
-            data-step="0.1" data-bigstep="1"
-            title="Guidance scale — how hard sampling is pushed toward the prompt. Turbo is distilled to 1.0."></div>
-          <!-- The one control here whose *name* explains nothing, which is why
-               the tooltip is on the pill and not on the box: "Shift" is the
-               part you hover, and a title on the 52px input meant the word
-               itself was the one place on the control that answered nothing.
-               Two sentences rather than one, because timestep shift is a
-               flow-matching idea most people meet for the first time here —
-               the others are naming a knob you already know. -->
-          <div class="opt n" data-lb="Shift"
-            title="Timestep shift bends the noise schedule: higher spends more steps in the noisy half, where composition, pose and anatomy are settled, and fewer on fine detail. Krea 2's own config says 1.15 — raise it if large canvases come out muddled, lower it if they come out flat."><input
-            id="g-shift" placeholder="1.15" inputmode="decimal"
-            data-step="0.05" data-bigstep="0.5"></div>
-          <span class="vr"></span>
-          <!-- The real parameter, exposed. Snapped to 16 on the way out, because
-               the pipeline floors to 16 anyway and a box that keeps 1000 while
-               the model renders 992 is a box that lied to you. -->
-          <span class="vr" id="g-region-vr"></span>
-          <!-- Was a persistent Columns/Rows select that filled only the
-               coordinates nobody had typed into. Once boxes are drawn there is
-               no such thing as an untouched coordinate, so the mode became a
-               verb: distribute what is already there, on demand. -->
-          <button class="opt ib hide" id="g-arrange" data-ico="arrange"
-            title="Distribute the boxes evenly"></button>
-          <!-- The prompt above keeps applying everywhere once regions are on —
-               it is what holds the lighting, lens and palette common to all of
-               them. This is how hard it pulls against them. The backend has
-               taken it since regional prompting landed; nothing ever sent it,
-               so it sat at its default and the knob did not exist. -->
-          <div class="opt n hide" id="g-region-base-wrap" data-lb="Global"><input id="g-region-base"
-            value="1" inputmode="decimal" data-step="0.05" data-bigstep="0.25"
-            title="Multiplies every region's LoRA strength at once. 1 uses the strengths as written; nudge to 1.1 if all the identities look soft."></div>
-          <!-- Two plates, and they are not variants of each other: a scene is
-               regenerated *around* the boxes so the subjects are lit by it and
-               can lean on the furniture, while an outfit is a second reference
-               frame the garments are read out of. Both need the identity edit
-               LoRA, so both stay hidden until it is on the volume — a tile that
-               silently renders a picture with nothing to do with the photo you
-               dropped is the failure this hiding prevents. -->
-          <button class="drop mini hide" id="g-drop-scene" data-lb="Scene"
-            title="Scene photo. The picture is generated inside it — lighting, perspective and shadows integrate.">
-            <img id="g-thumb-scene" class="hide" alt=""><span id="g-hint-scene"></span>
-          </button>
-          <button class="drop mini hide" id="g-drop-outfit" data-lb="Outfit"
-            title="Outfit or object photo. Transferred onto the subjects rather than pasted into the frame.">
-            <img id="g-thumb-outfit" class="hide" alt=""><span id="g-hint-outfit"></span>
-          </button>
-        </div>
-        <p class="muted hide" id="region-note" style="margin:7px 0 0"></p>
       </div>
     </div>
 
@@ -8487,11 +8483,26 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
              token as a third field, and is read off the filename when the
              matched `high`/`low` pair names it. -->
         <button class="s hide" id="v-add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
+        <!-- Sampling state, the same arrangement as #g-samp-state. The three
+             `-wrap` divs stay because syncVideoModel toggles them per model —
+             H3 reads no CFG and only the A14B pair has a handover to place —
+             and the popover reads those same classes to decide what to draw. -->
+        <div class="hide" id="v-samp-state">
+          <select id="v-sampler"></select>
+          <select id="v-scheduler"></select>
+          <input id="v-steps" inputmode="numeric">
+          <span id="v-cfg-wrap" class="hide"><input id="v-cfg" inputmode="decimal"
+            data-step="0.1" data-bigstep="1"></span>
+          <span id="v-shift-wrap" class="hide"><input id="v-shift" inputmode="decimal"
+            data-step="0.1" data-bigstep="1"></span>
+          <span id="v-switch-wrap" class="hide"><input id="v-switch" placeholder="auto"
+            inputmode="numeric"></span>
+        </div>
         <button class="opt ib" id="v-shot" data-ico="shot" data-lb="Shot"
           title="Shot size, camera move, light, action and sound — the fields H3 reads."></button>
         <span class="actions">
           <span class="muted" id="v-model-line"></span>
-          <button class="opt ib" id="v-toggle-adv" data-ico="sliders" title="Advanced"></button>
+          <button class="opt ib" id="v-sampling" title="Sampler, steps and guidance"></button>
           <button class="b" id="go-vid">Generate</button>
         </span>
       </div>
@@ -8543,34 +8554,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
         <span class="muted" id="v-ref-max" hidden>9</span><span class="muted" id="v-vid-max" hidden>3</span>
       </div>
 
-      <div id="vid-adv" class="hide adv">
-        <!-- The CFG dial is still gated here, for the reason the negative
-             prompt used to be: H3 is guidance-distilled and never looks at it.
-             The negative itself has moved into the prompt field, where it is a
-             mode rather than a box that has to be scrolled past. -->
-        <div class="opts">
-          <div class="opt" data-lb="Sampler"><select id="v-sampler"></select></div>
-          <div class="opt" data-lb="Scheduler"><select id="v-scheduler"></select></div>
-          <div class="opt n" data-lb="Steps"><input id="v-steps" inputmode="numeric"
-            title="Denoising steps. Blank uses the model's own default."></div>
-          <div class="opt n hide" id="v-cfg-wrap" data-lb="CFG"><input id="v-cfg" inputmode="decimal"
-            data-step="0.1" data-bigstep="1"
-            title="Guidance scale — how hard sampling is pushed toward the prompt and away from the negative."></div>
-          <!-- Same idea, same placement, different half of the schedule that
-               matters: on a clip the noisy steps buy motion and layout rather
-               than anatomy, and Wan's default is 8.0 rather than Krea 2's 1.15
-               because a video latent is a much longer sequence. -->
-          <div class="opt n hide" id="v-shift-wrap" data-lb="Shift"
-            title="Timestep shift bends the noise schedule: higher spends more steps in the noisy half, where motion and layout are settled, and fewer on fine detail. Wan's own default is 8.0 — lower it for a near-static shot, raise it if motion comes out stiff."><input
-            id="v-shift" inputmode="decimal" data-step="0.1" data-bigstep="1"></div>
-          <!-- Only the A14B pair has a handover to place. -->
-          <!-- "auto", not empty: every other box in this row shows the model's
-               default in grey, and one blank box among them reads as broken
-               rather than as unset. -->
-          <div class="opt n hide" id="v-switch-wrap" data-lb="Expert switch"><input id="v-switch" placeholder="auto" inputmode="numeric"
-            title="Step at which the high-noise expert hands the latent to the low-noise one."></div>
-        </div>
-      </div>
+
     </div>
   </div>
  </div>
@@ -9034,6 +9018,7 @@ function setKind(k){
   // which of its pills the thing on the other side of the switch can read.
   drawShotRail();
   syncNeg();
+  autoGrow($('.field.on-neg')?$('#neg'):$('#prompt'));
   syncCanvasView();
 }
 $$('#kinds button').forEach(b=>{
@@ -9141,12 +9126,50 @@ function moveClause(el,dir){
 // limit is a field that can push the picture off screen one keystroke at a
 // time. Past the cap it scrolls, which is the one place a scrollbar is the
 // right answer: the prompt has stopped being glanceable anyway.
-const FIELD_MAX = 168;
-function autoGrow(el){
-  if(!el) return;
-  el.style.height='auto';
-  el.style.height=Math.min(el.scrollHeight, FIELD_MAX)+'px';
+// The console's whole budget, and the prompt is what yields to it.
+//
+// Everything else here is either fixed or already conditional — the strip is one
+// row, the rail only exists once you pick a pill, the region bar only once you
+// arm regions. The prompt is the one part that grows without asking, and
+// measuring showed it is also the part that breaks the budget on its own: at a
+// flat 168px cap the worst case was 39.8% of a 1440x900 window, of which the
+// prompt was 136.
+//
+// So the cap is not a number, it is what is left. The console measures its own
+// non-prompt height and hands the remainder to the field, down to a floor of
+// two lines — below that the box stops being a place you can write, and a
+// budget that wins by making the prompt unusable has optimised the wrong thing.
+// Past the cap it scrolls, which is the one place a scrollbar is right: a prompt
+// that long has stopped being glanceable anyway.
+const CONSOLE_BUDGET = 0.30;   // of the viewport
+const FIELD_FLOOR = 52, FIELD_CEIL = 168;
+const liveField=()=>$('.field.on-neg')?$('#neg'):$('#prompt');
+function fieldMax(){
+  const con=$('.console'); if(!con) return FIELD_CEIL;
+  const other=con.getBoundingClientRect().height - liveField().getBoundingClientRect().height;
+  return Math.max(FIELD_FLOOR, Math.min(FIELD_CEIL, innerHeight*CONSOLE_BUDGET - other));
 }
+let growing=false;
+function autoGrow(el){
+  if(!el||growing) return;
+  growing=true;
+  el.style.height='auto';
+  el.style.height=Math.min(el.scrollHeight, fieldMax())+'px';
+  growing=false;
+}
+// The budget is a fraction of the window, so it moves when the window does.
+addEventListener('resize',()=>autoGrow(liveField()));
+// And the console has to watch itself, because the prompt is not the only thing
+// that grows: arming Regions adds a bar and picking pills adds a rail, and both
+// happen long after the last keystroke. Without this the field kept whatever
+// height it had won when it was the only claimant — measuring showed a long
+// prompt at 30.0% climbing to 38.1% the moment regions and a full rail arrived,
+// which is the budget being right once and then not again.
+//
+// It converges in one pass rather than oscillating: fieldMax subtracts the
+// field's own height, so `other` does not move when the field does. The flag is
+// for the 'auto' write inside autoGrow, which changes layout mid-measurement.
+new ResizeObserver(()=>autoGrow(liveField())).observe($('.console'));
 ['#prompt','#neg'].forEach(sel=>$(sel).addEventListener('input',e=>autoGrow(e.target)));
 
 // Whether this model reads a negative prompt at all.
@@ -10589,15 +10612,15 @@ $('#do-stop').onclick=async()=>{ $('#do-stop').disabled=true; await post('/api/s
 // What the model implies, not what it is called — its name is already in the
 // select two controls to the left, and printing it twice is the sentence
 // telling you what you can see.
+// Only the thing the Sampling button cannot say. It used to print "8 steps ·
+// CFG 1.0" beside a drawer that held those two numbers; now the button itself
+// resolves and shows them, and a second copy in the strip would be the same
+// fact twice — which is what this line was originally added to avoid.
 function syncModelLine(){
-  const v=$('#g-model').value;
-  $('#gen-model-line').textContent = !v ? 'No model downloaded'
-    : v==='turbo' ? '8 steps · CFG 1.0' : '28 steps · CFG 5.5';
+  $('#gen-model-line').textContent = $('#g-model').value ? '' : 'No model downloaded';
+  paintSampling();
 }
 $('#g-model').onchange=()=>{ syncModelLine(); syncNeg() };
-$('#toggle-adv').onclick=()=>{
-  $('#toggle-adv').classList.toggle('on',!$('#gen-adv').classList.toggle('hide'));
-};
 
 // ---------- LoRAs, written in the prompt ----------
 // A stack of rows was the wrong shape for this. Each row cost 56px of vertical
@@ -11090,6 +11113,94 @@ function swapSize(){
 }
 $('#g-swap').onclick=swapSize;
 $('#g-size').onclick=e=>openSizer(e.currentTarget);
+$('#g-sampling').onclick=e=>openSampling(e.currentTarget,'g');
+$('#v-sampling').onclick=e=>openSampling(e.currentTarget,'v');
+
+// "8 steps · CFG 1.0", resolved rather than defaulted: a typed override shows,
+// and a blank box shows what the checkpoint will actually use. The drawer's
+// label said "Advanced", which is where something is rather than what it does.
+function paintSampling(){
+  paintOne('g',(window.KREA2_DEFAULTS||{})[$('#g-model').value]||{});
+  if($('#v-sampling')) paintOne('v',(videoModel()||{}).defaults||{});
+}
+function paintOne(pre,d){
+  const btn=$(`#${pre}-sampling`); if(!btn) return;
+  const steps=$(`#${pre}-steps`).value||d.steps, cfg=$(`#${pre}-cfg`).value||d.cfg;
+  // toFixed(1) because the defaults are 1.0 and 5.5 and the strip has always
+  // printed them that way — an unformatted 1 reads as "off" next to a 5.5.
+  const bits=[steps&&`${steps} steps`,
+              cfg!=null&&cfg!==''&&Number.isFinite(+cfg)&&`CFG ${(+cfg).toFixed(1)}`].filter(Boolean);
+  btn.textContent = bits.join(' · ')||'Sampling';
+  // Marked when anything is overridden, because the resolved numbers alone
+  // cannot say whether you chose them or the checkpoint did — and "why is this
+  // 12 steps" is a question you ask days later, off a gallery card.
+  const touched=['steps','cfg','shift','switch','sampler','scheduler']
+    .some(k=>{ const x=$(`#${pre}-${k}`); return x&&x.dataset.touched==='1' });
+  btn.classList.toggle('edited',touched);
+}
+
+// The five rarely-changed controls, behind one button. A form rather than a
+// palette: a sampler name and a step count are not things a picture of them
+// could teach, which is the line the shot tiles are on the other side of.
+function openSampling(btn,pre){
+  const el=document.createElement('div'); el.className='menu form';
+  const row=(lb,html,hint)=>`<label class="frow"><span>${lb}</span>${html}${
+    hint?`<i>${hint}</i>`:''}</label>`;
+  const opts=(sel,cur)=>[...$(sel).options]
+    .map(o=>`<option value="${esc(o.value)}"${o.value===cur?' selected':''}>${esc(o.textContent)}</option>`).join('');
+  const id=k=>`#${pre}-${k}`;
+  const d = pre==='g' ? ((window.KREA2_DEFAULTS||{})[$('#g-model').value]||{})
+                      : ((videoModel()||{}).defaults||{});
+  // A row the model does not read is not drawn. The video side already carries
+  // that answer in the -wrap classes syncVideoModel maintains, so this asks
+  // them rather than re-deriving what a checkpoint supports — two places
+  // deciding that is how a control ends up present and ignored.
+  const on=k=>{ const w=$(`#${pre}-${k}-wrap`); return !w || !w.classList.contains('hide') };
+  const num=(k,lb,ph,step,big,hint)=> on(k) ? row(lb,
+    `<input data-s="${id(k)}" inputmode="decimal" data-step="${step}" data-bigstep="${big}"
+       placeholder="${ph}" value="${esc($(id(k)).value)}">`, hint) : '';
+  el.innerHTML=
+      row('Sampler',`<select data-s="${id('sampler')}">${opts(id('sampler'),$(id('sampler')).value)}</select>`)
+    + row('Scheduler',`<select data-s="${id('scheduler')}">${opts(id('scheduler'),$(id('scheduler')).value)}</select>`)
+    + row('Steps',`<input data-s="${id('steps')}" inputmode="numeric" placeholder="${d.steps??'auto'}"
+        value="${esc($(id('steps')).value)}">`)
+    + num('cfg','CFG', d.cfg??'auto', '0.1','1')
+    + num('shift','Shift', d.shift??(pre==='g'?'1.15':'auto'), pre==='g'?'0.05':'0.1', pre==='g'?'0.5':'1',
+        'Bends the noise schedule — higher spends more steps on composition and motion.')
+    + (pre==='v' ? num('switch','Expert switch','auto','1','4',
+        'Step at which the high-noise expert hands the latent to the low-noise one.') : '')
+    + `<button class="sz-reset" type="button">Reset to the model’s defaults</button>`;
+  el.querySelectorAll('[data-s]').forEach(f=>{
+    const real=$(f.dataset.s);
+    const push=()=>{
+      real.value=f.value;
+      // `touched` is what stops syncVideoModel-style redraws handing a chosen
+      // value back to a default, and the selects already rely on it.
+      if(f.value!=='') real.dataset.touched='1'; else delete real.dataset.touched;
+      // Both events. `change` is what the selects' own handlers listen for and
+      // `input` is what syncNeg listens for — dispatching only change meant
+      // typing CFG 5 here left the negative-prompt toggle asleep, which is the
+      // one cross-control consequence any of these five numbers has.
+      real.dispatchEvent(new Event('input',{bubbles:true}));
+      real.dispatchEvent(new Event('change',{bubbles:true}));
+      paintSampling();
+    };
+    f.onchange=push; f.oninput=push;
+    f.onkeydown=ev=>{
+      if(ev.key!=='ArrowUp'&&ev.key!=='ArrowDown') return;
+      if(nudgeNumber(ev.target, ev.key==='ArrowUp'?1:-1, ev.metaKey||ev.ctrlKey)){ ev.preventDefault(); push() }
+    };
+  });
+  el.querySelector('.sz-reset').onclick=()=>{
+    ['steps','cfg','shift','switch'].forEach(k=>{
+      const x=$(id(k)); if(!x) return;
+      x.value=''; delete x.dataset.touched;
+    });
+    ['sampler','scheduler'].forEach(k=>{ const x=$(id(k)); if(x) delete x.dataset.touched });
+    closeMenu(); paintSampling(); syncNeg();
+  };
+  floatBy(btn,el);
+}
 
 // The size popover. Same lifecycle as the shot palette and the LoRA menu —
 // floatBy owns the single floating element, the outside-mousedown close, the
@@ -12147,6 +12258,7 @@ function syncVideoModel(){
   $('#go-vid').disabled=!t.ready;
   $('#v-model-line').textContent = t.ready ? m.note
     : 'Not downloaded: '+t.missing.join(', ')+' — get them under Settings.';
+  paintSampling();
   drawRefs();
 }
 $('#v-model').onchange=syncVideoModel;
@@ -12424,9 +12536,6 @@ function toVideo(b64, as){
   $('#prompt').focus();
 }
 
-$('#v-toggle-adv').onclick=()=>{
-  $('#v-toggle-adv').classList.toggle('on',!$('#vid-adv').classList.toggle('hide'));
-};
 
 $('#go-vid').onclick=async()=>{
   const p=promptText();
@@ -12732,8 +12841,6 @@ function reuse(it){
 
     syncModelLine(); syncLoraNote(); syncNeg();
     autoGrow($('#prompt')); autoGrow($('#neg'));
-    if(it.steps||saved.length||$('#g-aspect').value==='custom')
-      $('#gen-adv').classList.remove('hide');
     $('#prompt').focus();
   } else {
     setKind('video');
@@ -12772,7 +12879,6 @@ function reuse(it){
     }
     syncLoraNote(); syncNeg();
     autoGrow($('#prompt')); autoGrow($('#neg'));
-    if(it.steps||it.cfg_scale) $('#vid-adv').classList.remove('hide');
     $('#prompt').focus();
   }
 }
