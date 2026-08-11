@@ -341,6 +341,30 @@ still writing cannot be swept out from under itself.
   few lines, and it turns a disagreement upstream can introduce silently into
   one a diff shows.
 
+- **Every input a run is priced by needs a range, and a file does not come with
+  one.** Tier, seconds, aspect, steps are all controls that cannot be set past
+  what the card will do. `ref_image_size: "max"` looked like one more of those
+  and was not: the node sizes a reference by `min(1.0, 2048 / min(w, h))`, which
+  floors the short edge and caps nothing, so a 4032x3024 straight off a phone
+  arrived as 2720x2048 — 21,760 latent tokens against "match"'s 3,996 — and a
+  panorama arrived untouched at 31,000, because its short edge was already small
+  enough to be left alone. Reference tokens ride every sampling step, so nine of
+  them doubled the sequence and the run died in step 0 of 8 with ComfyUI's canned
+  advice about a batch size the video path does not have.
+
+  `H3_REF_MAX_SIDE` is the range, applied on arrival by `_fit_reference` rather
+  than by asking the node for a smaller number: under 2048 on the short edge its
+  scale is exactly 1.0, so bounding the staged file is what bounds the run and
+  there is still only one thing deciding how big the picture is. It rewrites only
+  when it resizes, and bakes the EXIF rotation in when it does — a resized copy
+  saved without the tag would reach the DiT sideways, which is `_upright_inplace`
+  from the other end: not a reader that forgets the tag, but a writer that drops
+  it. The browser caps too, at the same number, for the payload; that copy is an
+  optimisation and the server's is the one that binds, so drift costs nothing.
+
+  The general rule: an option whose cost is set by something the page never
+  measured is an option that will be found by whoever has the biggest camera.
+
 ## The page
 
 The UI is not organised the way this file is. There are three subsystems and

@@ -4164,6 +4164,27 @@ MAX_H3_REF_TOTAL = 12
 # for and buys identity fidelity at several times the time.
 H3_REF_SIZES = ("match", "max")
 
+# The longest side a reference is allowed to arrive at, which is what makes "max
+# detail" a control with a range rather than a bill the camera writes.
+#
+# The node's "max" scale is `min(1.0, 2048 / min(w, h))` — a floor under the
+# short edge and no cap at all on the area. A 4032x3024 straight off a phone
+# therefore resolves to 2720x2048, which is 21,760 latent tokens against the
+# 3,996 "match" would have given the same file, and those tokens ride every
+# step. Nine of them add 196k to the 149k a 5 s 16:9 clip already carries, on a
+# card that is holding 42.5 GB of weights before any of it, so the run died in
+# step 0 with `Allocation on device` and ComfyUI's canned advice about a batch
+# size this path does not have. Every other lever here — tier, seconds, aspect,
+# steps — is a control with a range. This was the one whose price was set by
+# whichever file you happened to drop, and the page could not have told you.
+#
+# 1536 is REF_MAX, the number the image side already caps its reference photos
+# at. Reused rather than tuned, because it is the same decision arriving from
+# the payload side, and because it leaves "max" meaning something: 6,912 tokens
+# against match's 3,996 for that phone photo, 9,216 at the square worst case, so
+# nine references cost at most 83k tokens where they used to cost 196k.
+H3_REF_MAX_SIDE = 1536
+
 # Shared by every video model, because an aspect ratio is a property of the
 # shot and not of the checkpoint. What differs per model is the short edge and
 # the alignment, which is what _canvas() takes.
@@ -4220,6 +4241,49 @@ def _fit_canvas(image_path: Path, *, short: int, align: int) -> tuple[int, int]:
     if src_w >= src_h:
         return (src_w * short // src_h) // align * align, short
     return short, (src_h * short // src_w) // align * align
+
+
+def _fit_reference(path: Path) -> None:
+    """
+    Shrink one staged reference to H3_REF_MAX_SIDE, in place.
+
+    Bounding the file is what bounds the run: under 2048 on the short edge the
+    node's "max" scale is exactly 1.0, so the pixels written here are the pixels
+    the DiT sees, and only one place decided how big the picture is. That is the
+    same reason `ref_max_side` is pinned to 0 on the image side — two things
+    resizing the same photograph is two things to check when it comes out soft.
+
+    Applied to both modes. "match" is already bounded in tokens, but not in what
+    PIL and the VAE encoder chew through on the way there, and one rule is
+    easier to hold than one rule per mode.
+
+    Rewrites only when it actually resizes — and bakes the EXIF rotation in when
+    it does, because ComfyUI's LoadImage is the reader that applies the tag here
+    and a resized copy saved without one would reach the DiT sideways. Same trap
+    `_upright_inplace` exists for, reached from the other end: not a reader that
+    forgets the tag, but a writer that drops it.
+    """
+    from PIL import Image
+
+    tmp = path.with_name(path.name + ".fit")
+    try:
+        with Image.open(path) as im:
+            src = _upright(im)
+            w, h = src.size
+            if max(w, h) <= H3_REF_MAX_SIDE:
+                return
+            scale = H3_REF_MAX_SIDE / max(w, h)
+            size = (max(1, round(w * scale)), max(1, round(h * scale)))
+            src.resize(size, Image.LANCZOS).save(tmp, "PNG")
+        tmp.replace(path)
+        print(f"[video] reference {path.name}: {w}x{h} -> {size[0]}x{size[1]}",
+              flush=True)
+    except Exception as exc:
+        # A reference that cannot be read is not one that can be measured
+        # either, and LoadImage is about to fail on it with a better message
+        # than anything guessable from here.
+        tmp.unlink(missing_ok=True)
+        print(f"[video] could not cap reference {path.name}: {exc}", flush=True)
 
 
 def _h3_frames(seconds: float) -> int:
@@ -5585,7 +5649,14 @@ class VideoGenerator:
         seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
         steps = int(params["steps"])
 
-        references = [stage(b, f"refimg{i}") for i, b in enumerate(refs_b64)]
+        # Capped on arrival, not asked for smaller at the node — see
+        # H3_REF_MAX_SIDE. The gallery's "Use as reference" hand-off sends a
+        # finished render at whatever canvas it was made on, so this has to sit
+        # behind every route in rather than in the file picker alone.
+        references = []
+        for i, blob in enumerate(refs_b64):
+            references.append(stage(blob, f"refimg{i}"))
+            _fit_reference(COMFY / "input" / references[-1])
         # LoadVideo lists the input directory and filters it by content
         # type, so the extension is load-bearing, not cosmetic.
         ref_videos = [stage(b, f"refvid{i}", "mp4") for i, b in enumerate(vids_b64)]
@@ -5598,30 +5669,37 @@ class VideoGenerator:
         # A first keyframe anchors the geometry, so the canvas follows the
         # image rather than the aspect picker — cropping a source frame the
         # user chose is not ours to do silently. References are the opposite
-        # case: they are encoded at their own resolution and bind nothing,
-        # so the canvas stays whatever was asked for.
+        # case: they are encoded at their own size, up to H3_REF_MAX_SIDE, and
+        # bind nothing, so the canvas stays whatever was asked for.
         if "first_frame" in keyframes:
             width, height = _fit_canvas(
                 COMFY / "input" / keyframes["first_frame"],
                 short=H3_TIERS[params["tier"]], align=32,
             )
 
+        ref_size = params.get("ref_size") or "match"
         graph = _h3_graph(
             prompt=params["prompt"], width=width, height=height, frames=frames,
             seed=seed, steps=steps,
             sampler=params["sampler"], scheduler=params["scheduler"],
-            references=references, ref_videos=ref_videos,
-            ref_size=params.get("ref_size") or "match",
+            references=references, ref_videos=ref_videos, ref_size=ref_size,
             **keyframes,
         )
+        meta = {"mode": "ref2va" if (references or ref_videos) else "fl2va",
+                "sampler": params["sampler"], "scheduler": params["scheduler"],
+                "references": len(references), "ref_videos": len(ref_videos)}
+        # Only where it meant something. It is the one input on this path that
+        # changes what a take costs without changing anything the sidecar
+        # already records — two takes at the same canvas, frames and steps can
+        # be minutes apart on this alone, and nothing said which was which.
+        if references:
+            meta["ref_size"] = ref_size
         return {
             "graph": graph,
             "info": {"width": width, "height": height, "frames": frames,
                      "seconds": round(frames / H3_FPS, 2), "fps": H3_FPS,
                      "seed": seed, "steps": steps},
-            "meta": {"mode": "ref2va" if (references or ref_videos) else "fl2va",
-                     "sampler": params["sampler"], "scheduler": params["scheduler"],
-                     "references": len(references), "ref_videos": len(ref_videos)},
+            "meta": meta,
         }
 
     @staticmethod
@@ -8153,7 +8231,13 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
                 title="Add an image reference — the subject, redrawn in a new shot. The prompt refers to it as &lt;Picture 1&gt;."></button>
         <button class="drop mini" id="v-add-vid" data-lb="Video"
                 title="Add a video reference. The prompt refers to it as &lt;Video 1&gt;."></button>
-        <div class="opt" id="v-ref-size-wrap"><select id="v-ref-size">
+        <!-- The one control in this row that changes what a take costs rather
+             than what it contains, and the two options are not close: reference
+             tokens ride through every sampling step, so this is a per-step
+             price. Both are bounded — see H3_REF_MAX_SIDE — which is the only
+             reason "max detail" is offered at all. -->
+        <div class="opt" id="v-ref-size-wrap"><select id="v-ref-size"
+          title="How much of each reference the model reads. &quot;match canvas&quot; scales every picture to the clip's own pixel area; &quot;max detail&quot; hands over as much of it as the run allows — 1536px on the long side — and buys likeness at several times the sampling time.">
           <option value="match">match canvas</option><option value="max">max detail</option>
         </select></div>
         <span class="muted" id="v-ref-max" hidden>9</span><span class="muted" id="v-vid-max" hidden>3</span>
@@ -10936,16 +11020,31 @@ $('#region-layer').addEventListener('focusin',e=>{
 
 // ---------- reference photos ----------
 // Downscaled before encoding, because eight photographs in one JSON body is the
-// payload this feature invites. Deliberately the only cap: the node's own
-// `ref_max_side` is set to 0 in the graph so the resizing happens in exactly one
-// place and the two cannot end up fighting over which one shrank the picture.
+// payload this feature invites. On the image side this is the only cap there is:
+// the node's own `ref_max_side` is set to 0 in the graph so the resizing happens
+// in exactly one place and the two cannot end up fighting over which one shrank
+// the picture.
+//
+// The video references reuse it and are not that case — H3_REF_MAX_SIDE caps the
+// staged file again, at the same number, because the gallery's "Use as reference"
+// hand-off never passes through here and H3 has no `ref_max_side` to switch off.
+// The two agreeing is not what makes that correct; the server binding is. If they
+// ever drift, the picture is still capped on the side that decides.
 const REF_MAX=1536;
 function shrinkB64(file){
   return new Promise(res=>{
     const img=new Image(), url=URL.createObjectURL(file);
     img.onload=()=>{
       URL.revokeObjectURL(url);
-      const s=Math.min(1,REF_MAX/Math.max(img.width,img.height));
+      // Under the cap the bytes go verbatim, because the canvas only knows how
+      // to hand back PNG and a 224 KB JPEG that needed no resizing came out of
+      // it at 1.9 MB — 8.6x, for a picture nothing had asked to change. Nine of
+      // those is 17 MB of base64 to save 2 MB, which is the fix costing more
+      // than the thing it fixes. Same rule the volume uses for the orientation
+      // tag and `_fit_reference` for the size: rewrite only what is out of
+      // spec, pass the rest through untouched.
+      if(img.width<=REF_MAX&&img.height<=REF_MAX) return res(toB64(file));
+      const s=REF_MAX/Math.max(img.width,img.height);
       const c=document.createElement('canvas');
       c.width=Math.round(img.width*s); c.height=Math.round(img.height*s);
       c.getContext('2d').drawImage(img,0,0,c.width,c.height);
@@ -11583,8 +11682,20 @@ function pickRefs(kindOf){
   }
   const input=document.createElement('input');
   input.type='file'; input.accept=isImg?'image/*':'video/*'; input.multiple=true;
+  // Images go through the same shrink the region photos do, for the payload
+  // half of the reason H3_REF_MAX_SIDE gives: nine photographs straight off a
+  // phone is tens of megabytes of base64 in one JSON body. The server caps them
+  // again on arrival and that is the copy that binds — this is the one that
+  // keeps the request from being the slowest part of pressing Generate.
+  // Videos are sent whole: there is nothing here that can re-encode one.
   input.onchange=async e=>{
-    for(const f of [...e.target.files].slice(0,max-bucket.length)) bucket.push(await toB64(f));
+    for(const f of [...e.target.files].slice(0,max-bucket.length)){
+      const b=await(isImg?shrinkB64(f):toB64(f));
+      // shrinkB64 answers null for a file the canvas could not decode. Pushed
+      // anyway it would be a chip with no picture and a base64 of "null" in the
+      // request, which fails on the GPU rather than on the file it came from.
+      if(b) bucket.push(b); else alert('Could not read that image.');
+    }
     drawRefs();
   };
   input.click();
