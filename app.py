@@ -7812,6 +7812,40 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    than in one shared strip at the top of Settings — with a button per family
    there is no longer a single place that "the download" means. */
 .fam-prog{margin:0 2px 12px}
+
+/* The size popover. Aspect is shown as a rectangle at its own proportions,
+   because that is the one representation of a ratio nobody has to read — the
+   same argument the shot tiles make for a camera move, and the reason this is
+   a palette rather than a longer select. */
+.menu.sizer{padding:10px;width:auto;min-width:236px}
+.sizer .ars{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.sizer .ar{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+  gap:5px;height:56px;padding:5px 2px;border:1px solid transparent;border-radius:9px;
+  background:none;color:var(--dim);cursor:pointer;font:500 10px/1 inherit}
+.sizer .ar i{display:block;border:1.5px solid currentColor;border-radius:2px;opacity:.75}
+.sizer .ar:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.sizer .ar.on{background:rgba(255,255,255,.13);color:var(--fg);border-color:rgba(255,255,255,.22)}
+/* Scale is a separate row because it is a separate decision: the shape you want
+   and how much of it you can afford are not the same question, and the old
+   single select forced them to be answered together. */
+.sizer .scales{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:9px}
+.sizer .sc{padding:7px 0;border:1px solid var(--line);border-radius:9px;background:none;
+  color:var(--dim);cursor:pointer;font:500 11.5px/1 inherit}
+.sizer .sc:hover{color:var(--fg);border-color:rgba(255,255,255,.3)}
+.sizer .sc.on{background:rgba(255,255,255,.13);color:var(--fg);border-color:rgba(255,255,255,.26)}
+.sizer .sz-custom{display:flex;align-items:center;gap:6px;margin-top:9px}
+.sizer .sz-custom label{display:flex;align-items:center;gap:5px;margin:0;flex:1;
+  font-size:10.5px;color:var(--dim)}
+.sizer .sz-custom input{width:100%;height:30px;padding:0 7px;font-size:12px;text-align:center}
+.sizer .sz-swap{flex:none;width:26px;height:26px;display:grid;place-items:center;border:0;
+  background:none;color:var(--dim);cursor:pointer;border-radius:7px;margin-top:12px}
+.sizer .sz-swap:hover{background:rgba(255,255,255,.09);color:var(--fg)}
+.sizer .sz-swap svg{width:14px;height:14px}
+.sizer .sz-note{margin:8px 2px 1px;font-size:10.5px}
+/* Wide enough to hold "16:9 · 2304×1296" without the strip reflowing when the
+   scale changes under it. */
+#g-size{width:auto;padding:0 11px;font-size:11.5px;color:var(--fg);font-variant-numeric:tabular-nums}
+
 /* A row per LoRA, not a card per LoRA. The catalogue below is cards because each
    entry there is a decision with a size, a repo and a licence attached; this is
    a list you scan for a name you recognise, and at a dozen LoRAs the card's
@@ -8300,13 +8334,36 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
              every other landscape preset had a portrait counterpart to flip
              into and 4:3 did not, so the one ratio the page opens on was the
              one whose flip landed on Custom. -->
-        <div class="opt"><select id="g-aspect">
-          <option value="1024x1024">1:1</option><option value="1152x896" selected>4:3</option>
-          <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
-          <option value="896x1152">3:4</option>
-          <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
-          <option value="custom">Custom</option>
-        </select></div>
+        <!-- Aspect and resolution were two controls pretending to be one, and
+             the seam was that every preset was 1024-based: picking 16:9 chose a
+             shape *and* silently chose ~1 MP, and the only route to the same
+             shape at 2K was to work out 2304x1296 by hand in two boxes parked
+             at the far end of Advanced. They are one control because there is
+             only ever one width and one height — the ratio picks the shape, the
+             scale picks how much of it, and the button shows the pair it
+             resolved to. Same move as the shot palette: a closed vocabulary
+             costs one button, and everything it can say lives behind it. -->
+        <button class="opt ib" id="g-size" title="Shape and resolution"></button>
+        <!-- The state the popover is a view over. Kept as real form elements
+             rather than plain variables so readSize, swapSize, reuse() and the
+             arrow-key nudges all keep addressing what they always did — the
+             popover writes here and reads back, and is free to not exist. -->
+        <div class="hide" id="g-size-state">
+          <select id="g-aspect">
+            <option value="1024x1024">1:1</option><option value="1152x896" selected>4:3</option>
+            <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
+            <option value="896x1152">3:4</option>
+            <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
+            <option value="custom">Custom</option>
+          </select>
+          <select id="g-scale">
+            <option value="1" selected>1K</option>
+            <option value="1.5">1.5K</option>
+            <option value="2">2K</option>
+          </select>
+          <input id="g-w" inputmode="numeric"><input id="g-h" inputmode="numeric">
+          <button id="g-swap"></button>
+        </div>
         <div class="opt n" data-lb="Images"><select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
         <div class="opt" data-lb="Seed"><input id="g-seed" placeholder="random" inputmode="numeric"
           title="Fix the noise so a prompt reproduces. Blank draws a new one per image."></div>
@@ -8368,15 +8425,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
           <!-- The real parameter, exposed. Snapped to 16 on the way out, because
                the pipeline floors to 16 anyway and a box that keeps 1000 while
                the model renders 992 is a box that lied to you. -->
-          <div class="opt n" data-lb="Width"><input id="g-w" inputmode="numeric"
-            title="Pixels. Rounded down to a multiple of 8 — the VAE's grid. ↑/↓ steps by 1, ⌘↑/⌘↓ by 8."></div>
-          <!-- Between the two boxes it operates on, because that is the only
-               place it needs no label: an arrow pointing both ways, sitting
-               between a width and a height, is the whole explanation. -->
-          <button class="opt ib" id="g-swap" data-ico="swap"
-            title="Swap width and height"></button>
-          <div class="opt n" data-lb="Height"><input id="g-h" inputmode="numeric"
-            title="Pixels. Rounded down to a multiple of 8 — the VAE's grid. ↑/↓ steps by 1, ⌘↑/⌘↓ by 8."></div>
           <span class="vr" id="g-region-vr"></span>
           <!-- Was a persistent Columns/Rows select that filled only the
                coordinates nobody had typed into. Once boxes are drawn there is
@@ -10946,10 +10994,23 @@ const snap=(v,d)=>{
   const n=parseInt(v,10);
   return Number.isFinite(n) ? Math.max(64,Math.min(2048,Math.floor(n/SNAP)*SNAP)) : d;
 };
+// The seven buckets stay exactly what they were and get multiplied, rather
+// than being recomputed from the ratio at a new edge length. Krea 2 inherits
+// Qwen-Image's trained buckets, and 1152x896 is one of them where the honest
+// arithmetic for 4:3 at a 1024 short edge is 1365x1024 — a size nothing was
+// trained on. Scaling a bucket keeps the shape the model knows and changes only
+// how much of it there is; deriving one from the ratio would quietly leave the
+// distribution at every scale including 1x.
+const SIZE_SCALES=[['1','1K'],['1.5','1.5K'],['2','2K']];
+const snap8=v=>Math.max(8,Math.round(v/8)*8);
+function sizeScale(){ return +($('#g-scale')||{}).value||1 }
 function readSize(){
   const a=$('#g-aspect').value;
-  if(a!=='custom'){ const p=a.split('x'); return [+p[0],+p[1]] }
-  return [snap($('#g-w').value,1024), snap($('#g-h').value,1024)];
+  // Custom is literal. A number you typed is not a bucket to be multiplied —
+  // scaling it would mean the box said 1153 and the model rendered 2306.
+  if(a==='custom') return [snap($('#g-w').value,1024), snap($('#g-h').value,1024)];
+  const p=a.split('x'), k=sizeScale();
+  return [snap8(+p[0]*k), snap8(+p[1]*k)];
 }
 // Reduced, so Custom can say whether 992×1488 is still the 2:3 you meant.
 // Only when it reduces to something a person actually says, though: 992×1024
@@ -10983,14 +11044,44 @@ function syncSize(fromBoxes){
   // the whole script dies on a temporal-dead-zone error. A property on window
   // is the one thing that is safe to read before anything is initialised.
   if(window.REGIONS_READY) drawRegions();
+  paintSizeBtn();
+}
+// "16:9 · 2304×1296" — the value, so the control needs no name. Custom prints
+// the ratio it reduces to when there is one worth saying, which is the one
+// thing the pixels alone cannot tell you.
+function paintSizeBtn(){
+  const [w,h]=readSize(), a=$('#g-aspect').value;
+  // The option's own label, not ratio(w,h). These are trained buckets, and a
+  // bucket is not its name: 1152x896 reduces to 9:7 and 1344x768 to 7:4. Both
+  // are called 4:3 and 16:9 everywhere the models are documented, and printing
+  // the honest fraction would rename two presets nobody would recognise —
+  // Custom is the only case where the arithmetic is the best name available.
+  const name = a==='custom' ? (ratio(w,h)||'Custom')
+                            : $('#g-aspect').selectedOptions[0].textContent;
+  $('#g-size').textContent=`${name} · ${w}×${h}`;
+  $('#g-size').classList.toggle('on', !!menuEl && menuEl.classList.contains('sizer'));
 }
 $('#g-aspect').onchange=()=>syncSize(false);
+$('#g-scale').onchange=()=>syncSize(false);
 // The picker and the boxes are one control, so the swap has to be one too:
 // 1152×896 flips to a 3:4 that is on the menu and gets selected there, rather
 // than to a Custom that spells out a ratio the page could have named. It falls
 // through to Custom only when the transpose really has no preset — which,
 // since 3:4 landed, means only a size you typed yourself.
 function swapSize(){
+  // The bucket transposes, not the pixels. Transposing what readSize returns
+  // looks for `1152x2016` among options that are all 1x, finds nothing, and
+  // drops a perfectly ordinary 9:16 at 1.5K into Custom — so the swap silently
+  // cost you the scale and the preset's name. The bucket's own transpose is
+  // always on the menu, because the seven exist as transposed pairs.
+  const a=$('#g-aspect').value;
+  if(a!=='custom'){
+    const [bw,bh]=a.split('x');
+    const flipped=`${bh}x${bw}`;
+    if([...$('#g-aspect').options].some(o=>o.value===flipped)){
+      $('#g-aspect').value=flipped; syncSize(false); return;
+    }
+  }
   const [w,h]=readSize();
   $('#g-w').value=h; $('#g-h').value=w;
   const preset=[...$('#g-aspect').options].some(o=>o.value===`${h}x${w}`);
@@ -10998,6 +11089,81 @@ function swapSize(){
   syncSize(!preset);
 }
 $('#g-swap').onclick=swapSize;
+$('#g-size').onclick=e=>openSizer(e.currentTarget);
+
+// The size popover. Same lifecycle as the shot palette and the LoRA menu —
+// floatBy owns the single floating element, the outside-mousedown close, the
+// scroll-close and the viewport clamp — so there is one thing on this page that
+// knows how a popover behaves.
+//
+// A view over #g-size-state, never a second copy of it: every click writes into
+// the real select or the real inputs and calls syncSize, which is what reuse(),
+// the frame and the arrow keys already read. Rebuilt on each change rather than
+// patched, because at eight tiles and three scales the diff is more code than
+// the redraw and one of them can be wrong.
+function openSizer(btn){
+  const el=document.createElement('div'); el.className='menu sizer';
+  const draw=()=>{
+    const a=$('#g-aspect').value, k=String(sizeScale()), [w,h]=readSize();
+    const tiles=[...$('#g-aspect').options].filter(o=>o.value!=='custom').map(o=>{
+      const [bw,bh]=o.value.split('x').map(Number);
+      // Drawn at its own proportions inside a fixed box. A rectangle is the one
+      // representation of an aspect ratio that needs no reading, which is the
+      // same argument the shot tiles make for a dolly-out.
+      const long=26, sw=bw>=bh?long:Math.round(long*bw/bh), sh=bh>bw?long:Math.round(long*bh/bw);
+      return `<button class="ar${o.value===a?' on':''}" data-ar="${o.value}" title="${esc(o.textContent)}">
+        <i style="width:${sw}px;height:${sh}px"></i><b>${esc(o.textContent)}</b></button>`;
+    }).join('');
+    el.innerHTML=`<div class="ars">${tiles}</div>
+      <div class="scales">${SIZE_SCALES.map(([v,lb])=>
+        `<button class="sc${v===k&&a!=='custom'?' on':''}" data-sc="${v}">${lb}</button>`).join('')}</div>
+      <div class="sz-custom">
+        <label>W<input id="sz-w" inputmode="numeric" value="${w}"></label>
+        <button class="sz-swap" title="Swap width and height">${ICON.swap}</button>
+        <label>H<input id="sz-h" inputmode="numeric" value="${h}"></label>
+      </div>
+      <p class="muted sz-note">${a==='custom'?'Custom — snapped to 8, the VAE grid.'
+        :`${esc($('#g-aspect').selectedOptions[0].textContent)} at ${esc(SIZE_SCALES.find(x=>x[0]===k)[1])} · ${(w*h/1e6).toFixed(1)} MP`}</p>`;
+    el.querySelectorAll('[data-ar]').forEach(b=>b.onclick=()=>{
+      $('#g-aspect').value=b.dataset.ar; syncSize(false); draw();
+    });
+    el.querySelectorAll('[data-sc]').forEach(b=>b.onclick=()=>{
+      // Choosing a scale on a custom size is how you get back to a bucket: it
+      // has to pick one, or the button would light with nothing behind it.
+      if($('#g-aspect').value==='custom') $('#g-aspect').value=nearestBucket(...readSize());
+      $('#g-scale').value=b.dataset.sc; syncSize(false); draw();
+    });
+    const commit=()=>{
+      $('#g-w').value=el.querySelector('#sz-w').value;
+      $('#g-h').value=el.querySelector('#sz-h').value;
+      syncSize(true); draw();
+    };
+    el.querySelectorAll('#sz-w,#sz-h').forEach(i=>{
+      i.onchange=commit;
+      // The same chord the strip's numbers take, so a size is nudged the way
+      // every other number on this page is: ⌘ steps by 8, the VAE's grid.
+      i.onkeydown=ev=>{
+        if(ev.key!=='ArrowUp'&&ev.key!=='ArrowDown') return;
+        if(nudgeNumber(ev.target, ev.key==='ArrowUp'?1:-1, ev.metaKey||ev.ctrlKey)){
+          ev.preventDefault(); commit();
+        }
+      };
+    });
+    el.querySelector('.sz-swap').onclick=()=>{ swapSize(); draw() };
+  };
+  draw();
+  floatBy(btn,el);
+  paintSizeBtn();
+}
+// Which trained bucket a typed size is closest to in shape, so leaving Custom
+// lands somewhere the model knows rather than on whichever option was selected
+// before you started typing.
+function nearestBucket(w,h){
+  const r=w/h;
+  return [...$('#g-aspect').options].filter(o=>o.value!=='custom')
+    .map(o=>{ const [a,b]=o.value.split('x').map(Number); return {v:o.value,d:Math.abs(a/b-r)} })
+    .sort((x,y)=>x.d-y.d)[0].v;
+}
 // On input, not change: switching the picker to Custom while you are still
 // typing is what makes the two halves read as one control.
 ['#g-w','#g-h'].forEach(s=>{
