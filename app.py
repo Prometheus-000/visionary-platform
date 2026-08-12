@@ -8215,9 +8215,20 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* Unselected boxes are outlines and the selected one is filled, which is the
    same distinction the canvas draws — a box you are editing against boxes that
    are merely there. */
-.rmap .bx{fill:rgba(255,255,255,.10);stroke:rgba(255,255,255,.45);stroke-width:1;cursor:pointer}
-.rmap .bx:hover{fill:rgba(255,255,255,.22)}
-.rmap .bx.on{fill:rgba(255,255,255,.82);stroke:#fff}
+/* No fill on the unselected ones. A translucent fill per box looks fine at two
+   and stacks into grey mush at five, which is exactly the count where you need
+   the map to tell them apart. Outlines do not accumulate; the one solid
+   rectangle is unambiguous at any number. */
+.rmap .bx{fill:none;stroke:rgba(255,255,255,.38);stroke-width:1;cursor:pointer}
+.rmap .bx:hover{stroke:rgba(255,255,255,.85)}
+.rmap .bx.on{fill:rgba(255,255,255,.85);stroke:#fff}
+.rmap-wrap{display:inline-flex;align-items:center;gap:1px;flex:none}
+.rmap-step{width:18px;height:36px;flex:none;border:0;background:none;color:var(--dim);
+  cursor:pointer;font:15px/1 inherit;padding:0;border-radius:7px}
+.rmap-step:hover{color:var(--fg);background:rgba(255,255,255,.08)}
+.rmap-at{position:absolute;right:3px;bottom:1px;font:600 8.5px/1 inherit;color:var(--fg);
+  text-shadow:0 0 3px #000;pointer-events:none;font-variant-numeric:tabular-nums}
+.rmap{position:relative}
 .pad{padding:26px}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
@@ -8623,7 +8634,11 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
            was the part that worked, and one row per box was the part that did
            not. So there is one map, the same size at eight boxes as at one, and
            it is how you reach a box when the boxes are off the render. -->
-      <button id="r-map" class="rmap" title="Which box you are editing. Click one to select it; ← → step."></button>
+      <span class="rmap-wrap">
+        <button class="rmap-step" id="r-prev" title="Previous box" aria-label="Previous box">‹</button>
+        <button id="r-map" class="rmap" title="Which box you are editing. Click one to select it."></button>
+        <button class="rmap-step" id="r-next" title="Next box" aria-label="Next box">›</button>
+      </span>
       <button class="drop mini" id="r-ref" data-lb="Photo"
         title="A photo of this character. Pulls the box toward that likeness during sampling — stacks with the LoRA, and works without one.">
         <img id="r-ref-thumb" class="hide" alt=""><span id="r-ref-hint"></span>
@@ -12043,7 +12058,18 @@ function drawRegions(){
 // disagree with the canvas about where anything is.
 function drawRegionMap(){
   const el=$('#r-map'); if(!el) return;
-  const W=40,H=28;
+  // The map is drawn at the render's own proportions, so a portrait canvas does
+  // not read as a landscape one — the whole point is recognising a box by where
+  // it sits, and the frame it sits in is half of that.
+  const [rw,rh]=(typeof readSize==='function'?readSize():[4,3]);
+  const H=30, W=Math.max(20,Math.min(58,Math.round(H*(rw/rh||1.33))));
+  el.style.width=(W+12)+'px';
+  // Arrows carry the selection once clicking gets unreliable. At two or three
+  // boxes the map is a fine target; past that they overlap, the rectangles get
+  // smaller than a pointer, and stepping is the only thing that still works at
+  // any count.
+  const many=regions.length>1;
+  $$('#r-prev,#r-next').forEach(b=>b.classList.toggle('hide',!many));
   el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">`
     +`<rect class="fr" x=".5" y=".5" width="${W-1}" height="${H-1}" rx="2"/>`
     +regions.map((r,i)=>{
@@ -12054,7 +12080,10 @@ function drawRegionMap(){
           +` y="${(y*H).toFixed(2)}" width="${(w*W).toFixed(2)}"`
           +` height="${(h*H).toFixed(2)}" rx="1.2"/>`;
       }).join('')
-    +`</svg>`;
+    +`</svg>`
+    // The count, because past three boxes the map stops being able to say which
+    // of them you are on and a number always can.
+    +(regions.length>1?`<b class="rmap-at">${rsel+1}/${regions.length}</b>`:'');
   el.querySelectorAll('[data-i]').forEach(r=>r.onclick=e=>{
     e.stopPropagation();
     // Selecting a box means adjusting it, and adjusting means seeing it — so
@@ -12066,6 +12095,13 @@ function drawRegionMap(){
 // Arrows step between boxes while the map has focus. Bound here rather than on
 // the bar, because ⌥←/⌥→ in a region's prompt already moves clauses and a chord
 // that means two things in one row is a chord nobody trusts.
+$('#r-prev').onclick=e=>{ e.stopPropagation(); stepRegion(-1) };
+$('#r-next').onclick=e=>{ e.stopPropagation(); stepRegion(1) };
+function stepRegion(d){
+  if(!regions.length) return;
+  revealRegions();
+  selectRegion((rsel+d+regions.length)%regions.length);
+}
 $('#r-map').addEventListener('keydown',e=>{
   if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight') return;
   if(!regions.length) return;
