@@ -844,6 +844,40 @@ what the document is really guarding against is a feature that *only* works with
 a cursor, which is the fork that rots. Design to the coarser input, let
 precision be a bonus, and do not read "no hover" as "remove the shortcuts".
 
+**Why the app does not already look like this.** The platform was built in a
+familiar idiom on purpose — a console, a Generate button, panels, modes — because
+the guts had to exist and be understood before a new surface could be imagined
+on top of them. Driving ComfyUI, the job/status/stop contract, the volume
+layout, regional masking, the H3 compiler, LoRA training: none of that is
+guessable from a mockup, and designing a novel interaction over a backend you do
+not yet understand produces a surface that cannot be built. So the conventional
+version came first, and it is scaffolding rather than debt. Read the console
+that way: it is what made the rest legible, and it is expected to go.
+
+**And part of the vision is waiting on models, not on us.** Worth separating,
+because the three tiers have very different costs:
+
+- *Reachable now.* Touch-to-select and touch-to-edit. Segmentation on a finished
+  render turns flat pixels into addressable regions, and regional inpainting
+  re-renders one mask. That is most of "reach for a face and only a face
+  answers", and the regional path is already element-as-component in primitive
+  form — the gap is that boxes are author-declared rather than model-derived,
+  which is a segmentation step and not a research problem.
+- *Reachable but expensive.* Entities that persist across renders. A LoRA gives
+  that for a character, which is why this platform trains them — but canon
+  figures, places and looks as first-class things means a LoRA per entity and a
+  training run per thing made canon. That changes what the arsenal is: a library
+  of weights, not of images.
+- *Not there.* The frame computed from blocking, and the camera as a character
+  with a body and limits. That is causality between a 3D arrangement and a 2D
+  image, which diffusion does not model. It needs a world model or a hybrid
+  where a real 3D scene drives conditioning, and nothing off the shelf does it.
+
+The useful consequence: the interaction is mostly reachable and the physics is
+not, so this phase should chase the first tier and leave blocking alone until
+the model exists. Attempting the third and concluding the whole direction is
+fantasy is the specific mistake this paragraph is here to prevent.
+
 Loose on purpose. This is the direction, not the design, and it is written down
 so the next pass starts from the intent rather than from whatever the console
 happens to look like by then.
