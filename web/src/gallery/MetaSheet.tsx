@@ -89,14 +89,18 @@ export function MetaSheet({ item, onClose }: { item: GalleryItem; onClose: () =>
         ))}
       </dl>
       <div className="row" style={{ gap: 8, marginTop: 20 }}>
-        <button className="s" type="button"
+        {/* `m-copy` and `m-reuse`, matching app.py — these are the two the
+            checks address, and a button a check cannot find reports as a
+            feature that is not there. */}
+        <button className="s" id="m-copy" type="button"
                 onClick={async () => {
                   await navigator.clipboard.writeText(typed)
                   setCopied(true)
                 }}>
           {copied ? 'Copied' : 'Copy prompt'}
         </button>
-        <button className="s" type="button" onClick={() => { onClose(); reuse(item) }}>
+        <button className="s" id="m-reuse" type="button"
+                onClick={() => { onClose(); reuse(item) }}>
           Reuse settings
         </button>
         <span className="grow" />

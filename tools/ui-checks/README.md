@@ -126,6 +126,13 @@ it still holds.
   naming its checkpoints. Asserted by shape and terminal state, never by the
   value at an instant — the stub advances per poll rather than per second, so
   two front ends sampled at the same moment are legitimately on different steps.
+- `check_meta.py` — the metadata sheet, Reuse and Copy: the only surface that
+  shows a prompt at all. Leads with the typed sentence, shows the compiled
+  document below it when they differ, and Reuse restores the typed one with its
+  pills — restoring a document would compile *that* on the next run. The stub's
+  video cards carry the pair, compiled through `_from_app` by the real
+  compiler, so the branch runs against the document a run would actually
+  produce rather than one transcribed into a fixture.
 
 ## Two things learned writing these
 

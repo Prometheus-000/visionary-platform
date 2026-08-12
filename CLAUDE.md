@@ -763,6 +763,20 @@ two domains, and the page follows the domains.
   `data-step`; a shift of 1.15 stepped by 8 leaves behind every value the model
   accepts.
 
+  **That paragraph describes an intent `app.py` does not deliver, and the React
+  front end does.** The handler is delegated from `#c-image`, `#c-video` and
+  `#region-bar`; the sizer popover is appended to `<body>`. With it open there
+  are two pairs of boxes — `#g-w`/`#g-h`, inside a listening section and
+  invisible, and `#sz-w`/`#sz-h`, visible and outside every one of them. So the
+  arrows step the inputs nobody can focus and do nothing on the boxes you
+  actually type in. Never fixed here because the page is being replaced;
+  recorded because a rule that reads as shipped is one nobody thinks to test.
+
+  The port does not inherit it: there the component owns its own keys, so where
+  a popover renders stops being able to break them. `tools/ui-checks/probe_size.py`
+  asserts it against either front end and is expected to fail those two rows on
+  `app.py` alone.
+
 `tools/preview_ui.py` serves `UI_HTML` against stubbed JSON, so the front end
 is worked on locally instead of paying an image build and a cold start per CSS
 change. Its stubs are shaped to hold the awkward states — a missing model, an

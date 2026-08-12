@@ -89,6 +89,43 @@ LONG_PROMPT = (
     "from a grate behind them, muted teal and amber grade, film grain"
 ) * 3
 
+# What a clip that used the shot palette left behind.
+#
+# The sidecar gains `prompt_typed` and `shot` only when the compiler did
+# something, so most cards carry neither and the ones that do are the case the
+# metadata sheet's two-prompt branch exists for: H3 compiles to a six-field
+# document, which is not a thing anyone recognises their own take by. Without a
+# single item carrying these, that branch — and Reuse's whole reason for
+# preferring the typed one — had never rendered here.
+#
+# Compiled by the real compiler rather than pasted, for the same reason
+# /api/compile calls it: a document written by hand into this file is a document
+# that drifts from the one a run would actually produce, and a preview that
+# disagrees with the run is worse than no preview.
+TYPED = "k3nan walks out of the shop and stops when he sees the car"
+# `group.item`, which is what SHOT_ITEMS is keyed by — a bare "mcu" is rejected
+# by name, and that rejection is the reason these are compiled here rather than
+# transcribed: a pill key invented in this file would have shipped a document
+# no run could reproduce.
+SHOT_PILLS = [
+    {"key": "framing.mcu"},
+    {"key": "camera.pullout"},
+    {"key": "light.overcast"},
+]
+
+
+def _h3_document() -> str:
+    try:
+        api = app_api()
+        return api["_compile_h3_prompt"](
+            typed=TYPED, pills=api["_validate_shot"](SHOT_PILLS),
+            task="t2va", seconds=5, roles=[])
+    except Exception:
+        # The stub has to serve a gallery even when app.py cannot be parsed —
+        # that is the state you are most likely to be in while editing it.
+        return TYPED
+
+
 GALLERY = [
     {
         "job_id": f"job{i:03d}",
@@ -96,14 +133,15 @@ GALLERY = [
         "files": [f"{i:02d}.mp4" if i % 5 == 3 else f"{i:02d}.png"],
         "created": time.time() - i * 3600,
         "modified": time.time() - i * 3600,
-        "prompt": LONG_PROMPT,
+        "prompt": _h3_document() if i % 5 == 3 else LONG_PROMPT,
         "negative_prompt": "blurry, low quality, watermark",
         "width": SIZES[i % 4][0],
         "height": SIZES[i % 4][1],
         **(
             {"seconds": 5, "frames": 120, "fps": 24, "seed": 4000 + i,
              "steps": 20, "sampler": "res_multistep", "scheduler": "simple",
-             "references": 0, "ref_videos": 0}
+             "references": 0, "ref_videos": 0,
+             "prompt_typed": TYPED, "shot": SHOT_PILLS}
             if i % 5 == 3 else
             {"model": "turbo", "seeds": [4000 + i], "steps": 8, "cfg_scale": 1.0,
              "shift": 1.15, "sampler": "Euler", "scheduler": "Simple",
