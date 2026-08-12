@@ -7300,7 +7300,12 @@ svg{width:100%;height:100%;display:block}
   transition:background .12s,color .12s}
 .opt.ib:hover{background:rgba(255,255,255,.1);color:var(--fg)}
 .opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
-.opt.ib>svg{width:16px;height:16px;color:inherit}
+".opt.ib>svg{width:16px;height:16px;color:inherit}
+/* How many boxes are armed, on the button, because the boxes themselves are
+   off the picture now. A regional render and a plain one are otherwise
+   identical on screen until the result comes back. */
+.opt.ib.counted::after{content:attr(data-count);margin-left:6px;font:600 10.5px/1 inherit;
+  color:inherit;opacity:.85;font-variant-numeric:tabular-nums}
 /* An icon button that arms a whole subsystem carries its name as well. :has()
    rather than a modifier class so the shell cannot disagree with whether
    data-lb is actually there — the two would drift, and the failure is a label
@@ -8119,18 +8124,51 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 
 /* The layer is reparented between the frame and the first still, so every
    coordinate in it is a percentage and nothing measures its host. */
-#region-layer{position:absolute;inset:0;touch-action:none;cursor:crosshair}
+/* Shown by intent, not by mode.
+   
+   The boxes used to stand for as long as regions were armed, which meant a
+   continuous white rectangle across every picture you rendered in the mode you
+   render most in — chrome painted over the one thing the page exists to show.
+   They are visible now while you are actually working on a region: the caret in
+   the region bar, a box under the pointer mid-drag, or a file over the window,
+   which is the moment "you can drop that here" needs saying.
+   
+   pointer-events goes with the paint. An invisible box that still swallows
+   clicks would make inspecting your own render place regions by accident, and
+   an invisible box that only *looks* gone is not the fix that was asked for.
+   The way back in is the region bar, which is on screen the whole time regions
+   are armed — click into its prompt and the boxes come back. */
+#region-layer{position:absolute;inset:0;touch-action:none;cursor:crosshair;
+  opacity:0;pointer-events:none;transition:opacity .16s ease}
+#region-layer.show{opacity:1;pointer-events:auto}
 #region-layer.off{display:none}
-.rbox{position:absolute;border:1px solid rgba(255,255,255,.9);border-radius:4px;
-  cursor:move;touch-action:none;overflow:hidden;
-  box-shadow:0 0 0 1px rgba(0,0,0,.45),inset 0 0 0 1px rgba(0,0,0,.28)}
+/* A region of the picture, not a line on top of it. The 1px white stroke read
+   as UI at every size and fought whatever was underneath — bright plate or
+   dark, it was the most contrasty thing in the frame. Corner brackets plus a
+   barely-there wash say "this area" and leave the middle of the box clear,
+   which is where the render you are judging actually is. */
+.rbox{position:absolute;border-radius:5px;cursor:move;touch-action:none;overflow:hidden;
+  background:rgba(255,255,255,.045);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16),inset 0 0 0 2px rgba(0,0,0,.18)}
+/* The brackets. Drawn with two gradients per corner so there is no extra
+   element per box — eight boxes would otherwise be thirty-two more nodes on a
+   layer that is redrawn on every pointermove. */
+.rbox::before,.rbox::after{content:'';position:absolute;width:15px;height:15px;
+  pointer-events:none;opacity:.9}
+.rbox::before{left:-1px;top:-1px;
+  border-left:2px solid rgba(255,255,255,.92);border-top:2px solid rgba(255,255,255,.92);
+  border-radius:5px 0 0 0;filter:drop-shadow(0 0 1px rgba(0,0,0,.6))}
+.rbox::after{right:-1px;bottom:-1px;
+  border-right:2px solid rgba(255,255,255,.92);border-bottom:2px solid rgba(255,255,255,.92);
+  border-radius:0 0 5px 0;filter:drop-shadow(0 0 1px rgba(0,0,0,.6))}
 /* Solid when the box holds an identity — a resolvable LoRA or a photo — and
    faint when it holds neither, which is the same distinction the 32px plots
    drew and the one that decides what comes out: an empty rectangle is filled
    by the scene prompt, a box with an identity in it is a person. */
-.rbox{opacity:.34}
+.rbox{opacity:.4}
 .rbox.armed{opacity:1}
-.rbox.sel{border-color:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.6),0 0 0 3px rgba(255,255,255,.16)}
+.rbox.sel{background:rgba(255,255,255,.08);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.42),inset 0 0 0 2px rgba(0,0,0,.22)}
 .rbox>.face{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.5;
   pointer-events:none}
 .rbox>.tag{position:absolute;left:0;top:0;max-width:100%;padding:3px 7px;
@@ -9312,6 +9350,9 @@ addEventListener('dragover',e=>{
   // make the page look like it wants to eat it.
   if(![...(e.dataTransfer?.types||[])].includes('Files')) return;
   document.body.classList.add('dragging');
+  // The one moment "you can drop a photo on a box" needs saying, which is also
+  // the only way a new user finds it at all.
+  if(typeof syncRegionVis==='function') syncRegionVis();
   clearTimeout(dragEnd);
   dragEnd=setTimeout(dropOff,300);
 });
@@ -9322,6 +9363,7 @@ addEventListener('dragover',e=>{
 function dropOff(){
   clearTimeout(dragEnd);
   document.body.classList.remove('dragging');
+  if(typeof syncRegionVis==='function') syncRegionVis();
   // Every target's own dragleave clears its own highlight, and that is enough
   // right up until a drag leaves the window faster than the events describing
   // it — then a tile stays lit with nothing over it, which is a control
@@ -11484,6 +11526,7 @@ function drawRegions(){
     tag.classList.toggle('hide',!t);
   });
   syncInspector(); syncRegionNote();
+  syncRegionVis(); syncRegionBadge();
 }
 
 // ---------- selection and the inspector ----------
@@ -11708,7 +11751,11 @@ $('#region-layer').addEventListener('pointerdown',e=>{
       selectRegion(idx, mode==='se'&&!orig.width);
     }
     syncLoraNote();
+    // selectRegion focuses the bar, so the boxes stay up on their own from
+    // here — the hold only had to survive the pointer being down.
+    holdRegions(false);
   };
+  holdRegions(true);
   $('#region-layer').addEventListener('pointermove',move);
   $('#region-layer').addEventListener('pointerup',up);
   $('#region-layer').addEventListener('pointercancel',up);
@@ -11858,6 +11905,37 @@ function wireCanvasDrop(el){
     drawRegions();
   });
 }
+// ---------- when the boxes are on screen ----------
+// Four reasons, and they are all "you are working on a region right now":
+// the caret is in the region bar, a box is mid-drag, a file is over the window,
+// or regions were just armed and the two seeded rectangles are the instruction.
+// Anything else — including looking at the render you just made — and they go.
+let regionPeek = false;          // set while a drag or a fresh arm holds them open
+function regionsVisible(){
+  if(!window.REGIONS_READY || !regionOn()) return false;
+  if(regionPeek) return true;
+  if(document.body.classList.contains('dragging')) return true;
+  const a=document.activeElement;
+  return !!(a && a.closest && a.closest('#region-bar'));
+}
+function syncRegionVis(){
+  const l=$('#region-layer'); if(l) l.classList.toggle('show', regionsVisible());
+}
+// The count, so the mode stays legible with nothing on the picture. Without it
+// a regional render and a plain one look identical right up until the result.
+function syncRegionBadge(){
+  const on=window.REGIONS_READY&&regionOn(), n=on?regions.length:0;
+  $('#g-regional').classList.toggle('counted',n>0);
+  $('#g-regional').dataset.count=n||'';
+}
+// focusin/focusout rather than focus/blur: those do not bubble, and the bar
+// holds a dozen fields — binding each one is a dozen places to forget the next
+// control added to the row.
+['focusin','focusout'].forEach(ev=>document.addEventListener(ev,()=>setTimeout(syncRegionVis,0)));
+// A drag that starts on the layer has to keep them up even though the pointer
+// leaves the field that revealed them.
+function holdRegions(on){ regionPeek=on; syncRegionVis() }
+
 function clearCanvasDrop(){
   const el=$('#region-layer');
   if(el.parentElement) el.parentElement.classList.remove('hot');
@@ -12018,6 +12096,12 @@ function setRegional(on){
     rsel=0;
   }
   drawRegions(); syncCanvasView(); syncLoraNote();
+  // Arming puts the caret in the region prompt, which is what makes the two
+  // seeded rectangles visible — the instruction only works if you can see it.
+  // It is also the honest answer to "how do I get the boxes back": the same
+  // field, every time, rather than a second gesture to learn.
+  if(on) $('#r-prompt').focus();
+  syncRegionVis();
 }
 $('#g-regional').onclick=()=>setRegional(!regionOn());
 
