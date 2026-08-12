@@ -7927,9 +7927,15 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    a transition on that lags the thumb — which is the whole thing this is for. */
 .lb-track.snap{transition:transform .3s cubic-bezier(.22,.61,.36,1)}
 .lb-slide{flex:0 0 100%;height:100%;display:grid;place-items:center;padding:30px}
+/* Belt and braces with draggable="false": Safari honours -webkit-user-drag and
+   ignores the attribute on some elements. */
+.lb img,.lb video{-webkit-user-drag:none;user-select:none;-webkit-user-select:none}
 .lb img,.lb video{max-width:100%;max-height:100%;width:auto;height:auto;
   min-width:0;min-height:0;object-fit:contain}
-.lb .x{position:absolute;top:16px;right:20px;width:34px;height:34px;border:0;background:none;color:#bbb;padding:7px;cursor:pointer}
+.lb .x{position:absolute;top:14px;right:16px;width:40px;height:40px;border:0;background:none;
+  color:#fff;padding:8px;cursor:pointer;z-index:3;
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
+.lb .x:hover{opacity:.75}
 /* Paging, for the pointer that cannot swipe. Big, edge-anchored and mostly
    transparent — they sit over the picture, so they earn their place by being
    where a thumb already is rather than by being visible. */
@@ -7944,10 +7950,10 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    reason you can flick through twenty takes without losing your place. */
 .lb .lb-at{position:absolute;top:20px;left:50%;transform:translateX(-50%);
   font:500 12px/1 inherit;color:#bbb;font-variant-numeric:tabular-nums}
-.lb .lb-all{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);
-  border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.5);color:#e8e8e8;
-  padding:8px 14px;border-radius:999px;font:500 12px/1 inherit;cursor:pointer}
-.lb .lb-all:hover{background:rgba(0,0,0,.8);border-color:rgba(255,255,255,.35)}
+.lb .lb-all{position:absolute;top:14px;right:60px;width:40px;height:40px;border:0;
+  background:none;color:#fff;padding:9px;cursor:pointer;z-index:3;
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
+.lb .lb-all:hover{opacity:.75}
 /* The header button when it is carrying a picture rather than a glyph. */
 .ico.thumb{padding:0;overflow:hidden;border-radius:9px;border:1px solid rgba(255,255,255,.22)}
 .ico.thumb img,.ico.thumb video{width:100%;height:100%;object-fit:cover;display:block}
@@ -9737,20 +9743,32 @@ function lightbox(src,video){
   const at=i=>{
     const it=viewSet[i]; if(!it) return '<div class="lb-slide"></div>';
     const u=`/api/file/${it.job_id}/${it.files[0]}`;
+    // draggable=false, because an <img> is natively draggable: mousedown and
+    // move starts an HTML image drag, the browser fires pointercancel, and the
+    // gesture dies one frame in. Touch never takes that path, so the same code
+    // tracked a thumb and refused a trackpad — the exact asymmetry an interface
+    // this shape must not have.
     return `<div class="lb-slide">`+(it.kind==='video'
-      ? `<video src="${u}" controls loop playsinline></video>`
-      : `<img src="${u}" alt="">`)+`</div>`;
+      ? `<video src="${u}" controls loop playsinline draggable="false"></video>`
+      : `<img src="${u}" alt="" draggable="false">`)+`</div>`;
   };
-  el.innerHTML=`<button class="x">${ICON.close}</button>`
+  el.innerHTML=`<button class="x" title="Close">`
+    +`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"`
+    +` stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>`
     +(many?`<button class="lb-nav prev" ${viewIdx<=0?'disabled':''}>${ICON.back}</button>`
          +`<button class="lb-nav next" ${viewIdx>=viewSet.length-1?'disabled':''}>${ICON.back}</button>`
          +`<span class="lb-at">${viewIdx+1} / ${viewSet.length}</span>`:'')
-    +`<button class="lb-all">All generations</button>`
+    +`<button class="lb-all" title="All generations">`
+    +`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"`
+    +` stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.4"/>`
+    +`<rect x="13.5" y="3" width="7.5" height="7.5" rx="1.4"/>`
+    +`<rect x="3" y="13.5" width="7.5" height="7.5" rx="1.4"/>`
+    +`<rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.4"/></svg></button>`
     +`<div class="lb-track">`
     +(many ? at(viewIdx-1)+at(viewIdx)+at(viewIdx+1)
            : `<div class="lb-slide">`+(video
-               ? `<video src="${src}" controls autoplay loop playsinline></video>`
-               : `<img src="${src}" alt="">`)+`</div>`)
+               ? `<video src="${src}" controls autoplay loop playsinline draggable="false"></video>`
+               : `<img src="${src}" alt="" draggable="false">`)+`</div>`)
     +`</div>`;
   const track=el.querySelector('.lb-track');
   if(many) track.style.transform='translateX(-100%)';
@@ -9770,16 +9788,19 @@ function lightbox(src,video){
   // The drag itself. While the pointer is down the track follows it one-to-one,
   // so both takes are on screen and the gesture is reversible — let go halfway
   // and it falls back to where it was. It only ever comes to rest on a take.
-  let sx=null, sy=null, dragging=false, w=1;
+  let sx=null, sy=null, st=0, dragging=false, w=1, justDragged=false;
   const settle=(dx,commit)=>{
     track.classList.add('snap');
     track.style.transform=`translateX(${commit? (dx<0?'-200%':'0%') : '-100%'})`;
   };
   el.addEventListener('pointerdown',e=>{
     if(!many||e.target.closest('button')) return;
-    sx=e.clientX; sy=e.clientY; dragging=false;
+    sx=e.clientX; sy=e.clientY; st=e.timeStamp; dragging=false;
     w=el.getBoundingClientRect().width||1;
     track.classList.remove('snap');
+    // Captured, so a drag that wanders off the picture — or off the window —
+    // keeps arriving here instead of stopping wherever the pointer went.
+    try{ el.setPointerCapture(e.pointerId) }catch(_){}
   });
   el.addEventListener('pointermove',e=>{
     if(sx==null) return;
@@ -9798,9 +9819,20 @@ function lightbox(src,video){
     const dx=e.clientX-sx; const was=dragging;
     sx=null; dragging=false;
     if(!was) return;
-    // A quarter of the width, the same threshold a page turn uses everywhere:
-    // past it you meant it, short of it you were looking.
-    const commit=Math.abs(dx)>w*0.25
+    // A drag ends in a click. Without this the click lands on the backdrop and
+    // closes the viewer, so every successful swipe shut the thing it was
+    // paging — and on a trackpad that is the only outcome you ever see.
+    justDragged=true; setTimeout(()=>{ justDragged=false },0);
+    // Distance or speed, not distance alone. A quarter of the width is a long
+    // way on a 1200px viewer, and requiring it made every quick flick fall back
+    // — the gesture people actually use to go through twenty takes is a short
+    // fast one, not a slow haul across the screen. 0.45px/ms is about the speed
+    // of a flick that means it and comfortably above a drag that is still
+    // deciding, so either a long pull or a brisk flick pages and a slow short
+    // nudge does not.
+    const v=Math.abs(dx)/Math.max(1,e.timeStamp-st);
+    const meant=Math.abs(dx)>w*0.25 || (v>0.45 && Math.abs(dx)>36);
+    const commit=meant
       && !((dx>0&&viewIdx<=0)||(dx<0&&viewIdx>=viewSet.length-1));
     settle(dx,commit);
     if(!commit) return;
@@ -9812,8 +9844,15 @@ function lightbox(src,video){
     },{once:true});
   };
   el.addEventListener('pointerup',release);
-  el.addEventListener('pointercancel',release);
-  el.onclick=e=>{ if(e.target===el||e.target.closest('.x')) close() };
+  // Cancel means something took the gesture away, which is not the same as you
+  // finishing it — so it goes back rather than committing to a take you may
+  // never have asked for.
+  el.addEventListener('pointercancel',()=>{
+    if(sx==null) return;
+    sx=null; dragging=false; settle(0,false);
+  });
+  el.onclick=e=>{ if(justDragged) return;
+    if(e.target===el||e.target.closest('.x')) close() };
   document.addEventListener('keydown',onKey);
   document.body.appendChild(el);
 }
