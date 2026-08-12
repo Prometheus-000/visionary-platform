@@ -1,8 +1,10 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { failed } from './api/client'
 import { getState } from './api/routes'
 import { autoGrow } from './console/fieldMax'
+import { Gallery, useGallery } from './gallery/Gallery'
+import { IconPanel, IconTrain } from './icons'
 import { useStore } from './store'
 
 /**
@@ -26,6 +28,10 @@ export function App() {
 
   const consoleRef = useRef<HTMLDivElement>(null)
   const fieldRef = useRef<HTMLTextAreaElement>(null)
+
+  const { items, reload } = useGallery()
+  const [galleryOpen, setGalleryOpen] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(true)
 
   useEffect(() => {
     let live = true
@@ -77,13 +83,21 @@ export function App() {
           Visionary
         </button>
         <span className="grow" />
+        {/* Train is one door, labelled with where it leads rather than where
+            you are, so two things never look equally selected. Generate has no
+            nav item because it is not a place you go — it is the page. */}
         <button className="door" id="door" type="button">
+          <IconTrain />
           Train
+        </button>
+        <button className="ico" id="t-drawer" title="Gallery" type="button"
+                onClick={() => setDrawerOpen((d) => !d)}>
+          <IconPanel />
         </button>
       </header>
 
       <div className="views">
-        <div className="view studio nodrawer" id="v-generate">
+        <div className={`view studio${drawerOpen ? '' : ' nodrawer'}`} id="v-generate">
           <div className="stage">
             <div className="canvas" id="canvas">
               {stateError ? (
@@ -110,6 +124,16 @@ export function App() {
               </div>
             </div>
           </div>
+
+          <Gallery
+            items={items}
+            open={galleryOpen}
+            onClose={() => setGalleryOpen(false)}
+            onReload={() => {
+              setGalleryOpen(true)
+              void reload()
+            }}
+          />
         </div>
       </div>
     </>

@@ -36,6 +36,33 @@ that moves the baseline.
   sound, and the four H3 alignment sentences.
 - `probe_console.py` — the console against its 30% budget at three viewports.
 
+## Parity checks
+
+`check_viewer.py` takes a URL, so the same twelve assertions run against either
+front end and the outputs are compared directly:
+
+    python3 tools/ui-checks/check_viewer.py                        # vanilla
+    python3 tools/ui-checks/check_viewer.py http://localhost:5173  # React
+
+This is the shape every port check should take. Two things it taught:
+
+**Do not hold a reference across a rebuild.** The first version captured `.lb`
+once and read the counter through it. The vanilla viewer removes and rebuilds
+that element on `transitionend`, so the handle went stale and the check
+reported "did not page" for a viewer that had paged — while React, which reuses
+the element, passed. A parity check that passes one implementation for
+structural reasons is worse than no parity check.
+
+**A driver drag is not a drag.** `left_click_drag` produced no pointer events
+on the viewer at all, so a real-input test asserted nothing and passed by doing
+nothing. The drag is dispatched as synthetic `PointerEvent`s with real
+timestamps instead, which exercises the same handlers. What that cannot cover
+is the trackpad-versus-touch asymmetry that broke this before — `<img>` is
+natively draggable, so a mouse drag started an HTML image drag and fired
+`pointercancel` one frame in, while touch never took that path. The check
+asserts `draggable="false"` because that is the fix; only real hardware proves
+it still holds.
+
 ## The rest
 
 - `check_neg.py` — the negative-prompt toggle and the auto-growing prompt field.
