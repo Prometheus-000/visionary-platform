@@ -7955,8 +7955,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
 .lb .lb-all:hover{opacity:.75}
 /* The header button when it is carrying a picture rather than a glyph. */
-.ico.thumb{padding:0;overflow:hidden;border-radius:9px;border:1px solid rgba(255,255,255,.22)}
-.ico.thumb img,.ico.thumb video{width:100%;height:100%;object-fit:cover;display:block}
+.shot-back{width:36px;height:36px;flex:none;padding:0;overflow:hidden;border-radius:10px;
+  border:1px solid rgba(255,255,255,.22);background:none;cursor:pointer}
+.shot-back:hover{border-color:rgba(255,255,255,.5)}
+.shot-back img,.shot-back video{width:100%;height:100%;object-fit:cover;display:block}
+@media (hover:none) and (max-width:1024px){ .shot-back{width:44px;height:44px} }
 
 /* Datasets -------------------------------------------------------------- */
 /* flex-column, not the default: a <button> centres its content vertically, so
@@ -8680,6 +8683,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
                one number. This is the shot palette's shape again: one button
                showing the value it resolved to, everything behind it. -->
           <button class="opt ib" id="g-sampling" title="Sampler, steps and guidance"></button>
+          <button class="ico shot-back hide" id="g-last" title="Last generation"></button>
           <button class="b" id="go-gen">Generate</button>
         </span>
       </div>
@@ -8732,6 +8736,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
         <span class="actions">
           <span class="muted" id="v-model-line"></span>
           <button class="opt ib" id="v-sampling" title="Sampler, steps and guidance"></button>
+          <button class="ico shot-back hide" id="v-last" title="Last generation"></button>
           <button class="b" id="go-vid">Generate</button>
         </span>
       </div>
@@ -9201,15 +9206,26 @@ $('#t-drawer').innerHTML=ICON.panel;
 // Falls back to the glyph with nothing on the volume, because a hole where a
 // picture goes is worse than a symbol.
 function paintLastShot(items){
-  const b=$('#t-drawer'), it=(items||[])[0];
-  if(!it){ b.innerHTML=ICON.panel; b.classList.remove('thumb'); b.title='Recent work'; return }
-  const src=`/api/file/${it.job_id}/${it.files[0]}`;
-  b.classList.add('thumb');
-  b.innerHTML = it.kind==='video'
-    ? `<video src="${src}#t=0.04" preload="metadata" muted playsinline></video>`
-    : `<img src="${src}" alt="">`;
-  b.title='Last generation';
+  const it=(items||[])[0];
+  // Beside Generate, not in the header. The Camera app puts the last frame next
+  // to the shutter because those two are one loop: you press one and then want
+  // the other. Putting it in the top bar meant pressing Generate at the bottom
+  // of a 1194px screen and then reaching to the opposite corner to look at the
+  // result — the hand crossing the whole device and coming back, for two things
+  // that belong within a thumb's travel of each other.
+  ['#g-last','#v-last'].forEach(sel=>{
+    const b=$(sel); if(!b) return;
+    b.classList.toggle('hide',!it);
+    if(!it) return;
+    const src=`/api/file/${it.job_id}/${it.files[0]}`;
+    b.innerHTML = it.kind==='video'
+      ? `<video src="${src}#t=0.04" preload="metadata" muted playsinline></video>`
+      : `<img src="${src}" alt="">`;
+  });
 }
+$$('#g-last,#v-last').forEach(b=>b.onclick=()=>{
+  if((galItems||[]).length) viewAt(galItems,0);
+});
 $('#settings-x').innerHTML=ICON.close;
 
 // ==================== SHELL ====================
@@ -9604,10 +9620,7 @@ function syncDropTargets(){
   $$('#canvas .frame, #canvas .shot').forEach(el=>el.classList.toggle('can-drop',live));
 }
 
-$('#t-drawer').onclick=e=>{
-  if(matchMedia('(max-width:1024px)').matches && (galItems||[]).length){
-    return viewAt(galItems,0);
-  }
+$('#t-drawer').onclick=()=>{
   const off=$('#v-generate').classList.toggle('nodrawer');
   $('#t-drawer').classList.toggle('on',!off);
 };
