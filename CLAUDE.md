@@ -855,12 +855,18 @@ frame is the scene, and on the video side the keyframes and the reference
 pictures and videos arrive the same way rather than through a tray of 32px
 tiles. One gesture, one place, for every picture the model can be given.
 
-**The fallback is a three-dot menu in the box's top-right corner**, and it is the
-same shape as the model and sampling popovers — a small form, opened from the
-thing it belongs to. Coordinate fine-tuning lives in there. That is where the
-numeric escape hatch goes once the numbers stop needing a permanent row: X, Y,
-W, H are the thing you reach for rarely and precisely, which by the frequency
-rule under "The page" is exactly what belongs behind a menu.
+**What you touch answers with its own roles, at the place you touched it.** The
+Dream Engine renders show this: a selection ring on a figure's head, and three
+small round glyphs beside it — figure, wardrobe, light — which are the things
+*that* object can be asked about and nothing else. Not a menu at a fixed corner
+of the box. A corner menu was the first sketch here and it is a panel in
+miniature parked at a coordinate, which is the failure sentence 4 names; the
+number of affordances should fall out of what you touched, not out of a layout.
+
+The numeric escape hatch still has to live somewhere, because X/Y/W/H is
+precision work you occasionally need and a drag cannot give. It belongs behind
+one of those roles rather than beside them — reached for rarely and precisely,
+which the frequency rule under "The page" already places behind something.
 
 **It eliminates the region bar.** Which raises the question worth answering
 first, because the answer decides how much of this is a move and how much is a
