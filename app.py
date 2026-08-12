@@ -8265,8 +8265,15 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
      Horizontal scrolling is the right axis here for the same reason vertical
      is the cheap one above: whichever direction the container is short in is
      the direction its contents must not grow. */
+  /* A height, not a max-height. Everything below this distributes the track
+     with flex, and flex has nothing to distribute unless something in the chain
+     is definite — with `max-height` the drawer sized from content, the content
+     sized from flex, and the whole strip resolved to zero. The closed state is
+     spelled out beside it because `height` would otherwise keep the bar on
+     screen when the gallery is shut. */
   .drawer{flex:none;border-left:0;border-top:1px solid rgba(255,255,255,.07);
-    max-height:192px;overflow:hidden;display:flex;flex-direction:column}
+    height:192px;overflow:hidden;display:flex;flex-direction:column}
+  .studio.nodrawer .drawer{height:0;border-top:0}
   .drawer-in{width:auto;padding:10px 14px;flex:1;min-height:0;
     display:flex;flex-direction:column}
   /* grid-template-columns is reset rather than left to be overridden: .grid is
@@ -8291,9 +8298,28 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
      came out 299px tall inside a 192px drawer. 100px is what the cap leaves
      once the head, the padding and the card foot are paid for, and stating it
      is what makes every thumbnail the same height. */
-  .drawer .grid>.gal{flex:0 0 148px;align-self:start;display:flex;flex-direction:column}
-  .drawer .grid>.gal .media{height:100px;width:100%;aspect-ratio:auto;object-fit:contain}
-  .drawer .grid>.gal .foot{flex:none}
+  /* The card stretches to the track and the media takes what the foot does not
+     want. Hard-coding a media height was the previous attempt and it is the
+     wrong shape of answer: the track's height comes from a chain of paddings
+     and a head, so any number written here is right until one of them changes
+     and silently slices the foot off afterwards. `flex:1 1 0` rather than the
+     `1 1 auto` that failed before — an auto basis is the content size, which
+     for an <img> is its intrinsic height, which is exactly what needed
+     overriding. */
+  .drawer .grid>.gal{flex:0 0 158px;min-height:0;display:flex;flex-direction:column}
+  .drawer .grid>.gal .media{flex:1 1 0;min-height:0;height:auto;width:100%;
+    aspect-ratio:auto;object-fit:contain}
+  /* The foot pays for itself twice over at this size and has to get cheaper.
+     At the desktop padding the card came to 143px inside a 134px content box,
+     so every timestamp in the strip was sliced through the middle — the kind of
+     overflow that looks like a font problem and is really an arithmetic one.
+     The kind glyph and the menu are what the strip needs (a still and a clip are
+     otherwise the same black rectangle); the timestamp is the part that can go,
+     since the row is already newest-first. */
+  .drawer .grid>.gal .foot{flex:none;padding:2px 4px 2px 6px;min-height:0;gap:4px}
+  .drawer .grid>.gal .foot .kind{width:16px;height:16px;padding:0}
+  .drawer .grid>.gal .foot .when{display:none}
+  .drawer .grid>.gal .foot .more{width:20px;height:20px}
   .grid2{grid-template-columns:1fr}
 }
 </style></head><body>
