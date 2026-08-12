@@ -8253,9 +8253,47 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   .view{position:static;flex-direction:column}
   .canvas{overflow:visible}
   .console{max-height:none;padding:13px 16px 15px}
-  .drawer{flex:none;border-left:0;border-top:1px solid rgba(255,255,255,.07)}
-  .drawer-in{width:auto}
-  .drawer .grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+  /* Stacked, the drawer stops being a column and becomes a strip. Left as a
+     wrapping grid it grew downward without limit — at a dozen outputs it was
+     several screens of gallery under a canvas you had to scroll back up to,
+     which inverts what the drawer is for: the work you made is meant to sit
+     beside the work you are making, not bury it.
+
+     So it is capped and the row scrolls sideways instead. 192px is about a
+     104px thumbnail once the head and the card foot are paid for, which is
+     enough to recognise a shot by and not enough to compete with the canvas.
+     Horizontal scrolling is the right axis here for the same reason vertical
+     is the cheap one above: whichever direction the container is short in is
+     the direction its contents must not grow. */
+  .drawer{flex:none;border-left:0;border-top:1px solid rgba(255,255,255,.07);
+    max-height:192px;overflow:hidden;display:flex;flex-direction:column}
+  .drawer-in{width:auto;padding:10px 14px;flex:1;min-height:0;
+    display:flex;flex-direction:column}
+  /* grid-template-columns is reset rather than left to be overridden: .grid is
+     still display:grid at this point in the cascade, and a stale template on a
+     flex container is the kind of leftover that only shows up at one width. */
+  .drawer .grid{display:flex;grid-template-columns:none;gap:10px;
+    flex:1;min-height:0;overflow-x:auto;overflow-y:hidden}
+  /* The card sizes from its height, not the container's width — the media
+     keeps 4:3 and the width follows, so a strip of mixed aspects still reads
+     as one row of even-height thumbnails. */
+  /* A fixed card width, and the media contains inside it. Letting the width
+     follow each image's own aspect was the first attempt and it does not work:
+     an <img> flex item in a column takes its width from the intrinsic size, so
+     the row came out at 1346px-wide cards instead of thumbnails. The whole
+     frame still shows — object-fit stays `contain`, so a portrait letterboxes
+     rather than being cropped to fit a tidy row, which is the same trade the
+     gallery grid already refuses to make. */
+  /* The media carries an explicit height rather than stretching to the row.
+     height:100% on the card does not resolve here — the grid's own height comes
+     from `flex:1`, which is definite to the layout engine and not to a
+     percentage — so the cards sized from intrinsic media instead and a portrait
+     came out 299px tall inside a 192px drawer. 100px is what the cap leaves
+     once the head, the padding and the card foot are paid for, and stating it
+     is what makes every thumbnail the same height. */
+  .drawer .grid>.gal{flex:0 0 148px;align-self:start;display:flex;flex-direction:column}
+  .drawer .grid>.gal .media{height:100px;width:100%;aspect-ratio:auto;object-fit:contain}
+  .drawer .grid>.gal .foot{flex:none}
   .grid2{grid-template-columns:1fr}
 }
 </style></head><body>
