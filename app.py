@@ -7905,6 +7905,27 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .lb img,.lb video{max-width:100%;max-height:100%;width:auto;height:auto;
   min-width:0;min-height:0;object-fit:contain}
 .lb .x{position:absolute;top:16px;right:20px;width:34px;height:34px;border:0;background:none;color:#bbb;padding:7px;cursor:pointer}
+/* Paging, for the pointer that cannot swipe. Big, edge-anchored and mostly
+   transparent — they sit over the picture, so they earn their place by being
+   where a thumb already is rather than by being visible. */
+.lb .lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:52px;height:78px;
+  border:0;background:rgba(0,0,0,.4);color:#e8e8e8;cursor:pointer;padding:22px;
+  border-radius:12px;opacity:.5;transition:opacity .12s}
+.lb .lb-nav:hover{opacity:1;background:rgba(0,0,0,.66)}
+.lb .lb-nav[disabled]{opacity:.12;cursor:default}
+.lb .lb-nav.prev{left:14px}
+.lb .lb-nav.next{right:14px;transform:translateY(-50%) rotate(180deg)}
+/* Where you are in the set. The one thing swiping cannot tell you, and the
+   reason you can flick through twenty takes without losing your place. */
+.lb .lb-at{position:absolute;top:20px;left:50%;transform:translateX(-50%);
+  font:500 12px/1 inherit;color:#bbb;font-variant-numeric:tabular-nums}
+.lb .lb-all{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);
+  border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.5);color:#e8e8e8;
+  padding:8px 14px;border-radius:999px;font:500 12px/1 inherit;cursor:pointer}
+.lb .lb-all:hover{background:rgba(0,0,0,.8);border-color:rgba(255,255,255,.35)}
+/* The header button when it is carrying a picture rather than a glyph. */
+.ico.thumb{padding:0;overflow:hidden;border-radius:9px;border:1px solid rgba(255,255,255,.22)}
+.ico.thumb img,.ico.thumb video{width:100%;height:100%;object-fit:cover;display:block}
 
 /* Datasets -------------------------------------------------------------- */
 /* flex-column, not the default: a <button> centres its content vertically, so
@@ -8292,6 +8313,27 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   .view{position:static;flex-direction:column;min-height:calc(100dvh - var(--head))}
   .canvas{overflow:visible}
   .console{max-height:none;padding:13px 16px 15px}
+  /* The gallery grid crops to squares here, which is the one place this app
+     deliberately trades information for density — and the trade is right
+     because the screen is the constraint rather than the design. Desktop keeps
+     uncropped thumbnails because 320px of column can afford a 4:3 that letter-
+     boxes; a phone cannot, and a ragged grid of mixed aspects on a 390px screen
+     is a column of two-inch pictures with gaps between them. macOS Photos and
+     iOS Photos make exactly this split, and for exactly this reason.
+     
+     Recognition survives the crop: you are scanning for "the one with the ship"
+     and the centre of the frame carries that. The whole frame is one tap away
+     in the viewer, which is where you look at a picture rather than find it. */
+  #gal-grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:2px}
+  #gal-grid .gal{border:0;border-radius:0;background:none}
+  #gal-grid .media{aspect-ratio:1;width:100%;height:auto;object-fit:cover}
+  /* The card's chrome goes with it. A timestamp and a menu under every square
+     is the furniture this layout exists to remove, and both live in the viewer
+     the square opens. */
+  #gal-grid .foot{display:none}
+  #gal-grid .quick{opacity:0}
+  #gal-grid .gal:focus-within .quick{opacity:1}
+
   /* Stacked, the drawer stops being a column and becomes a strip. Left as a
      wrapping grid it grew downward without limit — at a dozen outputs it was
      several screens of gallery under a canvas you had to scroll back up to,
@@ -9122,6 +9164,21 @@ $('#canvas-full').innerHTML=ICON.expand;
 $('#canvas-clear').innerHTML=ICON.close;
 $('#t-settings').innerHTML=ICON.gear;
 $('#t-drawer').innerHTML=ICON.panel;
+// The Camera app's move: the way back to what you made is a picture of what you
+// made. An icon says "gallery", which you have to already want; a thumbnail says
+// "this is the last thing you rendered", which is what you are reaching for.
+// Falls back to the glyph with nothing on the volume, because a hole where a
+// picture goes is worse than a symbol.
+function paintLastShot(items){
+  const b=$('#t-drawer'), it=(items||[])[0];
+  if(!it){ b.innerHTML=ICON.panel; b.classList.remove('thumb'); b.title='Recent work'; return }
+  const src=`/api/file/${it.job_id}/${it.files[0]}`;
+  b.classList.add('thumb');
+  b.innerHTML = it.kind==='video'
+    ? `<video src="${src}#t=0.04" preload="metadata" muted playsinline></video>`
+    : `<img src="${src}" alt="">`;
+  b.title='Last generation';
+}
 $('#settings-x').innerHTML=ICON.close;
 
 // ==================== SHELL ====================
@@ -9516,7 +9573,10 @@ function syncDropTargets(){
   $$('#canvas .frame, #canvas .shot').forEach(el=>el.classList.toggle('can-drop',live));
 }
 
-$('#t-drawer').onclick=()=>{
+$('#t-drawer').onclick=e=>{
+  if(matchMedia('(max-width:1024px)').matches && (galItems||[]).length){
+    return viewAt(galItems,0);
+  }
   const off=$('#v-generate').classList.toggle('nodrawer');
   $('#t-drawer').classList.toggle('on',!off);
 };
@@ -9622,12 +9682,54 @@ addEventListener('keydown',e=>{
   e.preventDefault(); lightbox(s.src,s.video);
 });
 
+// The set the viewer is walking, and where in it. Opening one picture and
+// having to close it to see the next is the tax this removes: on a phone,
+// twenty takes is twenty taps out and twenty back in.
+let viewSet=[], viewIdx=0;
+function viewAt(rows,i){
+  viewSet=rows; viewIdx=i;
+  const it=rows[i];
+  lightbox(`/api/file/${it.job_id}/${it.files[0]}`, it.kind==='video');
+}
+function viewStep(d){
+  const i=viewIdx+d;
+  // Stops at the ends rather than wrapping. A set that loops has no edges, and
+  // "am I back where I started" is the question you cannot answer while flicking.
+  if(!viewSet.length||i<0||i>=viewSet.length) return;
+  const keep=viewSet;
+  document.querySelector('.lb')?.remove();
+  viewAt(keep,i);
+}
+
 function lightbox(src,video){
   const el=document.createElement('div'); el.className='lb';
-  el.innerHTML=`<button class="x">${ICON.close}</button>`+
-    (video?`<video src="${src}" controls autoplay loop playsinline></video>`:`<img src="${src}" alt="">`);
-  const close=()=>{ el.remove(); document.removeEventListener('keydown',onKey) };
-  const onKey=e=>{ if(e.key==='Escape') close() };
+  const many=viewSet.length>1;
+  el.innerHTML=`<button class="x">${ICON.close}</button>`
+    +(many?`<button class="lb-nav prev" ${viewIdx<=0?'disabled':''}>${ICON.back}</button>`
+         +`<button class="lb-nav next" ${viewIdx>=viewSet.length-1?'disabled':''}>${ICON.back}</button>`
+         +`<span class="lb-at">${viewIdx+1} / ${viewSet.length}</span>`:'')
+    +`<button class="lb-all">All generations</button>`
+    +(video?`<video src="${src}" controls autoplay loop playsinline></video>`:`<img src="${src}" alt="">`);
+  const close=()=>{ el.remove(); document.removeEventListener('keydown',onKey); viewSet=[] };
+  const onKey=e=>{
+    if(e.key==='Escape') return close();
+    if(e.key==='ArrowLeft') return viewStep(-1);
+    if(e.key==='ArrowRight') return viewStep(1);
+  };
+  el.querySelector('.lb-all').onclick=()=>{ close(); openGallery() };
+  if(many){
+    el.querySelector('.prev').onclick=e=>{ e.stopPropagation(); viewStep(-1) };
+    el.querySelector('.next').onclick=e=>{ e.stopPropagation(); viewStep(1) };
+  }
+  // Horizontal drag pages; vertical is left alone so a tall picture still
+  // scrolls. 48px, because a thumb resting on glass wanders further than a mouse.
+  let sx=null,sy=null;
+  el.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY });
+  el.addEventListener('pointerup',e=>{
+    if(sx==null) return;
+    const dx=e.clientX-sx, dy=e.clientY-sy; sx=null;
+    if(Math.abs(dx)>48&&Math.abs(dx)>Math.abs(dy)) viewStep(dx<0?1:-1);
+  });
   el.onclick=e=>{ if(e.target===el||e.target.closest('.x')) close() };
   document.addEventListener('keydown',onKey);
   document.body.appendChild(el);
@@ -12866,6 +12968,7 @@ const ago=t=>{
 async function loadGallery(){
   const r=await api('/api/gallery');
   galItems=r.items||[];
+  paintLastShot(galItems);
   drawDrawer();
   if(!$('#gal-full').classList.contains('hide')) drawGallery();
 }
@@ -12901,8 +13004,7 @@ function galCard(it,i){
 function wireCards(root,rows){
   root.querySelectorAll('.gal').forEach(card=>{
     const it=rows[+card.dataset.i];
-    card.querySelector('[data-open]').onclick=()=>
-      lightbox(`/api/file/${it.job_id}/${it.files[0]}`, it.kind==='video');
+    card.querySelector('[data-open]').onclick=()=>viewAt(rows,+card.dataset.i);
     card.querySelectorAll('[data-act]').forEach(b=>b.onclick=e=>{
       e.stopPropagation();
       if(b.dataset.act==='download') return download(it);
