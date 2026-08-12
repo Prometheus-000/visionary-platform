@@ -7959,11 +7959,24 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   background:none;color:#fff;padding:9px;cursor:pointer;z-index:3;
   filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
 .lb .lb-all:hover{opacity:.75}
-/* The header button when it is carrying a picture rather than a glyph. */
-.shot-back{width:36px;height:36px;flex:none;padding:0;overflow:hidden;border-radius:10px;
-  border:1px solid rgba(255,255,255,.22);background:none;cursor:pointer}
-.shot-back:hover{border-color:rgba(255,255,255,.5)}
-.shot-back img,.shot-back video{width:100%;height:100%;object-fit:cover;display:block}
+/* The last generation, beside Generate — and only where that is the shortest
+   way back to it.
+   
+   Below 1024px the gallery has no other home: the drawer stacks, so there is no
+   column beside the canvas and the header is the far corner of a tall screen.
+   Above it the drawer is a column that is already next to the picture and the
+   header button already opens it, so this is a second door onto a room with a
+   door — and it lands in the composer, which is the row this whole redesign has
+   been trying to empty. Desktop was not the problem the thumbnail solved, so it
+   does not get the fix. */
+.shot-back{display:none}
+@media (max-width:1024px){
+  .shot-back{width:36px;height:36px;flex:none;padding:0;overflow:hidden;border-radius:10px;
+    border:1px solid rgba(255,255,255,.22);background:none;cursor:pointer;display:block}
+  .shot-back:hover{border-color:rgba(255,255,255,.5)}
+  .shot-back img,.shot-back video{width:100%;height:100%;object-fit:cover;display:block}
+  .shot-back.hide{display:none}
+}
 @media (hover:none) and (max-width:1024px){ .shot-back{width:44px;height:44px} }
 
 /* Datasets -------------------------------------------------------------- */
@@ -9873,6 +9886,14 @@ function lightbox(src,video){
     if(justDragged) return;
     if(e.target.closest('.x')) return close();
     if(e.target.closest('button,video')) return;   // controls keep their own jobs
+    // On the picture, a click asks for more of it — chrome off. Off the picture
+    // is where the two devices differ, and they should: clicking the dark
+    // surround to dismiss is a desktop convention old enough that removing it
+    // reads as a broken dialog, while on glass the picture fills the screen and
+    // that surround is a few pixels nobody aims at. So the mouse keeps its
+    // click-away and touch does not have to grow one.
+    if(e.target.closest('.lb-slide img,.lb-slide video')) return el.classList.toggle('bare');
+    if(matchMedia('(hover:hover)').matches) return close();
     el.classList.toggle('bare');
   };
   document.addEventListener('keydown',onKey);
