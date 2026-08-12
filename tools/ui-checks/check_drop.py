@@ -74,10 +74,17 @@ with sync_playwright() as pw:
     report("outfit plate", "#g-drop-outfit")
     report("region layer", "#region-layer")
     report("a region box", "#region-layer .rbox")
-    report("the still canvas frame", "#canvas .frame")
+    # `#canvas .frame` is deliberately not tested. `wireCanvasDrop` listens on
+    # #region-layer, which covers the frame, and paints `hot` onto the frame as
+    # its *host* — so a real drag is cancelled on the layer and the frame never
+    # needs its own listener. Dispatching synthetically at the frame cannot
+    # reach the layer (the layer is its child, not its ancestor), so the row
+    # reported DEAD for a target that is working, while `body.dragging` kept
+    # `lit` true and hid the contradiction. A check that cries dead about a live
+    # control is how a real dead one gets waved past.
 
     print("\nELSEWHERE (known good, as a control)")
     pg.evaluate("() => { window.setMode && setMode('datasets') }")
     pg.wait_for_timeout(600)
-    report("dataset hero drop", "#ds-drop")
+    report("dataset hero drop", "#drop")
     b.close()
