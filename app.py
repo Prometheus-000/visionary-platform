@@ -7279,6 +7279,36 @@ svg{width:100%;height:100%;display:block}
 .opt{display:inline-flex;align-items:center;gap:5px;height:36px;padding:0 5px 0 9px;
   background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
 .opt:focus-within{border-color:rgba(255,255,255,.28)}
+
+/* Unbounded ---------------------------------------------------------------
+   Ten controls in a row, each in its own box, is ten boxes competing with the
+   picture above them. The chrome is not what makes a control a control — the
+   value is, and every one of these already shows its own. So the box is spent
+   only when it is doing something: pointing at what the pointer is over, or
+   showing that a popover is open from here.
+
+   Scoped to the console. `.opt` is also used in Train, which is a form you fill
+   in rather than a row you scan, and a form without field edges is a worse
+   form. The region bar is included because it is the same console.
+
+   The line: a control whose value *is* its label can lose its box; a free-text
+   field cannot, because an empty one has nothing to show and no edge to aim at.
+   Hence the `:has(input[type=text])`-shaped exceptions below rather than a
+   blanket rule — #r-prompt and the size boxes keep their containers. */
+#c-image>.opts .opt,#c-video>.opts .opt,#region-bar .opt{
+  background:none;border-color:transparent}
+#c-image>.opts .opt:hover,#c-video>.opts .opt:hover,#region-bar .opt:hover,
+#c-image>.opts .opt:focus-within,#c-video>.opts .opt:focus-within,#region-bar .opt:focus-within{
+  background:rgba(255,255,255,.06);border-color:var(--line)}
+/* The exception, and the reason it is by content rather than by id: anything
+   holding a text box you type into keeps its edges wherever it appears. */
+#region-bar .opt.wide,#c-image>.opts .opt.wide,#c-video>.opts .opt.wide{
+  background:rgba(255,255,255,.05);border-color:var(--line)}
+/* Icon buttons and the value-bearing pills follow the same rule. `.on` is a
+   popover open from this control, which is the one state that must read while
+   the pointer is somewhere else entirely — inside the popover. */
+#c-image>.opts .opt.ib.on,#c-video>.opts .opt.ib.on,#region-bar .opt.ib.on{
+  background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.24)}
 .opt>svg{width:14px;height:14px;flex:none;color:var(--dim)}
 /* `.lead`, not `.lb` — `.lb` is the lightbox, `position:fixed;inset:0`, and
    every label in the strip quietly became a full-screen black overlay. Same
@@ -7304,8 +7334,7 @@ svg{width:100%;height:100%;display:block}
    This is the promote/demote rule with the screen as the forcing function: the
    controls that survive are the ones a render actually varies by. */
 @media (max-width:640px){
-  .opt:has(#g-gpu),.opt:has(#v-gpu),.opt:has(#g-n),.opt:has(#g-seed),.opt:has(#v-seed){display:none}
-  #c-image .opts,#c-video .opts{gap:6px}
+    #c-image .opts,#c-video .opts{gap:6px}
 }
 .opt input{width:76px}
 /* Named numerics do not need the width an unlabelled one did: the label
@@ -7909,7 +7938,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .sizer .sz-note{margin:8px 2px 1px;font-size:10.5px}
 /* Wide enough to hold "16:9 · 2304×1296" without the strip reflowing when the
    scale changes under it. */
-#g-size{width:auto;padding:0 11px;font-size:11.5px;color:var(--fg);font-variant-numeric:tabular-nums}
+#g-size,#v-size{width:auto;padding:0 11px;font-size:11.5px;color:var(--fg);font-variant-numeric:tabular-nums}
 
 /* A row per LoRA, not a card per LoRA. The catalogue below is cards because each
    entry there is a decision with a size, a repo and a licence attached; this is
@@ -8702,11 +8731,14 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
           <input id="g-steps" placeholder="auto" inputmode="numeric">
           <input id="g-cfg" placeholder="auto" inputmode="decimal" data-step="0.1" data-bigstep="1">
           <input id="g-shift" placeholder="1.15" inputmode="decimal" data-step="0.05" data-bigstep="0.5">
+          <!-- Demoted out of the strip. A seed is *reused off a result* — the
+               gesture happens after a render, not before — and a batch count is
+               a run parameter like steps, not a thing a take varies by. Both
+               stay real elements here so reuse(), the submit body and the
+               arrow-key nudges address exactly what they always did. -->
+          <input id="g-seed" placeholder="random" inputmode="numeric">
+          <select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
         </div>
-        <div class="opt n" data-lb="Images"><select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
-        <div class="opt" data-lb="Seed"><input id="g-seed" placeholder="random" inputmode="numeric"
-          title="Fix the noise so a prompt reproduces. Blank draws a new one per image."></div>
-        <div class="opt"><select id="g-gpu"></select></div>
         <span class="vr"></span>
         <!-- A picker, not a row: it writes a <lora:name:1> into the prompt at
              the caret. The button is here for discovery — you cannot type a
@@ -8757,16 +8789,20 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
              strip even offers: LoRAs, CFG and a negative prompt on Wan;
              references and a soundtrack on H3. -->
         <div class="opt"><select id="v-model"></select></div>
-        <div class="opt"><select id="v-aspect">
-          <option value="21:9">21:9</option><option value="16:9" selected>16:9</option>
-          <option value="4:3">4:3</option><option value="1:1">1:1</option>
-          <option value="3:4">3:4</option><option value="9:16">9:16</option>
-        </select></div>
-        <div class="opt"><select id="v-tier"></select></div>
+        <!-- Shape and how much of it, as one control — the same pair `g-size`
+             already collapsed on the image side, which the video side never
+             received. The scale row here is the model's own tiers, which differ
+             per checkpoint. -->
+        <button class="opt ib" id="v-size" title="Shape and resolution"></button>
+        <div class="hide" id="v-size-state">
+          <select id="v-aspect">
+            <option value="21:9">21:9</option><option value="16:9" selected>16:9</option>
+            <option value="4:3">4:3</option><option value="1:1">1:1</option>
+            <option value="3:4">3:4</option><option value="9:16">9:16</option>
+          </select>
+          <select id="v-tier"></select>
+        </div>
         <div class="opt"><select id="v-seconds"></select></div>
-        <div class="opt" data-lb="Seed"><input id="v-seed" placeholder="random" inputmode="numeric"
-          title="Fix the noise so a prompt reproduces. Blank draws a new one."></div>
-        <div class="opt"><select id="v-gpu"></select></div>
         <!-- Wan only, and the same picker the image side uses. The one thing
              the A14B pair forces — which expert a LoRA patches — rides in the
              token as a third field, and is read off the filename when the
@@ -8786,6 +8822,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
             data-step="0.1" data-bigstep="1"></span>
           <span id="v-switch-wrap" class="hide"><input id="v-switch" placeholder="auto"
             inputmode="numeric"></span>
+          <input id="v-seed" placeholder="random" inputmode="numeric">
         </div>
         <button class="opt ib" id="v-shot" data-ico="shot" data-lb="Shot"
           title="Shot size, camera move, light, action and sound — the fields H3 reads."></button>
@@ -9060,6 +9097,18 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
          password field it has nothing to do with. Each family downloads itself
          now, so the button that is almost always the wrong scope is gone and
          the card is about the thing it is labelled with. -->
+    <!-- Where the cards you fill in once live, which is what a GPU choice is:
+         it is set per session and confirms a cold start when it changes, so it
+         was 71px of composer for a decision no take varies by. -->
+    <div class="card">
+      <label>GPU</label>
+      <div class="row" style="gap:10px">
+        <div class="opt" data-lb="Images"><select id="g-gpu"></select></div>
+        <div class="opt" data-lb="Video"><select id="v-gpu"></select></div>
+      </div>
+      <p class="muted" style="margin:9px 2px 0">Changing a card costs one cold start while the model loads. Runs after it are warm.</p>
+    </div>
+
     <div class="card">
       <label>HuggingFace token</label>
       <div class="row">
@@ -11616,6 +11665,53 @@ function swapSize(){
 }
 $('#g-swap').onclick=swapSize;
 $('#g-size').onclick=e=>openSizer(e.currentTarget);
+$('#v-size').onclick=e=>openVidSizer(e.currentTarget);
+
+// The video side's size control. Deliberately its own function rather than a
+// `pre` parameter on openSizer: the image side addresses trained pixel buckets
+// and a scale multiplier, the video side addresses ratio strings and a tier key
+// whose labels come from the chosen model. Same shape on screen and the same
+// `.sizer` styles, different vocabulary underneath — folding them together
+// would mean one function branching on which of two unrelated things it holds.
+function paintVidSize(){
+  const b=$('#v-size'); if(!b) return;
+  const m=videoModel()||{}, tiers=m.tiers||{};
+  const a=$('#v-aspect').value;
+  const tier=tiers[$('#v-tier').value]||Object.values(tiers)[0]||'';
+  // The tier's own label, which already reads "768p" or "544p draft" — the
+  // second word is a fact about the run and belongs on the button.
+  b.textContent=[a,tier].filter(Boolean).join(' · ')||'Size';
+  b.classList.toggle('on', !!menuEl && menuEl.classList.contains('sizer'));
+}
+function openVidSizer(btn){
+  const el=document.createElement('div'); el.className='menu sizer';
+  const draw=()=>{
+    const cur=$('#v-aspect').value, curT=$('#v-tier').value;
+    const tiles=[...$('#v-aspect').options].map(o=>{
+      const [aw,ah]=o.value.split(':').map(Number);
+      const long=26, sw=aw>=ah?long:Math.round(long*aw/ah), sh=ah>aw?long:Math.round(long*ah/aw);
+      return `<button class="ar${o.value===cur?' on':''}" data-ar="${esc(o.value)}">
+        <i style="width:${sw}px;height:${sh}px"></i><b>${esc(o.textContent)}</b></button>`;
+    }).join('');
+    // Read off the select rather than the model, because syncVideoModel has
+    // already rebuilt it for this checkpoint — asking the model again would be
+    // a second place deciding which tiers exist.
+    const tiers=[...$('#v-tier').options].map(o=>
+      `<button class="sc${o.value===curT?' on':''}" data-t="${esc(o.value)}">${esc(o.textContent)}</button>`).join('');
+    el.innerHTML=`<div class="ars">${tiles}</div><div class="scales">${tiers}</div>`;
+    el.querySelectorAll('[data-ar]').forEach(b=>b.onclick=()=>{
+      $('#v-aspect').value=b.dataset.ar;
+      $('#v-aspect').dispatchEvent(new Event('change',{bubbles:true}));
+      paintVidSize(); draw();
+    });
+    el.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{
+      $('#v-tier').value=b.dataset.t; $('#v-tier').dataset.touched='1';
+      $('#v-tier').dispatchEvent(new Event('change',{bubbles:true}));
+      paintVidSize(); draw();
+    });
+  };
+  draw(); floatBy(btn,el); paintVidSize();
+}
 $('#g-sampling').onclick=e=>openSampling(e.currentTarget,'g');
 $('#v-sampling').onclick=e=>openSampling(e.currentTarget,'v');
 
@@ -11672,6 +11768,11 @@ function openSampling(btn,pre){
         'Bends the noise schedule — higher spends more steps on composition and motion.')
     + (pre==='v' ? num('switch','Expert switch','auto','1','4',
         'Step at which the high-noise expert hands the latent to the low-noise one.') : '')
+    + row('Seed',`<input data-s="${id('seed')}" inputmode="numeric" placeholder="random"
+        value="${esc($(id('seed')).value)}">`,
+        'Blank draws a new one. A seed worth keeping is on the render that used it.')
+    + (pre==='g' ? row('Images',
+        `<select data-s="#g-n">${opts('#g-n',$('#g-n').value)}</select>`) : '')
     + `<button class="sz-reset" type="button">Reset to the model’s defaults</button>`;
   el.querySelectorAll('[data-s]').forEach(f=>{
     const real=$(f.dataset.s);
@@ -11695,7 +11796,7 @@ function openSampling(btn,pre){
     };
   });
   el.querySelector('.sz-reset').onclick=()=>{
-    ['steps','cfg','shift','switch'].forEach(k=>{
+    ['steps','cfg','shift','switch','seed'].forEach(k=>{
       const x=$(id(k)); if(!x) return;
       x.value=''; delete x.dataset.touched;
     });
@@ -12884,7 +12985,7 @@ function syncVideoModel(){
   $('#go-vid').disabled=!t.ready;
   $('#v-model-line').textContent = t.ready ? m.note
     : 'Not downloaded: '+t.missing.join(', ')+' — get them under Settings.';
-  paintSampling();
+  paintSampling(); paintVidSize();
   drawRefs();
 }
 $('#v-model').onchange=syncVideoModel;

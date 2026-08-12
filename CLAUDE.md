@@ -726,22 +726,28 @@ is worked on locally instead of paying an image build and a cold start per CSS
 change. Its stubs are shaped to hold the awkward states — a missing model, an
 uncaptioned dataset, a prompt too long to belong in a gallery card.
 
-## Where the console redesign is up to
+## Where the console redesign got to
 
-Two things are open, and both are further along than "not started" — the method
-is settled and the measurements exist, so neither needs re-deriving.
+**Promote and demote — done.** The rule that settled it: what survives in the
+strip is what a render actually varies by. Measured, the image strip was 1016px
+of controls and the video 979px, most of it spent on things a take does not
+change. Seed and the batch count went into the Sampling popover — a seed is
+*reused off a result*, so the gesture happens after a render and not before, and
+a batch is a run parameter like steps. The GPU went under the gear, because it
+is chosen once a session and already confirms a cold start when it changes. The
+video side finally got the size control the image side had, collapsing a
+separate aspect select and tier select into one button reading `16:9 · 768p`.
+Result: 732px and 652px.
 
-**Promote and demote.** The rule is: what survives is what a render actually
-varies by, and the phone is the forcing function rather than an opinion about
-which controls feel advanced. Three are already demoted below 640px and the
-argument generalises to every width — the GPU is set once and confirms a cold
-start when it changes; a seed is reused off a result, so the gesture happens
-*after* a render and not before; a batch count is a decision the Generate button
-could carry. What is left is applying the same read to the rest, and moving the
-three out of the composer entirely rather than only on a phone. Sampling, size
-and the shot palette are already popovers, so the strip is a row of doors — the
-open question is whether a row is still the right shape once everything in it
-is one.
+**Unbounded buttons — done.** Ten controls each in their own box is ten boxes
+competing with the picture above them, and the chrome is not what makes a
+control a control: the value is, and every one of these already shows its own.
+So the box is spent only when it is doing something — the pointer is over it, or
+a popover is open from it. Scoped to the console: Train keeps its edges, because
+it is a form you fill in rather than a row you scan, and a form without field
+edges is a worse form. The line that decides is the same one that governs
+labels — a control whose value *is* its label can lose its box; a free-text
+field cannot, because an empty one has nothing to show and no edge to aim at.
 
 **Bar or rail — settled: the bar stays.** The dead-space table under "The page"
 says a rail would fit on desktop, and it is still not the answer. A rail is a
@@ -793,6 +799,30 @@ They are not interchangeable, and the UI says so rather than averaging them:
 `VIDEO_MODELS` is served to the page, so the composer shows only the controls
 the chosen model reads. A control that is present but ignored is worse than one
 that is absent — it is the UI making a promise the model will not keep.
+
+### 2K is absent on purpose
+
+H3 generates at 768p here and there is no upscale, because the thing that makes
+2K is not downloadable. **H3-Regenerate-2K is not a super-resolution module** —
+it feeds the 768p result *plus the original multimodal context* back into the
+base model to regenerate, which is what lets it recover small text and fine
+detail that conventional SR has to guess. MiniMax's README is explicit that it
+is withheld: *"this module is not yet open-sourced. We will release it once it
+is ready."* H3-Context-IR, their prompt expansion, is withheld for the same
+reason. Every `scripts/readme/full-2k-*.sh` in the repo posts to their hosted
+platform with a bearer token and the video as a base64 data URL.
+
+Building that hosted path was considered and rejected: it sends renders to a
+third party, bills outside Modal, and is a second backend that becomes dead code
+the day the local module ships. When it does ship it should extend the existing
+job/status/stop contract rather than inventing a parallel one — it is another H3
+task taking a video and a prompt, which `_h3_graph` and `/api/video` are already
+shaped for.
+
+One thing to build first when it lands: **upscaling this app's own output beats
+upscaling a dropped file**, and not by a little. The method's whole advantage is
+the original context, and a sidecar still holds the prompt, the shot pills and
+the references. An external video arrives with none of that.
 
 The A14B pair is the one thing with no image-side analogue: it is *two*
 checkpoints split by noise level, sampled in sequence by two `KSamplerAdvanced`
