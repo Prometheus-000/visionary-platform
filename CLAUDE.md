@@ -971,19 +971,31 @@ vocabulary with three compilers behind it, and nobody types
 model reading intent instead of a table matching pills — is the same idea with
 a better front half, and the direction this is going.
 
-**Reproducibility is not at risk from this, because it never depended on the
-compiler.** A run is reproducible because the metadata exists: the sidecar
-records the prompt that was actually sent, so replaying it gives the same shot
-whether a dict wrote it or a model did. What a nondeterministic compiler loses
-is only the *compilation* — the same intent may not produce the same prompt
-twice — and that is a different thing from the run, which is what anyone
-actually wants back. The one requirement this places on an LLM in the path is
-the one already met: whatever it produces gets written to the sidecar.
+Reproducibility does not argue against this, because it never depended on the
+compiler: a run is reproducible because the metadata exists, and replaying the
+recorded prompt gives the same shot whether a dict wrote it or a model did. The
+same intent producing a different prompt twice is not a defect to be engineered
+around. It is what a conversation is.
 
-The other thing to hold on to is that a job record should keep meaning something
-without the app that wrote it. Pills are keys on a table today; the recorded
-prompt is plain text either way, which is what makes the storage layout the
-contract rather than the code.
+**And that is the actual shape of it: you argue with the picture, you do not
+author a prompt.** "Make her older." "The light is too warm." "No, the other
+one." Iteration is conversational and corrective, the way any real working
+session is — including the ones that produced this file. What nobody should be
+doing is nudging commas, swapping a period for a comma, or shuffling clauses
+around a paragraph to see what the encoder does differently. That is a person
+performing machine work because the machine will not do it for them.
+
+The tell is in how AI writing is caught: it reads as machine-made because it is
+*too smooth*. People think and write in bursts — fragments, a correction, a
+second thought that contradicts the first, the real point arriving third. A tool
+that demands one clean flowing paragraph is demanding that a human produce the
+artefact of a machine before the machine will listen. Backwards.
+
+So fragments are the expected input, not the degraded case. Out of order,
+incomplete, self-correcting, arriving in pieces over a minute — that is the
+normal shape of intent and the system's job is to take it that way. The prompt
+that comes out the other side is the app's business, and stays in the sidecar so
+a run can always be replayed.
 
 **The failure to guard against is not the model, the latency or the scope.** It
 is month four, when something does not fit cleanly and the cheapest fix is a
