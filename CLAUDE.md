@@ -981,8 +981,14 @@ than the first.
 **What is worth keeping is the intent, and that is what the sidecar should be
 read as recording.** `prompt_typed` and `shot` are the durable half — what you
 actually meant — and the compiled `prompt` is a receipt: this is what this
-encoder was told, this once. The gallery and Reuse prefer the typed one, which
-reads as a legibility choice and is really the deeper one.
+encoder was told, this once. Reuse, Copy and the metadata sheet prefer the typed
+one, which reads as a legibility choice and is really the deeper one.
+
+The gallery itself shows neither, and never has: a card carries the picture, its
+kind and its age. Worth saying because "show the prompt on the card" is an
+obvious-looking addition and it is wrong twice over — a six-field document is
+not readable at thumbnail size, and a prompt is an implementation detail of
+whichever encoder was being fed that day.
 
 It also pays off the moment a model is replaced. Intent recompiles for whatever
 comes next; a stored prompt is worth nothing to a checkpoint that wants a
@@ -1139,9 +1145,9 @@ do with the result:
 
 The job carries `prompt` (what ran) and `prompt_typed` + `shot` (what you
 chose), and the sidecar only gains the second pair when the compiler did
-something. The gallery, Reuse and the metadata sheet all prefer the typed one: a
-card showing a six-field document is a card you cannot read, and restoring a
-document into the prompt box would compile *that* on the next run.
+something. Reuse, Copy and the metadata sheet all prefer the typed one, because
+restoring a document into the prompt box would compile *that* on the next run.
+The gallery shows no prompt at all — see the note above.
 
 ### The settled question: `forge/` is gone
 

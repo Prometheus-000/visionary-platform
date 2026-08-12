@@ -6,11 +6,19 @@ import { fileUrl } from '../api/routes'
  * The sidecar carries three prompt-shaped fields and they are not
  * interchangeable. `prompt` is the compiled receipt: what this encoder was
  * told, this once. `prompt_typed` and `shot` are the durable half — what you
- * actually meant. The gallery, Reuse and the metadata sheet all prefer the
- * typed one, which reads as a legibility choice (a card showing a six-field H3
- * document is a card you cannot read) and is really the deeper one: intent
- * recompiles for whatever model comes next, a stored prompt is worth nothing to
- * a checkpoint that wants a different grammar.
+ * actually meant.
+ *
+ * **A card never shows any of them.** The grid carries the picture, its kind
+ * and its age; the prompt lives in the metadata sheet, and Reuse and Copy read
+ * it from there. Worth stating because "put the prompt on the card" is an
+ * obvious-looking addition, and it is the wrong one twice over: a six-field H3
+ * document is not a thing you can read at thumbnail size, and a prompt is an
+ * implementation detail of whichever encoder was being fed that day.
+ *
+ * Where the prompt *is* shown — the sheet, Reuse, Copy — the typed one wins.
+ * That reads as legibility and is really the deeper choice: intent recompiles
+ * for whatever model comes next, while a stored prompt is worth nothing to a
+ * checkpoint that wants a different grammar.
  */
 export type GalleryItem = {
   job_id: string
