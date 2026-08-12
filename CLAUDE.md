@@ -825,97 +825,64 @@ buttons on a finished image are the first piece of that.
 
 ### Phase 6 — The Dynamic Canvas
 
-The direction this serves is written down separately, as *The Eleven Sentences*
-— a veto list rather than a manifesto, kept outside the repo. Two things about
-how to read it, from the author:
+The canvas becomes where the work is done rather than where the result appears.
+Region prompts and LoRAs set on the canvas. Every attachment a drop — a photo
+onto a box is that character, a photo onto the frame is the scene, and the video
+side's keyframes and reference pictures arrive the same way instead of through a
+tray of 32px tiles. One gesture, one place, for every picture a model can be
+given.
 
-**The conflicts are expected and are being retired on purpose.** The shipped app
-contradicts several of those sentences today — there is a Generate button where
-sentence 5 says nothing asks for confirmation, a console where sentence 4 says
-nothing is labelled, and modes where sentence 2 says the canvas never changes.
-That is not debt to be paid down in a sweep. Each one comes out when the thing
-replacing it is actually better, and a change that satisfies a sentence while
-making the tool worse has failed the sentence rather than served it.
+What you touch answers with its own affordances, at the place you touched it,
+and only the ones that object can respond to. Not a menu at a fixed corner: that
+is a panel in miniature parked at a coordinate, and it puts the same affordance
+count on every object regardless of what the object is. The numeric escape hatch
+— X, Y, W, H — stays reachable behind one of those affordances rather than
+beside them, because it is precision work you occasionally need and a drag
+cannot give.
 
-**Its touch-only assertions run ahead of where the tools are.** The document
-argues from a future where keyboard and pointer are obsolete, and that future is
-not here. Hover, tooltips and shortcuts are still first-class in this codebase —
-what the document is really guarding against is a feature that *only* works with
-a cursor, which is the fork that rots. Design to the coarser input, let
-precision be a bonus, and do not read "no hover" as "remove the shortcuts".
+It eliminates the region bar, which raises the question worth settling first,
+because the answer decides whether this is a move or a deletion: of the three
+things in that bar only one is regional. The scene and outfit plates only exist
+when regions are armed, so they follow. The region prompt becomes canvas-native,
+which is the point. But the map exists *because* the boxes hide on a finished
+render — if the dynamic canvas keeps them legible over a result, the map has no
+job left and should go with the row rather than be rehomed out of habit.
 
-**Why the app does not already look like this.** The platform was built in a
-familiar idiom on purpose — a console, a Generate button, panels, modes — because
-the guts had to exist and be understood before a new surface could be imagined
-on top of them. Driving ComfyUI, the job/status/stop contract, the volume
-layout, regional masking, the H3 compiler, LoRA training: none of that is
-guessable from a mockup, and designing a novel interaction over a backend you do
-not yet understand produces a surface that cannot be built. So the conventional
-version came first, and it is scaffolding rather than debt. Read the console
-that way: it is what made the rest legible, and it is expected to go.
+**Why the app does not already work this way.** The platform was built in a
+familiar idiom on purpose — a console, a Generate button, panels, modes —
+because the guts had to exist and be understood before a new surface could be
+imagined on top of them. Driving ComfyUI, the job/status/stop contract, the
+volume layout, regional masking, the prompt compiler, LoRA training: none of
+that is guessable from a mockup, and designing a novel interaction over a
+backend you do not yet understand produces a surface that cannot be built. So
+the conventional version came first, and it is scaffolding rather than debt.
+Read the console that way — it is what made the rest legible, and it is expected
+to go.
 
-**And part of the vision is waiting on models, not on us.** Worth separating,
-because the three tiers have very different costs:
+**Part of this waits on models, not on effort.** Three tiers, with very
+different costs:
 
 - *Reachable now.* Touch-to-select and touch-to-edit. Segmentation on a finished
   render turns flat pixels into addressable regions, and regional inpainting
-  re-renders one mask. That is most of "reach for a face and only a face
-  answers", and the regional path is already element-as-component in primitive
-  form — the gap is that boxes are author-declared rather than model-derived,
-  which is a segmentation step and not a research problem.
-- *Reachable but expensive.* Entities that persist across renders. A LoRA gives
-  that for a character, which is why this platform trains them — but canon
-  figures, places and looks as first-class things means a LoRA per entity and a
-  training run per thing made canon. That changes what the arsenal is: a library
-  of weights, not of images.
-- *Not there.* The frame computed from blocking, and the camera as a character
-  with a body and limits. That is causality between a 3D arrangement and a 2D
-  image, which diffusion does not model. It needs a world model or a hybrid
-  where a real 3D scene drives conditioning, and nothing off the shelf does it.
+  re-renders one mask. The regional path here is already element-as-component in
+  primitive form; the gap is that boxes are author-declared rather than
+  model-derived, which is a segmentation step and not a research problem.
+- *Reachable but expensive.* Elements that persist across renders. A LoRA gives
+  that for a character, which is why this platform trains them — but making it
+  general means a LoRA per element and a training run per thing kept, which
+  changes what a library is: weights, not images.
+- *Not there.* A frame computed from a spatial arrangement rather than authored,
+  and a camera with real physical limits. That is causality between a 3D scene
+  and a 2D image, which diffusion does not model. It needs a world model, or a
+  hybrid where real 3D drives conditioning, and nothing off the shelf does it.
 
-The useful consequence: the interaction is mostly reachable and the physics is
-not, so this phase should chase the first tier and leave blocking alone until
-the model exists. Attempting the third and concluding the whole direction is
-fantasy is the specific mistake this paragraph is here to prevent.
+The consequence: the interaction is mostly reachable and the physics is not, so
+this phase should chase the first tier and leave the third alone until the model
+exists. Attempting it, failing, and concluding the whole direction is fantasy is
+the specific mistake this paragraph exists to prevent.
 
-Loose on purpose. This is the direction, not the design, and it is written down
-so the next pass starts from the intent rather than from whatever the console
-happens to look like by then.
-
-**The canvas becomes where the work is done, not where the result appears.** You
-set a region's prompt on the canvas. You apply its LoRA on the canvas. Every
-attachment is a drop: a photo onto a box is that character, a photo onto the
-frame is the scene, and on the video side the keyframes and the reference
-pictures and videos arrive the same way rather than through a tray of 32px
-tiles. One gesture, one place, for every picture the model can be given.
-
-**What you touch answers with its own roles, at the place you touched it.** The
-Dream Engine renders show this: a selection ring on a figure's head, and three
-small round glyphs beside it — figure, wardrobe, light — which are the things
-*that* object can be asked about and nothing else. Not a menu at a fixed corner
-of the box. A corner menu was the first sketch here and it is a panel in
-miniature parked at a coordinate, which is the failure sentence 4 names; the
-number of affordances should fall out of what you touched, not out of a layout.
-
-The numeric escape hatch still has to live somewhere, because X/Y/W/H is
-precision work you occasionally need and a drag cannot give. It belongs behind
-one of those roles rather than beside them — reached for rarely and precisely,
-which the frequency rule under "The page" already places behind something.
-
-**It eliminates the region bar.** Which raises the question worth answering
-first, because the answer decides how much of this is a move and how much is a
-deletion: three things live in that bar and only one of them is regional. The
-scene and outfit plates only exist when regions are armed, so they follow. The
-region prompt becomes canvas-native, which is the point. But the map exists
-*because* the boxes hide on a finished render — if the dynamic canvas keeps the
-boxes legible over a result, the map has no job left and should go with the row
-rather than be rehomed out of habit.
-
-**And it is the differentiator.** Every other tool in this space asks you to
-describe a composition in a sentence. This one lets you point at it. That is
-worth saying out loud here because it is the thing to protect when a change
-would be easier the other way: if a decision makes the canvas less direct and
-some panel more capable, the decision is wrong.
+The fuller product direction lives in a private document outside this repo and
+is deliberately not reproduced here.
 
 ### Two video families, one path
 
