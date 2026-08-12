@@ -106,6 +106,7 @@ in for free.
     ai-toolkit/         training reference
     tools/              smoke tests, the local UI preview
     tools/_from_app.py  pulls plain-Python pieces out of app.py by AST
+    docs/               screenshots the README embeds, and PRODUCT_BRIEF.md
 
 `_from_app.py` exists because two tools need the *real* thing rather than a
 copy: `smoke_prompt.py` checking a compiler against a reimplementation would be

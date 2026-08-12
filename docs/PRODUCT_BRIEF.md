@@ -102,16 +102,59 @@ rather than a cold start and 35 GB of weight loading before it fails.
 Four phases are complete and in this release. The system is one Modal app defined
 in one file; what follows is what that file contains.
 
+### How it is built — three words, in priority order when they conflict
+
+**Antifragile.** A failure should teach you something and leave the system better
+able to survive the next one. Errors diagnose themselves: the missing-model error
+prints the resolved volume name, the exact path it wanted, and what is actually
+on the volume, because those three facts are what distinguish a wrong Modal
+profile from a filename typo from a partial download. Any error a user can hit
+twice is an error that should have explained itself the first time. Destructive
+operations are asked for rather than softened — deletion unlinks, and the confirm
+dialog that says what is going and how much of it is the safety net. A per-root
+`.trash/` lived here for a while on the theory that a mis-click should cost a
+file move rather than the file, but nothing ever surfaced it: it was not an undo
+anyone could reach, it was a second copy of everything already thrown away, on a
+volume whose only other way to reclaim space is the CLI. Stops are cooperative.
+Pins are commit SHAs rather than branches, so an upstream force-push cannot
+change your build under you.
+
+**Scalable.** Scale here is not requests per second; it is dataset size, model
+size and cost per job. Never rent a GPU to do CPU work. Keep the polled thing
+small — a record polled every two seconds must never grow with the size of the
+result. Separate storage by commit cost. One container per loaded checkpoint.
+
+**Future-proof.** Prefer the surface that will still be there, and that carries
+the *next* model in for free. Depend on maintained upstreams over owned forks.
+Storage layout is the contract, not the code. Separate images when pins conflict,
+and only then — a dependency conflict resolved by compromise is a conflict you
+pay for forever, and the converse binds just as hard, which is why images and
+video share one image rather than paying for a second CUDA build. Do not build a
+second way to do the first thing.
+
 ### Runtime and deployment
 
 | | |
 |---|---|
 | **Shape** | One Modal app, one web URL serving UI + ~38 API routes + GPU jobs |
 | **Images** | Three — trainer, inference/ComfyUI, captioner. Separate only because their `transformers` pins genuinely conflict; images and video share one image because nothing in it is per-family |
-| **GPU classes** | Two (image, video), H100/H200, `max_containers=1` each so a warm checkpoint is shared rather than reloaded |
+| **GPU classes** | Two (image, video), H100/H200. Hopper-only is the bill for sharing one image: SageAttention is compiled for sm_90. `max_containers=1` each, so a warm checkpoint is shared rather than reloaded |
 | **Volumes** | Two — the workspace, and the HuggingFace cache on its own volume because committing 17 GB of weights after writing 80 captions turned an 8-minute job into a 23-minute one |
 | **Pins** | Two upstream commit SHAs (`COMFY_SHA`, `CLIFF_SHA`). Nothing vendored, nothing patched |
 | **Multi-instance** | `VISIONARY_VOLUME` runs a second copy against its own storage |
+
+### Storage — the volume is the contract
+
+`models/` is flat and addressed by exact path; `loras/{folder}/` is what training
+writes; `datasets/` and `drafts/` are the same shape as each other; `outputs/{job}/`
+holds generated media; the rest is disposable scratch.
+
+A folder is a LoRA and the checkpoints in it are that LoRA's epochs — but anything
+arriving another way, migrated off an older volume or pulled off Drive, is a bare
+file at the top level, and a folders-only walk skipped four real LoRAs silently.
+That reads to the user as "training never produced anything" rather than "this
+listing has an opinion about directory layout." A file a run can load is a file
+the picker has to offer.
 
 ### Model catalogue and acquisition
 
@@ -218,6 +261,27 @@ than averaging them:
 `VIDEO_MODELS` is served to the page, so the composer renders only what the
 chosen model reads.
 
+Two rules earned in this path and worth stating on their own:
+
+- **Write out every optional input a node takes.** A ComfyUI node declares its
+  defaults twice — once for the canvas widget, once in its `run()` signature —
+  and for an input the graph omits, it is the signature that wins. In the pack we
+  drive, two of them disagreed, so every plate render ran the identity-edit LoRA
+  43% hot and downscaled every reference to 1024. Neither was visible in the
+  graph, the sidecar or the page. Spelling every optional input out is a few
+  lines, and it turns a disagreement upstream can introduce silently into one a
+  diff shows.
+- **Every input a run is priced by needs a range, and a file does not come with
+  one.** Tier, seconds, aspect and steps are all bounded. "Max detail" on a
+  reference was not: the node floors the short edge at 2048 and caps nothing, so
+  a 4032×3024 straight off a phone arrived as 2720×2048 — 21,760 latent tokens
+  against the 3,996 the same file would have cost at "match" — and reference
+  tokens ride *every* sampling step, so the run died in step 0 of 8. References
+  are bounded on arrival at 1536px now, and the resize bakes in the EXIF rotation
+  rather than dropping the tag. The general rule: an option whose cost is set by
+  something the page never measured is an option that will be found by whoever
+  has the biggest camera.
+
 ### The prompt compiler
 
 `SHOT_VOCAB` is one table with nine groups — Framing, Angle, Light, Tone, Action,
@@ -282,12 +346,42 @@ One page, no build step, no dependencies. The canvas is the largest thing on
 screen at every moment and the controls live in a bar under it, capped at 30% of
 the viewport with the prompt field yielding to the budget. Image and video are
 one workspace sharing prompt, canvas and gallery — the switch is a chip inside
-the prompt field and the sentence survives it. Controls are sorted by how often
-you reach for them, not by whether they are per-take or per-session: what you
-touch constantly is in the row, what you touch rarely is behind the model button.
-Controls carry no chrome until the pointer is on them. The gallery has three
-layers and its navigation lives in the top corners, while the last generation is
-a thumbnail beside Generate where the hand that pressed it already is.
+the prompt field and the sentence survives it. The gallery has three layers, its
+navigation lives in the top corners, and the last generation is a thumbnail
+beside Generate where the hand that pressed it already is.
+
+**The console pass has a measured result.** Controls are sorted by how often you
+reach for them, not by whether they are per-take or per-session — scope sounds
+right and fails on its own examples, because nobody picks a new aspect ratio per
+render and CFG is not a thing you set once a session either, it is a thing you
+almost never set. The seed is the case that proves it: different on every render,
+so per-scope it belongs in the row, and yet nobody types a seed — you take it off
+a result. Moving what a take does not change behind the model button took the
+image strip from 1016px of controls to 732px, and the video strip from 979px to
+652px. Controls also carry no chrome until the pointer is on them, because the
+value is what makes a control a control and every one of these already shows its
+own.
+
+**Bar versus rail is settled, with evidence rather than taste.** Fitting each
+render aspect into the canvas at 1512×982 leaves 0px of dead vertical space at
+all five aspects and 152–1068px horizontal, so the picture is height-bound
+everywhere: the bar always comes out of the picture, while four of five leave
+room for a rail twice over. The bar stays anyway — a rail is a dated shape that
+will read as of-its-decade long before this app stops being useful, and the
+overlay that would have avoided both was built and rejected, because a backdrop
+blur means judging a render through something whose legibility depends on what
+you generated.
+
+**Every picture the model can be given sits in one row, and the two halves dim
+each other.** Keyframes and references are the same decision made two ways — they
+load different transformers, so one excludes the other. As two separate rows of
+unlabelled 36px tiles, the keyframe pair was never found at all, and dropping
+photos into the reference tray looked like filling keyframe slots that kept
+growing. Side by side with a rule between them, the tray that grows and the two
+slots that do not are told apart by shape, which is the thing a tooltip could not
+do. Whichever half is out of play goes dim rather than disappearing: a control
+that vanishes when you fill its neighbour teaches nothing except that the page
+lost it.
 
 `tools/preview_ui.py` serves the page against stubbed JSON shaped to hold the
 awkward states, so front-end work costs a reload rather than an image build and a
