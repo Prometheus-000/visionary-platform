@@ -7287,6 +7287,26 @@ svg{width:100%;height:100%;display:block}
 .opt>.lead,.drop.mini>.lead{font-size:11.5px;line-height:1;color:var(--dim);flex:none;
   white-space:nowrap;cursor:default;-webkit-user-select:none;user-select:none}
 .opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:34px;border-radius:8px}
+/* The native select chrome was never switched off. On a desktop the macOS arrows
+   pass for a chevron; at 42px on a phone they render as a stepper — a control
+   that looks like it increments something, next to controls that do. One
+   chevron, drawn once, so every select on the page says the same thing. */
+.opt select{appearance:none;-webkit-appearance:none;padding-right:17px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238a8a8a' stroke-width='1.4' stroke-linecap='round'><path d='M3 4.5 6 7.5 9 4.5'/></svg>");
+  background-repeat:no-repeat;background-position:right 1px center;background-size:12px}
+/* Phone. Ten controls wrapping into four ragged rows is what the strip does
+   here, and three of the ten are the ones nobody touches twice: the GPU is set
+   once and confirms a cold start when it changes, the seed is a thing you reuse
+   off a result rather than type, and a batch count is a decision the Generate
+   button could carry. They are still reachable — GPU under the gear, seed and
+   steps behind Sampling — they are simply not worth a row on a 390px screen.
+   
+   This is the promote/demote rule with the screen as the forcing function: the
+   controls that survive are the ones a render actually varies by. */
+@media (max-width:640px){
+  .opt:has(#g-gpu),.opt:has(#v-gpu),.opt:has(#g-n),.opt:has(#g-seed),.opt:has(#v-seed){display:none}
+  #c-image .opts,#c-video .opts{gap:6px}
+}
 .opt input{width:76px}
 /* Named numerics do not need the width an unlabelled one did: the label
    carries the meaning, so the box only has to hold two or three digits. */
@@ -7902,6 +7922,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    content box, which `inset:0` makes definite, so `100%` means the screen. */
 .lb{position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:70;
   display:flex;align-items:center;justify-content:center;padding:34px}
+.lb-track{position:absolute;inset:0;display:flex;touch-action:pan-y;will-change:transform}
+/* Only while settling. During the drag the transform is written every frame, and
+   a transition on that lags the thumb — which is the whole thing this is for. */
+.lb-track.snap{transition:transform .3s cubic-bezier(.22,.61,.36,1)}
+.lb-slide{flex:0 0 100%;height:100%;display:grid;place-items:center;padding:30px}
 .lb img,.lb video{max-width:100%;max-height:100%;width:auto;height:auto;
   min-width:0;min-height:0;object-fit:contain}
 .lb .x{position:absolute;top:16px;right:20px;width:34px;height:34px;border:0;background:none;color:#bbb;padding:7px;cursor:pointer}
@@ -9704,12 +9729,32 @@ function viewStep(d){
 function lightbox(src,video){
   const el=document.createElement('div'); el.className='lb';
   const many=viewSet.length>1;
+  // Three slides, not one. The middle is what you are looking at and the
+  // neighbours are already in the DOM, because the drag has to show them: a
+  // page that only swaps on release is a cut, and a cut does not tell you which
+  // way you went or that there is anything either side. This is the one place
+  // in the app where an animation is carrying information rather than decorating.
+  const at=i=>{
+    const it=viewSet[i]; if(!it) return '<div class="lb-slide"></div>';
+    const u=`/api/file/${it.job_id}/${it.files[0]}`;
+    return `<div class="lb-slide">`+(it.kind==='video'
+      ? `<video src="${u}" controls loop playsinline></video>`
+      : `<img src="${u}" alt="">`)+`</div>`;
+  };
   el.innerHTML=`<button class="x">${ICON.close}</button>`
     +(many?`<button class="lb-nav prev" ${viewIdx<=0?'disabled':''}>${ICON.back}</button>`
          +`<button class="lb-nav next" ${viewIdx>=viewSet.length-1?'disabled':''}>${ICON.back}</button>`
          +`<span class="lb-at">${viewIdx+1} / ${viewSet.length}</span>`:'')
     +`<button class="lb-all">All generations</button>`
-    +(video?`<video src="${src}" controls autoplay loop playsinline></video>`:`<img src="${src}" alt="">`);
+    +`<div class="lb-track">`
+    +(many ? at(viewIdx-1)+at(viewIdx)+at(viewIdx+1)
+           : `<div class="lb-slide">`+(video
+               ? `<video src="${src}" controls autoplay loop playsinline></video>`
+               : `<img src="${src}" alt="">`)+`</div>`)
+    +`</div>`;
+  const track=el.querySelector('.lb-track');
+  if(many) track.style.transform='translateX(-100%)';
+
   const close=()=>{ el.remove(); document.removeEventListener('keydown',onKey); viewSet=[] };
   const onKey=e=>{
     if(e.key==='Escape') return close();
@@ -9721,15 +9766,53 @@ function lightbox(src,video){
     el.querySelector('.prev').onclick=e=>{ e.stopPropagation(); viewStep(-1) };
     el.querySelector('.next').onclick=e=>{ e.stopPropagation(); viewStep(1) };
   }
-  // Horizontal drag pages; vertical is left alone so a tall picture still
-  // scrolls. 48px, because a thumb resting on glass wanders further than a mouse.
-  let sx=null,sy=null;
-  el.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY });
-  el.addEventListener('pointerup',e=>{
-    if(sx==null) return;
-    const dx=e.clientX-sx, dy=e.clientY-sy; sx=null;
-    if(Math.abs(dx)>48&&Math.abs(dx)>Math.abs(dy)) viewStep(dx<0?1:-1);
+
+  // The drag itself. While the pointer is down the track follows it one-to-one,
+  // so both takes are on screen and the gesture is reversible — let go halfway
+  // and it falls back to where it was. It only ever comes to rest on a take.
+  let sx=null, sy=null, dragging=false, w=1;
+  const settle=(dx,commit)=>{
+    track.classList.add('snap');
+    track.style.transform=`translateX(${commit? (dx<0?'-200%':'0%') : '-100%'})`;
+  };
+  el.addEventListener('pointerdown',e=>{
+    if(!many||e.target.closest('button')) return;
+    sx=e.clientX; sy=e.clientY; dragging=false;
+    w=el.getBoundingClientRect().width||1;
+    track.classList.remove('snap');
   });
+  el.addEventListener('pointermove',e=>{
+    if(sx==null) return;
+    const dx=e.clientX-sx, dy=e.clientY-sy;
+    // Committed to horizontal only once it is clearly horizontal, so a vertical
+    // flick on a tall picture is still a scroll and not a half-page.
+    if(!dragging){ if(Math.abs(dx)<10||Math.abs(dx)<=Math.abs(dy)) return; dragging=true }
+    e.preventDefault();
+    // Resistance at the ends: it moves, so the gesture is alive, but a third as
+    // far, which is how an edge is felt rather than announced.
+    const edge=(dx>0&&viewIdx<=0)||(dx<0&&viewIdx>=viewSet.length-1);
+    track.style.transform=`translateX(calc(-100% + ${dx*(edge?0.3:1)}px))`;
+  });
+  const release=e=>{
+    if(sx==null) return;
+    const dx=e.clientX-sx; const was=dragging;
+    sx=null; dragging=false;
+    if(!was) return;
+    // A quarter of the width, the same threshold a page turn uses everywhere:
+    // past it you meant it, short of it you were looking.
+    const commit=Math.abs(dx)>w*0.25
+      && !((dx>0&&viewIdx<=0)||(dx<0&&viewIdx>=viewSet.length-1));
+    settle(dx,commit);
+    if(!commit) return;
+    const keep=viewSet, next=viewIdx+(dx<0?1:-1);
+    // Swapped after the slide lands, so the rebuild is invisible: the picture
+    // already sits where the new middle slide will put it.
+    track.addEventListener('transitionend',()=>{
+      document.querySelector('.lb')?.remove(); viewAt(keep,next);
+    },{once:true});
+  };
+  el.addEventListener('pointerup',release);
+  el.addEventListener('pointercancel',release);
   el.onclick=e=>{ if(e.target===el||e.target.closest('.x')) close() };
   document.addEventListener('keydown',onKey);
   document.body.appendChild(el);
