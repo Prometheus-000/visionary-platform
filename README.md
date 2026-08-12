@@ -89,6 +89,44 @@ sits where the LoRA applies, so a fifth LoRA costs the canvas nothing — the ro
 this replaced cost 380px of it for four filenames. `+ LoRA` still opens a
 picker, because you cannot type a syntax you have never seen.
 
+**Shape and resolution are one control, not two.** Every aspect preset used to be
+1024-based, so picking 16:9 chose a shape *and* silently chose ~1 MP — and the
+only route to the same shape at 2K was arithmetic in two boxes at the far end of
+Advanced. One button now shows what it resolved to (`16:9 · 2016×1152`), with the
+ratios as proportioned rectangles and the scale as a separate row. The buckets
+are multiplied rather than recomputed, because Krea 2 inherits Qwen-Image's
+trained sizes and the honest arithmetic for 4:3 at a 1024 short edge is a size
+nothing was trained on.
+
+**There is no Advanced drawer.** "Advanced" names where something is rather than
+what it does, and behind it sat five controls that are not advanced — they are
+rarely changed. Sampler, steps, guidance and shift live behind one button that
+shows the values it resolved to, and it draws only the rows the chosen model
+reads: MiniMax-H3 is guidance-distilled, so it gets no CFG row at all.
+
+**The negative prompt is a mode on the prompt field.** A small marker in the
+corner, and only on models that read one — Krea 2 Turbo is distilled to CFG 1.0,
+where a negative prompt is not weak but unread. The gate is the effective CFG
+rather than the checkpoint's name, so raising CFG brings the control back. A dot
+appears when there is text on the other side, because otherwise the negative is
+invisible from the positive.
+
+**The console has a budget: 30% of the viewport.** Everything else in it is fixed
+or conditional, so the prompt field is the only part that grows without asking —
+and it is the part that yields. It takes whatever the budget has left, down to a
+two-line floor, and re-measures when the region bar or the pill rail appears.
+
+**It is designed for a tablet in portrait, and desktop inherits.** Below 1024px
+the layout stacks, the gallery crops to a 1:1 grid, and the last generation
+becomes a thumbnail beside Generate — the Camera app's arrangement, because you
+press one and then want the other. Three faults found that way had been live on
+desktop for months, including a drag that was broken on trackpads specifically.
+
+**Nothing sits on top of a render.** Animate and As reference are icons under the
+bottom-left corner that appear on hover. Regional boxes come off the picture the
+moment a render lands and are reached again through a map of them in the console
+— one control the same size at eight boxes as at one.
+
 **Copy is a last resort — but a number is not a value it can show.** Design
 first, then an icon, then words. A control that shows its own value gets no
 label; the two keyframe tiles put the mark where the frame sits in the clip

@@ -743,13 +743,17 @@ and the shot palette are already popovers, so the strip is a row of doors — th
 open question is whether a row is still the right shape once everything in it
 is one.
 
-**Bar or rail.** See the dead-space table under "The page". Desktop has zero
-vertical slack at every aspect and 513–1068px of horizontal at four of five, so
-the bar is measurably the wrong default there; a tablet in portrait inverts it.
-The overlay was built and rejected. What has not been tried is placing the
-console in whichever margin the render leaves empty, which the app can already
-compute because it fits the frame. `tools/preview_ui.py` holds the awkward
-states for both.
+**Bar or rail — settled: the bar stays.** The dead-space table under "The page"
+says a rail would fit on desktop, and it is still not the answer. A rail is a
+dated shape that will read as of-its-decade long before this app stops being
+useful, and the overlay that would have avoided both was built and rejected for
+putting chrome on the render. What the measurements really argued for was less
+in the bar, not the bar somewhere else — which is what the popovers did.
+
+The direction instead is **unbounded buttons**: controls that carry no chrome
+until they need it, so the strip stops looking like a strip. It is a step toward
+the console disappearing entirely, which is the actual goal the rail was a
+detour around.
 
 ## Phases
 
