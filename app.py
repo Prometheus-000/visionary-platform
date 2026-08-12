@@ -7936,6 +7936,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   color:#fff;padding:8px;cursor:pointer;z-index:3;
   filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
 .lb .x:hover{opacity:.75}
+/* Chrome off. Navigation lives in the top corners while you are moving between
+   layers; once you have stopped on one picture there is nowhere left to go, so
+   it gets out of the way until you ask for it. */
+.lb.bare .x,.lb.bare .lb-all,.lb.bare .lb-nav,.lb.bare .lb-at{opacity:0;pointer-events:none}
+.lb .x,.lb .lb-all,.lb .lb-nav,.lb .lb-at{transition:opacity .16s ease}
 /* Paging, for the pointer that cannot swipe. Big, edge-anchored and mostly
    transparent — they sit over the picture, so they earn their place by being
    where a thumb already is rather than by being visible. */
@@ -9864,8 +9869,12 @@ function lightbox(src,video){
     if(sx==null) return;
     sx=null; dragging=false; settle(0,false);
   });
-  el.onclick=e=>{ if(justDragged) return;
-    if(e.target===el||e.target.closest('.x')) close() };
+  el.onclick=e=>{
+    if(justDragged) return;
+    if(e.target.closest('.x')) return close();
+    if(e.target.closest('button,video')) return;   // controls keep their own jobs
+    el.classList.toggle('bare');
+  };
   document.addEventListener('keydown',onKey);
   document.body.appendChild(el);
 }
