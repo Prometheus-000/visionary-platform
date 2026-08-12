@@ -12304,6 +12304,8 @@ function regionsVisible(){
   return !freshRender;
 }
 // A result landed: the canvas is for looking at until you touch something.
+// A result landed: the boxes come off the picture. They are still armed and
+// still masking their LoRAs — this is only about what is drawn.
 function shotLanded(){ freshRender=true; syncRegionVis() }
 // The way back, on the result rather than in the strip. It sits with Animate
 // and As reference because those are the other three things you do to a picture
@@ -12314,11 +12316,17 @@ function syncShowRegions(){
   const on = window.REGIONS_READY && regionOn() && freshRender && regions.length>0;
   $$('#gen-out [data-regions]').forEach(b=>{
     b.classList.toggle('hide',!on);
-    b.onclick=e=>{ e.stopPropagation(); composing() };
+    b.onclick=e=>{ e.stopPropagation(); revealRegions() };
   });
 }
-// And you touched something.
-function composing(){
+// And you asked for them back. Deliberately narrow: the 50/50 split is right
+// most of the time, so a set of boxes is placed once and rendered against dozens
+// of times, changing only the prompt. Restoring them on a keystroke would put
+// rectangles back over the picture on the single most common action in the app
+// — the original complaint, arriving through the fix for it. Only an explicit
+// ask counts: the pill on the result, the mode button, or the region bar, which
+// you reach only when adjusting a box.
+function revealRegions(){
   if(!freshRender) return;
   freshRender=false; syncRegionVis();
 }
@@ -12336,9 +12344,9 @@ function syncRegionBadge(){
 // focusin/focusout rather than focus/blur: those do not bubble, and the bar
 // holds a dozen fields — binding each one is a dozen places to forget the next
 // control added to the row.
-// Any of these means the next shot is being composed, so the boxes come back.
-$('#prompt').addEventListener('input',composing);
-$('#region-bar').addEventListener('focusin',composing);
+// Not the prompt. Writing the next take is the common path and says nothing
+// about whether you want to look at the boxes.
+$('#region-bar').addEventListener('focusin',revealRegions);
 ['focusin','focusout'].forEach(ev=>document.addEventListener(ev,()=>setTimeout(syncRegionVis,0)));
 // A drag that starts on the layer has to keep them up even though the pointer
 // leaves the field that revealed them.
@@ -12516,7 +12524,7 @@ $('#g-regional').onclick=()=>{
   // them away, this button's job is to bring them back — disarming the mode
   // from a button lit with a count, without the boxes ever being on screen, is
   // the one destructive reading this control has never had.
-  if(regionOn() && freshRender) return composing();
+  if(regionOn() && freshRender) return revealRegions();
   setRegional(!regionOn());
 };
 
