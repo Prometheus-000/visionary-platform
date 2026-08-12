@@ -971,17 +971,19 @@ vocabulary with three compilers behind it, and nobody types
 model reading intent instead of a table matching pills — is the same idea with
 a better front half, and the direction this is going.
 
-Two things it must not break on the way, both already true and both easy to lose:
+**Reproducibility is not at risk from this, because it never depended on the
+compiler.** A run is reproducible because the metadata exists: the sidecar
+records the prompt that was actually sent, so replaying it gives the same shot
+whether a dict wrote it or a model did. What a nondeterministic compiler loses
+is only the *compilation* — the same intent may not produce the same prompt
+twice — and that is a different thing from the run, which is what anyone
+actually wants back. The one requirement this places on an LLM in the path is
+the one already met: whatever it produces gets written to the sidecar.
 
-- **A run stays reproducible from its record.** The sidecar keeps what ran and
-  what you chose, separately, and it does that precisely because a compiler
-  sitting between the two can change. If the compiler becomes a model, it
-  becomes nondeterministic, and the recorded output is then the only thing that
-  can reproduce a shot a year later. That is why the split exists — not tidiness.
-- **It stays free to leave.** The pills are keys on a table, so a job record
-  means something without the app that wrote it. An LLM in the path must not
-  turn a reproducible run into a prompt only one version of one service can
-  regenerate.
+The other thing to hold on to is that a job record should keep meaning something
+without the app that wrote it. Pills are keys on a table today; the recorded
+prompt is plain text either way, which is what makes the storage layout the
+contract rather than the code.
 
 **The failure to guard against is not the model, the latency or the scope.** It
 is month four, when something does not fit cleanly and the cheapest fix is a
