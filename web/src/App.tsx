@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { failed } from './api/client'
 import { getState } from './api/routes'
 import { autoGrow } from './console/fieldMax'
 import { Gallery, useGallery } from './gallery/Gallery'
-import { IconPanel, IconTrain } from './icons'
+import { IconGear, IconPanel, IconTrain } from './icons'
+import { Settings } from './settings/Settings'
 import { useStore } from './store'
 
 /**
@@ -32,6 +33,16 @@ export function App() {
   const { items, reload } = useGallery()
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(true)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Settings is where weights arrive, so closing it has to refresh the state
+  // the composer reads — a LoRA deleted or a family downloaded changes what the
+  // picker can offer.
+  const reloadState = useCallback(async () => {
+    const r = await getState()
+    if (failed(r)) setStateError(r.error)
+    else setState(r)
+  }, [setState, setStateError])
 
   useEffect(() => {
     let live = true
@@ -94,6 +105,10 @@ export function App() {
                 onClick={() => setDrawerOpen((d) => !d)}>
           <IconPanel />
         </button>
+        <button className="ico" id="t-settings" title="Settings" type="button"
+                onClick={() => setSettingsOpen(true)}>
+          <IconGear />
+        </button>
       </header>
 
       <div className="views">
@@ -136,6 +151,13 @@ export function App() {
           />
         </div>
       </div>
+
+      <Settings
+        state={state}
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onReload={() => void reloadState()}
+      />
     </>
   )
 }

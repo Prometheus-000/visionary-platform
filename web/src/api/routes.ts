@@ -21,12 +21,60 @@ const seg = encodeURIComponent
 export const getState = () => api<AppState>('/api/state')
 export const getWhere = () => api<Record<string, unknown>>('/api/where')
 export const setToken = (token: string) => post<{ ok?: boolean }>('/api/token', { token })
-export const startDownload = (key: string, family?: string) =>
-  post<{ job_id: string }>('/api/download', family ? { key, family } : { key })
+
+/**
+ * What a download route answers with.
+ *
+ * `mine` is the half that is easy to miss. One download at a time, because they
+ * share an uplink — three concurrent pulls measured 4-12 MB/s each against
+ * ~31 MB/s for one, so a second download is the same bandwidth divided plus a
+ * container to pay for. So `/api/download` is *idempotent*: a second press
+ * returns the job the first one started, with `mine: false` and `busy_with`
+ * naming what holds it. Being busy is a state, not an error — the page disables
+ * the other buttons rather than answering a press with a red box, because
+ * pressing twice is what anyone does when the first press appears to do nothing.
+ */
+export type DownloadStart = {
+  job_id?: string
+  mine?: boolean
+  busy_with?: string
+  note?: string
+}
+
+/** One weight, by catalogue key. Its job id is `dl_{key}`. */
+export const startDownload = (key: string) => post<DownloadStart>('/api/download', { key })
+
+/**
+ * Every missing file in one family, queued server-side.
+ *
+ * The family is the unit you decide in — you want the Wan stack or you do
+ * not — and clicking its files one at a time meant watching a 4 GB file finish
+ * to be allowed to start the next, which is a queue kept in a person rather
+ * than in the program. The token rides along because pasting a key and pressing
+ * Download is one action, and the gated families are exactly the ones you paste
+ * it for.
+ *
+ * There is deliberately no catalogue-wide form of this. It existed, in the
+ * token row, which put the one button that pulls every family — including the
+ * ones an install will never run — next to a password field it has nothing to
+ * do with.
+ */
+export const downloadFamily = (family: string, hfToken?: string) =>
+  post<DownloadStart>('/api/download-missing', { family, hf_token: hfToken || '' })
+
 export const startGdrive = (url: string, folder?: string) =>
-  post<{ job_id: string }>('/api/gdrive', { url, folder })
-export const downloadMissing = () => post<{ job_id: string }>('/api/download-missing')
-export const deleteLoras = (paths: string[]) => post<{ ok?: boolean }>('/api/loras/delete', { paths })
+  post<DownloadStart>('/api/gdrive', { url, folder })
+/**
+ * One LoRA — the folder with its epochs in it, or the loose file. Singular
+ * `path`, and the unit is the row `/api/state` lists, which is the unit the
+ * storage layout already calls a LoRA.
+ *
+ * An epoch inside a folder is deliberately not addressable: the route rejects
+ * `loras/{name}/{epoch}.safetensors` with the same guard that rejects `../`
+ * escapes, because one request whose blast radius is a file or a whole training
+ * run depending on path depth is the thing that guard exists to prevent.
+ */
+export const deleteLora = (path: string) => post<{ ok?: boolean }>('/api/loras/delete', { path })
 
 /* ---- session --------------------------------------------------------- */
 
