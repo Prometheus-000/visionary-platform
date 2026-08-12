@@ -72,9 +72,52 @@ export type Store = {
   setRegions: (r: Region[]) => void
   select: (id: string | null) => void
 
+  /* ---- what the strip will set ------------------------------------------ */
+  /**
+   * Every value the run is priced by, in one place.
+   *
+   * Here now, before the strip exists, so that porting the strip is wiring
+   * controls to fields rather than rebuilding the payload. The Generate button
+   * reads only this — which is what lets the console be *dissolvable*: Phase 6
+   * re-hosts these controls onto the canvas and the payload does not notice.
+   *
+   * Defaults are seeded from `/api/state` rather than written here, because the
+   * checkpoint decides what its own numbers are — naming them in this file
+   * would be a second source of truth for `krea2_defaults`.
+   */
+  composer: Composer
+  setComposer: (patch: Partial<Composer>) => void
+
   /* ---- jobs ------------------------------------------------------------- */
   job: string | null
   setJob: (id: string | null) => void
+}
+
+export type Composer = {
+  model: string
+  width: number
+  height: number
+  numImages: number
+  seed: string
+  steps: string
+  cfg: string
+  shift: string
+  sampler: string
+  scheduler: string
+  gpu: string
+  regionWeight: string
+}
+
+const COMPOSER: Composer = {
+  model: 'turbo',
+  // 4:3 — the ratio the page opens on.
+  width: 1024, height: 768,
+  numImages: 1,
+  // Empty means "let the checkpoint decide", which is not the same as a zero:
+  // the route's `num()` falls back to its default on '' and would take a 0.
+  seed: '', steps: '', cfg: '', shift: '',
+  sampler: '', scheduler: '', gpu: '',
+  regionWeight: '1',
 }
 
 export const useStore = create<Store>((set) => ({
@@ -108,9 +151,44 @@ export const useStore = create<Store>((set) => ({
   setRegions: (regions) => set({ regions }),
   select: (selected) => set({ selected }),
 
+  composer: COMPOSER,
+  setComposer: (patch) => set((s) => ({ composer: { ...s.composer, ...patch } })),
+
   job: null,
   setJob: (job) => set({ job }),
 }))
+
+/**
+ * The `/api/generate` body.
+ *
+ * One function, so the Generate button, a keyboard shortcut and anything Phase
+ * 6 grows later all send the same request. Empty strings are passed through
+ * rather than coerced: the route's `num()` treats `''` as "use the default" and
+ * would take a `0` literally, so turning a blank steps field into a number here
+ * would silently ask for zero steps.
+ */
+export function generateBody(s: Store): Record<string, unknown> {
+  const c = s.composer
+  return {
+    prompt: s.prompt,
+    negative_prompt: s.negative,
+    model: c.model,
+    shot: s.shot,
+    loras: [],
+    regions: s.regional ? s.regions : [],
+    region_weight: c.regionWeight,
+    width: c.width,
+    height: c.height,
+    num_images: c.numImages,
+    seed: c.seed,
+    steps: c.steps,
+    cfg_scale: c.cfg,
+    shift: c.shift,
+    sampler: c.sampler,
+    scheduler: c.scheduler,
+    gpu: c.gpu,
+  }
+}
 
 /** The chosen video family, or null on the image side. The composer shows only
  *  the controls this says the model reads — a control that is present but

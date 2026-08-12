@@ -3,10 +3,14 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { failed } from './api/client'
 import { getState } from './api/routes'
 import { autoGrow } from './console/fieldMax'
+import { Canvas } from './canvas/Canvas'
+import { useGenerate } from './canvas/useGenerate'
 import { Gallery, useGallery } from './gallery/Gallery'
+import { Viewer } from './gallery/Viewer'
+import type { GalleryItem } from './gallery/types'
 import { IconGear, IconPanel, IconTrain } from './icons'
 import { Settings } from './settings/Settings'
-import { useStore } from './store'
+import { generateBody, useStore } from './store'
 
 /**
  * The shell: header, stage, canvas, console.
@@ -34,6 +38,16 @@ export function App() {
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [shown, setShown] = useState<{ rows: GalleryItem[]; i: number } | null>(null)
+  const { run, start, cancel } = useGenerate()
+
+  // Generate reads only the store, so a keyboard shortcut and the button send
+  // the same request and Phase 6 can move the controls without touching this.
+  const fire = useCallback(() => {
+    const s = useStore.getState()
+    if (!s.prompt.trim() && !s.regions.length) return
+    void start(generateBody(s))
+  }, [start])
 
   // Settings is where weights arrive, so closing it has to refresh the state
   // the composer reads — a LoRA deleted or a family downloaded changes what the
@@ -114,17 +128,19 @@ export function App() {
       <div className="views">
         <div className={`view studio${drawerOpen ? '' : ' nodrawer'}`} id="v-generate">
           <div className="stage">
-            <div className="canvas" id="canvas">
-              {stateError ? (
-                <div className="blank" id="canvas-empty">
-                  <div className="err-box">{stateError}</div>
-                </div>
-              ) : (
-                <div className="blank" id="canvas-empty">
-                  {state ? `${state.models.length} models · ${state.loras.length} LoRAs` : 'Loading…'}
-                </div>
-              )}
-            </div>
+            <Canvas
+              run={run}
+              onOpen={(jobId, _file, i) => setShown({
+                rows: run.files.map((f) => ({ job_id: jobId, kind: 'image', files: [f] })),
+                i,
+              })}
+              onHandoff={() => void 0}
+              blank={
+                stateError ? <div className="err-box">{stateError}</div>
+                  : state ? 'Describe an image and press Generate.'
+                  : 'Loading…'
+              }
+            />
 
             <div className="console" ref={consoleRef}>
               <div className="field">
@@ -135,7 +151,22 @@ export function App() {
                   placeholder="Describe an image…"
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
+                  // Shift+Enter keeps the newline, because prompts here are
+                  // prose and paragraphs in them are real. isComposing, because
+                  // an IME's Enter is committing a character, not submitting.
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.shiftKey || e.altKey) return
+                    e.preventDefault()
+                    fire()
+                  }}
                 />
+              </div>
+              <div className="row" style={{ gap: 10, marginTop: 10 }}>
+                {run.error && <div className="err-box grow" id="gen-err">{run.error}</div>}
+                <span className="grow" />
+                {run.running
+                  ? <button className="b" type="button" onClick={() => void cancel()}>Stop</button>
+                  : <button className="b" id="go-gen" type="button" onClick={fire}>Generate</button>}
               </div>
             </div>
           </div>
@@ -151,6 +182,16 @@ export function App() {
           />
         </div>
       </div>
+
+      {shown && (
+        <Viewer
+          items={shown.rows}
+          index={shown.i}
+          onIndex={(i) => setShown((v) => (v ? { ...v, i } : v))}
+          onClose={() => setShown(null)}
+          onAll={() => { setShown(null); setGalleryOpen(true); void reload() }}
+        />
+      )}
 
       <Settings
         state={state}
