@@ -8160,6 +8160,21 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   .opt select,.opt input{height:42px}
   .b{min-height:44px}
 }
+/* The region map. Same height as the 36px controls beside it so the bar stays
+   one row, and the frame is drawn rather than bordered so the boxes sit inside
+   the picture's proportions rather than inside a button's. */
+.rmap{width:52px;height:36px;flex:none;padding:4px 6px;border:1px solid var(--line);
+  border-radius:10px;background:rgba(255,255,255,.03);cursor:pointer}
+.rmap:hover{border-color:rgba(255,255,255,.4)}
+.rmap:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:1px}
+.rmap svg{width:100%;height:100%;display:block;overflow:visible}
+.rmap .fr{fill:none;stroke:rgba(255,255,255,.22);stroke-width:1}
+/* Unselected boxes are outlines and the selected one is filled, which is the
+   same distinction the canvas draws — a box you are editing against boxes that
+   are merely there. */
+.rmap .bx{fill:rgba(255,255,255,.10);stroke:rgba(255,255,255,.45);stroke-width:1;cursor:pointer}
+.rmap .bx:hover{fill:rgba(255,255,255,.22)}
+.rmap .bx.on{fill:rgba(255,255,255,.82);stroke:#fff}
 .pad{padding:26px}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
@@ -8560,6 +8575,12 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
          hatch, and while you drag they are the readout that teaches what they
          mean. -->
     <div id="region-bar" class="opts hide">
+      <!-- The frame in miniature. The old per-region rows needed a 32px picture
+           of the coordinates beside each one to be legible at all — that picture
+           was the part that worked, and one row per box was the part that did
+           not. So there is one map, the same size at eight boxes as at one, and
+           it is how you reach a box when the boxes are off the render. -->
+      <button id="r-map" class="rmap" title="Which box you are editing. Click one to select it; ← → step."></button>
       <button class="drop mini" id="r-ref" data-lb="Photo"
         title="A photo of this character. Pulls the box toward that likeness during sampling — stacks with the LoRA, and works without one.">
         <img id="r-ref-thumb" class="hide" alt=""><span id="r-ref-hint"></span>
@@ -11903,6 +11924,42 @@ function drawRegions(){
 }
 
 // ---------- selection and the inspector ----------
+// The map. Redrawn from `regions`, which drawRegions already owns, so it cannot
+// disagree with the canvas about where anything is.
+function drawRegionMap(){
+  const el=$('#r-map'); if(!el) return;
+  const W=40,H=28;
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">`
+    +`<rect class="fr" x=".5" y=".5" width="${W-1}" height="${H-1}" rx="2"/>`
+    +regions.map((r,i)=>{
+        const x=Math.max(0,Math.min(1,+r.x||0)), y=Math.max(0,Math.min(1,+r.y||0));
+        const w=Math.max(0,Math.min(1-x,r.width==null?1:+r.width));
+        const h=Math.max(0,Math.min(1-y,r.height==null?1:+r.height));
+        return `<rect class="bx${i===rsel?' on':''}" data-i="${i}" x="${(x*W).toFixed(2)}"`
+          +` y="${(y*H).toFixed(2)}" width="${(w*W).toFixed(2)}"`
+          +` height="${(h*H).toFixed(2)}" rx="1.2"/>`;
+      }).join('')
+    +`</svg>`;
+  el.querySelectorAll('[data-i]').forEach(r=>r.onclick=e=>{
+    e.stopPropagation();
+    // Selecting a box means adjusting it, and adjusting means seeing it — so
+    // this is also the way back onto the canvas after a render put them away.
+    revealRegions();
+    selectRegion(+r.dataset.i);
+  });
+}
+// Arrows step between boxes while the map has focus. Bound here rather than on
+// the bar, because ⌥←/⌥→ in a region's prompt already moves clauses and a chord
+// that means two things in one row is a chord nobody trusts.
+$('#r-map').addEventListener('keydown',e=>{
+  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight') return;
+  if(!regions.length) return;
+  e.preventDefault(); revealRegions();
+  const d=e.key==='ArrowRight'?1:-1;
+  selectRegion((rsel+d+regions.length)%regions.length);
+  $('#r-map').focus();
+});
+
 function selectRegion(i,focusPrompt){
   rsel=(i>=0&&i<regions.length)?i:-1;
   drawRegions();
@@ -12333,6 +12390,7 @@ function revealRegions(){
 function syncRegionVis(){
   const l=$('#region-layer'); if(l) l.classList.toggle('show', regionsVisible());
   if(typeof syncShowRegions==='function') syncShowRegions();
+  if(typeof drawRegionMap==='function') drawRegionMap();
 }
 // The count, so the mode stays legible with nothing on the picture. Without it
 // a regional render and a plain one look identical right up until the result.
