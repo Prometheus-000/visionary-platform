@@ -1,0 +1,1430 @@
+/*
+ * Extracted from UI_HTML in app.py by tools/extract_css.py — do not edit here.
+ *
+ * Every measured decision in this file is documented in CLAUDE.md under
+ * "The page". The ones most easily lost to a tidy-up:
+ *
+ *   --- the console budget is 30% of the viewport, and `fieldMax()` in JS is
+ *       what enforces it; the CSS only supplies FIELD_FLOOR/FIELD_CEIL's twins
+ *   --- thumbnails are `contain`, not `cover`: a ragged grid is the right
+ *       trade, because cropping throws away the information you opened the
+ *       gallery to see
+ *   --- splits are on `(hover:none)` rather than width wherever the question
+ *       is really about the pointer; a tablet with a keyboard is neither of
+ *       the things a width test thinks it is
+ *
+ * 1412 lines, extracted from app.py (1412 lines of CSS).
+ */
+
+*{box-sizing:border-box;margin:0;padding:0}
+:root, :host{--bg:#000;--panel:rgba(255,255,255,.04);--line:rgba(255,255,255,.10);--fg:#f5f5f5;
+      --mut:#8a8a8a;--dim:#5a5a5a;--drawer:320px;--head:56px}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+     -webkit-font-smoothing:antialiased;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+svg{width:100%;height:100%;display:block}
+
+/* Chrome ---------------------------------------------------------------- */
+/* There is no navigation rail, and no two-up switcher up here either.
+   Generate and Train are not peers: one is where the machine is used, the
+   other is where it is changed, and a 50/50 toggle asserts a balance that
+   does not exist. So Generate is simply the page — it has no nav item because
+   it is not a place you go — and Train is a door on the right: one slot,
+   labelled with where it leads rather than with where you are. */
+.top{flex:0 0 var(--head);display:flex;align-items:center;gap:8px;padding:0 8px;
+     border-bottom:1px solid rgba(255,255,255,.07)}
+.brand{border:0;background:none;color:var(--fg);font-weight:600;font-size:15px;line-height:1;letter-spacing:-.01em;
+  padding:8px 2px;cursor:pointer}
+.grow{flex:1;min-width:0}
+
+/* The door, and the reason it is worth a permanent slot: a training run lasts
+   hours and you are meant to leave and keep generating while it goes. So the
+   way back to it is also the readout on it — progress on the control that
+   takes you there, rather than in a place you have to go to look. */
+.door{display:inline-flex;align-items:center;gap:8px;border:0;height:32px;
+  background:none;color:var(--fg);border-radius:10px;padding:0 10px;
+  font-weight:500;font-size:14px;line-height:1;cursor:pointer;transition:background .12s,color .12s}
+.door:hover{background:rgba(255,255,255,.10);color:var(--fg)}
+.door svg{width:15px;height:15px;flex:none}
+.door .ring circle{fill:none;stroke-width:3}
+.door .ring .bg{stroke:rgba(255,255,255,.2)}
+.door .ring .fg{stroke:currentColor;stroke-linecap:round;
+  transform:rotate(-90deg);transform-origin:50% 50%;transition:stroke-dashoffset .5s}
+.door.live{color:#fff}
+/* A training run, in the icon that already draws bars. Four durations that share
+   no common multiple, so they never resynchronise and the row reads as activity
+   rather than as a four-beat loop — the point is "something is happening", and a
+   pattern you can predict stops saying that after the first cycle.
+
+   transform-box:fill-box is what makes scaleY mean "from the baseline": without
+   it the origin is the whole SVG viewport and the bars slide instead of grow. */
+.door.live svg path{stroke:#4ade80;transform-box:fill-box;transform-origin:bottom;
+  animation:train-bar .8s ease-in-out infinite alternate}
+.door.live svg path:nth-child(1){animation-duration:.53s;animation-delay:-.31s}
+.door.live svg path:nth-child(2){animation-duration:.79s;animation-delay:-.14s}
+.door.live svg path:nth-child(3){animation-duration:.67s;animation-delay:-.48s}
+.door.live svg path:nth-child(4){animation-duration:.91s;animation-delay:-.05s}
+@keyframes train-bar{from{transform:scaleY(.28)}to{transform:scaleY(1)}}
+/* Solid, like Train beside them. These three are how you leave this page;
+   dimming them made the header look switched off. */
+.top .ico{color:var(--fg)}
+
+/* The one black-on-white switcher left in the product: Training and Datasets,
+   which is the only pair in here that really is two equal halves of one thing. */
+.switch{display:inline-flex;background:rgba(255,255,255,.06);border-radius:11px;padding:3px;gap:2px}
+.switch button{border:0;background:none;color:var(--mut);padding:6px 15px;border-radius:9px;
+  font-weight:500;font-size:13px;line-height:1.35;cursor:pointer;transition:color .12s,background .12s}
+.switch button:hover{color:#ddd}
+.switch button.on{background:#fff;color:#000}
+.ico{width:32px;height:32px;flex:none;border:0;border-radius:10px;background:none;color:var(--mut);
+  display:grid;place-items:center;
+  cursor:pointer;padding:0;font-size:14px;transition:background .12s,color .12s}
+/* The glyph is stated, not left to fall out of a padding value. 20px drawing in
+   a 32px target: the icon is the size it should be and the thing you press is
+   still the size a thumb needs, which two numbers say plainly and one padding
+   only implies. */
+.ico svg{width:20px;height:20px;display:block}
+.ico:hover{background:rgba(255,255,255,.08);color:var(--fg)}
+.ico.on{color:var(--fg);background:rgba(255,255,255,.1)}
+
+.views{flex:1;min-height:0;position:relative}
+.view{position:absolute;inset:0;display:flex;min-width:0}
+.view.scroll{display:block;overflow:auto}
+.hide{display:none !important}
+
+/* Generate -------------------------------------------------------------- */
+/* The canvas gets the width; the console gets the height.
+   A settings rail down the left costs the picture 384px of the one dimension
+   it cannot get back — an image is wide, a screen is wide, and a column of
+   dropdowns is neither. Vertical is the cheap axis: the console is a bar under
+   the canvas that grows downward when it has more to say and collapses when it
+   does not, so on a bare prompt the canvas has the whole room. */
+.stage{flex:1;min-width:0;display:flex;flex-direction:column}
+.canvas{position:relative;flex:1;min-height:0;overflow:auto;padding:22px 28px;
+  display:flex;flex-direction:column}
+/* Capped, so a console with everything open can never push the canvas out of
+   the frame — past the cap it scrolls itself instead. */
+.console{flex:none;max-height:54dvh;overflow:auto;padding:13px 28px 15px;
+  border-top:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.012)}
+/* Generate lives in the bar with the controls it acts on, not beside the
+   prompt — so the prompt gets the console's full width, which is the thing
+   that actually benefits from it. Sized to the row: same height and radius as
+   every control next to it, still white, because it is still the one control
+   on the page that spends money. */
+.opts button.b{flex:none;height:32px;padding:0 12px;border-radius:11px;font-weight:600;font-size:14px;line-height:1}
+.opts .actions{display:flex;align-items:center;gap:7px;flex:none;margin-left:auto}
+.drawer{flex:0 0 var(--drawer);min-width:0;border-left:1px solid rgba(255,255,255,.07);overflow:auto}
+.drawer-in{width:var(--drawer);padding:12px 14px 40px}
+/* Collapsed by flex-basis rather than display:none so the canvas reflows
+   smoothly; the inner column keeps its width so nothing re-wraps on the way. */
+.studio.nodrawer .drawer{flex-basis:0;border-left:0;overflow:hidden}
+#v-train .drawer{flex-basis:var(--drawer)}
+/* The sheet's own toolbar sticks for the same reason the console is pinned:
+   the filters are how you find the six bad captions in eighty images, and
+   scrolling to look for them is exactly when they must not scroll away. */
+/* The open contact sheet takes a drop too, so a second batch lands in the set
+   you are looking at instead of starting another one. */
+#ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:8px;border-radius:16px}
+#ds-sheet .sheet-bar{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
+  padding:22px 28px 10px;background:var(--bg)}
+#ds-list{gap:8px}
+#ds-list .ds-card{flex-direction:row;align-items:center;gap:11px;padding:8px}
+#ds-list .ds-cover{width:56px;height:56px;flex:none;aspect-ratio:auto;border-radius:9px;object-fit:cover}
+#ds-list .ds-meta{padding:0;min-width:0}
+#ds-list .ds-meta b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer{transition:flex-basis .18s ease}
+.drawer-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-height:28px}
+
+/* Controls in a row, not a form. A control that shows its own value — "Krea 2
+   Turbo", "16:9", "720p", "5s" — still gets no label, because one would only
+   repeat what the control already says.
+   A number does not show its own value. "32" is a rank, an alpha, a step
+   count or a seed with equal plausibility, and the icons that used to stand in
+   for those words failed the only test that matters: someone who has trained
+   these models for five years had to hover every numeric field to find out
+   what it was. An icon is a rebus for a word you already know; it cannot teach
+   you which hyperparameter you are looking at. So every numeric field is
+   named, and the tooltip is promoted from repeating the name to saying what
+   the number does. */
+.opts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
+.opt{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0;font-size:14px;
+  background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
+.opt:focus-within{border-color:rgba(255,255,255,.28)}
+
+/* Unbounded ---------------------------------------------------------------
+   Ten controls in a row, each in its own box, is ten boxes competing with the
+   picture above them. The chrome is not what makes a control a control — the
+   value is, and every one of these already shows its own. So the box is spent
+   only when it is doing something: pointing at what the pointer is over, or
+   showing that a popover is open from here.
+
+   Scoped to the console. `.opt` is also used in Train, which is a form you fill
+   in rather than a row you scan, and a form without field edges is a worse
+   form. The region bar is included because it is the same console.
+
+   The line: a control whose value *is* its label can lose its box; a free-text
+   field cannot, because an empty one has nothing to show and no edge to aim at.
+   Hence the `:has(input[type=text])`-shaped exceptions below rather than a
+   blanket rule — #r-prompt and the size boxes keep their containers. */
+/* One treatment for the whole row, and no outline anywhere in it. A border is
+   an edge you are asked to notice; these controls already show their own value,
+   so the only thing worth marking is which one you are pointing at or which one
+   has a popover open — and those are the same fact, so they get the same paint.
+   `+ LoRA` is in here too: it was a bordered `.s` button sitting among unbounded
+   ones, which made the odd one out look like the important one. */
+#c-image>.opts .opt,#c-video>.opts .opt,#region-bar .opt,
+#c-image>.opts button.s,#c-video>.opts button.s{
+  background:none;border-color:transparent;border-width:0;color:var(--mut)}
+#c-image>.opts .opt:hover,#c-video>.opts .opt:hover,#region-bar .opt:hover,
+#c-image>.opts .opt:focus-within,#c-video>.opts .opt:focus-within,#region-bar .opt:focus-within,
+#c-image>.opts .opt.on,#c-video>.opts .opt.on,#region-bar .opt.on,
+#c-image>.opts button.s:hover,#c-video>.opts button.s:hover,
+#c-image>.opts button.s:focus-visible,#c-video>.opts button.s:focus-visible{
+  background:rgba(255,255,255,.10);border-color:transparent;color:var(--fg)}
+/* The one exception, by content rather than by id: anything holding a text box
+   you type into keeps its edges, because an empty field has nothing to show and
+   no edge to aim at. */
+#region-bar .opt.wide{background:rgba(255,255,255,.05);
+  border-color:var(--line);border-width:1px}
+/* The glyph is the same ink as the word beside it. Pinned to --dim it stayed
+   dark while the label brightened on hover and on `.on`, so a control that was
+   selected still had a switched-off icon in it — and at rest the icon read as
+   the disabled half of a live button. currentColor makes the pair one thing.
+
+   The stroke goes up with it. These are drawn at 1.6–1.9 for a 16px glyph on a
+   dark panel; beside 14px text at weight 500 that reads a full step lighter, so
+   the icon looked like a hint rather than part of the label. */
+.opt>svg{width:20px;height:20px;flex:none;color:inherit}
+.opt>svg *{stroke-width:2.1}
+/* `.lead`, not `.lb` — `.lb` is the lightbox, `position:fixed;inset:0`, and
+   every label in the strip quietly became a full-screen black overlay. Same
+   class of bug as `.blank` above: a selector that collides is invisible in the
+   markup and total on the page. */
+.opt>.lead,.drop.mini>.lead{font-size:14px;line-height:1;color:var(--dim);flex:none;
+  white-space:nowrap;cursor:default;-webkit-user-select:none;user-select:none}
+.opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:30px;
+  border-radius:8px;font-size:14px}
+/* The native select chrome was never switched off. On a desktop the macOS arrows
+   pass for a chevron; at 42px on a phone they render as a stepper — a control
+   that looks like it increments something, next to controls that do. One
+   chevron, drawn once, so every select on the page says the same thing. */
+.opt select{appearance:none;-webkit-appearance:none;padding-right:17px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238a8a8a' stroke-width='1.4' stroke-linecap='round'><path d='M3 4.5 6 7.5 9 4.5'/></svg>");
+  background-repeat:no-repeat;background-position:right 1px center;background-size:12px}
+/* Phone. Ten controls wrapping into four ragged rows is what the strip does
+   here, and three of the ten are the ones nobody touches twice: the GPU is set
+   once and confirms a cold start when it changes, the seed is a thing you reuse
+   off a result rather than type, and a batch count is a decision the Generate
+   button could carry. They are still reachable — GPU under the gear, seed and
+   steps behind Sampling — they are simply not worth a row on a 390px screen.
+   
+   This is the promote/demote rule with the screen as the forcing function: the
+   controls that survive are the ones a render actually varies by. */
+@media (max-width:640px){
+    #c-image .opts,#c-video .opts{gap:6px}
+}
+.opt input{width:76px}
+/* Named numerics do not need the width an unlabelled one did: the label
+   carries the meaning, so the box only has to hold two or three digits. */
+.opt.n input{width:52px}
+.opt.mid input{width:136px}
+.opt.wide{flex:1;min-width:220px}
+.opt.wide input,.opt.wide textarea{flex:1;min-width:0;width:auto}
+/* Icon-only controls in the strip: same box, square, no value to show. */
+.opt.ib{padding:0;width:32px;justify-content:center;cursor:pointer;color:var(--mut);
+  transition:background .12s,color .12s}
+.opt.ib:hover{background:rgba(255,255,255,.1);color:var(--fg)}
+.opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
+.opt.ib>svg{width:20px;height:20px;color:inherit}
+/* How many boxes are armed, on the button, because the boxes themselves are
+   off the picture now. A regional render and a plain one are otherwise
+   identical on screen until the result comes back. */
+.opt.ib.counted::after{content:attr(data-count);margin-left:6px;font-weight:600;font-size:10.5px;line-height:1;
+  color:inherit;opacity:.85;font-variant-numeric:tabular-nums}
+/* An icon button that arms a whole subsystem carries its name as well. :has()
+   rather than a modifier class so the shell cannot disagree with whether
+   data-lb is actually there — the two would drift, and the failure is a label
+   clipped to a 36px box, which is what happened to `.drop.mini`. */
+.opt.ib:has(>.lead){width:auto;padding:0 10px;gap:7px}
+/* order:2 puts the word after the glyph, matching the Train door in the header
+   and `.drop.mini`; label() inserts afterbegin, so without it the word lands in
+   front. color:inherit so the label brightens with the button on hover and .on
+   instead of staying at --dim while the icon lights up. */
+.opt.ib>.lead{order:2;color:inherit}
+.adv{margin-top:9px;padding-top:10px;border-top:1px solid var(--line)}
+/* Not an inline style, which is what this was: an empty <p> is zero-height but
+   still spends its margin, and the :empty rule that reclaims it cannot outrank
+   a style attribute. A line that has nothing to say most of the time should
+   cost the canvas nothing most of the time. */
+#lora-note{margin:7px 2px 0}
+#lora-note:empty{margin:0}
+
+/* The prompt field. The textarea and the Image/Video chip are one bordered
+   box, and the prompt itself is shared by both — switching mid-sentence keeps
+   the sentence. Image and video are not two workspaces to navigate between;
+   they are two things the same sentence can become, so the choice belongs
+   inside the field you are already typing in, at the smallest size that still
+   reads. Everything below the field is options for that choice. */
+.field{position:relative;border:1px solid var(--line);background:rgba(255,255,255,.05);
+  border-radius:13px;padding:2px 2px 0}
+.field:focus-within{border-color:rgba(255,255,255,.28)}
+/* One row, and it grows into what you type. It was two rows fixed, with the
+   native resize grip in the corner — which is a control that asks you to do by
+   hand, every session, the one thing the box can measure for itself. Two rows
+   is also wrong in both directions at once: a line and a half of empty box for
+   the short prompt that is most of them, and a scrollbar for the long one.
+   resize:none rather than resize:vertical from the base rule, because with
+   autoGrow() driving the height a drag would be overwritten by the next
+   keystroke — a grip that silently undoes itself is worse than no grip. */
+.field textarea{border:0;background:none;border-radius:0;padding:9px 10px 2px;
+  resize:none;overflow-y:auto}
+/* The row under the prompt was half empty — a 150px chip on a 1456px line —
+   while a separate strip below carried every control. They are one row now:
+   the chip says what you are making and the rest of the line says how. */
+.field .bar2{display:flex;align-items:center;gap:8px;padding:2px 8px 8px;min-width:0}
+/* Always lit, never boxed. It sits directly in the bar rather than inside one
+   of the strips, so the row's unbounded rule does not reach it — and it should
+   not be dim in either state anyway: this is the one control whose value is the
+   mode you are in, and a dim icon would read as the mode being off. White ink,
+   no fill, no edge; the glyph changing is the whole feedback. */
+#kind-toggle{background:none;border:0;color:var(--fg)}
+#kind-toggle:hover{background:none;opacity:.7}
+.field .bar2>#c-image,.field .bar2>#c-video{flex:1;min-width:0}
+.field .bar2 .opts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  justify-content:flex-end;min-width:0}
+/* The model picker is the one that can shrink — every other control is showing
+   a value it must not truncate, and a name is the one thing you can read half
+   of and still know. */
+.field .bar2 .opt:has(#g-model),.field .bar2 .opt:has(#v-model){min-width:0;overflow:hidden}
+.field .bar2 .actions{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+/* The negative prompt, which used to be a permanent two-row box at the top of
+   Advanced — on Krea 2 Turbo, whose CFG is 1.0, that is a control the sampler
+   cannot read sitting above every control it can. Not hidden behind the model's
+   name either: it is the same sentence field in a different sign, so it is a
+   mode on the field rather than a second box under it, and it costs the console
+   nothing until you switch into it.
+
+   Text, not a chip: a chip reads as a thing to press among other things to
+   press, and this is a corner marker for a mode you are usually not in. It
+   sits in the corner the resize grip just vacated.
+
+   It names the field you are looking at — "positive", then "negative" — and
+   not the one a click would take you to. A tag that reads as an instruction
+   has to be decoded every time it is seen: "negative" over an empty box is
+   equally readable as "this box is the negative" and "press to go there", and
+   those are opposite facts. A label that states the current state is never
+   ambiguous, and the click is discovered once. */
+.neg-t{position:absolute;top:6px;right:8px;z-index:2;border:0;background:none;padding:3px 4px;
+  color:var(--dim);font-weight:500;font-size:10.5px;line-height:1;letter-spacing:.02em;cursor:pointer;
+  border-radius:7px;-webkit-user-select:none;user-select:none}
+.neg-t:hover{color:var(--fg);background:rgba(255,255,255,.07)}
+.field.on-neg .neg-t{color:#fca5a5}
+/* Reserved only while the toggle is there, so a model that reads no negative
+   prompt gets the full width back rather than a permanent gutter for a control
+   it is not showing. */
+.field.has-neg textarea{padding-right:62px}
+/* Something is written on the other side. Without it the negative is invisible
+   from the positive — you would be looking at a prompt that renders differently
+   than it reads, with nothing on screen saying why. */
+.neg-t::after{content:'';display:inline-block;width:4px;height:4px;margin-left:5px;
+  border-radius:50%;background:#f87171;vertical-align:1px;opacity:0;transition:opacity .12s}
+.neg-t.filled::after{opacity:1}
+.field.on-neg .neg-t::after{opacity:0}
+
+.sec{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
+.sec:first-child{border-top:0;margin-top:0;padding-top:0}
+.sec>label:first-child{margin-bottom:8px}
+.f2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.f3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+
+h1{font-size:19px;font-weight:600;margin-bottom:3px;letter-spacing:-.01em}
+.sub{color:var(--dim);font-size:13px;margin-bottom:22px}
+.card{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:16px;padding:16px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:14px}
+label{display:block;font-size:12px;color:var(--mut);margin-bottom:6px}
+input,textarea,select{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--line);
+  border-radius:11px;padding:10px 12px;color:var(--fg);font:inherit;outline:none}
+input:focus,textarea:focus,select:focus{border-color:rgba(255,255,255,.28)}
+input:disabled,select:disabled{opacity:.45}
+textarea{resize:vertical}
+button.b{background:#fff;color:#000;border:0;border-radius:12px;padding:0 12px;font-weight:600;font-size:14px;line-height:1;cursor:pointer}
+button.b:disabled{background:rgba(255,255,255,.2);color:rgba(0,0,0,.4);cursor:not-allowed}
+button.s{background:rgba(255,255,255,.07);color:var(--fg);border:1px solid var(--line);
+  font-size:14px;
+  border-radius:11px;padding:0 10px;font-weight:500;font-size:14px;line-height:1;cursor:pointer}
+button.s:hover{background:rgba(255,255,255,.12)}
+button.s:disabled{opacity:.4;cursor:not-allowed}
+button.t{background:none;border:0;color:var(--mut);font-weight:500;font-size:12px;line-height:1;cursor:pointer;padding:6px 2px}
+button.t:hover{color:var(--fg)}
+.pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:0;
+  border-radius:999px;padding:8px;color:#ddd;font-size:13px;cursor:pointer}
+.pill.on{background:#fff;color:#000}
+/* Red and spelled out, because this one is a whole gallery at once. The per-card
+   × is the same kind of action at a scale a mis-click can survive; this is the
+   scale where the confirm dialog is the only thing between you and the volume. */
+.pill.danger{background:rgba(248,113,113,.12);color:#f87171}
+.pill.danger:hover{background:rgba(248,113,113,.2)}
+.pill.danger[disabled]{opacity:.35;cursor:default;background:rgba(248,113,113,.12)}
+.bar{height:3px;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden;margin-top:10px}
+.bar>i{display:block;height:100%;background:#fff;border-radius:99px;transition:width .4s}
+.muted{color:var(--dim);font-size:12px}
+.ok{color:#4ade80}.warn{color:#fbbf24}.err{color:#f87171}
+.err-box{border:1px solid rgba(248,113,113,.25);background:rgba(248,113,113,.1);color:#fca5a5;
+  border-radius:12px;padding:11px 14px;font-size:13px;margin-bottom:12px}
+code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
+
+/* Canvas ---------------------------------------------------------------- */
+/* Not `.empty` — `.ds-cover.empty` already owned that name, and a bare `.empty`
+   carrying min-height:62vh landed on the dataset placeholder and inflated every
+   card in its grid row to 606px. */
+.blank{flex:1;min-height:200px;display:grid;place-items:center;color:var(--dim)}
+/* `.blank`, not `.empty` — the placeholder is `.blank`, so this rule matched
+   nothing and the global `svg{width:100%}` inflated the glyph to the width of
+   the canvas. A selector that misses is invisible in the CSS and enormous on
+   the page. */
+.blank .glyph{width:44px;height:44px;margin:0 auto 14px;opacity:.3}
+/* The figure hugs the image rather than the column: a portrait still in a 1fr
+   cell would otherwise sit inside letterbox bars it does not have, and the
+   border would describe the grid instead of the picture. --shot-h is set per
+   batch size so four images are a contact sheet you can see at once, not a
+   scroll. */
+.shots{display:grid;gap:16px;margin:0 auto}
+.shot{position:relative;width:fit-content;max-width:100%;justify-self:center;
+  border-radius:16px;overflow:hidden;border:1px solid var(--line);background:rgba(255,255,255,.02)}
+/* zoom-in, because it does: the still on the canvas opens the same lightbox the
+   gallery card does. A result you have to send to the gallery to look at
+   properly is a result the canvas is only pretending to show you. */
+.shot img{display:block;max-width:100%;max-height:var(--shot-h,none);width:auto;height:auto;cursor:zoom-in}
+/* Quiet at rest rather than absent. These two are the whole "a still flows into
+   a clip without a round trip through the filesystem" claim, and at opacity:0
+   they were a feature you had to already know about to find — nothing on the
+   canvas suggested there was anything under the pointer. A third of an opacity
+   is enough to read as "something is here" from across the picture and not
+   enough to compete with it. :focus-within because `.gal .quick` has had it all
+   along and these did not, so the keyboard could reach a control it could never
+   see. */
+/* Under the picture, not on it. These were two filled buttons floating over the
+   bottom-right corner, which is furniture on the one surface this layout exists
+   to keep clear — and they were the loudest thing in a dark frame. As words
+   below the corner they are the same register as the "8 steps · CFG 1.0"
+   summary: present, quiet, and discovered the first time anyone's pointer
+   crosses a render. ACTS_H below is the height this reserves, and layoutShots
+   subtracts it, or the last row's words would sit under the caption. */
+/* bottom, not top:100% — a percentage top resolves against the padded box,
+   so the 26px reserved for these pushed them 26px further down instead of
+   making room, and they landed on the caption. */
+.shot .acts{position:absolute;left:1px;bottom:3px;display:flex;gap:8px;opacity:0;
+  transition:opacity .12s}
+.shot:hover .acts,.shot .acts:focus-within{opacity:1}
+.shot{padding-bottom:26px}
+.shot .acts button{width:20px;height:20px;flex:none;border:0;background:none;padding:0;
+  border-radius:5px;color:var(--dim);cursor:pointer}
+.shot .acts button:hover{color:var(--fg);background:none}
+.shot .acts button svg{width:100%;height:100%;display:block}
+/* Lit, unlike its two neighbours, because it is the only one of the three
+   that restores something rather than starting something. */
+#vid-out{position:relative}
+#vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
+  border:1px solid var(--line);background:#000}
+/* A button rather than a click on the video: the video already owns its own
+   click, which is play/pause, and taking that away to open a viewer would
+   trade a control people use constantly for one they use occasionally. */
+#vid-out .zoom{position:absolute;top:10px;right:10px;width:30px;height:30px;border:0;border-radius:999px;
+  background:rgba(0,0,0,.66);color:#eee;padding:7px;cursor:pointer;backdrop-filter:blur(8px);
+  opacity:0;transition:opacity .12s}
+#vid-out:hover .zoom{opacity:1}
+
+/* Cards ----------------------------------------------------------------- */
+/* One card, three homes: the drawer, the full gallery, the dataset index.
+   4/3 with contain, so nothing on the volume is shown as a crop it is not. */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:14px}
+.drawer .grid{grid-template-columns:1fr;gap:10px}
+.gal{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;overflow:hidden;position:relative}
+.gal:hover{border-color:rgba(255,255,255,.2)}
+.gal .media{aspect-ratio:4/3;background:rgba(255,255,255,.045);display:block;width:100%;object-fit:contain;cursor:zoom-in}
+/* Hover cluster on the media: the two verbs worth one click. Everything else
+   is one more click away in the overflow, which is the correct price for it. */
+.gal .quick{position:absolute;top:8px;right:8px;display:flex;gap:6px;opacity:0;transition:opacity .12s}
+.gal:hover .quick,.gal .quick:focus-within{opacity:1}
+.gal .quick button{width:28px;height:28px;flex:none;border:0;border-radius:999px;background:rgba(0,0,0,.66);
+  color:#eee;padding:7px;cursor:pointer;backdrop-filter:blur(8px)}
+.gal .quick button:hover{background:rgba(0,0,0,.9)}
+/* The footer is the label. A 24px photo or play glyph says what this is in
+   less space and less noise than the word "image" ever did. */
+.foot{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;border-top:1px solid var(--line);min-height:40px}
+.foot .kind{width:24px;height:24px;flex:none;color:var(--dim);padding:2px}
+.foot .when{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.foot .more{width:28px;height:28px;flex:none;border:0;border-radius:8px;background:none;color:var(--mut);
+  padding:5px;cursor:pointer}
+.foot .more:hover{background:rgba(255,255,255,.09);color:var(--fg)}
+
+/* Overflow menu --------------------------------------------------------- */
+/* Scrolls rather than growing: this is also the LoRA picker, and a volume with
+   forty of them would otherwise open a menu taller than the window. */
+.menu{position:fixed;z-index:80;min-width:196px;max-width:min(420px,92vw);
+  max-height:min(56vh,430px);overflow:auto;padding:5px;border-radius:13px;
+  border:1px solid rgba(255,255,255,.14);background:#111;box-shadow:0 18px 48px rgba(0,0,0,.6)}
+.menu button{display:block;width:100%;text-align:left;border:0;background:none;color:#e6e6e6;
+  font-size:13px;line-height:1;padding:9px 11px;border-radius:9px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.menu button:hover{background:rgba(255,255,255,.09)}
+.menu button.danger{color:#f87171}
+.menu button.danger:hover{background:rgba(248,113,113,.14)}
+/* A ticked item is one already in the prompt, and choosing it again takes it
+   out. The gutter is reserved on every button in such a menu rather than only
+   the ticked ones, so the labels do not shift sideways as items toggle. */
+.menu.checks button{padding-left:28px}
+.menu button.on::before{content:"";position:absolute;left:12px;top:50%;margin-top:-5px;
+  width:5px;height:9px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.menu.checks button{position:relative}
+.menu hr{border:0;border-top:1px solid rgba(255,255,255,.1);margin:5px 7px}
+
+/* The shot palette ------------------------------------------------------
+   A popover of tiles, sharing openMenu's element lifecycle. Grouped, because
+   the groups are the question — you are choosing a shot size, then a move —
+   and a flat grid of eighty tiles is a vocabulary list rather than a palette. */
+.pal{position:fixed;z-index:80;width:min(576px,94vw);max-height:min(62vh,520px);
+  overflow:auto;padding:13px;border-radius:16px;border:1px solid rgba(255,255,255,.14);
+  background:#111;box-shadow:0 18px 48px rgba(0,0,0,.6)}
+/* Longhands, not the `font:` shorthand. `font:600 10.5px/1 inherit` is
+   invalid — `inherit` is a CSS-wide keyword and cannot stand in for the family
+   the shorthand requires — so the whole declaration is dropped and the element
+   silently keeps the browser default. It is spelled that way elsewhere in this
+   stylesheet and gets away with it because 13px is what those elements wanted
+   anyway; at 9.5px it is the difference between a label and a clipped label. */
+.pal h4{display:flex;align-items:baseline;gap:8px;margin:0 0 8px 3px;
+  font-size:10.5px;font-weight:600;line-height:1;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+/* Why a whole group is out of play. The pills themselves dim, which says that
+   they are unavailable; only the heading can say what would make them
+   available, and that is a sentence about the model rather than about them. */
+.pal h4 i{font-size:10px;font-weight:400;font-style:normal;line-height:1;
+  letter-spacing:.02em;text-transform:none;color:var(--dim)}
+.pal section+section{margin-top:15px;padding-top:13px;border-top:1px solid rgba(255,255,255,.08)}
+.pal .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:5px}
+.pal .tl{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 3px 7px;
+  border:1px solid transparent;border-radius:11px;background:none;color:#ddd;cursor:pointer;
+  font-size:11.5px;line-height:1.25;text-align:center}
+.pal .tl:hover{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.13)}
+.pal .tl.on{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff}
+.pal .tl.off{opacity:.26;cursor:default}
+
+/* One skeleton, eighty behaviours -----------------------------------------
+   Every tile is the same nine shapes — a frame, a horizon, its posts, two
+   subjects, an object, a light wedge, bars, grain — and what makes a push-in
+   look like a push-in is a class on the <svg> plus a keyframe rule. Eighty
+   bespoke drawings is the version that drifts: the frame ends up 1px in thirty
+   of them and 1.5 in the rest, and nobody ever sees all eighty side by side to
+   notice. It is also the version nobody finishes.
+
+   The posts are what make lateral motion visible at all. A horizontal line
+   translated horizontally is a horizontal line, so panning without them is a
+   perfectly correct animation of nothing happening; they are spaced exactly
+   20 apart so a 20px stream loops seamlessly.
+
+   Only an open palette animates. It is removed from the DOM on close, the same
+   reason openMenu is one element that moves, and the copies of these glyphs
+   that live on the pill rail are frozen — see `.spill .gl` below. So the page
+   at rest is running nothing. */
+.gl{width:44px;height:30px;display:block;color:#eee;overflow:hidden}
+.gl *{transform-box:view-box;transform-origin:50% 50%}
+.gl .fr{fill:none;stroke:currentColor;stroke-width:1;opacity:.42}
+.gl .hz{stroke:currentColor;stroke-width:1;opacity:.28}
+.gl .tk path{stroke:currentColor;stroke-width:1;opacity:.24}
+.gl .s1,.gl .s2,.gl .ob,.gl .lt,.gl .gr circle,.gl .bu{fill:currentColor}
+.gl .s2,.gl .ob,.gl .pv,.gl .bu,.gl .tx{display:none}
+.gl .pv,.gl .tx{stroke:currentColor;stroke-width:1.4;stroke-linecap:round;fill:none}
+.gl .bu{opacity:.75}
+.gl .lt,.gl .gr{opacity:0}
+.gl .bars rect{fill:#000;opacity:0}
+
+/* Framing. The entire vocabulary of shot size is how much of the frame a
+   person takes up, so that is literally the only thing that varies. */
+.gl-fr-xw .s1{transform:scale(.3) translateY(14px)}
+.gl-fr-w .s1{transform:scale(.58) translateY(7px)}
+.gl-fr-mcu .s1{transform:scale(1.5) translateY(2px)}
+.gl-fr-cu .s1{transform:scale(2.4) translateY(3px)}
+.gl-fr-xcu .s1{transform:scale(4) translateY(1px)}
+.gl-fr-ots .s2{display:block;transform:scale(2.9) translate(-5px,3px);opacity:.4}
+.gl-fr-ots .s1{transform:scale(1.35) translateX(4px)}
+.gl-fr-pov .s1{display:none}
+.gl-fr-pov .pv{display:block}
+
+/* Angle, told by where the horizon sits. Looking up puts it low in the frame
+   and looking down puts it high, which is the fact the words name. */
+.gl-an-low .hz,.gl-an-low .tk{transform:translateY(5px)}
+.gl-an-low .s1{transform:scale(1.2) translateY(-2px)}
+.gl-an-high .hz,.gl-an-high .tk{transform:translateY(-9px)}
+.gl-an-high .s1{transform:scale(.85) translateY(3px)}
+.gl-an-bird .hz,.gl-an-bird .tk{opacity:0}
+.gl-an-bird .s1{transform:scaleY(.66)}
+.gl-an-bird .s2{display:block;opacity:.18;transform:scale(2.8)}
+.gl-an-worm .hz,.gl-an-worm .tk{transform:translateY(8px)}
+.gl-an-worm .s1{transform:scale(1,1.5) translateY(-3px)}
+.gl-an-dutch .wo{transform:rotate(-13deg)}
+
+/* Light, as one wedge moved around the frame. */
+.gl-li-window .lt{opacity:.2}
+.gl-li-golden .lt{opacity:.26;transform:translate(19px,5px) rotate(30deg) scaleY(.85)}
+.gl-li-overcast .lt{opacity:.1;transform:scaleX(5)}
+.gl-li-hardsun .lt{opacity:.44;transform:scaleX(.5) translateX(-11px)}
+.gl-li-neon .lt{opacity:.32;transform:scaleX(.36) translateX(-26px)}
+.gl-li-neon .hz{opacity:.85;stroke-dasharray:4 3}
+.gl-li-candle .lt{opacity:.3;transform:rotate(180deg) scale(.5) translateY(12px)}
+.gl-li-practical .s2{display:block;transform:scale(.3) translate(40px,-16px)}
+.gl-li-practical .lt{opacity:.15;transform:translateX(19px) scale(.75)}
+.gl-li-silhouette .lt{opacity:.5;transform:scaleX(6)}
+.gl-li-silhouette .s1{fill:#0d0d0d}
+.gl-li-top .lt{opacity:.24;transform:translateY(-9px) scale(1.8,.5)}
+
+/* Tone. The one group where the tile is a treatment rather than a geometry. */
+.gl-to-doc .s2{display:block;transform:scale(.24) translate(60px,-42px)}
+.gl-to-doc .hz{opacity:.46}
+.gl-to-noir .bars{transform:rotate(-26deg) scale(1.6,.42)}
+.gl-to-noir .bars rect{opacity:.72}
+.gl-to-noir .lt{opacity:.3;transform:scaleX(.45) translateX(-13px)}
+.gl-to-s16 .gr{opacity:.6}
+.gl-to-s16 .hz,.gl-to-s16 .tk path{opacity:.16}
+.gl-to-anamorphic .bars rect{opacity:.95}
+.gl-to-anamorphic .lt{opacity:.3;transform:scale(3,.12) translateY(-52px)}
+.gl-to-highkey .lt{opacity:.4;transform:scaleX(6)}
+.gl-to-highkey .s1{opacity:.45}
+.gl-to-desat .s1{opacity:.36}
+.gl-to-desat .hz,.gl-to-desat .tk path{opacity:.13}
+.gl-to-contrast .s1{fill:#0d0d0d}
+.gl-to-contrast .lt{opacity:.62;transform:scaleX(1.15) translateX(-6px)}
+
+/* Speech and on-screen text. */
+.gl-sa-dialogue .bu{display:block}
+.gl-sa-dialogue .s1{transform:scale(1.15) translate(-7px,2px)}
+.gl-sa-screen .tx{display:block}
+.gl-sa-screen .s1{opacity:.3;transform:scale(1.3) translateY(-3px)}
+
+/* Camera. Three of these pairs are the distinctions a word alone never makes,
+   and the tile is the only place the app can make them: a dolly changes the
+   relationship between subject and background and a zoom does not, so the
+   push-in tile scales the subject faster than the horizon and the zoom tile
+   scales both together. Truck against pan is the same argument sideways. */
+.gl-ca-push .s1{animation:gScale 2.4s ease-in-out infinite alternate}
+.gl-ca-push .tk{animation:gCreep 2.4s ease-in-out infinite alternate}
+.gl-ca-pull .s1{animation:gScale 2.4s ease-in-out infinite alternate-reverse}
+.gl-ca-pull .tk{animation:gCreep 2.4s ease-in-out infinite alternate-reverse}
+.gl-ca-zoom .wo{animation:gScale 2.4s ease-in-out infinite alternate}
+.gl-ca-panl,.gl-ca-truckl,.gl-ca-orbit{--d:-1}
+.gl-ca-panr,.gl-ca-truckr,.gl-ca-arc{--d:1}
+.gl-ca-panl .wo,.gl-ca-panr .wo{animation:gPan 2.6s ease-in-out infinite alternate}
+.gl-ca-truckl .tk,.gl-ca-truckr .tk{animation:gPanHalf 2.6s ease-in-out infinite alternate}
+.gl-ca-truckl .s1,.gl-ca-truckr .s1{animation:gPan 2.6s ease-in-out infinite alternate}
+.gl-ca-tiltu,.gl-ca-pedu,.gl-ca-craneu{--v:1}
+.gl-ca-tiltd,.gl-ca-pedd,.gl-ca-craned{--v:-1}
+.gl-ca-tiltu .wo,.gl-ca-tiltd .wo{animation:gTilt 2.6s ease-in-out infinite alternate}
+.gl-ca-pedu .s1,.gl-ca-pedd .s1{animation:gTilt 2.6s ease-in-out infinite alternate}
+.gl-ca-pedu .tk,.gl-ca-pedd .tk{animation:gTiltHalf 2.6s ease-in-out infinite alternate}
+.gl-ca-craneu .wo,.gl-ca-craned .wo{animation:gCrane 3s ease-in-out infinite alternate}
+.gl-ca-orbit .tk,.gl-ca-arc .tk{animation:gPan 3s ease-in-out infinite alternate}
+.gl-ca-orbit .s1,.gl-ca-arc .s1{animation:gSquash 3s ease-in-out infinite}
+.gl-ca-arc .wo{animation:gPanHalf 3s ease-in-out infinite alternate}
+.gl-ca-trackside .tk,.gl-ca-trackrear .tk{animation:gStream 1.7s linear infinite}
+.gl-ca-trackrear .s1{animation:gBob 1.7s ease-in-out infinite}
+.gl-ca-handheld .wo{animation:gJit .9s steps(1,end) infinite}
+.gl-ca-whip .wo{animation:gWhip 2.4s ease-in-out infinite}
+.gl-ca-rack .s2{display:block;transform:scale(2.3) translate(-6px,4px);
+  animation:gFocusA 3s ease-in-out infinite alternate}
+.gl-ca-rack .s1{animation:gFocusB 3s ease-in-out infinite alternate}
+/* Locked off is the one tile that does nothing, and it is not an omission:
+   beside twenty moving tiles, stillness is the clearest available statement of
+   what "the camera does not move" means. */
+
+/* Action. Two subjects, which is what separates this group from every other
+   one on the palette — the whole reason it exists is what happens between
+   them. `[class*=]` rather than a second class from the builder: the glyph
+   name is the data, and a shadow flag alongside it is a thing to keep in step. */
+.gl[class*="gl-ac-"] .s2{display:block;transform:translateX(6px)}
+.gl[class*="gl-ac-"] .s1{transform:translateX(-6px)}
+.gl-ac-fight .s1{animation:gJabA .62s ease-in-out infinite}
+.gl-ac-fight .s2{animation:gJabB .62s ease-in-out infinite}
+.gl-ac-kiss .s1{animation:gCloseA 2.6s ease-in-out infinite}
+.gl-ac-kiss .s2{animation:gCloseB 2.6s ease-in-out infinite}
+.gl-ac-embrace .s1{animation:gCloseA 3.2s ease-in-out infinite;opacity:.8}
+.gl-ac-embrace .s2{animation:gCloseB 3.2s ease-in-out infinite;opacity:.8}
+.gl-ac-talk .s1{animation:gSayA 2.2s ease-in-out infinite}
+.gl-ac-talk .s2{animation:gSayB 2.2s ease-in-out infinite}
+.gl-ac-laugh .s1{animation:gLaughA 1.1s ease-in-out infinite}
+.gl-ac-laugh .s2{animation:gLaughB 1.1s ease-in-out infinite}
+.gl-ac-walktalk .tk{animation:gStream 2.4s linear infinite}
+.gl-ac-walktalk .s1{animation:gStepA 1s ease-in-out infinite}
+.gl-ac-walktalk .s2{animation:gStepB 1s ease-in-out infinite}
+.gl-ac-chase .tk{animation:gStream 1.1s linear infinite}
+.gl-ac-chase .s1{animation:gStepA .7s ease-in-out infinite;opacity:.5}
+.gl-ac-chase .s2{animation:gStepB .7s ease-in-out infinite}
+.gl-ac-handoff .ob{display:block;animation:gPass 2.8s ease-in-out infinite}
+/* `.gl.` on these two, and only these two. The group's base rule is
+   `.gl[class*="gl-ac-"] .s2` — an attribute selector, so (0,3,0) — and a plain
+   `.gl-ac-reveal .s2` is (0,2,0) and loses. Both of these are the actions with
+   one performer rather than two, so losing meant the two tiles that are not
+   about a pair were the only evidence that the base rule outranked them. */
+.gl.gl-ac-reveal .s2,.gl.gl-ac-turn .s2{display:none}
+.gl.gl-ac-reveal .s1{transform:none;animation:gReveal 3s ease-in-out infinite}
+.gl-ac-reveal .lt{opacity:.22;animation:gWipe 3s ease-in-out infinite}
+.gl.gl-ac-turn .s1{transform:none;animation:gTurn 2.6s ease-in-out infinite}
+
+@keyframes gScale{to{transform:scale(1.5)}}
+@keyframes gCreep{to{transform:scale(1.08)}}
+@keyframes gPan{to{transform:translateX(calc(var(--d,1) * 11px))}}
+@keyframes gPanHalf{to{transform:translateX(calc(var(--d,1) * 4.5px))}}
+@keyframes gTilt{to{transform:translateY(calc(var(--v,1) * 7px))}}
+@keyframes gTiltHalf{to{transform:translateY(calc(var(--v,1) * 2.5px))}}
+@keyframes gCrane{to{transform:translateY(calc(var(--v,1) * 9px)) scale(.84)}}
+@keyframes gSquash{0%,100%{transform:scaleX(1)}50%{transform:scaleX(.55)}}
+/* Exactly one post spacing, so the loop has no seam to see. */
+@keyframes gStream{from{transform:translateX(10px)}to{transform:translateX(-10px)}}
+@keyframes gBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.1px)}}
+@keyframes gJit{0%{transform:translate(0,0)}20%{transform:translate(.9px,-.6px)}
+  40%{transform:translate(-.8px,.5px)}60%{transform:translate(.5px,.9px)}
+  80%{transform:translate(-.6px,-.5px)}}
+@keyframes gWhip{0%,26%{transform:translateX(13px);filter:none}
+  46%,54%{transform:translateX(0);filter:blur(1.7px)}
+  74%,100%{transform:translateX(-13px);filter:none}}
+@keyframes gFocusA{from{filter:blur(0);opacity:.85}to{filter:blur(1.4px);opacity:.4}}
+@keyframes gFocusB{from{filter:blur(1.4px);opacity:.4}to{filter:blur(0);opacity:.95}}
+@keyframes gJabA{0%,100%{transform:translateX(-6px)}50%{transform:translateX(-2.2px)}}
+@keyframes gJabB{0%,100%{transform:translateX(6px)}50%{transform:translateX(2.2px)}}
+@keyframes gCloseA{0%{transform:translateX(-8px)}45%,100%{transform:translateX(-2.4px)}}
+@keyframes gCloseB{0%{transform:translateX(8px)}45%,100%{transform:translateX(2.4px)}}
+@keyframes gSayA{0%,44%,100%{transform:translateX(-6px) scale(1)}
+  20%{transform:translateX(-6px) scale(1.14)}}
+@keyframes gSayB{0%,60%,100%{transform:translateX(6px) scale(1)}
+  78%{transform:translateX(6px) scale(1.14)}}
+@keyframes gLaughA{0%,100%{transform:translate(-6px,0)}50%{transform:translate(-6px,-1.6px)}}
+@keyframes gLaughB{0%,100%{transform:translate(6px,0)}50%{transform:translate(6px,-1.4px)}}
+@keyframes gStepA{0%,100%{transform:translate(-6px,0)}50%{transform:translate(-6px,-1.2px)}}
+@keyframes gStepB{0%,100%{transform:translate(6px,-1.2px)}50%{transform:translate(6px,0)}}
+@keyframes gPass{0%,10%{transform:translateX(-5px)}55%,100%{transform:translateX(5px)}}
+@keyframes gReveal{0%,15%{opacity:0}55%,100%{opacity:.9}}
+@keyframes gWipe{0%,10%{transform:scaleX(7) translateX(1px)}60%,100%{transform:scaleX(7) translateX(-9px)}}
+@keyframes gTurn{0%,100%{transform:scaleX(1)}45%,55%{transform:scaleX(.28)}}
+/* Frozen mid-move rather than switched off: a still diagram is still a
+   diagram, and a tile that reverts to the neutral skeleton would make half the
+   camera group identical to each other. */
+@media (prefers-reduced-motion:reduce){
+  .gl *{animation-play-state:paused !important;animation-delay:-1.2s !important}
+  /* The green stays — it is the part that carries the meaning. Only the
+     movement goes, frozen at full height rather than at whatever fraction the
+     negative delay happened to land on. */
+  .door.live svg path{animation:none !important;transform:none !important}
+}
+
+/* The pill rail ----------------------------------------------------------
+   One rail, shared by Image and Video, because the prompt is shared and a pill
+   is part of the prompt. It costs nothing while empty — not a collapsed row, no
+   element at all — which is the condition for putting anything above the
+   options strip at all. */
+#shot-rail{margin:8px 2px 0;gap:6px}
+#shot-rail:empty{display:none;margin:0}
+.spill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:3px 5px 3px 7px;
+  color:#ddd;font-size:12.5px;max-width:100%}
+.spill>.gl{width:26px;height:18px;flex:none;opacity:.85}
+/* Frozen in the rail. The tile is the animated version because motion is what
+   teaches a move you have not picked yet; a pill is the record of a decision
+   already made, and twenty of them moving under the prompt is motion competing
+   with the canvas for information you already have — the word is right there.
+   Paused mid-move rather than switched off, and for the same reason
+   reduced-motion pauses instead of cancelling: a camera glyph reverted to the
+   neutral skeleton is the same drawing for all twenty-one of them. */
+.spill .gl *{animation-play-state:paused;animation-delay:-1.2s}
+.spill b{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* An empty valued pill is a decision started and not finished, and it says so
+   by staying visibly empty rather than by erroring. */
+.spill.val b{color:var(--dim)}
+.spill.val b.set{color:#ddd;font-style:italic}
+.spill.val:not(.open){cursor:text}
+.spill.open{background:rgba(255,255,255,.11);border-color:rgba(255,255,255,.2)}
+/* width:auto and flex:none on both, because the base rule three hundred lines
+   up is `input,textarea,select{width:100%}` — inside a flex pill that made the
+   language select 245px of a 480px pill and squeezed the line of dialogue,
+   which is the only thing in there anyone is reading, down to 156. */
+.spill input{border:0;background:none;color:#fff;font-size:12.5px;padding:2px 0;
+  flex:1 1 250px;width:auto;min-width:110px;max-width:min(38vw,340px)}
+.spill select{border:0;background:rgba(255,255,255,.09);color:#ccc;font-size:11px;
+  border-radius:6px;padding:0 3px;height:19px;flex:none;width:auto}
+.spill .x{border:0;background:none;color:var(--mut);cursor:pointer;font-size:13px;
+  line-height:1;width:19px;height:19px;border-radius:50%;flex:none}
+.spill .x:hover{background:rgba(255,255,255,.15);color:#fff}
+/* Dim, never gone. The rail is shared and the models are not: a pill this
+   model does not read has to stay where you put it, because switching back is
+   one click and a rail that forgets is worse than a rail that dims. */
+.spill.off{opacity:.32}
+
+/* What the model will actually read. Collapsed to one 11px line, which is the
+   whole argument for it existing: the alternative to showing the compiled
+   document is a three-minute render to find out. */
+#shot-peek{margin:7px 2px 0}
+#shot-peek>button{border:0;background:none;color:var(--dim);font-size:11.5px;
+  cursor:pointer;padding:2px 0;display:inline-flex;align-items:center;gap:5px}
+#shot-peek>button:hover{color:var(--fg)}
+#shot-peek>button::before{content:"";width:0;height:0;border:4px solid transparent;
+  border-left-color:currentColor;border-right:0;transition:transform .12s}
+#shot-peek.open>button::before{transform:rotate(90deg) translateX(1px)}
+#shot-peek pre{margin:7px 0 0;padding:10px 12px;border-radius:11px;background:rgba(255,255,255,.04);
+  border:1px solid var(--line);font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:#c8c8c8;white-space:pre-wrap;word-break:break-word;max-height:184px;overflow:auto}
+
+/* Sheets: settings, metadata, lightbox ---------------------------------- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:60;display:grid;place-items:center;padding:32px}
+.sheet{width:100%;max-width:720px;max-height:100%;overflow:auto;background:#0b0b0b;
+  border:1px solid var(--line);border-radius:20px;padding:22px 24px 26px}
+.sheet-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px}
+/* Model families. A rule above each heading rather than a box around each
+   group: the cards already have edges, and nesting borders inside borders is
+   two frames for one idea. */
+.fam{margin-bottom:22px}
+.fam+.fam{border-top:1px solid var(--line);padding-top:18px}
+.fam-head{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px}
+.fam-head .muted{margin-left:auto;font-size:12px}
+/* The queue reports where you started it, under the head it belongs to, rather
+   than in one shared strip at the top of Settings — with a button per family
+   there is no longer a single place that "the download" means. */
+.fam-prog{margin:0 2px 12px}
+
+/* The size popover. Aspect is shown as a rectangle at its own proportions,
+   because that is the one representation of a ratio nobody has to read — the
+   same argument the shot tiles make for a camera move, and the reason this is
+   a palette rather than a longer select. */
+
+/* The sampling popover. A form, not a palette — a sampler name and a step count
+   are not things a picture of them could teach, which is the line the shot
+   tiles sit on the other side of. */
+.menu.form{padding:9px;width:auto;min-width:250px}
+.form .frow{display:grid;grid-template-columns:74px 1fr;align-items:center;gap:8px;
+  margin:0 0 7px;font-size:11.5px;color:var(--dim)}
+.form .frow>span{white-space:nowrap}
+.form .frow select,.form .frow input{height:30px;padding:0 7px;font-size:12px}
+/* The one control whose name explains nothing, so it gets the sentence the
+   others do not need. Spanning both columns because a hint indented under a
+   74px label is a hint shaped like a value. */
+.form .frow>i{grid-column:1/-1;font-style:normal;font-size:10.5px;color:var(--mut);line-height:1.4}
+.form .sz-reset{width:100%;margin-top:2px;padding:7px 0;border:1px solid var(--line);
+  border-radius:9px;background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:11px;line-height:1}
+.form .sz-reset:hover{color:var(--fg);border-color:rgba(255,255,255,.3)}
+/* A dot, not a colour change: the button's text is the resolved numbers, and
+   recolouring those would say "warning" about a value you deliberately chose. */
+#g-sampling,#v-sampling{width:auto;padding:0 10px;font-size:14px;color:var(--fg);
+  font-variant-numeric:tabular-nums}
+#g-sampling.edited::after,#v-sampling.edited::after{content:'';display:inline-block;width:4px;height:4px;margin-left:6px;
+  border-radius:50%;background:var(--fg);opacity:.55;vertical-align:1.5px}
+.menu.sizer{padding:10px;width:auto;min-width:236px}
+.sizer .ars{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.sizer .ar{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+  gap:5px;height:56px;padding:5px 2px;border:1px solid transparent;border-radius:9px;
+  background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:10px;line-height:1}
+.sizer .ar i{display:block;border:1.5px solid currentColor;border-radius:2px;opacity:.75}
+.sizer .ar:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.sizer .ar.on{background:rgba(255,255,255,.13);color:var(--fg);border-color:rgba(255,255,255,.22)}
+/* Scale is a separate row because it is a separate decision: the shape you want
+   and how much of it you can afford are not the same question, and the old
+   single select forced them to be answered together. */
+.sizer .scales{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:9px}
+.sizer .sc{padding:7px 0;border:1px solid var(--line);border-radius:9px;background:none;
+  color:var(--dim);cursor:pointer;font-weight:500;font-size:11.5px;line-height:1}
+.sizer .sc:hover{color:var(--fg);border-color:rgba(255,255,255,.3)}
+.sizer .sc.on{background:rgba(255,255,255,.13);color:var(--fg);border-color:rgba(255,255,255,.26)}
+.sizer .sz-custom{display:flex;align-items:center;gap:6px;margin-top:9px}
+.sizer .sz-custom label{display:flex;align-items:center;gap:5px;margin:0;flex:1;
+  font-size:10.5px;color:var(--dim)}
+.sizer .sz-custom input{width:100%;height:30px;padding:0 7px;font-size:12px;text-align:center}
+.sizer .sz-swap{flex:none;width:26px;height:26px;display:grid;place-items:center;border:0;
+  background:none;color:var(--dim);cursor:pointer;border-radius:7px;margin-top:12px}
+.sizer .sz-swap:hover{background:rgba(255,255,255,.09);color:var(--fg)}
+.sizer .sz-swap svg{width:14px;height:14px}
+.sizer .sz-note{margin:8px 2px 1px;font-size:10.5px}
+/* Wide enough to hold "16:9 · 2304×1296" without the strip reflowing when the
+   scale changes under it. */
+#g-size,#v-size{width:auto;padding:0 10px;font-size:14px;color:var(--fg);font-variant-numeric:tabular-nums}
+
+/* A row per LoRA, not a card per LoRA. The catalogue below is cards because each
+   entry there is a decision with a size, a repo and a licence attached; this is
+   a list you scan for a name you recognise, and at a dozen LoRAs the card's
+   16px of padding is the difference between reading it and scrolling it. */
+.lora-row{display:flex;align-items:center;gap:12px;padding:9px 2px;border-top:1px solid var(--line)}
+.lora-row:first-child{border-top:0;padding-top:2px}
+.lora-row b{font-size:13px;font-weight:600}
+/* Always visible, unlike the dataset card's ×, which only appears on hover
+   because it sits on top of a picture it would otherwise cover. There is nothing
+   under this one, and the whole reason to open this card is to find it. */
+.lora-x{border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;line-height:1;
+  padding:6px 8px;border-radius:9px;flex:none}
+.lora-x:hover{background:rgba(248,113,113,.14);color:#f87171}
+.kv{display:grid;grid-template-columns:132px 1fr;gap:5px 14px;font-size:13px}
+.kv dt{color:var(--mut)}
+.kv dd{color:#e8e8e8;word-break:break-word}
+/* Flex, not grid. As a grid container with `place-items:center` the image was
+   the only in-flow item, in an implicit auto-sized row, and `align-items:center`
+   stops that row stretching — so the row was sized from the image and the
+   image's `max-height:100%` was a percentage of a height derived from itself.
+   Cyclic, so the browser drops the constraint. `max-width:100%` kept working
+   because the inline axis is definite, which is exactly why this only showed up
+   on images taller than the viewport: a 640x1536 rendered at 640x1536 and ran
+   592px off the bottom of the screen, and the strip you could see read as a
+   centre crop. A flex item's percentages resolve against the container's
+   content box, which `inset:0` makes definite, so `100%` means the screen. */
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:70;
+  display:flex;align-items:center;justify-content:center;padding:34px}
+.lb-track{position:absolute;inset:0;display:flex;touch-action:pan-y;will-change:transform}
+/* Only while settling. During the drag the transform is written every frame, and
+   a transition on that lags the thumb — which is the whole thing this is for. */
+.lb-track.snap{transition:transform .3s cubic-bezier(.22,.61,.36,1)}
+.lb-slide{flex:0 0 100%;height:100%;display:grid;place-items:center;padding:30px}
+/* Belt and braces with draggable="false": Safari honours -webkit-user-drag and
+   ignores the attribute on some elements. */
+.lb img,.lb video{-webkit-user-drag:none;user-select:none;-webkit-user-select:none}
+.lb img,.lb video{max-width:100%;max-height:100%;width:auto;height:auto;
+  min-width:0;min-height:0;object-fit:contain}
+.lb .x{position:absolute;top:14px;right:16px;width:40px;height:40px;border:0;background:none;
+  color:#fff;padding:8px;cursor:pointer;z-index:3;
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
+.lb .x:hover{opacity:.75}
+/* Chrome off. Navigation lives in the top corners while you are moving between
+   layers; once you have stopped on one picture there is nowhere left to go, so
+   it gets out of the way until you ask for it. */
+.lb.bare .x,.lb.bare .lb-all,.lb.bare .lb-nav,.lb.bare .lb-at{opacity:0;pointer-events:none}
+.lb .x,.lb .lb-all,.lb .lb-nav,.lb .lb-at{transition:opacity .16s ease}
+/* Paging, for the pointer that cannot swipe. Big, edge-anchored and mostly
+   transparent — they sit over the picture, so they earn their place by being
+   where a thumb already is rather than by being visible. */
+.lb .lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:52px;height:78px;
+  border:0;background:rgba(0,0,0,.4);color:#e8e8e8;cursor:pointer;padding:22px;
+  border-radius:12px;opacity:.5;transition:opacity .12s}
+.lb .lb-nav:hover{opacity:1;background:rgba(0,0,0,.66)}
+.lb .lb-nav[disabled]{opacity:.12;cursor:default}
+.lb .lb-nav.prev{left:14px}
+.lb .lb-nav.next{right:14px;transform:translateY(-50%) rotate(180deg)}
+/* Where you are in the set. The one thing swiping cannot tell you, and the
+   reason you can flick through twenty takes without losing your place. */
+.lb .lb-at{position:absolute;top:20px;left:50%;transform:translateX(-50%);
+  font-weight:500;font-size:12px;line-height:1;color:#bbb;font-variant-numeric:tabular-nums}
+.lb .lb-all{position:absolute;top:14px;right:60px;width:40px;height:40px;border:0;
+  background:none;color:#fff;padding:9px;cursor:pointer;z-index:3;
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
+.lb .lb-all:hover{opacity:.75}
+/* The last generation, beside Generate — and only where that is the shortest
+   way back to it.
+   
+   Below 1024px the gallery has no other home: the drawer stacks, so there is no
+   column beside the canvas and the header is the far corner of a tall screen.
+   Above it the drawer is a column that is already next to the picture and the
+   header button already opens it, so this is a second door onto a room with a
+   door — and it lands in the composer, which is the row this whole redesign has
+   been trying to empty. Desktop was not the problem the thumbnail solved, so it
+   does not get the fix. */
+.shot-back{display:none}
+@media (max-width:1024px){
+  .shot-back{width:36px;height:36px;flex:none;padding:0;overflow:hidden;border-radius:10px;
+    border:1px solid rgba(255,255,255,.22);background:none;cursor:pointer;display:block}
+  .shot-back:hover{border-color:rgba(255,255,255,.5)}
+  .shot-back img,.shot-back video{width:100%;height:100%;object-fit:cover;display:block}
+  .shot-back.hide{display:none}
+}
+@media (hover:none) and (max-width:1024px){ .shot-back{width:44px;height:44px} }
+
+/* Datasets -------------------------------------------------------------- */
+/* flex-column, not the default: a <button> centres its content vertically, so
+   once one card in the row is taller than another the covers float in the
+   middle of their cards with black above them. */
+.ds-card{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;overflow:hidden;
+  cursor:pointer;text-align:left;padding:0;color:inherit;font:inherit;
+  display:flex;flex-direction:column;align-items:stretch}
+.ds-card:hover{border-color:rgba(255,255,255,.24)}
+/* The set you are looking at, and the one Start training will use. */
+.ds-card.sel{border-color:rgba(255,255,255,.55)}
+/* Not kept yet. The border is the whole statement — a dashed edge is what a
+   provisional thing looks like, and it costs the card no words to say it. The
+   same dash and the same alpha as the drop target, deliberately: a draft is
+   what came off it, and at --line's 10% the gaps only made the card look
+   fainter than its neighbours rather than different from them. */
+.ds-card.draft{border-style:dashed;border-color:rgba(255,255,255,.2)}
+/* The delete target has to sit beside the card rather than inside it: the card
+   is a <button>, and a button cannot contain one. */
+/* width:100% because a <button> shrinks to its content: without it the cards
+   end at wherever each name happens to stop and the rail loses its edge. */
+.ds-row{position:relative;min-width:0}
+.ds-row .ds-card{width:100%}
+.ds-row .ds-x{position:absolute;top:50%;right:9px;transform:translateY(-50%);
+  width:24px;height:24px;border:0;border-radius:50%;background:rgba(0,0,0,.62);
+  color:#eee;cursor:pointer;font-size:13px;line-height:1;padding:0;opacity:0;
+  transition:opacity .12s}
+.ds-row:hover .ds-x,.ds-row .ds-x:focus-visible{opacity:1}
+/* Which group a card is in, said once above the group rather than on every
+   card in it. */
+.ds-group{grid-column:1/-1;margin:14px 2px 2px;font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim)}
+.ds-group:first-child{margin-top:0}
+.ds-group span{text-transform:none;letter-spacing:0}
+.ds-cover{aspect-ratio:4/3;background:rgba(255,255,255,.045);display:block;width:100%;
+  flex:none;object-fit:contain}
+.ds-cover.empty{display:grid;place-items:center;color:var(--dim);font-size:22px}
+.ds-meta{padding:11px 13px}
+.ds-meta b{font-size:13px;font-weight:600}
+.tiles{display:grid;gap:10px}
+.tile{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.02);
+  display:flex;flex-direction:column}
+.tile.sel{border-color:rgba(255,255,255,.5)}
+/* A true square cell with the whole image inside it, Bridge-style — you cannot
+   judge a crop you cannot see. The image is absolutely positioned: as a normal
+   flow child with height:100% it establishes the container's height itself, so
+   aspect-ratio never applies and the cell silently takes the image's ratio.
+   The cell is also lifted off the page background, because letterbox bars the
+   same colour as the page read as a cropped photo rather than a contained one. */
+.tile .ph{position:relative;background:rgba(255,255,255,.045);aspect-ratio:1}
+.tile .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;cursor:zoom-in}
+.tile .dim{position:absolute;left:6px;bottom:6px;font-size:10px;color:#ddd;background:rgba(0,0,0,.62);
+  padding:2px 6px;border-radius:5px;pointer-events:none}
+.tile .rm{position:absolute;top:6px;right:6px;width:24px;height:24px;border:0;border-radius:50%;
+  background:rgba(0,0,0,.62);color:#eee;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .12s}
+.tile:hover .rm{opacity:1}
+/* The third line is cut through the glyphs rather than between them, and that
+   is left alone deliberately. It is not a rendering fault dressed as a feature:
+   a sliced line appears exactly when the caption runs past the box and never
+   otherwise, so it is a perfectly correlated "there is more" that costs no
+   pixels and no element. Snapping the height to whole lines was tried and
+   reverted — it buys a tidier edge and pays for it by making a four-line
+   caption end flush, indistinguishable from one that really stops there. */
+.tile textarea{border:0;border-top:1px solid var(--line);border-radius:0;background:none;resize:none;
+  font-size:12px;padding:8px 9px;min-height:66px;line-height:1.45}
+.tile textarea.dirty{background:rgba(56,189,248,.08)}
+.tile.thin textarea{border-top-color:rgba(245,158,11,.5)}
+.tile.notrig textarea{border-top-color:rgba(239,68,68,.55)}
+/* Insight panel: bars are the readout, numbers confirm them. */
+.ins{position:sticky;top:0}
+.ins .stat{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.ins .stat b{font-size:19px;font-weight:600;letter-spacing:-.01em}
+.ins .stat span{font-size:12px;color:var(--mut)}
+.meter{height:5px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden;margin:2px 0 14px}
+.meter i{display:block;height:100%;background:#34d399}
+.meter i.warn{background:#f59e0b}
+.meter i.bad{background:#ef4444}
+.ph-row{display:flex;align-items:center;gap:8px;margin-bottom:3px;cursor:pointer;border:0;background:none;
+  padding:2px 0;width:100%;color:inherit;font:inherit;text-align:left}
+.ph-row:hover .ph-bar{outline:1px solid rgba(255,255,255,.3)}
+.ph-bar{position:relative;flex:1;min-width:0;height:20px;border-radius:5px;background:rgba(255,255,255,.06);overflow:hidden}
+/* Proportional fill only. An earlier version turned these red above 60% share,
+   which read as "this is wrong" — but a phrase recurring is information about
+   the set, not an error. A feature that is present and *not* captioned is the
+   actual hazard, since it has nowhere to attach except the trigger. Red is
+   reserved for trigger coverage, where a gap really is a defect. */
+.ph-bar i{position:absolute;inset:0;width:var(--w);background:rgba(255,255,255,.11)}
+.ph-bar i.hot{background:rgba(255,255,255,.2)}
+/* Only the two human-error rows are coloured, because only they are defects. */
+.ph-bar i.bad{background:rgba(239,68,68,.3)}
+.ph-bar i.warn{background:rgba(245,158,11,.28)}
+.ph-bar span{position:absolute;left:7px;top:0;line-height:20px;font-size:11px;color:#e8e8e8;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;right:7px}
+.ph-n{font-size:11px;color:var(--mut);width:26px;text-align:right;flex:none}
+.drop{border:1px dashed rgba(255,255,255,.2);border-radius:16px;text-align:center;cursor:pointer}
+.drop.hot{border-color:rgba(255,255,255,.45);background:rgba(255,255,255,.05)}
+.drop>span{display:block;padding:22px 12px;color:var(--dim);font-size:12px}
+.drop img{display:block;width:100%;max-height:150px;object-fit:contain;border-radius:15px}
+/* The strip's version: a dashed outline when empty and the frame itself once
+   filled. The thumbnail is the label — a filled first tile says
+   "image-to-video" more directly than the words do.
+
+   That was only ever true of the filled half. Empty, the row was four 36px
+   dashed squares of near-identical weight — two fixed keyframe slots and two
+   add-buttons for a tray — told apart by tooltip and a 1px rule, which is the
+   same hover-to-find-out failure `.opt>.lead` was added to fix on the numeric
+   fields. So an empty tile is named and a filled one collapses back to the
+   square: the words are scaffolding for a picture that is not there yet, and
+   the moment it arrives they are in its way. */
+/* The way most sets begin, so it is the size of that fact: the whole canvas
+   when nothing is chosen, and a target you can hit without aiming. */
+.drop.hero{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;border-radius:20px;padding:34px}
+.drop.hero .drop-face{text-align:center;pointer-events:none}
+.drop.hero .drop-face input{pointer-events:auto}
+.drop.hero .glyph{width:40px;height:40px;margin:0 auto 16px;opacity:.4}
+.drop.hero b{font-size:15px;font-weight:600}
+.drop.mini{height:32px;flex:none;padding:8px;border-radius:10px;overflow:hidden;
+  background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:center;
+  gap:7px;color:var(--dim)}
+.drop.mini:hover{border-color:rgba(255,255,255,.4);color:var(--fg)}
+/* :not(.lead), because label() inserts a <span> too and this rule pinned it to
+   the icon's 16px box — every label was clipped to "Pictu" by the overflow the
+   tile needs for its thumbnail. */
+.drop.mini>span:not(.lead){padding:0;display:grid;place-items:center;width:16px;height:16px;flex:none}
+/* After the icon, not before it: label() inserts afterbegin, and the glyph is
+   what the eye lands on first. */
+.drop.mini>.lead{order:2}
+.drop.mini img{width:100%;height:100%;max-height:none;object-fit:cover;border-radius:0}
+.drop.mini.set{width:32px;padding:0;border-style:solid;border-color:rgba(255,255,255,.28)}
+.drop.mini.set>.lead{display:none}
+/* Out of play this run because its opposite number is filled. Dimmed rather
+   than removed: the row's whole job is to show that keyframes and references
+   are alternatives, and a control that disappears when you use its neighbour
+   teaches nothing except that the page lost it. */
+.drop.mini.off{opacity:.3;pointer-events:none}
+/* Dimmed like .off and, unlike it, still hoverable. .off means "the choice you
+   already made put this out of play for this run", which the row's own shape
+   explains; this means "the weight it needs is not on the volume", which
+   nothing explains — and a tile with pointer-events:none cannot be hovered, so
+   it could not deliver the one sentence that would. */
+.drop.mini.locked{opacity:.3;cursor:default}
+#canvas-acts{position:absolute;top:12px;right:12px;z-index:4;display:flex;gap:6px;
+  opacity:.32;transition:opacity .12s}
+#canvas:hover #canvas-acts,#canvas-acts:focus-within{opacity:1}
+#canvas-acts .ico{width:30px;height:30px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);
+  border-radius:9px}
+#canvas-acts .ico:hover{background:rgba(0,0,0,.78);color:var(--fg)}
+/* No pointer to hover with.
+   
+   Half a dozen controls on this page are revealed by :hover, which on a
+   trackpad is a light touch and on an iPad is nothing at all — the gallery
+   card's download and delete and the dataset tile's remove were at opacity:0
+   with no way to reach them. They are not "hard to find" on touch, they are
+   absent, and the feature behind them may as well not have shipped.
+   
+   The quiet-at-rest ones are a different case and stay quiet, just less so: the
+   canvas actions and the shot actions are legible at .32 with a mouse because
+   hover is one move away, and a tablet has no such move — so they sit up where
+   they can be read and tapped without hunting.
+   
+   hover:none rather than pointer:coarse, because the question is whether hover
+   exists, not how precise the pointer is: a trackpad-less touchscreen laptop
+   fails this test too and has exactly the same problem. */
+@media (hover:none){
+  .gal .quick{opacity:1}
+  .tile .rm{opacity:1}
+  .shot .acts,#canvas-acts{opacity:.85}
+  /* Handles ride on .sel already, which a tap sets — so a box you have selected
+     is resizable and one you have not is not cluttered with eight dots. */
+}
+/* 44px is Apple's minimum and these are 36. Only the composer strip, because
+   that is what you drive a render from; the settings sheet is a form you visit
+   rather than a surface you work on. */
+@media (hover:none) and (max-width:1024px){
+  .opt,.opt.ib,.s,.drop.mini,.kinds button{min-height:44px}
+  .opt select,.opt input{height:42px}
+  .b{min-height:44px}
+}
+/* The region map. Same height as the 36px controls beside it so the bar stays
+   one row, and the frame is drawn rather than bordered so the boxes sit inside
+   the picture's proportions rather than inside a button's. */
+.rmap{width:52px;height:32px;flex:none;padding:4px 6px;border:1px solid var(--line);
+  border-radius:10px;background:rgba(255,255,255,.03);cursor:pointer}
+.rmap:hover{border-color:rgba(255,255,255,.4)}
+.rmap:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:1px}
+.rmap svg{width:100%;height:100%;display:block;overflow:visible}
+.rmap .fr{fill:none;stroke:rgba(255,255,255,.22);stroke-width:1}
+/* Unselected boxes are outlines and the selected one is filled, which is the
+   same distinction the canvas draws — a box you are editing against boxes that
+   are merely there. */
+/* No fill on the unselected ones. A translucent fill per box looks fine at two
+   and stacks into grey mush at five, which is exactly the count where you need
+   the map to tell them apart. Outlines do not accumulate; the one solid
+   rectangle is unambiguous at any number. */
+.rmap .bx{fill:none;stroke:rgba(255,255,255,.38);stroke-width:1;cursor:pointer}
+.rmap .bx:hover{stroke:rgba(255,255,255,.85)}
+.rmap .bx.on{fill:rgba(255,255,255,.85);stroke:#fff}
+.rmap-wrap{display:inline-flex;align-items:center;gap:1px;flex:none}
+.rmap-step{width:18px;height:32px;flex:none;border:0;background:none;color:var(--dim);
+  cursor:pointer;font-size:15px;line-height:1;padding:0;border-radius:7px}
+.rmap-step:hover{color:var(--fg);background:rgba(255,255,255,.08)}
+.rmap-at{position:absolute;right:3px;bottom:1px;font-weight:600;font-size:8.5px;line-height:1;color:var(--fg);
+  text-shadow:0 0 3px #000;pointer-events:none;font-variant-numeric:tabular-nums}
+.rmap{position:relative}
+.pad{padding:26px}
+
+/* Reference chips. Numbered, because the number is the <Picture n> the prompt
+   refers to — it is data, not decoration. */
+.ref{position:relative;width:64px;height:64px;border-radius:11px;overflow:hidden;border:1px solid var(--line);
+  background:rgba(255,255,255,.04)}
+.ref img,.ref video{width:100%;height:100%;object-fit:cover;display:block}
+.ref b{position:absolute;left:4px;top:3px;font-size:10px;font-weight:600;color:#fff;
+  background:rgba(0,0,0,.7);padding:1px 5px;border-radius:4px}
+.ref button.x{position:absolute;top:3px;right:3px;width:19px;height:19px;border:0;border-radius:50%;
+  background:rgba(0,0,0,.66);color:#eee;font-size:11px;line-height:1;cursor:pointer}
+/* What this picture is *for*, across the foot of the chip it belongs to.
+   Always present, never empty, because this is the control that finally makes
+   "do not describe your reference image" something other than advice — there
+   is somewhere for that description to go now, and it is one click. A tile that
+   only appeared once a role was set would be a feature you had to already know
+   about to find, which is the state the keyframe pair was rescued from. */
+.ref .role{position:absolute;left:0;right:0;bottom:0;border:0;padding:2px 3px;
+  background:rgba(0,0,0,.72);color:#e8e8e8;font-size:9.5px;line-height:1.3;text-align:center;
+  cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ref .role:hover{background:rgba(0,0,0,.88)}
+.ref .role.none{color:var(--dim)}
+/* Regions --------------------------------------------------------------- */
+/* A region is a rectangle on the canvas, so it is drawn on the canvas. The
+   four coordinates were the right parameter and the wrong primary: "0.5 0 0.5
+   1" is a rectangle you rebuild in your head every time, which is why the row
+   that carried those numbers also had to carry a 32px picture of them. That
+   picture is this, at the size of the frame and grabbable — and the numbers,
+   still here in the inspector, are now a readout that moves while you drag.
+   Dragging is what teaches them; they never taught the dragging.
+
+   It also fixes what the stack cost: a row was ~74px, so the eight regions the
+   backend allows were ~592px of console against a 54dvh cap — the feature's
+   fullest state broke the rule the console exists to hold. One inspector row
+   is the same height whether there is one box or eight. */
+/* `.frame`, not `.stage` — `.view > .stage` is already the canvas-plus-console
+   column, and a second `.stage` carrying aspect-ratio and a max-height would
+   have landed on it and collapsed the whole view. Third time this file has
+   been bitten by a reused class name; see the notes on `.lb` and on
+   `.blank`/`.empty`. */
+/* Both dimensions in pixels, set by layoutFrame() off the canvas the way
+   --shot-h is. `aspect-ratio` with an auto width is the obvious way to write
+   this and does not work here: the frame is a flex item in a column, so its
+   width is the cross size, and the ratio never transferred into it — the box
+   came out 2px wide, which is exactly its two borders and nothing else. A dvh
+   sum would be wrong for the height anyway the moment the console grew, so
+   both numbers were going to be measured regardless. */
+.frame{position:relative;align-self:center;flex:none;
+  width:var(--frame-w,0);height:var(--frame-h,0);
+  border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.02);
+  overflow:hidden;touch-action:none}
+/* Absolute, not a flow child: a child sized height:100% would establish the
+   container's height itself and aspect-ratio would never apply — the same trap
+   documented on .tile .ph. */
+.frame>.plate{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+/* Thirds. Faint enough to be a viewfinder rather than a grid you are working
+   against, and gone the moment there is a picture underneath to judge. */
+.frame>.thirds{position:absolute;inset:0;pointer-events:none;opacity:.5;
+  background:
+    linear-gradient(to right,transparent calc(33.333% - .5px),rgba(255,255,255,.07) calc(33.333% - .5px),
+      rgba(255,255,255,.07) calc(33.333% + .5px),transparent calc(33.333% + .5px)),
+    linear-gradient(to right,transparent calc(66.666% - .5px),rgba(255,255,255,.07) calc(66.666% - .5px),
+      rgba(255,255,255,.07) calc(66.666% + .5px),transparent calc(66.666% + .5px)),
+    linear-gradient(to bottom,transparent calc(33.333% - .5px),rgba(255,255,255,.07) calc(33.333% - .5px),
+      rgba(255,255,255,.07) calc(33.333% + .5px),transparent calc(33.333% + .5px)),
+    linear-gradient(to bottom,transparent calc(66.666% - .5px),rgba(255,255,255,.07) calc(66.666% - .5px),
+      rgba(255,255,255,.07) calc(66.666% + .5px),transparent calc(66.666% + .5px))}
+.frame.hot,.shot.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:-4px}
+
+/* The layer is reparented between the frame and the first still, so every
+   coordinate in it is a percentage and nothing measures its host. */
+/* Shown by intent, not by mode.
+   
+   The boxes used to stand for as long as regions were armed, which meant a
+   continuous white rectangle across every picture you rendered in the mode you
+   render most in — chrome painted over the one thing the page exists to show.
+   They are visible now while you are actually working on a region: the caret in
+   the region bar, a box under the pointer mid-drag, or a file over the window,
+   which is the moment "you can drop that here" needs saying.
+   
+   pointer-events goes with the paint. An invisible box that still swallows
+   clicks would make inspecting your own render place regions by accident, and
+   an invisible box that only *looks* gone is not the fix that was asked for.
+   The way back in is the region bar, which is on screen the whole time regions
+   are armed — click into its prompt and the boxes come back. */
+#region-layer{position:absolute;inset:0;touch-action:none;cursor:crosshair;
+  opacity:0;pointer-events:none;transition:opacity .16s ease}
+#region-layer.show{opacity:1;pointer-events:auto}
+#region-layer.off{display:none}
+/* A region of the picture, not a line on top of it. The 1px white stroke read
+   as UI at every size and fought whatever was underneath — bright plate or
+   dark, it was the most contrasty thing in the frame. Corner brackets plus a
+   barely-there wash say "this area" and leave the middle of the box clear,
+   which is where the render you are judging actually is. */
+.rbox{position:absolute;border-radius:5px;cursor:move;touch-action:none;overflow:hidden;
+  background:rgba(255,255,255,.045);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16),inset 0 0 0 2px rgba(0,0,0,.18)}
+/* The brackets. Drawn with two gradients per corner so there is no extra
+   element per box — eight boxes would otherwise be thirty-two more nodes on a
+   layer that is redrawn on every pointermove. */
+.rbox::before,.rbox::after{content:'';position:absolute;width:15px;height:15px;
+  pointer-events:none;opacity:.9}
+.rbox::before{left:-1px;top:-1px;
+  border-left:2px solid rgba(255,255,255,.92);border-top:2px solid rgba(255,255,255,.92);
+  border-radius:5px 0 0 0;filter:drop-shadow(0 0 1px rgba(0,0,0,.6))}
+.rbox::after{right:-1px;bottom:-1px;
+  border-right:2px solid rgba(255,255,255,.92);border-bottom:2px solid rgba(255,255,255,.92);
+  border-radius:0 0 5px 0;filter:drop-shadow(0 0 1px rgba(0,0,0,.6))}
+/* Solid when the box holds an identity — a resolvable LoRA or a photo — and
+   faint when it holds neither, which is the same distinction the 32px plots
+   drew and the one that decides what comes out: an empty rectangle is filled
+   by the scene prompt, a box with an identity in it is a person. */
+.rbox{opacity:.4}
+.rbox.armed{opacity:1}
+.rbox.sel{background:rgba(255,255,255,.08);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.42),inset 0 0 0 2px rgba(0,0,0,.22)}
+.rbox>.face{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.5;
+  pointer-events:none}
+.rbox>.tag{position:absolute;left:0;top:0;max-width:100%;padding:3px 7px;
+  background:rgba(0,0,0,.6);backdrop-filter:blur(8px);color:#fff;
+  border-radius:0 0 6px 0;font-weight:500;font-size:11px;line-height:1.25;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.rbox>.tag em{font-style:normal;color:var(--mut)}
+/* Handles are hidden until the box is worth resizing — eight dots on every box
+   at eight boxes is 64 dots on a picture you are trying to look at. */
+.rbox>i{position:absolute;width:11px;height:11px;border-radius:3px;
+  background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.5);opacity:0;transition:opacity .12s}
+.rbox:hover>i,.rbox.sel>i{opacity:1}
+.rbox>i[data-h=nw]{left:-5px;top:-5px;cursor:nwse-resize}
+.rbox>i[data-h=ne]{right:-5px;top:-5px;cursor:nesw-resize}
+.rbox>i[data-h=sw]{left:-5px;bottom:-5px;cursor:nesw-resize}
+.rbox>i[data-h=se]{right:-5px;bottom:-5px;cursor:nwse-resize}
+.rbox>i[data-h=n]{left:50%;top:-5px;margin-left:-5px;cursor:ns-resize}
+.rbox>i[data-h=s]{left:50%;bottom:-5px;margin-left:-5px;cursor:ns-resize}
+.rbox>i[data-h=w]{left:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+.rbox>i[data-h=e]{right:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+/* Snap guides: drawn only while a drag is landing on one, so the line is
+   feedback rather than furniture. */
+#region-layer>.guide{position:absolute;background:rgba(255,255,255,.55);pointer-events:none}
+#region-layer>.guide.v{top:0;bottom:0;width:1px}
+#region-layer>.guide.h{left:0;right:0;height:1px}
+
+/* Drag-intent reveal -----------------------------------------------------
+   Every one of this app's best gestures is a drop, and every one of them was
+   invisible until you had already guessed it: a photo onto a region box is
+   that character's likeness, a photo onto the bare canvas is the world the
+   render happens inside, files onto an open contact sheet join the set. None
+   of those can be advertised at rest without putting furniture on a canvas
+   the whole layout exists to keep clear.
+
+   So they are advertised at the only moment they are relevant. Dragging a file
+   over the window *is* the question "where can this go", and this block is the
+   answer to it. `dragging` is on the body only while a file is actually over
+   the page, so at rest every selector here matches nothing and the page is
+   exactly what it was.
+
+   Two levels, because "you may drop here" and "here is what dropping does" are
+   different questions. Everything eligible outlines itself; only the target
+   under the cursor says what it is. Naming all of them at once would put eight
+   captions on a picture at eight boxes, which is the wall of text the region
+   rows were deleted for, redrawn on the canvas. */
+body.dragging .can-drop:not(.hot):not(.locked){border-color:rgba(255,255,255,.34)}
+body.dragging .frame.can-drop:not(.hot),body.dragging .shot.can-drop:not(.hot),
+body.dragging #ds-sheet:not(.hot){outline:1px dashed rgba(255,255,255,.2);outline-offset:-4px}
+#ds-sheet{position:relative}
+#ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:-4px}
+/* The caption. Generated content, so at rest it is not an element that exists
+   and is hidden — it is an element that was never built. */
+body.dragging .frame.hot::after,body.dragging .shot.hot::after,
+body.dragging .rbox.drop-hit::after,body.dragging #ds-sheet.hot::after{
+  content:attr(data-drop);position:absolute;left:50%;top:50%;
+  transform:translate(-50%,-50%);padding:5px 11px;border-radius:999px;
+  background:rgba(0,0,0,.74);backdrop-filter:blur(8px);color:#f5f5f5;
+  font-weight:500;font-size:12px;line-height:1;white-space:nowrap;max-width:calc(100% - 12px);
+  overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:6}
+/* The contact sheet is the one target taller than the window — it is the thing
+   that scrolls — so centring on the element puts the caption at the middle of
+   forty images, which is off-screen for all but the shortest sets. Fixed to the
+   viewport instead, low enough to clear the tile under the cursor and high
+   enough to clear the training bar. */
+body.dragging #ds-sheet.hot::after{position:fixed;top:auto;bottom:104px;
+  transform:translateX(-50%);z-index:50}
+/* A box under the cursor is lit the way a selected one is, and additionally
+   pulled to full opacity — an unarmed box sits at .34, which is legible as
+   "nothing in this one yet" and illegible as "this is the one you are about to
+   drop on". */
+body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
+
+.wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+/* Train ----------------------------------------------------------------- */
+.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+
+@media(max-width:1180px){:root{--drawer:284px}}
+@media(max-width:1024px){
+  /* Scrollable, but still at least a windowful. `height:auto` alone dropped the
+     fill-the-viewport behaviour along with the fixed height, so on anything
+     taller than the content — a 900x1000 window, which is an ordinary half of a
+     laptop screen — the page ended at 708px and the canvas collapsed to 268 with
+     a third of the window left black underneath it. min-height puts the floor
+     back: the column fills the viewport and the canvas, being the only flexible
+     row, takes the slack. It can still grow past that and scroll, which is what
+     `height:auto` was for on a genuinely short screen. */
+  body{overflow:auto;height:auto;min-height:100dvh}
+  .views{position:static;min-height:0}
+  .view{position:static;flex-direction:column;min-height:calc(100dvh - var(--head))}
+  .canvas{overflow:visible}
+  .console{max-height:none;padding:13px 16px 15px}
+  /* The gallery grid crops to squares here, which is the one place this app
+     deliberately trades information for density — and the trade is right
+     because the screen is the constraint rather than the design. Desktop keeps
+     uncropped thumbnails because 320px of column can afford a 4:3 that letter-
+     boxes; a phone cannot, and a ragged grid of mixed aspects on a 390px screen
+     is a column of two-inch pictures with gaps between them. macOS Photos and
+     iOS Photos make exactly this split, and for exactly this reason.
+     
+     Recognition survives the crop: you are scanning for "the one with the ship"
+     and the centre of the frame carries that. The whole frame is one tap away
+     in the viewer, which is where you look at a picture rather than find it. */
+  #gal-grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:2px}
+  #gal-grid .gal{border:0;border-radius:0;background:none}
+  #gal-grid .media{aspect-ratio:1;width:100%;height:auto;object-fit:cover}
+  /* The card's chrome goes with it. A timestamp and a menu under every square
+     is the furniture this layout exists to remove, and both live in the viewer
+     the square opens. */
+  #gal-grid .foot{display:none}
+  #gal-grid .quick{opacity:0}
+  #gal-grid .gal:focus-within .quick{opacity:1}
+
+  /* Stacked, the drawer stops being a column and becomes a strip. Left as a
+     wrapping grid it grew downward without limit — at a dozen outputs it was
+     several screens of gallery under a canvas you had to scroll back up to,
+     which inverts what the drawer is for: the work you made is meant to sit
+     beside the work you are making, not bury it.
+
+     So it is capped and the row scrolls sideways instead. 192px is about a
+     104px thumbnail once the head and the card foot are paid for, which is
+     enough to recognise a shot by and not enough to compete with the canvas.
+     Horizontal scrolling is the right axis here for the same reason vertical
+     is the cheap one above: whichever direction the container is short in is
+     the direction its contents must not grow. */
+  /* A height, not a max-height. Everything below this distributes the track
+     with flex, and flex has nothing to distribute unless something in the chain
+     is definite — with `max-height` the drawer sized from content, the content
+     sized from flex, and the whole strip resolved to zero. The closed state is
+     spelled out beside it because `height` would otherwise keep the bar on
+     screen when the gallery is shut. */
+  .drawer{flex:none;border-left:0;border-top:1px solid rgba(255,255,255,.07);
+    height:192px;overflow:hidden;display:flex;flex-direction:column}
+  .studio.nodrawer .drawer{height:0;border-top:0}
+  .drawer-in{width:auto;padding:10px 14px;flex:1;min-height:0;
+    display:flex;flex-direction:column}
+  /* grid-template-columns is reset rather than left to be overridden: .grid is
+     still display:grid at this point in the cascade, and a stale template on a
+     flex container is the kind of leftover that only shows up at one width. */
+  .drawer .grid{display:flex;grid-template-columns:none;gap:10px;
+    flex:1;min-height:0;overflow-x:auto;overflow-y:hidden}
+  /* The card sizes from its height, not the container's width — the media
+     keeps 4:3 and the width follows, so a strip of mixed aspects still reads
+     as one row of even-height thumbnails. */
+  /* A fixed card width, and the media contains inside it. Letting the width
+     follow each image's own aspect was the first attempt and it does not work:
+     an <img> flex item in a column takes its width from the intrinsic size, so
+     the row came out at 1346px-wide cards instead of thumbnails. The whole
+     frame still shows — object-fit stays `contain`, so a portrait letterboxes
+     rather than being cropped to fit a tidy row, which is the same trade the
+     gallery grid already refuses to make. */
+  /* The media carries an explicit height rather than stretching to the row.
+     height:100% on the card does not resolve here — the grid's own height comes
+     from `flex:1`, which is definite to the layout engine and not to a
+     percentage — so the cards sized from intrinsic media instead and a portrait
+     came out 299px tall inside a 192px drawer. 100px is what the cap leaves
+     once the head, the padding and the card foot are paid for, and stating it
+     is what makes every thumbnail the same height. */
+  /* The card stretches to the track and the media takes what the foot does not
+     want. Hard-coding a media height was the previous attempt and it is the
+     wrong shape of answer: the track's height comes from a chain of paddings
+     and a head, so any number written here is right until one of them changes
+     and silently slices the foot off afterwards. `flex:1 1 0` rather than the
+     `1 1 auto` that failed before — an auto basis is the content size, which
+     for an <img> is its intrinsic height, which is exactly what needed
+     overriding. */
+  .drawer .grid>.gal{flex:0 0 158px;min-height:0;display:flex;flex-direction:column}
+  .drawer .grid>.gal .media{flex:1 1 0;min-height:0;height:auto;width:100%;
+    aspect-ratio:auto;object-fit:contain}
+  /* The foot pays for itself twice over at this size and has to get cheaper.
+     At the desktop padding the card came to 143px inside a 134px content box,
+     so every timestamp in the strip was sliced through the middle — the kind of
+     overflow that looks like a font problem and is really an arithmetic one.
+     The kind glyph and the menu are what the strip needs (a still and a clip are
+     otherwise the same black rectangle); the timestamp is the part that can go,
+     since the row is already newest-first. */
+  .drawer .grid>.gal .foot{flex:none;padding:2px 4px 2px 6px;min-height:0;gap:4px}
+  .drawer .grid>.gal .foot .kind{width:16px;height:16px;padding:0}
+  .drawer .grid>.gal .foot .when{display:none}
+  .drawer .grid>.gal .foot .more{width:20px;height:20px}
+  .grid2{grid-template-columns:1fr}
+}

@@ -7,6 +7,12 @@
       "runtimeArgs": ["tools/preview_ui.py"],
       "autoPort": true,
       "port": 8791
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "web"],
+      "port": 5173
     }
   ]
 }

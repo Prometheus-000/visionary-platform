@@ -7386,7 +7386,7 @@ svg{width:100%;height:100%;display:block}
   transition:background .12s,color .12s}
 .opt.ib:hover{background:rgba(255,255,255,.1);color:var(--fg)}
 .opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
-".opt.ib>svg{width:20px;height:20px;color:inherit}
+.opt.ib>svg{width:20px;height:20px;color:inherit}
 /* How many boxes are armed, on the button, because the boxes themselves are
    off the picture now. A regional render and a plain one are otherwise
    identical on screen until the result comes back. */
