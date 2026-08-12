@@ -881,8 +881,85 @@ this phase should chase the first tier and leave the third alone until the model
 exists. Attempting it, failing, and concluding the whole direction is fantasy is
 the specific mistake this paragraph exists to prevent.
 
-The fuller product direction lives in a private document outside this repo and
-is deliberately not reproduced here.
+### Where this is going, and what that vetoes
+
+Phase 6 is the first move toward an end state worth stating in full, because
+every one of these exists to kill a specific cheap fix — and the cheap fix is
+always a panel. If one of these has never vetoed anything, it is not earning its
+place.
+
+**If a gesture cannot communicate intent without a label, the answer is a better
+gesture or a smarter reading of it — never a control panel.** Every other rule
+here is an instance of this one. It also kills the tutorial: onboarding, coach
+marks, first-run overlays, the little animated hand. Those are labels in a
+costume. A gesture that needs teaching is the wrong gesture.
+
+**The canvas never changes.** Character, wardrobe, action, location, camera —
+one surface. What changes is what the surface is willing to hear. Kills tabs,
+rooms, modes, a spine, a back button. Today's Generate/Train/Datasets split is
+on the wrong side of this.
+
+**What you touch decides the mode.** You do not enter character mode, you touch
+a face. Mode is a consequence of attention, never a precondition for it. Kills
+tool palettes, mode switchers, a selected-tool state, anything you must do
+*before* the thing you meant to do. Ambiguity resolves toward the smaller
+object — a hand over a counter is the hand; widening is cheap and obvious, while
+guessing large silently edits the wrong scope.
+
+**Everything is live, nothing is labelled.** Every element addressable at all
+times, none of them drawn as a control. This is the hardest engineering in the
+product and it exists so the screen can stay empty. Kills inspectors, sidebars,
+property panels, toolbars, persistent chrome — which is what the console is.
+
+**Nothing asks for confirmation.** Move something and the frame changes. Kills
+modals, "are you sure", staged edits, and the Generate button. The trade is that
+undo must be total, because reversibility is what replaces confirmation.
+
+**Duration starts at zero.** A still is the default and time is added. Someone
+who wants one image should finish and leave without learning that motion exists.
+Kills a timeline on first run and any flow treating a photograph as the
+degenerate case.
+
+**The frame is computed, never authored.** Arrangement produces the frame; you
+never compose by dragging contents around a viewport. This is what makes direct
+manipulation honest — you move the world, not the picture of it.
+
+**The camera is a character.** It has a position, a path, a want and real limits.
+It can be late, it can look away, it can be wrong. Kills the camera as a settings
+group and lens choice as taste.
+
+**Derived or invented, always visible.** What was read from your words is marked
+one way; what was filled in for you is marked another and is cheap to reroll.
+This is the entire trust surface and it needs no dialogue. Kills the chat panel,
+the assistant sidebar, and clarifying questions — every question asked is a small
+failure, so pick something, mark it invented, move on.
+
+**The library is closed until you reach for it.** A drawer, not a workspace.
+Browsed, not searched. Things are applied, never imported: edits in a scene are
+scene-local, edits in the library propagate, and those are two different acts in
+two different places. Kills a persistent rail, a docked browser, an asset
+manager.
+
+**It never remembers unless told.** Same words, same result, a year later. Kills
+personalisation, suggestion engines, learned preferences, recently-used
+defaults, anything that pre-populates. The first screen of the thousandth
+session is the first screen of the first.
+
+**On touch, and the trap in it.** Designing for a tablet is a constraint that
+does the work for you: no hover kills progressive disclosure, no right-click
+kills the hidden second layer, imprecise input forces you to manipulate objects
+instead of widgets. But that argument runs ahead of the tools — keyboard and
+pointer are first-class here and will be for a long time. What it is really
+guarding against is a feature that works *only* with a cursor, because that is a
+fork, and the touch half of a fork becomes the degraded half within two
+releases. Design to the coarser input; let precision be a bonus. Hover earns its
+place for exactly one thing — showing what you would be touching before you
+touch it — which is spatial feedback about scope rather than a control being
+revealed. "No hover" is not "remove the shortcuts".
+
+**The failure to guard against is not the model, the latency or the scope.** It
+is month four, when something does not fit cleanly and the cheapest fix is a
+panel. That is the moment this becomes a node graph with better typography.
 
 ### Two video families, one path
 
