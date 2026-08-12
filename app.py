@@ -7476,12 +7476,29 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    enough to compete with it. :focus-within because `.gal .quick` has had it all
    along and these did not, so the keyboard could reach a control it could never
    see. */
-.shot .acts{position:absolute;right:10px;bottom:10px;display:flex;gap:6px;opacity:.35;
+/* Under the picture, not on it. These were two filled buttons floating over the
+   bottom-right corner, which is furniture on the one surface this layout exists
+   to keep clear — and they were the loudest thing in a dark frame. As words
+   below the corner they are the same register as the "8 steps · CFG 1.0"
+   summary: present, quiet, and discovered the first time anyone's pointer
+   crosses a render. ACTS_H below is the height this reserves, and layoutShots
+   subtracts it, or the last row's words would sit under the caption. */
+/* bottom, not top:100% — a percentage top resolves against the padded box,
+   so the 26px reserved for these pushed them 26px further down instead of
+   making room, and they landed on the caption. */
+.shot .acts{position:absolute;left:1px;bottom:3px;display:flex;gap:8px;opacity:0;
   transition:opacity .12s}
 .shot:hover .acts,.shot .acts:focus-within{opacity:1}
+.shot{padding-bottom:26px}
+.shot .acts button{width:20px;height:20px;flex:none;border:0;background:none;padding:0;
+  border-radius:5px;color:var(--dim);cursor:pointer}
+.shot .acts button:hover{color:var(--fg);background:none}
+.shot .acts button svg{width:100%;height:100%;display:block}
 /* Lit, unlike its two neighbours, because it is the only one of the three
    that restores something rather than starting something. */
-.shot .acts .show-regions{border-color:rgba(255,255,255,.42);color:var(--fg)}
+/* The one that restores something rather than starting something, so it reads
+   at full strength while its neighbours stay dim until hovered. */
+.shot .acts .show-regions{color:#e8e8e8}
 #vid-out{position:relative}
 #vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
   border:1px solid var(--line);background:#000}
@@ -12632,7 +12649,11 @@ function layoutShots(n){
   const cap=$(kind==='image'?'#gen-meta':'#vid-meta');
   const h=box.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)
           -(cap.offsetHeight||0)-12;
-  g.style.setProperty('--shot-h', (n<=2 ? h : h/2-16)+'px');
+  // 22px for the actions strip under each still — the same number as
+  // `.shot{padding-bottom}`, and subtracted per row rather than once, because a
+  // batch is two rows and each of them has a strip.
+  const ACTS_H=30;
+  g.style.setProperty('--shot-h', (n<=2 ? h-ACTS_H : h/2-16-ACTS_H)+'px');
 }
 // The canvas changes height whenever the console does, so the fit is recomputed
 // rather than set once at generation time.
@@ -12700,9 +12721,11 @@ $('#go-gen').onclick=async()=>{
       $('#gen-out').innerHTML=files.map((f,n)=>
         `<figure class="shot"><img src="/api/file/${r.job_id}/${encodeURIComponent(f)}" alt=""`+
         ` decoding="async" fetchpriority="high">`+
-        `<span class="acts"><button class="s show-regions hide" data-regions>Regions</button>`+
-        `<button class="s" data-n="${n}" data-as="first">Animate</button>`+
-        `<button class="s" data-n="${n}" data-as="reference">As reference</button></span></figure>`).join('')
+        `<span class="acts">`+
+        `<button class="show-regions hide" data-regions title="Show the region boxes">${ICON.regions}</button>`+
+        `<button data-n="${n}" data-as="first" title="Animate — use as the first frame of a clip">${ICON.play}</button>`+
+        `<button data-n="${n}" data-as="reference" title="Use as a reference image">${ICON.photo}</button>`+
+        `</span></figure>`).join('')
         || '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
       $$('#gen-out .acts button').forEach(b=>b.onclick=()=>
         handoffFile(r.job_id, files[+b.dataset.n], b.dataset.as));
