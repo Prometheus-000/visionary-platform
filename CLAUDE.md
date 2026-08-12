@@ -825,6 +825,25 @@ buttons on a finished image are the first piece of that.
 
 ### Phase 6 — The Dynamic Canvas
 
+The direction this serves is written down separately, as *The Eleven Sentences*
+— a veto list rather than a manifesto, kept outside the repo. Two things about
+how to read it, from the author:
+
+**The conflicts are expected and are being retired on purpose.** The shipped app
+contradicts several of those sentences today — there is a Generate button where
+sentence 5 says nothing asks for confirmation, a console where sentence 4 says
+nothing is labelled, and modes where sentence 2 says the canvas never changes.
+That is not debt to be paid down in a sweep. Each one comes out when the thing
+replacing it is actually better, and a change that satisfies a sentence while
+making the tool worse has failed the sentence rather than served it.
+
+**Its touch-only assertions run ahead of where the tools are.** The document
+argues from a future where keyboard and pointer are obsolete, and that future is
+not here. Hover, tooltips and shortcuts are still first-class in this codebase —
+what the document is really guarding against is a feature that *only* works with
+a cursor, which is the fork that rots. Design to the coarser input, let
+precision be a bonus, and do not read "no hover" as "remove the shortcuts".
+
 Loose on purpose. This is the direction, not the design, and it is written down
 so the next pass starts from the intent rather than from whatever the console
 happens to look like by then.
