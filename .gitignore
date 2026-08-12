@@ -28,3 +28,6 @@ screenshots for styling inspiration/
 # Per-machine Claude Code settings. launch.json is committed because the
 # preview server is a fact about the project; the permission list is not.
 .claude/settings.local.json
+
+# Scratch the author keeps in-tree
+stuff to git ignore/

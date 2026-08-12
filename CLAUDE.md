@@ -44,6 +44,28 @@ Scale here means the axis that actually binds: not requests per second, but
 - **Keep the polled thing small.** Job records carry filenames; bytes are served
   off the volume by their own route. A dict polled every two seconds must never
   grow with the size of the result.
+- **A poll waits for its own reply, and a burst of identical work is done
+  once.** Small is not enough on its own: `setInterval` fires on a clock rather
+  than on a reply, so at 400ms against a network Dict a slow answer does not
+  delay the next tick, it overlaps it. Replies then land out of order and the
+  bar is painted by whichever arrived last rather than whichever is newest —
+  and the polls in flight hold connections, of which a browser gives one origin
+  about six. The gallery's covers, the canvas stills and a `<video>`
+  re-requesting byte ranges all come off that origin, so a pile of polls
+  starves them: the clip stutters and the grid comes back half-painted. Neither
+  symptom looks like a poll loop, which is why it went unfound. `everyMs` is
+  the whole fix and is a drop-in — same arguments, same id, so
+  `clearInterval(t)` inside the body still ends it.
+
+  `_reload_volume()` is the same shape at the other end. Serialising it turned
+  a race into a queue, and a queue of twelve identical reloads is the wrong
+  half of that trade, because a gallery is a grid and a canvas is a batch — the
+  misses arrive together and all want the same thing. The sequence number is
+  read *before* queueing, so a caller overtaken by a reload that began after it
+  asked rides on that one. One reload per in-flight window, not one overall:
+  a reload that began before you asked is no evidence that a file written after
+  it is visible, so a caller arriving mid-reload still runs its own. Twelve
+  concurrent misses cost two rather than twelve — 3.00s of queue became 0.51s.
 - **Separate storage by commit cost.** The HF cache lives on its own volume
   because committing 17 GB of model weights after writing 80 captions turned an
   eight-minute job into a twenty-three minute one. Storage boundaries follow
@@ -231,6 +253,22 @@ still writing cannot be swept out from under itself.
   per container and raised for the rest of its life. Freshness is not worth a
   dead container, so the open-files conflict is absorbed and logged; every
   other reload failure still raises.
+- **A job record has two writers, so `_publish` holds a lock.** It does
+  get-update-put against a *network* Dict, and the round trip is the window: a
+  value is already stale when it arrives and the write lands after the caller
+  decided. The job thread publishes phases and the terminal result; `_drain`
+  publishes step counts as ComfyUI's tqdm line scrolls past. Interleaved, the
+  drain reads `{step: 6}`, the job thread reads `{step: 6}` and writes
+  `{step: 6, phase: …}` over the drain's `{step: 7}`, and the bar walks
+  backwards — the server half of a symptom whose client half is the poll
+  overlap above, which is why neither was reachable from where it was being
+  looked for. On the last line it stops being cosmetic: a tqdm write that read
+  the record before the job finished puts `status: "running"` back over a
+  `completed` that was already there, and the page then polls a finished job
+  until someone reloads it. Modelled with the latency where it actually sits,
+  that lost the terminal status in 15 runs out of 15. The lock is process-local
+  because `max_containers=1` means there is no second writer to coordinate
+  with.
 - **A long transfer publishes bytes, or it cannot be debugged.** `_download_weight`
   used to print one line at the start and one at the end. Between them, on a
   17 GB pull, it reported nothing — so "stalled at 4 GB" and "running fine at
@@ -407,6 +445,69 @@ two domains, and the page follows the domains.
   bar is capped so its fullest state cannot push the canvas out of frame, and
   anything sized to fit the canvas measures the canvas — a `dvh` sum is wrong
   the moment the bar grows.
+
+  **"Vertical is the cheap axis" is false on a laptop, and the measurement is
+  here so nobody re-derives it.** Fitting each render aspect into the canvas at
+  1512x982 leaves this much unused:
+
+  | render | dead ↔ | dead ↕ |
+  |---|---|---|
+  | 16:9 | 152px | **0px** |
+  | 4:3 | 513px | **0px** |
+  | 1:1 | 735px | **0px** |
+  | 3:4 | 908px | **0px** |
+  | 9:16 | 1068px | **0px** |
+
+  The picture is height-bound at *every* aspect, so the bar always comes out of
+  the picture, while four of five leave enough horizontal room for a rail twice
+  over. On a tablet in portrait it inverts — 834x1194 leaves 297–469px vertical
+  on landscape renders and nothing on portrait ones — so neither placement is
+  right everywhere and the axis that is free depends on the render, not on
+  taste. What is *not* an option is floating the console over the picture: it
+  was built and rejected, because a backdrop blur means judging a render through
+  something, and its legibility then depends on what you generated.
+
+- **The console has a budget, and the prompt is what yields to it.** 30% of the
+  viewport. Everything else in there is fixed or conditional — the strip is one
+  row, the rail appears with the first pill, the region bar with the first box —
+  so the prompt field is the only part that grows without asking, and measuring
+  showed it was also the part that broke the budget alone: at a flat 168px cap
+  the worst case was 39.8% of a 1440x900 window, 136 of which was the field.
+  `fieldMax()` hands it whatever is left, down to a two-line floor, because a
+  budget that wins by making the prompt unusable has optimised the wrong thing.
+  A ResizeObserver on the console is the half that makes it true more than once:
+  arming regions and picking pills both happen long after the last keystroke,
+  and without it a long prompt sat at 30.0% and climbed to 38.1% when they
+  arrived. It converges in one pass because `fieldMax` subtracts the field's own
+  height, so `other` does not move when the field does.
+
+- **A utility lives with the controls; navigation lives in the top corners.**
+  Reaching the gallery is part of making something, like writing a prompt — so
+  the last generation is a thumbnail beside Generate, 15px off the bottom, where
+  the hand that just pressed Generate already is. The Camera app puts the last
+  frame next to the shutter for that reason and it was read wrong once here:
+  the pattern was copied into the header, which put the two halves of one loop
+  at opposite corners of a 1194px screen.
+
+  Moving *between* the gallery's layers is navigation, and it belongs in the top
+  corners from the moment you are inside — not promoted there after a
+  bottom-centre pill hands you over, which is what a "View all generations"
+  button did and why it read as inconsistent. There are three layers, and the
+  third is easy to miss: the paged view you swipe, the grid, and the picture
+  with its chrome off, which is entered by *tapping* rather than swiping. A tap
+  used to close the viewer, so leaving was doing double duty for looking
+  closely and every attempt to see a render properly dismissed it.
+
+- **The small screen is the design tool, not a port of the big one.** Three
+  faults this session were live on desktop for months and only became visible
+  under a phone or tablet: `appearance` had never been reset on any select, so
+  desktop had been rendering macOS arrows as its chevron; the viewer's drag was
+  broken on *trackpad* specifically, because `<img>` is natively draggable and
+  the resulting HTML drag fires `pointercancel` — touch was the case that
+  worked; and the gallery thumb was in the wrong corner at every size. Below
+  1024px the layout stacks and the grid crops to squares, which is the one place
+  this codebase trades information for density, and the trade is right because
+  there the screen is the constraint rather than the design.
 - **Generate is the page, not a destination.** It has no nav item. Train is one
   door, labelled with where it leads rather than where you are, so two things
   never look equally selected. It carries the training run's progress, because
@@ -607,6 +708,31 @@ two domains, and the page follows the domains.
 is worked on locally instead of paying an image build and a cold start per CSS
 change. Its stubs are shaped to hold the awkward states — a missing model, an
 uncaptioned dataset, a prompt too long to belong in a gallery card.
+
+## Where the console redesign is up to
+
+Two things are open, and both are further along than "not started" — the method
+is settled and the measurements exist, so neither needs re-deriving.
+
+**Promote and demote.** The rule is: what survives is what a render actually
+varies by, and the phone is the forcing function rather than an opinion about
+which controls feel advanced. Three are already demoted below 640px and the
+argument generalises to every width — the GPU is set once and confirms a cold
+start when it changes; a seed is reused off a result, so the gesture happens
+*after* a render and not before; a batch count is a decision the Generate button
+could carry. What is left is applying the same read to the rest, and moving the
+three out of the composer entirely rather than only on a phone. Sampling, size
+and the shot palette are already popovers, so the strip is a row of doors — the
+open question is whether a row is still the right shape once everything in it
+is one.
+
+**Bar or rail.** See the dead-space table under "The page". Desktop has zero
+vertical slack at every aspect and 513–1068px of horizontal at four of five, so
+the bar is measurably the wrong default there; a tablet in portrait inverts it.
+The overlay was built and rejected. What has not been tried is placing the
+console in whichever margin the render leaves empty, which the app can already
+compute because it fits the frame. `tools/preview_ui.py` holds the awkward
+states for both.
 
 ## Phases
 
