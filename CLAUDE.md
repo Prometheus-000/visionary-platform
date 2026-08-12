@@ -467,6 +467,32 @@ two domains, and the page follows the domains.
   was built and rejected, because a backdrop blur means judging a render through
   something, and its legibility then depends on what you generated.
 
+- **There are two classes of control, and the console is that split made
+  visible.** A *generation-level* control is one this take varies by: the
+  dimensions, the LoRAs, the shot pills, the regions. A *session-level* control
+  is one you set and then stop thinking about: the model, the sampler, steps,
+  CFG, shift, the batch count.
+
+  Generation-level controls are the row. Session-level controls are behind one
+  button, and that button is named for the model — because the model is the
+  session-level choice that decides what every other control in the row *means*:
+  which sizes exist, whether there is a negative prompt to write, whether LoRAs
+  load at all. Naming the button `8 steps · CFG 1.0` was naming it after two
+  values nobody chose, since those are the checkpoint's own defaults; the
+  checkpoint is the choice, and the numbers are its consequences.
+
+  This is the rule that decides where a new control goes, and it is a better
+  question than "is this advanced" — which is a claim about difficulty and
+  produced a drawer holding five things that are not difficult, only rare.
+
+  One control sits awkwardly and is worth naming rather than filing quietly.
+  **The seed is generation-level by nature and session-level by gesture.** Every
+  render varies by it, but nobody types one: you draw a random seed, see
+  something worth keeping, and take the seed *off the result*. So it lives with
+  the session-level controls, and the reason is the gesture rather than the
+  class. If a "lock this seed" affordance ever lands on a finished render, that
+  is the same observation built rather than written down.
+
 - **The console has a budget, and the prompt is what yields to it.** 30% of the
   viewport. Everything else in there is fixed or conditional — the strip is one
   row, the rail appears with the first pill, the region bar with the first box —
@@ -728,8 +754,9 @@ uncaptioned dataset, a prompt too long to belong in a gallery card.
 
 ## Where the console redesign got to
 
-**Promote and demote — done.** The rule that settled it: what survives in the
-strip is what a render actually varies by. Measured, the image strip was 1016px
+**Promote and demote — done.** The rule that settled it is the two classes of
+control under "The page": generation-level stays in the row, session-level goes
+behind the model button. Measured, the image strip was 1016px
 of controls and the video 979px, most of it spent on things a take does not
 change. Seed and the batch count went into the Sampling popover — a seed is
 *reused off a result*, so the gesture happens after a render and not before, and

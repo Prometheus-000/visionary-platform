@@ -7184,7 +7184,7 @@ svg{width:100%;height:100%;display:block}
    labelled with where it leads rather than with where you are. */
 .top{flex:0 0 var(--head);display:flex;align-items:center;gap:14px;padding:0 14px 0 18px;
      border-bottom:1px solid rgba(255,255,255,.07)}
-.brand{border:0;background:none;color:var(--fg);font:600 15px/1 inherit;letter-spacing:-.01em;
+.brand{border:0;background:none;color:var(--fg);font-weight:600;font-size:15px;line-height:1;letter-spacing:-.01em;
   padding:8px 2px;cursor:pointer}
 .grow{flex:1;min-width:0}
 
@@ -7194,7 +7194,7 @@ svg{width:100%;height:100%;display:block}
    takes you there, rather than in a place you have to go to look. */
 .door{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);
   background:rgba(255,255,255,.04);color:#ddd;border-radius:999px;padding:7px 14px 7px 11px;
-  font:500 13px/1 inherit;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+  font-weight:500;font-size:13px;line-height:1;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
 .door:hover{background:rgba(255,255,255,.1);color:var(--fg);border-color:rgba(255,255,255,.22)}
 .door svg{width:15px;height:15px;flex:none}
 .door .ring circle{fill:none;stroke-width:3}
@@ -7208,11 +7208,11 @@ svg{width:100%;height:100%;display:block}
    which is the only pair in here that really is two equal halves of one thing. */
 .switch{display:inline-flex;background:rgba(255,255,255,.06);border-radius:11px;padding:3px;gap:2px}
 .switch button{border:0;background:none;color:var(--mut);padding:6px 15px;border-radius:9px;
-  font:500 13px/1.35 inherit;cursor:pointer;transition:color .12s,background .12s}
+  font-weight:500;font-size:13px;line-height:1.35;cursor:pointer;transition:color .12s,background .12s}
 .switch button:hover{color:#ddd}
 .switch button.on{background:#fff;color:#000}
-.ico{width:34px;height:34px;flex:none;border:0;border-radius:10px;background:none;color:var(--mut);
-  cursor:pointer;padding:8px;transition:background .12s,color .12s}
+.ico{width:32px;height:32px;flex:none;border:0;border-radius:10px;background:none;color:var(--mut);
+  cursor:pointer;padding:0;font-size:14px;transition:background .12s,color .12s}
 .ico:hover{background:rgba(255,255,255,.08);color:var(--fg)}
 .ico.on{color:var(--fg);background:rgba(255,255,255,.1)}
 
@@ -7240,7 +7240,7 @@ svg{width:100%;height:100%;display:block}
    that actually benefits from it. Sized to the row: same height and radius as
    every control next to it, still white, because it is still the one control
    on the page that spends money. */
-.opts button.b{flex:none;height:36px;padding:0 20px;border-radius:11px;font:600 13px/1 inherit}
+.opts button.b{flex:none;height:32px;padding:0 12px;border-radius:11px;font-weight:600;font-size:14px;line-height:1}
 .opts .actions{display:flex;align-items:center;gap:7px;flex:none;margin-left:auto}
 .drawer{flex:0 0 var(--drawer);min-width:0;border-left:1px solid rgba(255,255,255,.07);overflow:auto}
 .drawer-in{width:var(--drawer);padding:12px 14px 40px}
@@ -7276,7 +7276,7 @@ svg{width:100%;height:100%;display:block}
    named, and the tooltip is promoted from repeating the name to saying what
    the number does. */
 .opts{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px}
-.opt{display:inline-flex;align-items:center;gap:5px;height:36px;padding:0 5px 0 9px;
+.opt{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0;font-size:14px;
   background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
 .opt:focus-within{border-color:rgba(255,255,255,.28)}
 
@@ -7295,28 +7295,35 @@ svg{width:100%;height:100%;display:block}
    field cannot, because an empty one has nothing to show and no edge to aim at.
    Hence the `:has(input[type=text])`-shaped exceptions below rather than a
    blanket rule — #r-prompt and the size boxes keep their containers. */
-#c-image>.opts .opt,#c-video>.opts .opt,#region-bar .opt{
-  background:none;border-color:transparent}
+/* One treatment for the whole row, and no outline anywhere in it. A border is
+   an edge you are asked to notice; these controls already show their own value,
+   so the only thing worth marking is which one you are pointing at or which one
+   has a popover open — and those are the same fact, so they get the same paint.
+   `+ LoRA` is in here too: it was a bordered `.s` button sitting among unbounded
+   ones, which made the odd one out look like the important one. */
+#c-image>.opts .opt,#c-video>.opts .opt,#region-bar .opt,
+#c-image>.opts button.s,#c-video>.opts button.s{
+  background:none;border-color:transparent;border-width:0;color:var(--mut)}
 #c-image>.opts .opt:hover,#c-video>.opts .opt:hover,#region-bar .opt:hover,
-#c-image>.opts .opt:focus-within,#c-video>.opts .opt:focus-within,#region-bar .opt:focus-within{
-  background:rgba(255,255,255,.06);border-color:var(--line)}
-/* The exception, and the reason it is by content rather than by id: anything
-   holding a text box you type into keeps its edges wherever it appears. */
-#region-bar .opt.wide,#c-image>.opts .opt.wide,#c-video>.opts .opt.wide{
-  background:rgba(255,255,255,.05);border-color:var(--line)}
-/* Icon buttons and the value-bearing pills follow the same rule. `.on` is a
-   popover open from this control, which is the one state that must read while
-   the pointer is somewhere else entirely — inside the popover. */
-#c-image>.opts .opt.ib.on,#c-video>.opts .opt.ib.on,#region-bar .opt.ib.on{
-  background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.24)}
+#c-image>.opts .opt:focus-within,#c-video>.opts .opt:focus-within,#region-bar .opt:focus-within,
+#c-image>.opts .opt.on,#c-video>.opts .opt.on,#region-bar .opt.on,
+#c-image>.opts button.s:hover,#c-video>.opts button.s:hover,
+#c-image>.opts button.s:focus-visible,#c-video>.opts button.s:focus-visible{
+  background:rgba(255,255,255,.10);border-color:transparent;color:var(--fg)}
+/* The one exception, by content rather than by id: anything holding a text box
+   you type into keeps its edges, because an empty field has nothing to show and
+   no edge to aim at. */
+#region-bar .opt.wide{background:rgba(255,255,255,.05);
+  border-color:var(--line);border-width:1px}
 .opt>svg{width:14px;height:14px;flex:none;color:var(--dim)}
 /* `.lead`, not `.lb` — `.lb` is the lightbox, `position:fixed;inset:0`, and
    every label in the strip quietly became a full-screen black overlay. Same
    class of bug as `.blank` above: a selector that collides is invisible in the
    markup and total on the page. */
-.opt>.lead,.drop.mini>.lead{font-size:11.5px;line-height:1;color:var(--dim);flex:none;
+.opt>.lead,.drop.mini>.lead{font-size:14px;line-height:1;color:var(--dim);flex:none;
   white-space:nowrap;cursor:default;-webkit-user-select:none;user-select:none}
-.opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:34px;border-radius:8px}
+.opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:30px;
+  border-radius:8px;font-size:14px}
 /* The native select chrome was never switched off. On a desktop the macOS arrows
    pass for a chevron; at 42px on a phone they render as a stepper — a control
    that looks like it increments something, next to controls that do. One
@@ -7345,7 +7352,7 @@ svg{width:100%;height:100%;display:block}
 .opt.wide input,.opt.wide textarea{flex:1;min-width:0;width:auto}
 .vr{width:1px;height:20px;flex:none;background:var(--line);margin:0 4px}
 /* Icon-only controls in the strip: same box, square, no value to show. */
-.opt.ib{padding:0;width:36px;justify-content:center;cursor:pointer;color:var(--mut);
+.opt.ib{padding:0;width:32px;justify-content:center;cursor:pointer;color:var(--mut);
   transition:background .12s,color .12s}
 .opt.ib:hover{background:rgba(255,255,255,.1);color:var(--fg)}
 .opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
@@ -7353,13 +7360,13 @@ svg{width:100%;height:100%;display:block}
 /* How many boxes are armed, on the button, because the boxes themselves are
    off the picture now. A regional render and a plain one are otherwise
    identical on screen until the result comes back. */
-.opt.ib.counted::after{content:attr(data-count);margin-left:6px;font:600 10.5px/1 inherit;
+.opt.ib.counted::after{content:attr(data-count);margin-left:6px;font-weight:600;font-size:10.5px;line-height:1;
   color:inherit;opacity:.85;font-variant-numeric:tabular-nums}
 /* An icon button that arms a whole subsystem carries its name as well. :has()
    rather than a modifier class so the shell cannot disagree with whether
    data-lb is actually there — the two would drift, and the failure is a label
    clipped to a 36px box, which is what happened to `.drop.mini`. */
-.opt.ib:has(>.lead){width:auto;padding:0 11px 0 9px;gap:7px}
+.opt.ib:has(>.lead){width:auto;padding:0 10px;gap:7px}
 /* order:2 puts the word after the glyph, matching the Train door in the header
    and `.drop.mini`; label() inserts afterbegin, so without it the word lands in
    front. color:inherit so the label brightens with the button on hover and .on
@@ -7392,7 +7399,18 @@ svg{width:100%;height:100%;display:block}
    keystroke — a grip that silently undoes itself is worse than no grip. */
 .field textarea{border:0;background:none;border-radius:0;padding:9px 10px 2px;
   resize:none;overflow-y:auto}
-.field .bar2{display:flex;align-items:center;gap:8px;padding:2px 5px 5px}
+/* The row under the prompt was half empty — a 150px chip on a 1456px line —
+   while a separate strip below carried every control. They are one row now:
+   the chip says what you are making and the rest of the line says how. */
+.field .bar2{display:flex;align-items:center;gap:10px;padding:2px 6px 6px;min-width:0}
+.field .bar2>#c-image,.field .bar2>#c-video{flex:1;min-width:0}
+.field .bar2 .opts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  justify-content:flex-end;min-width:0}
+/* The model picker is the one that can shrink — every other control is showing
+   a value it must not truncate, and a name is the one thing you can read half
+   of and still know. */
+.field .bar2 .opt:has(#g-model),.field .bar2 .opt:has(#v-model){min-width:0;overflow:hidden}
+.field .bar2 .actions{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
 /* The negative prompt, which used to be a permanent two-row box at the top of
    Advanced — on Krea 2 Turbo, whose CFG is 1.0, that is a control the sampler
    cannot read sitting above every control it can. Not hidden behind the model's
@@ -7411,7 +7429,7 @@ svg{width:100%;height:100%;display:block}
    those are opposite facts. A label that states the current state is never
    ambiguous, and the click is discovered once. */
 .neg-t{position:absolute;top:6px;right:8px;z-index:2;border:0;background:none;padding:3px 4px;
-  color:var(--dim);font:500 10.5px/1 inherit;letter-spacing:.02em;cursor:pointer;
+  color:var(--dim);font-weight:500;font-size:10.5px;line-height:1;letter-spacing:.02em;cursor:pointer;
   border-radius:7px;-webkit-user-select:none;user-select:none}
 .neg-t:hover{color:var(--fg);background:rgba(255,255,255,.07)}
 .field.on-neg .neg-t{color:#fca5a5}
@@ -7428,7 +7446,7 @@ svg{width:100%;height:100%;display:block}
 .field.on-neg .neg-t::after{opacity:0}
 .kinds{display:inline-flex;gap:2px;background:rgba(255,255,255,.05);border-radius:999px;padding:2px}
 .kinds button{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--mut);
-  border-radius:999px;padding:4px 10px 4px 8px;font:500 12px/1 inherit;cursor:pointer;
+  border-radius:999px;padding:4px 10px 4px 8px;font-weight:500;font-size:12px;line-height:1;cursor:pointer;
   transition:background .12s,color .12s}
 .kinds button svg{width:13px;height:13px;flex:none}
 .kinds button:hover{color:#ddd}
@@ -7450,16 +7468,17 @@ input,textarea,select{width:100%;background:rgba(255,255,255,.05);border:1px sol
 input:focus,textarea:focus,select:focus{border-color:rgba(255,255,255,.28)}
 input:disabled,select:disabled{opacity:.45}
 textarea{resize:vertical}
-button.b{background:#fff;color:#000;border:0;border-radius:12px;padding:11px 18px;font:600 14px/1 inherit;cursor:pointer}
+button.b{background:#fff;color:#000;border:0;border-radius:12px;padding:0 12px;font-weight:600;font-size:14px;line-height:1;cursor:pointer}
 button.b:disabled{background:rgba(255,255,255,.2);color:rgba(0,0,0,.4);cursor:not-allowed}
 button.s{background:rgba(255,255,255,.07);color:var(--fg);border:1px solid var(--line);
-  border-radius:11px;padding:9px 15px;font:500 13px/1 inherit;cursor:pointer}
+  font-size:14px;
+  border-radius:11px;padding:0 10px;font-weight:500;font-size:14px;line-height:1;cursor:pointer}
 button.s:hover{background:rgba(255,255,255,.12)}
 button.s:disabled{opacity:.4;cursor:not-allowed}
-button.t{background:none;border:0;color:var(--mut);font:500 12px/1 inherit;cursor:pointer;padding:6px 2px}
+button.t{background:none;border:0;color:var(--mut);font-weight:500;font-size:12px;line-height:1;cursor:pointer;padding:6px 2px}
 button.t:hover{color:var(--fg)}
 .pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:0;
-  border-radius:999px;padding:7px 13px;color:#ddd;font:13px inherit;cursor:pointer}
+  border-radius:999px;padding:8px;color:#ddd;font-size:13px;cursor:pointer}
 .pill.on{background:#fff;color:#000}
 /* Red and spelled out, because this one is a whole gallery at once. The per-card
    × is the same kind of action at a scale a mis-click can survive; this is the
@@ -7567,7 +7586,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   max-height:min(56vh,430px);overflow:auto;padding:5px;border-radius:13px;
   border:1px solid rgba(255,255,255,.14);background:#111;box-shadow:0 18px 48px rgba(0,0,0,.6)}
 .menu button{display:block;width:100%;text-align:left;border:0;background:none;color:#e6e6e6;
-  font:13px/1 inherit;padding:9px 11px;border-radius:9px;cursor:pointer;
+  font-size:13px;line-height:1;padding:9px 11px;border-radius:9px;cursor:pointer;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .menu button:hover{background:rgba(255,255,255,.09)}
 .menu button.danger{color:#f87171}
@@ -7903,11 +7922,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    74px label is a hint shaped like a value. */
 .form .frow>i{grid-column:1/-1;font-style:normal;font-size:10.5px;color:var(--mut);line-height:1.4}
 .form .sz-reset{width:100%;margin-top:2px;padding:7px 0;border:1px solid var(--line);
-  border-radius:9px;background:none;color:var(--dim);cursor:pointer;font:500 11px/1 inherit}
+  border-radius:9px;background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:11px;line-height:1}
 .form .sz-reset:hover{color:var(--fg);border-color:rgba(255,255,255,.3)}
 /* A dot, not a colour change: the button's text is the resolved numbers, and
    recolouring those would say "warning" about a value you deliberately chose. */
-#g-sampling,#v-sampling{width:auto;padding:0 11px;font-size:11.5px;color:var(--fg);
+#g-sampling,#v-sampling{width:auto;padding:0 10px;font-size:14px;color:var(--fg);
   font-variant-numeric:tabular-nums}
 #g-sampling.edited::after,#v-sampling.edited::after{content:'';display:inline-block;width:4px;height:4px;margin-left:6px;
   border-radius:50%;background:var(--fg);opacity:.55;vertical-align:1.5px}
@@ -7915,7 +7934,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .sizer .ars{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
 .sizer .ar{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
   gap:5px;height:56px;padding:5px 2px;border:1px solid transparent;border-radius:9px;
-  background:none;color:var(--dim);cursor:pointer;font:500 10px/1 inherit}
+  background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:10px;line-height:1}
 .sizer .ar i{display:block;border:1.5px solid currentColor;border-radius:2px;opacity:.75}
 .sizer .ar:hover{background:rgba(255,255,255,.07);color:var(--fg)}
 .sizer .ar.on{background:rgba(255,255,255,.13);color:var(--fg);border-color:rgba(255,255,255,.22)}
@@ -7924,7 +7943,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    single select forced them to be answered together. */
 .sizer .scales{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:9px}
 .sizer .sc{padding:7px 0;border:1px solid var(--line);border-radius:9px;background:none;
-  color:var(--dim);cursor:pointer;font:500 11.5px/1 inherit}
+  color:var(--dim);cursor:pointer;font-weight:500;font-size:11.5px;line-height:1}
 .sizer .sc:hover{color:var(--fg);border-color:rgba(255,255,255,.3)}
 .sizer .sc.on{background:rgba(255,255,255,.13);color:var(--fg);border-color:rgba(255,255,255,.26)}
 .sizer .sz-custom{display:flex;align-items:center;gap:6px;margin-top:9px}
@@ -7938,7 +7957,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .sizer .sz-note{margin:8px 2px 1px;font-size:10.5px}
 /* Wide enough to hold "16:9 · 2304×1296" without the strip reflowing when the
    scale changes under it. */
-#g-size,#v-size{width:auto;padding:0 11px;font-size:11.5px;color:var(--fg);font-variant-numeric:tabular-nums}
+#g-size,#v-size{width:auto;padding:0 10px;font-size:14px;color:var(--fg);font-variant-numeric:tabular-nums}
 
 /* A row per LoRA, not a card per LoRA. The catalogue below is cards because each
    entry there is a decision with a size, a repo and a licence attached; this is
@@ -7950,7 +7969,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* Always visible, unlike the dataset card's ×, which only appears on hover
    because it sits on top of a picture it would otherwise cover. There is nothing
    under this one, and the whole reason to open this card is to find it. */
-.lora-x{border:0;background:none;color:var(--dim);cursor:pointer;font:15px/1 inherit;
+.lora-x{border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;line-height:1;
   padding:6px 8px;border-radius:9px;flex:none}
 .lora-x:hover{background:rgba(248,113,113,.14);color:#f87171}
 .kv{display:grid;grid-template-columns:132px 1fr;gap:5px 14px;font-size:13px}
@@ -8000,7 +8019,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* Where you are in the set. The one thing swiping cannot tell you, and the
    reason you can flick through twenty takes without losing your place. */
 .lb .lb-at{position:absolute;top:20px;left:50%;transform:translateX(-50%);
-  font:500 12px/1 inherit;color:#bbb;font-variant-numeric:tabular-nums}
+  font-weight:500;font-size:12px;line-height:1;color:#bbb;font-variant-numeric:tabular-nums}
 .lb .lb-all{position:absolute;top:14px;right:60px;width:40px;height:40px;border:0;
   background:none;color:#fff;padding:9px;cursor:pointer;z-index:3;
   filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
@@ -8141,7 +8160,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .drop.hero .drop-face input{pointer-events:auto}
 .drop.hero .glyph{width:40px;height:40px;margin:0 auto 16px;opacity:.4}
 .drop.hero b{font-size:15px;font-weight:600}
-.drop.mini{height:36px;flex:none;padding:0 11px 0 9px;border-radius:10px;overflow:hidden;
+.drop.mini{height:32px;flex:none;padding:8px;border-radius:10px;overflow:hidden;
   background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:center;
   gap:7px;color:var(--dim)}
 .drop.mini:hover{border-color:rgba(255,255,255,.4);color:var(--fg)}
@@ -8153,7 +8172,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    what the eye lands on first. */
 .drop.mini>.lead{order:2}
 .drop.mini img{width:100%;height:100%;max-height:none;object-fit:cover;border-radius:0}
-.drop.mini.set{width:36px;padding:0;border-style:solid;border-color:rgba(255,255,255,.28)}
+.drop.mini.set{width:32px;padding:0;border-style:solid;border-color:rgba(255,255,255,.28)}
 .drop.mini.set>.lead{display:none}
 /* Out of play this run because its opposite number is filled. Dimmed rather
    than removed: the row's whole job is to show that keyframes and references
@@ -8206,7 +8225,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* The region map. Same height as the 36px controls beside it so the bar stays
    one row, and the frame is drawn rather than bordered so the boxes sit inside
    the picture's proportions rather than inside a button's. */
-.rmap{width:52px;height:36px;flex:none;padding:4px 6px;border:1px solid var(--line);
+.rmap{width:52px;height:32px;flex:none;padding:4px 6px;border:1px solid var(--line);
   border-radius:10px;background:rgba(255,255,255,.03);cursor:pointer}
 .rmap:hover{border-color:rgba(255,255,255,.4)}
 .rmap:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:1px}
@@ -8223,10 +8242,10 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .rmap .bx:hover{stroke:rgba(255,255,255,.85)}
 .rmap .bx.on{fill:rgba(255,255,255,.85);stroke:#fff}
 .rmap-wrap{display:inline-flex;align-items:center;gap:1px;flex:none}
-.rmap-step{width:18px;height:36px;flex:none;border:0;background:none;color:var(--dim);
-  cursor:pointer;font:15px/1 inherit;padding:0;border-radius:7px}
+.rmap-step{width:18px;height:32px;flex:none;border:0;background:none;color:var(--dim);
+  cursor:pointer;font-size:15px;line-height:1;padding:0;border-radius:7px}
 .rmap-step:hover{color:var(--fg);background:rgba(255,255,255,.08)}
-.rmap-at{position:absolute;right:3px;bottom:1px;font:600 8.5px/1 inherit;color:var(--fg);
+.rmap-at{position:absolute;right:3px;bottom:1px;font-weight:600;font-size:8.5px;line-height:1;color:var(--fg);
   text-shadow:0 0 3px #000;pointer-events:none;font-variant-numeric:tabular-nums}
 .rmap{position:relative}
 .pad{padding:26px}
@@ -8349,7 +8368,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   pointer-events:none}
 .rbox>.tag{position:absolute;left:0;top:0;max-width:100%;padding:3px 7px;
   background:rgba(0,0,0,.6);backdrop-filter:blur(8px);color:#fff;
-  border-radius:0 0 6px 0;font:500 11px/1.25 inherit;white-space:nowrap;
+  border-radius:0 0 6px 0;font-weight:500;font-size:11px;line-height:1.25;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .rbox>.tag em{font-style:normal;color:var(--mut)}
 /* Handles are hidden until the box is worth resizing — eight dots on every box
@@ -8402,7 +8421,7 @@ body.dragging .rbox.drop-hit::after,body.dragging #ds-sheet.hot::after{
   content:attr(data-drop);position:absolute;left:50%;top:50%;
   transform:translate(-50%,-50%);padding:5px 11px;border-radius:999px;
   background:rgba(0,0,0,.74);backdrop-filter:blur(8px);color:#f5f5f5;
-  font:500 12px/1 inherit;white-space:nowrap;max-width:calc(100% - 12px);
+  font-weight:500;font-size:12px;line-height:1;white-space:nowrap;max-width:calc(100% - 12px);
   overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:6}
 /* The contact sheet is the one target taller than the window — it is the thing
    that scrolls — so centring on the element puts the caption at the middle of
@@ -8533,6 +8552,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   <!-- The wordmark is the way home, which is the only reason Generate needs no
        nav item: you are already there, or you are one click from it. -->
   <button class="brand" id="go-home">Visionary</button>
+
   <!-- Train's two halves. In Generate this slot is empty — Generate's own
        switch lives down in the composer, beside the prompt it applies to. -->
   <span class="grow"></span>
@@ -8604,12 +8624,219 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
           <button data-kind="image" class="on">Image</button>
           <button data-kind="video">Video</button>
         </div>
+        <!-- The controls live in the field now. The row under the prompt was
+             half empty — the Image/Video chip is 150px of a 1456px line — while
+             a whole separate strip sat beneath carrying everything else. One row
+             instead of two: the chip says what you are making and the rest of
+             the line says how, which is the same sentence. -->
+    <div id="c-image">
+      <div class="opts">
+        
+        <!-- The ratio was never the parameter — the pixels are. So this picker
+             and the Width/Height boxes under Advanced are one control: picking
+             a ratio writes the boxes, typing in the boxes selects Custom, and
+             Custom is the only option that has to spell out its own size. -->
+        <!-- 3:4 is here because the swap button under Advanced put it here:
+             every other landscape preset had a portrait counterpart to flip
+             into and 4:3 did not, so the one ratio the page opens on was the
+             one whose flip landed on Custom. -->
+        <!-- Aspect and resolution were two controls pretending to be one, and
+             the seam was that every preset was 1024-based: picking 16:9 chose a
+             shape *and* silently chose ~1 MP, and the only route to the same
+             shape at 2K was to work out 2304x1296 by hand in two boxes parked
+             at the far end of Advanced. They are one control because there is
+             only ever one width and one height — the ratio picks the shape, the
+             scale picks how much of it, and the button shows the pair it
+             resolved to. Same move as the shot palette: a closed vocabulary
+             costs one button, and everything it can say lives behind it. -->
+        <button class="opt ib" id="g-size" title="Shape and resolution"></button>
+        <!-- The state the popover is a view over. Kept as real form elements
+             rather than plain variables so readSize, swapSize, reuse() and the
+             arrow-key nudges all keep addressing what they always did — the
+             popover writes here and reads back, and is free to not exist. -->
+        <div class="hide" id="g-size-state">
+          <select id="g-aspect">
+            <option value="1024x1024">1:1</option><option value="1152x896" selected>4:3</option>
+            <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
+            <option value="896x1152">3:4</option>
+            <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
+            <option value="custom">Custom</option>
+          </select>
+          <select id="g-scale">
+            <option value="1" selected>1K</option>
+            <option value="1.5">1.5K</option>
+            <option value="2">2K</option>
+          </select>
+          <input id="g-w" inputmode="numeric"><input id="g-h" inputmode="numeric">
+          <button id="g-swap"></button>
+        </div>
+        <!-- Sampling state. Same arrangement as #g-size-state: the popover is a
+             view over these, so fillSelect, the submit body, reuse() and the
+             arrow-key nudges are all unchanged by the drawer going away. -->
+        <div class="hide" id="g-samp-state">
+          <select id="g-model"></select>
+          <select id="g-sampler"></select>
+          <select id="g-scheduler"></select>
+          <input id="g-steps" placeholder="auto" inputmode="numeric">
+          <input id="g-cfg" placeholder="auto" inputmode="decimal" data-step="0.1" data-bigstep="1">
+          <input id="g-shift" placeholder="1.15" inputmode="decimal" data-step="0.05" data-bigstep="0.5">
+          <!-- Demoted out of the strip. A seed is *reused off a result* — the
+               gesture happens after a render, not before — and a batch count is
+               a run parameter like steps, not a thing a take varies by. Both
+               stay real elements here so reuse(), the submit body and the
+               arrow-key nudges address exactly what they always did. -->
+          <input id="g-seed" placeholder="random" inputmode="numeric">
+          <select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+        </div>
+        <span class="vr"></span>
+        <!-- A picker, not a row: it writes a <lora:name:1> into the prompt at
+             the caret. The button is here for discovery — you cannot type a
+             syntax you have never seen — and after that the prompt is the
+             stack, so a fifth LoRA costs the canvas nothing. -->
+        <button class="s" id="add-lora" style="height:32px;padding:0 10px">+ LoRA</button>
+        <!-- One icon for the whole vocabulary. It is next to + LoRA because
+             both write into the prompt rather than beside it — the difference
+             is only that this one writes words the model was trained on and
+             you would otherwise have to guess. -->
+        <button class="opt ib" id="g-shot" data-ico="shot" data-lb="Shot"
+          title="Framing, angle, light and tone, as words this model reads."></button>
+        <!-- Out of Advanced, which is collapsed by default and was therefore
+             hiding the feature this backend was swapped for. It belongs beside
+             + LoRA because both answer "who is in this picture"; the difference
+             is only whether it matters where they stand. -->
+        <!-- Named, not just iconed. Moving it out of Advanced fixed where it
+             was; it did not fix that a glyph cannot announce a capability
+             nobody knows the app has. `+ LoRA` sits immediately to the left
+             with a word on it, which made the asymmetry the thing you noticed
+             about this button rather than the feature behind it. -->
+        <button class="opt ib" id="g-regional" data-ico="regions" data-lb="Regions"
+          title="Place each character in their own box on the canvas — one LoRA, or one photo, per box."></button>
+        <span class="actions">
+          <span class="muted" id="gen-model-line"></span>
+          <!-- "Advanced" was a drawer, which is a name for where something is
+               rather than what it does — and behind it sat five controls that
+               are not advanced, they are just rarely changed. A drawer also
+               charges the console a whole row the moment you open it to read
+               one number. This is the shot palette's shape again: one button
+               showing the value it resolved to, everything behind it. -->
+          <button class="opt ib" id="g-sampling" title="Sampler, steps and guidance"></button>
+          <button class="ico shot-back hide" id="g-last" title="Last generation"></button>
+          <button class="b" id="go-gen">Generate</button>
+        </span>
       </div>
     </div>
-    <!-- What you picked off the shot palette. One rail for both kinds, because
-         the prompt is shared and a pill is part of the prompt; empty, it is not
-         a collapsed row but no element at all, which is the condition for
-         anything being allowed to sit above the options strip. -->
+    <div id="c-video" class="hide">
+      <!-- On H3 the shared prompt describes picture and sound together, which
+           it denoises from the same sequence — so what you do not describe
+           hearing, it invents. The placeholder says so for those models and
+           not for the silent ones, rather than asking every model for audio
+           only some of them render. -->
+      <div class="opts">
+        <!-- The model comes first because it decides what the rest of this
+             strip even offers: LoRAs, CFG and a negative prompt on Wan;
+             references and a soundtrack on H3. -->
+        
+        <!-- Shape and how much of it, as one control — the same pair `g-size`
+             already collapsed on the image side, which the video side never
+             received. The scale row here is the model's own tiers, which differ
+             per checkpoint. -->
+        <button class="opt ib" id="v-size" title="Shape and resolution"></button>
+        <div class="hide" id="v-size-state">
+          <select id="v-aspect">
+            <option value="21:9">21:9</option><option value="16:9" selected>16:9</option>
+            <option value="4:3">4:3</option><option value="1:1">1:1</option>
+            <option value="3:4">3:4</option><option value="9:16">9:16</option>
+          </select>
+          <select id="v-tier"></select>
+        </div>
+        <div class="opt"><select id="v-seconds"></select></div>
+        <!-- Wan only, and the same picker the image side uses. The one thing
+             the A14B pair forces — which expert a LoRA patches — rides in the
+             token as a third field, and is read off the filename when the
+             matched `high`/`low` pair names it. -->
+        <button class="s hide" id="v-add-lora" style="height:32px;padding:0 10px">+ LoRA</button>
+        <!-- Sampling state, the same arrangement as #g-samp-state. The three
+             `-wrap` divs stay because syncVideoModel toggles them per model —
+             H3 reads no CFG and only the A14B pair has a handover to place —
+             and the popover reads those same classes to decide what to draw. -->
+        <div class="hide" id="v-samp-state">
+          <select id="v-model"></select>
+          <select id="v-sampler"></select>
+          <select id="v-scheduler"></select>
+          <input id="v-steps" inputmode="numeric">
+          <span id="v-cfg-wrap" class="hide"><input id="v-cfg" inputmode="decimal"
+            data-step="0.1" data-bigstep="1"></span>
+          <span id="v-shift-wrap" class="hide"><input id="v-shift" inputmode="decimal"
+            data-step="0.1" data-bigstep="1"></span>
+          <span id="v-switch-wrap" class="hide"><input id="v-switch" placeholder="auto"
+            inputmode="numeric"></span>
+          <input id="v-seed" placeholder="random" inputmode="numeric">
+        </div>
+        <button class="opt ib" id="v-shot" data-ico="shot" data-lb="Shot"
+          title="Shot size, camera move, light, action and sound — the fields H3 reads."></button>
+        <span class="actions">
+          <span class="muted" id="v-model-line"></span>
+          <button class="opt ib" id="v-sampling" title="Sampler, steps and guidance"></button>
+          <button class="ico shot-back hide" id="v-last" title="Last generation"></button>
+          <button class="b" id="go-vid">Generate</button>
+        </span>
+      </div>
+
+      <!-- Every picture this model can be given, in one row, because keyframes
+           and references are the same decision made two ways and choosing one
+           excludes the other — they load different transformers.
+
+           They used to be two rows: keyframes among the numeric controls at
+           the far right of the strip above, references down here. Two pairs of
+           unlabelled 36px dashed tiles, forty-five pixels and one row apart,
+           telling each other apart by tooltip. What that cost was not
+           aesthetic — the keyframe tiles were never found at all, and dropping
+           photos into the reference tray looked like filling keyframe slots
+           that kept growing, which is exactly what the reference tray does and
+           exactly what a keyframe pair must never look like. Side by side with
+           a rule between them, the tray that grows and the two fixed slots are
+           told apart by shape, which is the thing a tooltip could not do.
+
+           The chips carry their own <Picture n> labels, which is the part the
+           prompt actually refers to and the only part worth spelling out. -->
+      
+
+
+    </div>
+      </div>
+    </div>
+    <!-- Every picture the model can be given. Lifted out of #c-video when the
+         strip moved into the field: this is a row of pictures, not a row of
+         controls, and it is the one thing that could not follow. -->
+    <div class="opts hide" id="v-src-sec">
+        <button class="drop mini" id="v-drop-first" data-lb="First frame"
+                title="The clip starts on this image. Drop or click; click again to clear.">
+          <img id="v-thumb-first" class="hide" alt=""><span id="v-hint-first"></span>
+        </button>
+        <button class="drop mini hide" id="v-drop-last" data-lb="Last frame"
+                title="The clip ends on this image. Drop or click; click again to clear.">
+          <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
+        </button>
+        <span class="vr" id="v-src-vr"></span>
+        <span class="wrap" id="v-refs"></span>
+        <!-- Named for the token they produce, not for what they take: what you
+             attach here is what the prompt then calls <Picture 1> / <Video 1>,
+             and the chips are already lettered P1/V1 to match. -->
+        <button class="drop mini" id="v-add-ref" data-lb="Picture"
+                title="Add an image reference — the subject, redrawn in a new shot. The prompt refers to it as &lt;Picture 1&gt;."></button>
+        <button class="drop mini" id="v-add-vid" data-lb="Video"
+                title="Add a video reference. The prompt refers to it as &lt;Video 1&gt;."></button>
+        <!-- The one control in this row that changes what a take costs rather
+             than what it contains, and the two options are not close: reference
+             tokens ride through every sampling step, so this is a per-step
+             price. Both are bounded — see H3_REF_MAX_SIDE — which is the only
+             reason "max detail" is offered at all. -->
+        <div class="opt" id="v-ref-size-wrap"><select id="v-ref-size"
+          title="How much of each reference the model reads. &quot;match canvas&quot; scales every picture to the clip's own pixel area; &quot;max detail&quot; hands over as much of it as the run allows — 1536px on the long side — and buys likeness at several times the sampling time.">
+          <option value="match">match canvas</option><option value="max">max detail</option>
+        </select></div>
+        <span class="muted" id="v-ref-max" hidden>9</span><span class="muted" id="v-vid-max" hidden>3</span>
+      </div>
     <div class="wrap" id="shot-rail"></div>
     <!-- And what those pills turn into. H3 reads a six-field document, and
          until this line existed the only way to find out what it was going to
@@ -8696,208 +8923,10 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
     <p class="muted warn" id="vid-note" style="margin:8px 2px 0"></p>
 
     <!-- IMAGE -->
-    <div id="c-image">
-      <div class="opts">
-        <div class="opt"><select id="g-model"></select></div>
-        <!-- The ratio was never the parameter — the pixels are. So this picker
-             and the Width/Height boxes under Advanced are one control: picking
-             a ratio writes the boxes, typing in the boxes selects Custom, and
-             Custom is the only option that has to spell out its own size. -->
-        <!-- 3:4 is here because the swap button under Advanced put it here:
-             every other landscape preset had a portrait counterpart to flip
-             into and 4:3 did not, so the one ratio the page opens on was the
-             one whose flip landed on Custom. -->
-        <!-- Aspect and resolution were two controls pretending to be one, and
-             the seam was that every preset was 1024-based: picking 16:9 chose a
-             shape *and* silently chose ~1 MP, and the only route to the same
-             shape at 2K was to work out 2304x1296 by hand in two boxes parked
-             at the far end of Advanced. They are one control because there is
-             only ever one width and one height — the ratio picks the shape, the
-             scale picks how much of it, and the button shows the pair it
-             resolved to. Same move as the shot palette: a closed vocabulary
-             costs one button, and everything it can say lives behind it. -->
-        <button class="opt ib" id="g-size" title="Shape and resolution"></button>
-        <!-- The state the popover is a view over. Kept as real form elements
-             rather than plain variables so readSize, swapSize, reuse() and the
-             arrow-key nudges all keep addressing what they always did — the
-             popover writes here and reads back, and is free to not exist. -->
-        <div class="hide" id="g-size-state">
-          <select id="g-aspect">
-            <option value="1024x1024">1:1</option><option value="1152x896" selected>4:3</option>
-            <option value="1216x832">3:2</option><option value="1344x768">16:9</option>
-            <option value="896x1152">3:4</option>
-            <option value="832x1216">2:3</option><option value="768x1344">9:16</option>
-            <option value="custom">Custom</option>
-          </select>
-          <select id="g-scale">
-            <option value="1" selected>1K</option>
-            <option value="1.5">1.5K</option>
-            <option value="2">2K</option>
-          </select>
-          <input id="g-w" inputmode="numeric"><input id="g-h" inputmode="numeric">
-          <button id="g-swap"></button>
-        </div>
-        <!-- Sampling state. Same arrangement as #g-size-state: the popover is a
-             view over these, so fillSelect, the submit body, reuse() and the
-             arrow-key nudges are all unchanged by the drawer going away. -->
-        <div class="hide" id="g-samp-state">
-          <select id="g-sampler"></select>
-          <select id="g-scheduler"></select>
-          <input id="g-steps" placeholder="auto" inputmode="numeric">
-          <input id="g-cfg" placeholder="auto" inputmode="decimal" data-step="0.1" data-bigstep="1">
-          <input id="g-shift" placeholder="1.15" inputmode="decimal" data-step="0.05" data-bigstep="0.5">
-          <!-- Demoted out of the strip. A seed is *reused off a result* — the
-               gesture happens after a render, not before — and a batch count is
-               a run parameter like steps, not a thing a take varies by. Both
-               stay real elements here so reuse(), the submit body and the
-               arrow-key nudges address exactly what they always did. -->
-          <input id="g-seed" placeholder="random" inputmode="numeric">
-          <select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
-        </div>
-        <span class="vr"></span>
-        <!-- A picker, not a row: it writes a <lora:name:1> into the prompt at
-             the caret. The button is here for discovery — you cannot type a
-             syntax you have never seen — and after that the prompt is the
-             stack, so a fifth LoRA costs the canvas nothing. -->
-        <button class="s" id="add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
-        <!-- One icon for the whole vocabulary. It is next to + LoRA because
-             both write into the prompt rather than beside it — the difference
-             is only that this one writes words the model was trained on and
-             you would otherwise have to guess. -->
-        <button class="opt ib" id="g-shot" data-ico="shot" data-lb="Shot"
-          title="Framing, angle, light and tone, as words this model reads."></button>
-        <!-- Out of Advanced, which is collapsed by default and was therefore
-             hiding the feature this backend was swapped for. It belongs beside
-             + LoRA because both answer "who is in this picture"; the difference
-             is only whether it matters where they stand. -->
-        <!-- Named, not just iconed. Moving it out of Advanced fixed where it
-             was; it did not fix that a glyph cannot announce a capability
-             nobody knows the app has. `+ LoRA` sits immediately to the left
-             with a word on it, which made the asymmetry the thing you noticed
-             about this button rather than the feature behind it. -->
-        <button class="opt ib" id="g-regional" data-ico="regions" data-lb="Regions"
-          title="Place each character in their own box on the canvas — one LoRA, or one photo, per box."></button>
-        <span class="actions">
-          <span class="muted" id="gen-model-line"></span>
-          <!-- "Advanced" was a drawer, which is a name for where something is
-               rather than what it does — and behind it sat five controls that
-               are not advanced, they are just rarely changed. A drawer also
-               charges the console a whole row the moment you open it to read
-               one number. This is the shot palette's shape again: one button
-               showing the value it resolved to, everything behind it. -->
-          <button class="opt ib" id="g-sampling" title="Sampler, steps and guidance"></button>
-          <button class="ico shot-back hide" id="g-last" title="Last generation"></button>
-          <button class="b" id="go-gen">Generate</button>
-        </span>
-      </div>
-    </div>
+
 
     <!-- VIDEO -->
-    <div id="c-video" class="hide">
-      <!-- On H3 the shared prompt describes picture and sound together, which
-           it denoises from the same sequence — so what you do not describe
-           hearing, it invents. The placeholder says so for those models and
-           not for the silent ones, rather than asking every model for audio
-           only some of them render. -->
-      <div class="opts">
-        <!-- The model comes first because it decides what the rest of this
-             strip even offers: LoRAs, CFG and a negative prompt on Wan;
-             references and a soundtrack on H3. -->
-        <div class="opt"><select id="v-model"></select></div>
-        <!-- Shape and how much of it, as one control — the same pair `g-size`
-             already collapsed on the image side, which the video side never
-             received. The scale row here is the model's own tiers, which differ
-             per checkpoint. -->
-        <button class="opt ib" id="v-size" title="Shape and resolution"></button>
-        <div class="hide" id="v-size-state">
-          <select id="v-aspect">
-            <option value="21:9">21:9</option><option value="16:9" selected>16:9</option>
-            <option value="4:3">4:3</option><option value="1:1">1:1</option>
-            <option value="3:4">3:4</option><option value="9:16">9:16</option>
-          </select>
-          <select id="v-tier"></select>
-        </div>
-        <div class="opt"><select id="v-seconds"></select></div>
-        <!-- Wan only, and the same picker the image side uses. The one thing
-             the A14B pair forces — which expert a LoRA patches — rides in the
-             token as a third field, and is read off the filename when the
-             matched `high`/`low` pair names it. -->
-        <button class="s hide" id="v-add-lora" style="height:36px;padding:0 13px">+ LoRA</button>
-        <!-- Sampling state, the same arrangement as #g-samp-state. The three
-             `-wrap` divs stay because syncVideoModel toggles them per model —
-             H3 reads no CFG and only the A14B pair has a handover to place —
-             and the popover reads those same classes to decide what to draw. -->
-        <div class="hide" id="v-samp-state">
-          <select id="v-sampler"></select>
-          <select id="v-scheduler"></select>
-          <input id="v-steps" inputmode="numeric">
-          <span id="v-cfg-wrap" class="hide"><input id="v-cfg" inputmode="decimal"
-            data-step="0.1" data-bigstep="1"></span>
-          <span id="v-shift-wrap" class="hide"><input id="v-shift" inputmode="decimal"
-            data-step="0.1" data-bigstep="1"></span>
-          <span id="v-switch-wrap" class="hide"><input id="v-switch" placeholder="auto"
-            inputmode="numeric"></span>
-          <input id="v-seed" placeholder="random" inputmode="numeric">
-        </div>
-        <button class="opt ib" id="v-shot" data-ico="shot" data-lb="Shot"
-          title="Shot size, camera move, light, action and sound — the fields H3 reads."></button>
-        <span class="actions">
-          <span class="muted" id="v-model-line"></span>
-          <button class="opt ib" id="v-sampling" title="Sampler, steps and guidance"></button>
-          <button class="ico shot-back hide" id="v-last" title="Last generation"></button>
-          <button class="b" id="go-vid">Generate</button>
-        </span>
-      </div>
 
-      <!-- Every picture this model can be given, in one row, because keyframes
-           and references are the same decision made two ways and choosing one
-           excludes the other — they load different transformers.
-
-           They used to be two rows: keyframes among the numeric controls at
-           the far right of the strip above, references down here. Two pairs of
-           unlabelled 36px dashed tiles, forty-five pixels and one row apart,
-           telling each other apart by tooltip. What that cost was not
-           aesthetic — the keyframe tiles were never found at all, and dropping
-           photos into the reference tray looked like filling keyframe slots
-           that kept growing, which is exactly what the reference tray does and
-           exactly what a keyframe pair must never look like. Side by side with
-           a rule between them, the tray that grows and the two fixed slots are
-           told apart by shape, which is the thing a tooltip could not do.
-
-           The chips carry their own <Picture n> labels, which is the part the
-           prompt actually refers to and the only part worth spelling out. -->
-      <div class="opts" id="v-src-sec">
-        <button class="drop mini" id="v-drop-first" data-lb="First frame"
-                title="The clip starts on this image. Drop or click; click again to clear.">
-          <img id="v-thumb-first" class="hide" alt=""><span id="v-hint-first"></span>
-        </button>
-        <button class="drop mini hide" id="v-drop-last" data-lb="Last frame"
-                title="The clip ends on this image. Drop or click; click again to clear.">
-          <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
-        </button>
-        <span class="vr" id="v-src-vr"></span>
-        <span class="wrap" id="v-refs"></span>
-        <!-- Named for the token they produce, not for what they take: what you
-             attach here is what the prompt then calls <Picture 1> / <Video 1>,
-             and the chips are already lettered P1/V1 to match. -->
-        <button class="drop mini" id="v-add-ref" data-lb="Picture"
-                title="Add an image reference — the subject, redrawn in a new shot. The prompt refers to it as &lt;Picture 1&gt;."></button>
-        <button class="drop mini" id="v-add-vid" data-lb="Video"
-                title="Add a video reference. The prompt refers to it as &lt;Video 1&gt;."></button>
-        <!-- The one control in this row that changes what a take costs rather
-             than what it contains, and the two options are not close: reference
-             tokens ride through every sampling step, so this is a per-step
-             price. Both are bounded — see H3_REF_MAX_SIDE — which is the only
-             reason "max detail" is offered at all. -->
-        <div class="opt" id="v-ref-size-wrap"><select id="v-ref-size"
-          title="How much of each reference the model reads. &quot;match canvas&quot; scales every picture to the clip's own pixel area; &quot;max detail&quot; hands over as much of it as the run allows — 1536px on the long side — and buys likeness at several times the sampling time.">
-          <option value="match">match canvas</option><option value="max">max detail</option>
-        </select></div>
-        <span class="muted" id="v-ref-max" hidden>9</span><span class="muted" id="v-vid-max" hidden>3</span>
-      </div>
-
-
-    </div>
   </div>
  </div>
 
@@ -9391,6 +9420,7 @@ function setKind(k){
   $$('#kinds button').forEach(b=>b.classList.toggle('on',b.dataset.kind===k));
   $('#c-image').classList.toggle('hide',k!=='image');
   $('#c-video').classList.toggle('hide',k!=='video');
+  $('#v-src-sec').classList.toggle('hide',k!=='video');
   $('#gen-note').classList.toggle('hide',k!=='image');
   $('#vid-note').classList.toggle('hide',k!=='video');
   $('#gen-err').classList.toggle('hide',k!=='image');
@@ -11739,12 +11769,14 @@ function paintSampling(){
 }
 function paintOne(pre,d){
   const btn=$(`#${pre}-sampling`); if(!btn) return;
-  const steps=$(`#${pre}-steps`).value||d.steps, cfg=$(`#${pre}-cfg`).value||d.cfg;
-  // toFixed(1) because the defaults are 1.0 and 5.5 and the strip has always
-  // printed them that way — an unformatted 1 reads as "off" next to a 5.5.
-  const bits=[steps&&`${steps} steps`,
-              cfg!=null&&cfg!==''&&Number.isFinite(+cfg)&&`CFG ${(+cfg).toFixed(1)}`].filter(Boolean);
-  btn.textContent = bits.join(' · ')||'Sampling';
+  // The model's name, not the two numbers underneath it. "8 steps · CFG 1.0" is
+  // a pair of values nobody chose — they are the checkpoint's own defaults —
+  // while the checkpoint is the choice that decides what every other control in
+  // the row means. So the button is named for it, and the numbers sit behind it
+  // with everything else you rarely touch.
+  const sel=$(`#${pre}-model`);
+  const name=sel&&sel.selectedOptions[0]?sel.selectedOptions[0].textContent.trim():'';
+  btn.textContent = name||'Sampling';
   // Marked when anything is overridden, because the resolved numbers alone
   // cannot say whether you chose them or the checkpoint did — and "why is this
   // 12 steps" is a question you ask days later, off a gallery card.
@@ -11761,7 +11793,8 @@ function openSampling(btn,pre){
   const row=(lb,html,hint)=>`<label class="frow"><span>${lb}</span>${html}${
     hint?`<i>${hint}</i>`:''}</label>`;
   const opts=(sel,cur)=>[...$(sel).options]
-    .map(o=>`<option value="${esc(o.value)}"${o.value===cur?' selected':''}>${esc(o.textContent)}</option>`).join('');
+    .map(o=>`<option value="${esc(o.value)}"${o.value===cur?' selected':''}`
+      +`${o.disabled?' disabled':''}>${esc(o.textContent)}</option>`).join('');
   const id=k=>`#${pre}-${k}`;
   const d = pre==='g' ? ((window.KREA2_DEFAULTS||{})[$('#g-model').value]||{})
                       : ((videoModel()||{}).defaults||{});
@@ -11774,7 +11807,8 @@ function openSampling(btn,pre){
     `<input data-s="${id(k)}" inputmode="decimal" data-step="${step}" data-bigstep="${big}"
        placeholder="${ph}" value="${esc($(id(k)).value)}">`, hint) : '';
   el.innerHTML=
-      row('Sampler',`<select data-s="${id('sampler')}">${opts(id('sampler'),$(id('sampler')).value)}</select>`)
+      row('Model',`<select data-s="${id('model')}">${opts(id('model'),$(id('model')).value)}</select>`)
+    + row('Sampler',`<select data-s="${id('sampler')}">${opts(id('sampler'),$(id('sampler')).value)}</select>`)
     + row('Scheduler',`<select data-s="${id('scheduler')}">${opts(id('scheduler'),$(id('scheduler')).value)}</select>`)
     + row('Steps',`<input data-s="${id('steps')}" inputmode="numeric" placeholder="${d.steps??'auto'}"
         value="${esc($(id('steps')).value)}">`)
