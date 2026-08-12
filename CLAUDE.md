@@ -507,6 +507,22 @@ two domains, and the page follows the domains.
   arrived. It converges in one pass because `fieldMax` subtracts the field's own
   height, so `other` does not move when the field does.
 
+- **An icon invites, a tooltip names, a click teaches — and in the composer row
+  that is enough.** Shot and Regions carry no words. This reverses the labelling
+  added when `#g-regional` moved out of Advanced, and the reversal is narrower
+  than it looks rather than a change of mind: that note argued a glyph cannot
+  announce a capability nobody knows exists, which is true of a *destination* and
+  false of a control sitting in the row you are already working in. The icon is
+  what makes you hover; the tooltip supplies the word; the click supplies the
+  feature — and on glass the tap does all three at once, which is the case the
+  labels were never helping anyway.
+
+  It does not generalise past the row. `#ins-toggle` keeps "Captions" because it
+  wears the same sliders glyph as two unrelated panels, so its icon is not
+  identifying anything, and the hyperparameters keep their names because a bare
+  number is not a value. The rule is that an icon can carry a control whose glyph
+  is unambiguous *and* whose home you are already in.
+
 - **A utility lives with the controls; navigation lives in the top corners.**
   Reaching the gallery is part of making something, like writing a prompt — so
   the last generation is a thumbnail beside Generate, 15px off the bottom, where

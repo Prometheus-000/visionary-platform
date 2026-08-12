@@ -7182,7 +7182,7 @@ svg{width:100%;height:100%;display:block}
    does not exist. So Generate is simply the page — it has no nav item because
    it is not a place you go — and Train is a door on the right: one slot,
    labelled with where it leads rather than with where you are. */
-.top{flex:0 0 var(--head);display:flex;align-items:center;gap:14px;padding:0 14px 0 18px;
+.top{flex:0 0 var(--head);display:flex;align-items:center;gap:8px;padding:0 8px;
      border-bottom:1px solid rgba(255,255,255,.07)}
 .brand{border:0;background:none;color:var(--fg);font-weight:600;font-size:15px;line-height:1;letter-spacing:-.01em;
   padding:8px 2px;cursor:pointer}
@@ -7192,17 +7192,33 @@ svg{width:100%;height:100%;display:block}
    hours and you are meant to leave and keep generating while it goes. So the
    way back to it is also the readout on it — progress on the control that
    takes you there, rather than in a place you have to go to look. */
-.door{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);
-  background:rgba(255,255,255,.04);color:#ddd;border-radius:999px;padding:7px 14px 7px 11px;
-  font-weight:500;font-size:13px;line-height:1;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
-.door:hover{background:rgba(255,255,255,.1);color:var(--fg);border-color:rgba(255,255,255,.22)}
+.door{display:inline-flex;align-items:center;gap:8px;border:0;height:32px;
+  background:none;color:var(--fg);border-radius:10px;padding:0 10px;
+  font-weight:500;font-size:14px;line-height:1;cursor:pointer;transition:background .12s,color .12s}
+.door:hover{background:rgba(255,255,255,.10);color:var(--fg)}
 .door svg{width:15px;height:15px;flex:none}
 .door .ring circle{fill:none;stroke-width:3}
 .door .ring .bg{stroke:rgba(255,255,255,.2)}
 .door .ring .fg{stroke:currentColor;stroke-linecap:round;
   transform:rotate(-90deg);transform-origin:50% 50%;transition:stroke-dashoffset .5s}
-.door.live{color:#fff;border-color:rgba(255,255,255,.3)}
-.sep{width:1px;height:22px;flex:none;background:rgba(255,255,255,.12)}
+.door.live{color:#fff}
+/* A training run, in the icon that already draws bars. Four durations that share
+   no common multiple, so they never resynchronise and the row reads as activity
+   rather than as a four-beat loop — the point is "something is happening", and a
+   pattern you can predict stops saying that after the first cycle.
+
+   transform-box:fill-box is what makes scaleY mean "from the baseline": without
+   it the origin is the whole SVG viewport and the bars slide instead of grow. */
+.door.live svg path{stroke:#4ade80;transform-box:fill-box;transform-origin:bottom;
+  animation:train-bar .8s ease-in-out infinite alternate}
+.door.live svg path:nth-child(1){animation-duration:.53s;animation-delay:-.31s}
+.door.live svg path:nth-child(2){animation-duration:.79s;animation-delay:-.14s}
+.door.live svg path:nth-child(3){animation-duration:.67s;animation-delay:-.48s}
+.door.live svg path:nth-child(4){animation-duration:.91s;animation-delay:-.05s}
+@keyframes train-bar{from{transform:scaleY(.28)}to{transform:scaleY(1)}}
+/* Solid, like Train beside them. These three are how you leave this page;
+   dimming them made the header look switched off. */
+.top .ico{color:var(--fg)}
 
 /* The one black-on-white switcher left in the product: Training and Datasets,
    which is the only pair in here that really is two equal halves of one thing. */
@@ -7212,7 +7228,13 @@ svg{width:100%;height:100%;display:block}
 .switch button:hover{color:#ddd}
 .switch button.on{background:#fff;color:#000}
 .ico{width:32px;height:32px;flex:none;border:0;border-radius:10px;background:none;color:var(--mut);
+  display:grid;place-items:center;
   cursor:pointer;padding:0;font-size:14px;transition:background .12s,color .12s}
+/* The glyph is stated, not left to fall out of a padding value. 20px drawing in
+   a 32px target: the icon is the size it should be and the thing you press is
+   still the size a thumb needs, which two numbers say plainly and one padding
+   only implies. */
+.ico svg{width:20px;height:20px;display:block}
 .ico:hover{background:rgba(255,255,255,.08);color:var(--fg)}
 .ico.on{color:var(--fg);background:rgba(255,255,255,.1)}
 
@@ -7275,7 +7297,7 @@ svg{width:100%;height:100%;display:block}
    you which hyperparameter you are looking at. So every numeric field is
    named, and the tooltip is promoted from repeating the name to saying what
    the number does. */
-.opts{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px}
+.opts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
 .opt{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0;font-size:14px;
   background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
 .opt:focus-within{border-color:rgba(255,255,255,.28)}
@@ -7315,7 +7337,16 @@ svg{width:100%;height:100%;display:block}
    no edge to aim at. */
 #region-bar .opt.wide{background:rgba(255,255,255,.05);
   border-color:var(--line);border-width:1px}
-.opt>svg{width:14px;height:14px;flex:none;color:var(--dim)}
+/* The glyph is the same ink as the word beside it. Pinned to --dim it stayed
+   dark while the label brightened on hover and on `.on`, so a control that was
+   selected still had a switched-off icon in it — and at rest the icon read as
+   the disabled half of a live button. currentColor makes the pair one thing.
+
+   The stroke goes up with it. These are drawn at 1.6–1.9 for a 16px glyph on a
+   dark panel; beside 14px text at weight 500 that reads a full step lighter, so
+   the icon looked like a hint rather than part of the label. */
+.opt>svg{width:20px;height:20px;flex:none;color:inherit}
+.opt>svg *{stroke-width:2.1}
 /* `.lead`, not `.lb` — `.lb` is the lightbox, `position:fixed;inset:0`, and
    every label in the strip quietly became a full-screen black overlay. Same
    class of bug as `.blank` above: a selector that collides is invisible in the
@@ -7350,13 +7381,12 @@ svg{width:100%;height:100%;display:block}
 .opt.mid input{width:136px}
 .opt.wide{flex:1;min-width:220px}
 .opt.wide input,.opt.wide textarea{flex:1;min-width:0;width:auto}
-.vr{width:1px;height:20px;flex:none;background:var(--line);margin:0 4px}
 /* Icon-only controls in the strip: same box, square, no value to show. */
 .opt.ib{padding:0;width:32px;justify-content:center;cursor:pointer;color:var(--mut);
   transition:background .12s,color .12s}
 .opt.ib:hover{background:rgba(255,255,255,.1);color:var(--fg)}
 .opt.ib.on{background:rgba(255,255,255,.14);color:var(--fg);border-color:rgba(255,255,255,.24)}
-".opt.ib>svg{width:16px;height:16px;color:inherit}
+".opt.ib>svg{width:20px;height:20px;color:inherit}
 /* How many boxes are armed, on the button, because the boxes themselves are
    off the picture now. A regional render and a plain one are otherwise
    identical on screen until the result comes back. */
@@ -7402,7 +7432,14 @@ svg{width:100%;height:100%;display:block}
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —
    while a separate strip below carried every control. They are one row now:
    the chip says what you are making and the rest of the line says how. */
-.field .bar2{display:flex;align-items:center;gap:10px;padding:2px 6px 6px;min-width:0}
+.field .bar2{display:flex;align-items:center;gap:8px;padding:2px 8px 8px;min-width:0}
+/* Always lit, never boxed. It sits directly in the bar rather than inside one
+   of the strips, so the row's unbounded rule does not reach it — and it should
+   not be dim in either state anyway: this is the one control whose value is the
+   mode you are in, and a dim icon would read as the mode being off. White ink,
+   no fill, no edge; the glyph changing is the whole feedback. */
+#kind-toggle{background:none;border:0;color:var(--fg)}
+#kind-toggle:hover{background:none;opacity:.7}
 .field .bar2>#c-image,.field .bar2>#c-video{flex:1;min-width:0}
 .field .bar2 .opts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
   justify-content:flex-end;min-width:0}
@@ -7444,13 +7481,6 @@ svg{width:100%;height:100%;display:block}
   border-radius:50%;background:#f87171;vertical-align:1px;opacity:0;transition:opacity .12s}
 .neg-t.filled::after{opacity:1}
 .field.on-neg .neg-t::after{opacity:0}
-.kinds{display:inline-flex;gap:2px;background:rgba(255,255,255,.05);border-radius:999px;padding:2px}
-.kinds button{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--mut);
-  border-radius:999px;padding:4px 10px 4px 8px;font-weight:500;font-size:12px;line-height:1;cursor:pointer;
-  transition:background .12s,color .12s}
-.kinds button svg{width:13px;height:13px;flex:none}
-.kinds button:hover{color:#ddd}
-.kinds button.on{background:rgba(255,255,255,.14);color:var(--fg)}
 
 .sec{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
 .sec:first-child{border-top:0;margin-top:0;padding-top:0}
@@ -7829,6 +7859,10 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    camera group identical to each other. */
 @media (prefers-reduced-motion:reduce){
   .gl *{animation-play-state:paused !important;animation-delay:-1.2s !important}
+  /* The green stays — it is the part that carries the meaning. Only the
+     movement goes, frozen at full height rather than at whatever fraction the
+     negative delay happened to land on. */
+  .door.live svg path{animation:none !important;transform:none !important}
 }
 
 /* The pill rail ----------------------------------------------------------
@@ -8556,8 +8590,11 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   <!-- Train's two halves. In Generate this slot is empty — Generate's own
        switch lives down in the composer, beside the prompt it applies to. -->
   <span class="grow"></span>
+  <!-- No rule between this and the two icons after it. The divider was what
+       made Train look orphaned: one item on its own side of a line reads as
+       excluded from the group rather than distinguished from it, and there was
+       never a second thing on its side for the line to be separating. -->
   <button class="door" id="door"></button>
-  <span class="sep"></span>
   <!-- Off at load, matching the `nodrawer` the studio opens with: the drawer
        is raw material for the thing you are making, and on a page you have
        just opened there is nothing being made yet — so the canvas gets the
@@ -8620,10 +8657,15 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
       <button type="button" id="neg-toggle" class="neg-t hide"
               title="Which prompt you are writing. Click to switch; the negative is only read at CFG above 1."></button>
       <div class="bar2">
-        <div class="kinds" id="kinds">
-          <button data-kind="image" class="on">Image</button>
-          <button data-kind="video">Video</button>
-        </div>
+        <!-- One icon, not a pair of chips. This is the rare case where a glyph
+             alone carries it: a camera and a play triangle are not a vocabulary
+             anyone has to learn, and the control has exactly two states so there
+             is nothing a second chip could disambiguate. It shows the state you
+             are in rather than the one you would get — the same rule the
+             positive/negative tag follows, because a control that names its own
+             destination reads as a button you press to go somewhere, and this is
+             a thing you *are*. -->
+        <button class="opt ib" id="kind-toggle"></button>
         <!-- The controls live in the field now. The row under the prompt was
              half empty — the Image/Video chip is 150px of a 1456px line — while
              a whole separate strip sat beneath carrying everything else. One row
@@ -8688,7 +8730,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
           <input id="g-seed" placeholder="random" inputmode="numeric">
           <select id="g-n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
         </div>
-        <span class="vr"></span>
         <!-- A picker, not a row: it writes a <lora:name:1> into the prompt at
              the caret. The button is here for discovery — you cannot type a
              syntax you have never seen — and after that the prompt is the
@@ -8698,7 +8739,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
              both write into the prompt rather than beside it — the difference
              is only that this one writes words the model was trained on and
              you would otherwise have to guess. -->
-        <button class="opt ib" id="g-shot" data-ico="shot" data-lb="Shot"
+        <button class="opt ib" id="g-shot" data-ico="shot"
           title="Framing, angle, light and tone, as words this model reads."></button>
         <!-- Out of Advanced, which is collapsed by default and was therefore
              hiding the feature this backend was swapped for. It belongs beside
@@ -8709,7 +8750,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
              nobody knows the app has. `+ LoRA` sits immediately to the left
              with a word on it, which made the asymmetry the thing you noticed
              about this button rather than the feature behind it. -->
-        <button class="opt ib" id="g-regional" data-ico="regions" data-lb="Regions"
+        <button class="opt ib" id="g-regional" data-ico="regions"
           title="Place each character in their own box on the canvas — one LoRA, or one photo, per box."></button>
         <span class="actions">
           <span class="muted" id="gen-model-line"></span>
@@ -8772,7 +8813,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
             inputmode="numeric"></span>
           <input id="v-seed" placeholder="random" inputmode="numeric">
         </div>
-        <button class="opt ib" id="v-shot" data-ico="shot" data-lb="Shot"
+        <button class="opt ib" id="v-shot" data-ico="shot"
           title="Shot size, camera move, light, action and sound — the fields H3 reads."></button>
         <span class="actions">
           <span class="muted" id="v-model-line"></span>
@@ -8817,7 +8858,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
                 title="The clip ends on this image. Drop or click; click again to clear.">
           <img id="v-thumb-last" class="hide" alt=""><span id="v-hint-last"></span>
         </button>
-        <span class="vr" id="v-src-vr"></span>
         <span class="wrap" id="v-refs"></span>
         <!-- Named for the token they produce, not for what they take: what you
              attach here is what the prompt then calls <Picture 1> / <Video 1>,
@@ -8880,7 +8920,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
       <div class="opt n" data-lb="Strength"><input id="r-strength" inputmode="decimal"
         data-step="0.05" data-bigstep="0.25"
         title="How hard this box's LoRA is applied. The node pack's guidance is 1.3–1.4 for a character. Writes the number in the token."></div>
-      <span class="vr"></span>
       <div class="opt n" data-lb="X"><input data-r="x" inputmode="decimal"
         data-step="0.01" data-bigstep="0.1"
         title="Left edge, as a fraction of the width. 0 is the left of the canvas."></div>
@@ -8897,7 +8936,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
            about whichever box is selected. They lived in Advanced, which meant
            the two controls that only exist when regions are armed were behind a
            drawer that had nothing else to do with regions. -->
-      <span class="vr" id="g-region-vr"></span>
       <button class="opt ib" id="g-arrange" data-ico="arrange"
         title="Distribute the boxes evenly"></button>
       <div class="opt n" id="g-region-base-wrap" data-lb="Global"><input id="g-region-base"
@@ -9012,11 +9050,9 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
         </div>
         <button class="s hide" id="ds-save" title="Keep this set in datasets/">Save</button>
         <span class="muted" id="ds-count"></span>
-        <span class="vr"></span>
         <button class="s" id="f-all" title="Show every image">All</button>
         <button class="s" id="f-uncap" title="Only images with no caption">Uncaptioned</button>
         <button class="s" id="f-notrig" title="Only captions missing the trigger word">No trigger</button>
-        <span class="vr"></span>
         <button class="s" id="dens-down" title="Smaller tiles">−</button>
         <button class="s" id="dens-up" title="Larger tiles">+</button>
         <span class="actions">
@@ -9039,7 +9075,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
         <div class="opts" style="margin-top:0">
           <div class="opt mid" data-ico="tag"><input id="ds-trig" placeholder="trigger word" spellcheck="false"></div>
           <button class="s" id="do-prepend" title="Put the trigger word at the front of every caption that lacks it">Fix</button>
-          <span class="vr"></span>
           <!-- Three menus, no labels: "Character", "Medium" and "Qwen3-VL 8B"
                each name themselves, and none of them could be mistaken for
                another. What a preset *does* is the one thing the word cannot
@@ -9047,7 +9082,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
                nobody hovers. -->
           <div class="opt"><select id="cap-preset"></select></div>
           <div class="opt"><select id="cap-len"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select></div>
-          <span class="vr"></span>
           <div class="opt"><select id="cap-model"></select></div>
           <label class="row" style="gap:7px;margin:0;color:#ddd;font-size:13px"><input type="checkbox" id="cap-over" style="width:auto"> Replace existing</label>
           <span class="actions"><button class="s" id="do-caption">Caption</button></span>
@@ -9066,7 +9100,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
     <div class="opts" style="margin-top:0">
       <div class="opt wide" data-ico="tag"><input id="lname" placeholder="LoRA name" spellcheck="false"></div>
       <div class="opt mid" data-ico="trigger"><input id="ltrig" placeholder="trigger word" spellcheck="false"></div>
-      <span class="vr"></span>
       <!-- Named, not iconed. These are the three dials that decide whether a run
            is worth its hours, and a glyph beside a bare "32" cannot say which
            of rank, alpha, epochs or batch size you are looking at. The tooltip
@@ -9417,7 +9450,15 @@ $('#go-home').onclick=()=>{ closeGallery(); setMode('generate') };
 // change, so switching mid-thought costs nothing you typed.
 function setKind(k){
   kind=k;
-  $$('#kinds button').forEach(b=>b.classList.toggle('on',b.dataset.kind===k));
+  // The glyph is the readout. `.on` too, because it is the only lit thing in
+  // the row that is not lit by a popover being open — without it a still and a
+  // clip look identical at rest.
+  // The glyph is the whole readout. No lit state and no edge: the icon already
+  // differs between the two modes, so a background behind it would be a second
+  // thing saying what the first one says.
+  const kb=$('#kind-toggle');
+  kb.innerHTML = k==='video' ? ICON.play : ICON.photo;
+  kb.title = k==='video' ? 'Video — tap for image' : 'Image — tap for video';
   $('#c-image').classList.toggle('hide',k!=='image');
   $('#c-video').classList.toggle('hide',k!=='video');
   $('#v-src-sec').classList.toggle('hide',k!=='video');
@@ -9433,10 +9474,7 @@ function setKind(k){
   autoGrow($('.field.on-neg')?$('#neg'):$('#prompt'));
   syncCanvasView();
 }
-$$('#kinds button').forEach(b=>{
-  b.insertAdjacentHTML('afterbegin',b.dataset.kind==='image'?ICON.photo:ICON.play);
-  b.onclick=()=>setKind(b.dataset.kind);
-});
+$('#kind-toggle').onclick=()=>setKind(kind==='video'?'image':'video');
 
 // Enter generates. Which button that is belongs to the kind you are in, not to
 // the key, so this is looked up rather than bound twice — and a disabled button
@@ -12710,7 +12748,7 @@ const NEED_EDIT_LORA=
 // *off* on a card that has regions whenever it happened to already be on.
 function setRegional(on){
   $('#g-regional').classList.toggle('on',on);
-  ['#g-arrange','#g-region-base-wrap','#g-region-vr']
+  ['#g-arrange','#g-region-base-wrap']
     .forEach(s=>$(s).classList.toggle('hide',!on));
   // The plates ride on two conditions, not one: regions on, and the weight
   // they need actually downloaded. Region photos ride on neither — a mold is
@@ -13024,7 +13062,7 @@ function syncVideoModel(){
   // there is no model whose sources row is empty. It is the reference half
   // that comes and goes, and the rule with it — a divider with nothing on one
   // side of it is a line that means nothing.
-  ['#v-add-ref','#v-add-vid','#v-ref-size-wrap','#v-src-vr'].forEach(
+  ['#v-add-ref','#v-add-vid','#v-ref-size-wrap'].forEach(
     s=>$(s).classList.toggle('hide',!sup.references));
   syncNeg();
   $('#v-cfg-wrap').classList.toggle('hide',!sup.cfg);
