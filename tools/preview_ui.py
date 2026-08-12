@@ -535,6 +535,17 @@ class Handler(BaseHTTPRequestHandler):
                                      n_refs, int(p.get("ref_videos") or 0)),
             )})
 
+        # A training run, so the console below the tiles can be exercised.
+        # Without this the route fell through to the catch-all {"ok": true} and
+        # returned no job_id at all — and the two front ends then diverged in a
+        # way that flattered the wrong one. The page polled /api/status/undefined,
+        # which the catch-all answered "completed", so it painted Done 100% for a
+        # run that was never queued; the React side declined to poll a job it had
+        # not been given and sat at "Starting…" forever. Neither was reporting
+        # what happened, and only the second one looked broken.
+        if path == "/api/train":
+            return self.reply({"ok": True, "job_id": "train%03d" % (len(RUNS) + 1)})
+
         if path == "/api/generate":
             RUNS["gen000"] = {"polls": 0, "stopped": False}
             return self.reply({"ok": True, "job_id": "gen000"})
@@ -682,6 +693,47 @@ class Handler(BaseHTTPRequestHandler):
                 "loras": [{"name": "my_style", "unet": 0.8, "applied": True},
                           {"name": "gone", "unet": 1.0, "applied": False,
                            "reason": "no matching keys"}],
+            })
+
+        # Hours, not seconds — so the fields a long run is read by are the ones
+        # stubbed: epoch over total, step over total, rate, ETA and a loss that
+        # actually falls. A bar alone cannot tell "training" from "stuck", which
+        # is the whole reason the run meta line exists.
+        m = re.match(r"/api/status/(train\d+)$", path)
+        if m:
+            job = RUNS.setdefault(m.group(1), {"polls": 0, "stopped": False})
+            job["polls"] += 1
+            epochs, per_epoch = 4, 3
+            total = epochs * per_epoch
+            n = job["polls"]
+            if job["stopped"]:
+                # Checkpoints already written survive a stop, which is what the
+                # button promises by name.
+                done_epochs = min(epochs, n // per_epoch)
+                return self.reply({
+                    "status": "stopped", "percent": int(n * 100 / total),
+                    "note": "Stopped after %d epoch%s." % (done_epochs,
+                                                           "" if done_epochs == 1 else "s"),
+                    "output_dir": "/workspace/loras/probe_lora",
+                    "files": ["probe_lora-%06d.safetensors" % (i + 1)
+                              for i in range(done_epochs)],
+                    "duration_s": 60 * n,
+                })
+            if n < total:
+                return self.reply({
+                    "status": "running", "phase": "training",
+                    "step": n, "total_steps": total,
+                    "epoch": min(epochs, n // per_epoch + 1), "total_epochs": epochs,
+                    "rate": "1.8 it/s", "eta": "%dm" % max(1, (total - n) // 2),
+                    "loss": round(0.182 - 0.011 * n, 4),
+                    "percent": int(n * 100 / total),
+                })
+            return self.reply({
+                "status": "completed", "percent": 100,
+                "note": "4 epochs, 4 checkpoints. Pick one in the LoRA picker.",
+                "output_dir": "/workspace/loras/probe_lora",
+                "files": ["probe_lora-%06d.safetensors" % (i + 1) for i in range(epochs)],
+                "duration_s": 60 * total, "loss": 0.0709,
             })
 
         # Three files, sequentially, with the queue position in the phase — the

@@ -195,15 +195,18 @@ export function Editor({ ds, onLightbox }: {
            ['uncap', 'Uncaptioned', 'Only images with no caption'],
            ['notrig', 'No trigger', 'Only captions missing the trigger word']] as const)
           .map(([k, label, title]) => (
-            <button key={k} className="s" title={title} type="button"
+            // `f-{key}`, matching app.py. Unlike the page, the active one is
+            // marked: three buttons that all look identical while one of them is
+            // filtering the grid is a view you cannot account for.
+            <button key={k} id={`f-${k}`} className="s" title={title} type="button"
                     style={{ borderColor: filter === k && !isolated ? 'rgba(255,255,255,.45)' : '' }}
                     onClick={() => { setIsolated(null); setFilter(k) }}>
               {label}
             </button>
           ))}
-        <button className="s" title="Smaller tiles" type="button"
+        <button className="s" id="dens-down" title="Smaller tiles" type="button"
                 onClick={() => setDensity((d) => Math.max(0, d - 1))}>−</button>
-        <button className="s" title="Larger tiles" type="button"
+        <button className="s" id="dens-up" title="Larger tiles" type="button"
                 onClick={() => setDensity((d) => Math.min(4, d + 1))}>+</button>
         <span className="actions">
           <span className="muted" id="ins-summary">

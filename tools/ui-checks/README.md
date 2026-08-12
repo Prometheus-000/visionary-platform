@@ -120,6 +120,12 @@ it still holds.
   else is a report. A component shared by the two composer strips put `#go-gen`
   on the page twice, and `querySelector` then returns the image one forever, so
   the video button reads as dead rather than as invalid markup.
+- `check_train.py` — Train and the dataset editor: every hyperparameter carries
+  its name, drafts and saved sets are separated, the captioner offers two menus,
+  and a run reports step, epoch, rate, ETA and a falling loss before it ends
+  naming its checkpoints. Asserted by shape and terminal state, never by the
+  value at an instant — the stub advances per poll rather than per second, so
+  two front ends sampled at the same moment are legitimately on different steps.
 
 ## Two things learned writing these
 

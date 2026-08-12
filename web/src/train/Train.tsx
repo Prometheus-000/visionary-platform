@@ -79,6 +79,13 @@ export function Train({ onLightbox }: { onLightbox: (src: string) => void }) {
       batch_size: dials.bs, seed: dials.seed,
     })
     if (failed(r)) return setErr(r.error)
+    // A 200 with no job id is not a started run. Without this the poll has
+    // nothing to key on, so the console sat at "Starting…" for good — the one
+    // state that looks like patience and is actually a dead end. Say it instead:
+    // an error you can hit twice should explain itself the first time.
+    if (!r.job_id) {
+      return setErr('The run was accepted but came back with no job id, so there is nothing to follow.')
+    }
     setJob(r.job_id)
     setRun({ phase: 'Starting…', pct: 0, meta: '' })
   }
@@ -122,10 +129,12 @@ export function Train({ onLightbox }: { onLightbox: (src: string) => void }) {
     return () => clearInterval(t)
   }, [job, setTrainPct])
 
+  // `a-{key}`, matching app.py. The ids are how every check addresses these,
+  // and a control a check cannot find reads as a feature that is not there.
   const dial = (k: Dial, cls = 'opt n') => (
     <div className={cls} data-lb={DIALS[k].label} key={k}>
       <span className="lead">{DIALS[k].label}</span>
-      <input type="number" title={DIALS[k].title} value={dials[k]}
+      <input id={`a-${k}`} type="number" title={DIALS[k].title} value={dials[k]}
              step={k === 'lr' ? 0.00001 : k === 'res' ? 64 : undefined}
              onChange={(e) => setDials((d) => ({ ...d, [k]: e.target.value }))} />
     </div>
