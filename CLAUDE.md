@@ -508,6 +508,23 @@ two domains, and the page follows the domains.
   1024px the layout stacks and the grid crops to squares, which is the one place
   this codebase trades information for density, and the trade is right because
   there the screen is the constraint rather than the design.
+
+  **And the other half, which this rule reads as licence for if you stop at the
+  first sentence: the small screen is the right place to find a fault and the
+  wrong place to decide every screen has it.** Two changes made for a phone
+  reached desktop by accident and both were wrong there. The last-generation
+  thumbnail was declared outside every media query, so it sat beside Generate at
+  1512px — where the drawer is already a column next to the picture and the
+  header button already opens it, making it a second door onto a room that has
+  one. And the viewer lost click-away-to-close, because a tap meaning "show me
+  more of this" is right on glass and overwrites a convention on a mouse old
+  enough that its absence reads as a broken dialog.
+
+  Both were found by grepping for rules declared outside a media query, which is
+  worth doing after any pass that starts on a phone. Where the two genuinely
+  differ, split on the *pointer* rather than the width — `(hover:none)` is
+  asking the question the layout actually cares about, and a tablet with a
+  keyboard is neither of the things a width test thinks it is.
 - **Generate is the page, not a destination.** It has no nav item. Train is one
   door, labelled with where it leads rather than where you are, so two things
   never look equally selected. It carries the training run's progress, because
