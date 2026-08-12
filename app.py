@@ -7170,7 +7170,7 @@ UI_HTML = r"""<!doctype html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#000;--panel:rgba(255,255,255,.04);--line:rgba(255,255,255,.10);--fg:#f5f5f5;
-      --mut:#8a8a8a;--dim:#5a5a5a;--drawer:320px}
+      --mut:#8a8a8a;--dim:#5a5a5a;--drawer:320px;--head:56px}
 body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
      -webkit-font-smoothing:antialiased;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 svg{width:100%;height:100%;display:block}
@@ -7182,7 +7182,7 @@ svg{width:100%;height:100%;display:block}
    does not exist. So Generate is simply the page — it has no nav item because
    it is not a place you go — and Train is a door on the right: one slot,
    labelled with where it leads rather than with where you are. */
-.top{flex:0 0 56px;display:flex;align-items:center;gap:14px;padding:0 14px 0 18px;
+.top{flex:0 0 var(--head);display:flex;align-items:center;gap:14px;padding:0 14px 0 18px;
      border-bottom:1px solid rgba(255,255,255,.07)}
 .brand{border:0;background:none;color:var(--fg);font:600 15px/1 inherit;letter-spacing:-.01em;
   padding:8px 2px;cursor:pointer}
@@ -8248,9 +8248,17 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
 
 @media(max-width:1180px){:root{--drawer:284px}}
 @media(max-width:980px){
-  body{overflow:auto;height:auto}
-  .views{position:static}
-  .view{position:static;flex-direction:column}
+  /* Scrollable, but still at least a windowful. `height:auto` alone dropped the
+     fill-the-viewport behaviour along with the fixed height, so on anything
+     taller than the content — a 900x1000 window, which is an ordinary half of a
+     laptop screen — the page ended at 708px and the canvas collapsed to 268 with
+     a third of the window left black underneath it. min-height puts the floor
+     back: the column fills the viewport and the canvas, being the only flexible
+     row, takes the slack. It can still grow past that and scroll, which is what
+     `height:auto` was for on a genuinely short screen. */
+  body{overflow:auto;height:auto;min-height:100dvh}
+  .views{position:static;min-height:0}
+  .view{position:static;flex-direction:column;min-height:calc(100dvh - var(--head))}
   .canvas{overflow:visible}
   .console{max-height:none;padding:13px 16px 15px}
   /* Stacked, the drawer stops being a column and becomes a strip. Left as a
