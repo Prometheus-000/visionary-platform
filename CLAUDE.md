@@ -1018,6 +1018,15 @@ generate endless variations in their voice without ever having their taste. That
 is what hollows out AI-assisted work: the authored thing is a text file, and a
 text file is a tool anybody can pick up.
 
+The proof is public. Every image on Civitai looks the same, and it is not
+because the models cannot do anything else — it is because the prompt is the
+method, methods get shared, and a shared method converges. The same incantations
+get pasted in front of every subject, the same negative boilerplate behind it,
+the same dozen checkpoints and LoRAs underneath. The result is a house style that
+nobody chose and nobody authored, arrived at by thousands of people
+independently copying each other's strings. That is what an aesthetic looks like
+when its unit of authorship is copy-pasteable.
+
 A conversation does not transfer that way. Not because it cannot be copied —
 anything can be copied — but because copying it gives you a record of somebody
 else's session rather than an instrument you can point at your own. It is long,
