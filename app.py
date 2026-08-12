@@ -7479,6 +7479,9 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .shot .acts{position:absolute;right:10px;bottom:10px;display:flex;gap:6px;opacity:.35;
   transition:opacity .12s}
 .shot:hover .acts,.shot .acts:focus-within{opacity:1}
+/* Lit, unlike its two neighbours, because it is the only one of the three
+   that restores something rather than starting something. */
+.shot .acts .show-regions{border-color:rgba(255,255,255,.42);color:var(--fg)}
 #vid-out{position:relative}
 #vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
   border:1px solid var(--line);background:#000}
@@ -12281,15 +12284,47 @@ function wireCanvasDrop(el){
 // or regions were just armed and the two seeded rectangles are the instruction.
 // Anything else — including looking at the render you just made — and they go.
 let regionPeek = false;          // set while a drag or a fresh arm holds them open
+// Armed means visible — with one exception, which is the whole complaint the
+// first version overshot. Gating them on focus in the region bar was too
+// strict: the boxes are the list, you place and size them by dragging, and a
+// list you have to click a text field to see is a list you cannot use.
+//
+// The thing that was actually unbearable was narrower than that. It was white
+// rectangles over a picture you just waited two minutes for. So a finished
+// render is the only thing that puts them away, and the very next sign you are
+// making the next one brings them back — a keystroke in the prompt, a touch on
+// the canvas, a region control, arming the mode again. No gesture exists purely
+// to recover them, because every route back is something you were going to do
+// anyway.
+let freshRender = false;
 function regionsVisible(){
   if(!window.REGIONS_READY || !regionOn()) return false;
   if(regionPeek) return true;
   if(document.body.classList.contains('dragging')) return true;
-  const a=document.activeElement;
-  return !!(a && a.closest && a.closest('#region-bar'));
+  return !freshRender;
+}
+// A result landed: the canvas is for looking at until you touch something.
+function shotLanded(){ freshRender=true; syncRegionVis() }
+// The way back, on the result rather than in the strip. It sits with Animate
+// and As reference because those are the other three things you do to a picture
+// you just made, and because looking at the render is exactly when you decide
+// the boxes were wrong. Only present while there are boxes to bring back, so a
+// non-regional render is unchanged.
+function syncShowRegions(){
+  const on = window.REGIONS_READY && regionOn() && freshRender && regions.length>0;
+  $$('#gen-out [data-regions]').forEach(b=>{
+    b.classList.toggle('hide',!on);
+    b.onclick=e=>{ e.stopPropagation(); composing() };
+  });
+}
+// And you touched something.
+function composing(){
+  if(!freshRender) return;
+  freshRender=false; syncRegionVis();
 }
 function syncRegionVis(){
   const l=$('#region-layer'); if(l) l.classList.toggle('show', regionsVisible());
+  if(typeof syncShowRegions==='function') syncShowRegions();
 }
 // The count, so the mode stays legible with nothing on the picture. Without it
 // a regional render and a plain one look identical right up until the result.
@@ -12301,6 +12336,9 @@ function syncRegionBadge(){
 // focusin/focusout rather than focus/blur: those do not bubble, and the bar
 // holds a dozen fields — binding each one is a dozen places to forget the next
 // control added to the row.
+// Any of these means the next shot is being composed, so the boxes come back.
+$('#prompt').addEventListener('input',composing);
+$('#region-bar').addEventListener('focusin',composing);
 ['focusin','focusout'].forEach(ev=>document.addEventListener(ev,()=>setTimeout(syncRegionVis,0)));
 // A drag that starts on the layer has to keep them up even though the pointer
 // leaves the field that revealed them.
@@ -12473,7 +12511,14 @@ function setRegional(on){
   if(on) $('#r-prompt').focus();
   syncRegionVis();
 }
-$('#g-regional').onclick=()=>setRegional(!regionOn());
+$('#g-regional').onclick=()=>{
+  // Reveal before toggle. While regions are armed and a fresh render has put
+  // them away, this button's job is to bring them back — disarming the mode
+  // from a button lit with a count, without the boxes ever being on screen, is
+  // the one destructive reading this control has never had.
+  if(regionOn() && freshRender) return composing();
+  setRegional(!regionOn());
+};
 
 function readRegions(){
   if(!regionOn()) return [];
@@ -12589,7 +12634,8 @@ $('#go-gen').onclick=async()=>{
       $('#gen-out').innerHTML=files.map((f,n)=>
         `<figure class="shot"><img src="/api/file/${r.job_id}/${encodeURIComponent(f)}" alt=""`+
         ` decoding="async" fetchpriority="high">`+
-        `<span class="acts"><button class="s" data-n="${n}" data-as="first">Animate</button>`+
+        `<span class="acts"><button class="s show-regions hide" data-regions>Regions</button>`+
+        `<button class="s" data-n="${n}" data-as="first">Animate</button>`+
         `<button class="s" data-n="${n}" data-as="reference">As reference</button></span></figure>`).join('')
         || '<p class="muted">Saved to '+(s.output_dir||'')+'</p>';
       $$('#gen-out .acts button').forEach(b=>b.onclick=()=>
@@ -12623,6 +12669,7 @@ $('#go-gen').onclick=async()=>{
         skipped.length&&('<span class="warn">'+esc('not applied: '+skipped
           .map(l=>l.name+(l.reason?` (${l.reason})`:'')).join(', '))+'</span>'),
       ].filter(Boolean).join(' · ');
+      shotLanded();
       syncCanvasView(); loadGallery();
     } else if(s.status==='stopped'){
       clearInterval(t); btn.disabled=false; box.classList.add('hide');
@@ -13100,6 +13147,7 @@ $('#go-vid').onclick=async()=>{
         stack.length&&`${stack.length} LoRA${stack.length>1?'s':''}`,
         s.duration_s&&`${s.duration_s}s`,
       ].filter(Boolean).join(' · ');
+      shotLanded();
       syncCanvasView(); loadGallery();
     } else if(s.status==='stopped'){
       clearInterval(t); syncVideoModel(); box.classList.add('hide');
