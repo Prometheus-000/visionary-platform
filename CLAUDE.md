@@ -1009,6 +1009,28 @@ normal shape of intent and the system's job is to take it that way. The prompt
 that comes out the other side is the app's business, and stays in the sidecar so
 a run can always be replayed.
 
+**Why this matters beyond ergonomics: it puts authorship back in the work.**
+The industry built extraordinary visual technology and then made it usable only
+by engineers. Prompt engineering is a programming skill wearing an artist's
+clothes, and it produced a strange artefact — a prompt is copy-pasteable, so
+someone else's method transfers whole. Take their string, get their results,
+generate endless variations in their voice without ever having their taste. That
+is what hollows out AI-assisted work: the authored thing is a text file, and a
+text file is a tool anybody can pick up.
+
+A conversation does not transfer that way. Not because it cannot be copied —
+anything can be copied — but because copying it gives you a record of somebody
+else's session rather than an instrument you can point at your own. It is long,
+situated, full of corrections that only make sense against what was on screen at
+the time, and useless without the reactions that produced it. Nobody has the
+same argument twice, including the person who had it.
+
+Which is where this stops being a philosophy and becomes the file above: if
+intent is the durable record and the prompt is a receipt, then what the sidecar
+keeps *is* the authorship. The technical decision and the artistic one are the
+same decision, and that is the strongest argument that the technical one is
+right.
+
 **The failure to guard against is not the model, the latency or the scope.** It
 is month four, when something does not fit cleanly and the cheapest fix is a
 panel. That is the moment this becomes a node graph with better typography.
