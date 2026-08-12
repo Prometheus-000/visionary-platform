@@ -817,10 +817,46 @@ detour around.
    - A box per character, each LoRA masked to its own rectangle
    - Scene and outfit transfer, when the identity-edit LoRA is downloaded
 5. Video LoRA training — Wan 2.2 is the target, which is why phase 3 loads LoRAs
+6. **The Dynamic Canvas** — next, and sketched rather than specified below
 
 The end state is one application where a generated still flows into a clip
 without a round trip through the filesystem — the "Animate" and "As reference"
 buttons on a finished image are the first piece of that.
+
+### Phase 6 — The Dynamic Canvas
+
+Loose on purpose. This is the direction, not the design, and it is written down
+so the next pass starts from the intent rather than from whatever the console
+happens to look like by then.
+
+**The canvas becomes where the work is done, not where the result appears.** You
+set a region's prompt on the canvas. You apply its LoRA on the canvas. Every
+attachment is a drop: a photo onto a box is that character, a photo onto the
+frame is the scene, and on the video side the keyframes and the reference
+pictures and videos arrive the same way rather than through a tray of 32px
+tiles. One gesture, one place, for every picture the model can be given.
+
+**The fallback is a three-dot menu in the box's top-right corner**, and it is the
+same shape as the model and sampling popovers — a small form, opened from the
+thing it belongs to. Coordinate fine-tuning lives in there. That is where the
+numeric escape hatch goes once the numbers stop needing a permanent row: X, Y,
+W, H are the thing you reach for rarely and precisely, which by the frequency
+rule under "The page" is exactly what belongs behind a menu.
+
+**It eliminates the region bar.** Which raises the question worth answering
+first, because the answer decides how much of this is a move and how much is a
+deletion: three things live in that bar and only one of them is regional. The
+scene and outfit plates only exist when regions are armed, so they follow. The
+region prompt becomes canvas-native, which is the point. But the map exists
+*because* the boxes hide on a finished render — if the dynamic canvas keeps the
+boxes legible over a result, the map has no job left and should go with the row
+rather than be rehomed out of habit.
+
+**And it is the differentiator.** Every other tool in this space asks you to
+describe a composition in a sentence. This one lets you point at it. That is
+worth saying out loud here because it is the thing to protect when a change
+would be easier the other way: if a decision makes the canvas less direct and
+some panel more capable, the decision is wrong.
 
 ### Two video families, one path
 
