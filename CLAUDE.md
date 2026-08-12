@@ -467,31 +467,33 @@ two domains, and the page follows the domains.
   was built and rejected, because a backdrop blur means judging a render through
   something, and its legibility then depends on what you generated.
 
-- **There are two classes of control, and the console is that split made
-  visible.** A *generation-level* control is one this take varies by: the
-  dimensions, the LoRAs, the shot pills, the regions. A *session-level* control
-  is one you set and then stop thinking about: the model, the sampler, steps,
-  CFG, shift, the batch count.
+- **The console is sorted by how often you reach for something, and by nothing
+  else.** The row holds what you touch constantly — the dimensions, the LoRAs,
+  the shot pills, the regions. One button holds what you touch rarely — the
+  model, the sampler, steps, CFG, shift, the seed, the batch count.
 
-  Generation-level controls are the row. Session-level controls are behind one
-  button, and that button is named for the model — because the model is the
-  session-level choice that decides what every other control in the row *means*:
-  which sizes exist, whether there is a negative prompt to write, whether LoRAs
-  load at all. Naming the button `8 steps · CFG 1.0` was naming it after two
-  values nobody chose, since those are the checkpoint's own defaults; the
-  checkpoint is the choice, and the numbers are its consequences.
+  The axis is frequency, and getting that wrong is easy because two plausible
+  alternatives are close enough to survive a first look. "Is this advanced" is a
+  claim about *difficulty*, and it produced a drawer holding five controls that
+  are not difficult, only rare. "Per-generation against per-session" is a claim
+  about *scope*, and it fails on its own examples: almost nothing in the row
+  genuinely changes every take, and CFG is not a thing you set once a session
+  either — it is a thing you almost never set. Neither difficulty nor scope
+  predicts where your hand goes. Frequency does, and it is the only one of the
+  three you can answer by watching yourself work.
 
-  This is the rule that decides where a new control goes, and it is a better
-  question than "is this advanced" — which is a claim about difficulty and
-  produced a drawer holding five things that are not difficult, only rare.
+  It also dissolves the case that looked like an exception under the other two.
+  The seed *is* different on every render, so by scope it belongs in the row —
+  but nobody types a seed. You draw a random one, see something worth keeping,
+  and take it off the result. Rarely reached for, so behind the button, and no
+  special pleading required.
 
-  One control sits awkwardly and is worth naming rather than filing quietly.
-  **The seed is generation-level by nature and session-level by gesture.** Every
-  render varies by it, but nobody types one: you draw a random seed, see
-  something worth keeping, and take the seed *off the result*. So it lives with
-  the session-level controls, and the reason is the gesture rather than the
-  class. If a "lock this seed" affordance ever lands on a finished render, that
-  is the same observation built rather than written down.
+  The button is named for the model, because the model is the rarely-touched
+  choice that decides what every frequently-touched one *means*: which sizes
+  exist, whether there is a negative prompt to write, whether LoRAs load at all.
+  Naming it `8 steps · CFG 1.0` named it after two values nobody chose — those
+  are the checkpoint's defaults. The checkpoint is the choice; the numbers are
+  its consequences.
 
 - **The console has a budget, and the prompt is what yields to it.** 30% of the
   viewport. Everything else in there is fixed or conditional — the strip is one
@@ -754,9 +756,10 @@ uncaptioned dataset, a prompt too long to belong in a gallery card.
 
 ## Where the console redesign got to
 
-**Promote and demote — done.** The rule that settled it is the two classes of
-control under "The page": generation-level stays in the row, session-level goes
-behind the model button. Measured, the image strip was 1016px
+**Promote and demote — done.** The rule that settled it is under "The page":
+sort by how often you reach for a control, not by whether it is advanced and not
+by whether it is per-take or per-session. What you touch constantly is the row;
+what you touch rarely is behind the model button. Measured, the image strip was 1016px
 of controls and the video 979px, most of it spent on things a take does not
 change. Seed and the batch count went into the Sampling popover — a seed is
 *reused off a result*, so the gesture happens after a render and not before, and
