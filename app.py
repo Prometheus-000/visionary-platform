@@ -8053,6 +8053,37 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #canvas-acts .ico{width:30px;height:30px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);
   border-radius:9px}
 #canvas-acts .ico:hover{background:rgba(0,0,0,.78);color:var(--fg)}
+/* No pointer to hover with.
+   
+   Half a dozen controls on this page are revealed by :hover, which on a
+   trackpad is a light touch and on an iPad is nothing at all — the gallery
+   card's download and delete and the dataset tile's remove were at opacity:0
+   with no way to reach them. They are not "hard to find" on touch, they are
+   absent, and the feature behind them may as well not have shipped.
+   
+   The quiet-at-rest ones are a different case and stay quiet, just less so: the
+   canvas actions and the shot actions are legible at .32 with a mouse because
+   hover is one move away, and a tablet has no such move — so they sit up where
+   they can be read and tapped without hunting.
+   
+   hover:none rather than pointer:coarse, because the question is whether hover
+   exists, not how precise the pointer is: a trackpad-less touchscreen laptop
+   fails this test too and has exactly the same problem. */
+@media (hover:none){
+  .gal .quick{opacity:1}
+  .tile .rm{opacity:1}
+  .shot .acts,#canvas-acts{opacity:.85}
+  /* Handles ride on .sel already, which a tap sets — so a box you have selected
+     is resizable and one you have not is not cluttered with eight dots. */
+}
+/* 44px is Apple's minimum and these are 36. Only the composer strip, because
+   that is what you drive a render from; the settings sheet is a form you visit
+   rather than a surface you work on. */
+@media (hover:none) and (max-width:1024px){
+  .opt,.opt.ib,.s,.drop.mini,.kinds button{min-height:44px}
+  .opt select,.opt input{height:42px}
+  .b{min-height:44px}
+}
 .pad{padding:26px}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
@@ -8247,7 +8278,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
 .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
 
 @media(max-width:1180px){:root{--drawer:284px}}
-@media(max-width:980px){
+@media(max-width:1024px){
   /* Scrollable, but still at least a windowful. `height:auto` alone dropped the
      fill-the-viewport behaviour along with the fixed height, so on anything
      taller than the content — a 900x1000 window, which is an ordinary half of a
