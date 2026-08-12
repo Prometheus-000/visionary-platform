@@ -38,13 +38,40 @@ that moves the baseline.
 
 ## Parity checks
 
-`check_viewer.py` takes a URL, so the same twelve assertions run against either
-front end and the outputs are compared directly:
+Every check here takes a URL now, so the same assertions run against either front
+end and the outputs are compared directly:
 
     python3 tools/ui-checks/check_viewer.py                        # vanilla
     python3 tools/ui-checks/check_viewer.py http://localhost:5173  # React
 
-This is the shape every port check should take. Two things it taught:
+`check_viewer.py`, `check_render.py` and `check_settings.py` were built this way.
+`check_neg.py` and `check_drop.py` were not, and converting them is what found
+three of the port's real gaps — so the conversion is worth recording as its own
+lesson.
+
+**What made them single-front-end was reaching into the page, not the URL.** They
+switched sides with `setKind('video')` and reset state with `refs.length = 0;
+drawRefs()`. None of that exists in a bundled front end, so both had to start
+driving the way a person does: the kind chip inside the prompt field, the model
+select inside the Sampling popover, a second click on a filled tile to clear it,
+a chip's own ✕ to remove a reference. That is a better check on *either* front
+end, for the reason the drag test already records — a driver poking at internals
+is not a user, and the handler it pokes past may be the broken one.
+
+Two smaller things fell out of it:
+
+- **A report that leaves state behind makes the next report measure the wrong
+  rule.** Keyframes and references put each other out of play, so dropping a file
+  on the reference tray and then testing the keyframe tiles reports them DEAD for
+  a feature working exactly as designed. `clear_refs()` and `clear_keyframes()`
+  are between the rows for that reason.
+- **Assert the meaning, not the mechanism.** The vanilla page always renders
+  `#neg-toggle` and adds `.hide`; React does not render it at all. Both mean "this
+  model reads no negative", so `toggleHidden` accepts absent as well as hidden —
+  asserting on the mechanism would fail one implementation for a structural
+  reason, which is the fault named below.
+
+Two things `check_viewer.py` taught:
 
 **Do not hold a reference across a rebuild.** The first version captured `.lb`
 once and read the counter through it. The vanilla viewer removes and rebuilds
@@ -67,10 +94,32 @@ it still holds.
 
 - `check_neg.py` — the negative-prompt toggle and the auto-growing prompt field.
   Covers the models that read no negative, the CFG that wakes it, and the cap
-  the field stops growing at.
+  the field stops growing at. Both front ends answer 32px → 95px → 168px at one,
+  four and forty lines.
 - `check_drop.py` — every drop target, asserting each one *cancels* dragover.
   A target that does not cancel never receives the drop at all, which is how the
-  reference tray shipped dead.
+  reference tray shipped dead — and how the React port's video canvas shipped
+  without its first-frame drop, which this is what caught.
+
+- `probe_size.py` — the ratio picker and the pixel boxes as one control: a
+  preset writes the boxes, typing selects Custom, the swap transposes the
+  *bucket* rather than the pixels, and nothing is snapped while you type.
+  **Fails two rows on vanilla, by design.** ⌘↑ on Width and Height has never
+  worked there: the handler is delegated from `#c-image`, `#c-video` and
+  `#region-bar`, and the sizer popover is appended to `<body>`, so with it open
+  there are two pairs — `#g-w`/`#g-h`, reachable and invisible, and
+  `#sz-w`/`#sz-h`, visible and unreachable.
+- `probe_lora.py` — what the note says about `<lora:…>` tokens. The stub volume
+  holds `Portrait` and `portrait`, and `high` in both Wan speed folders, so the
+  case rule and the shortest-unambiguous-name rule are checked against real
+  collisions rather than a fixture invented to pass.
+- `probe_clause.py` — ⌥← / ⌥→. The invariant is not that the text is unchanged
+  — the point is that it changes — it is that the *separator sequence* is: same
+  characters, same order, same count.
+- `probe_ids.py` — runs against both at once. Duplicate ids fail; everything
+  else is a report. A component shared by the two composer strips put `#go-gen`
+  on the page twice, and `querySelector` then returns the image one forever, so
+  the video button reads as dead rather than as invalid markup.
 
 ## Two things learned writing these
 

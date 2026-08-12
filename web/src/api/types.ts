@@ -10,18 +10,32 @@
  * second copy of a vocabulary is a copy that can disagree with the compiler.
  */
 
-/** A shot pill as it goes *out*. The key is `"{group}.{item}"` — a bare item
- *  key is rejected by name rather than ignored, because a pill silently
- *  dropped is indistinguishable from the model ignoring the word. */
-export type ShotPill = { key: string; text?: string; lang?: string }
+/**
+ * A shot pill, in the one shape it has anywhere.
+ *
+ * The key is `"{group}.{item}"` — a bare item key is rejected by name rather
+ * than ignored, because a pill silently dropped is indistinguishable from the
+ * model ignoring the word.
+ *
+ * `value` and not `text`, which is what this said first: this exact object is
+ * what `/api/generate`, `/api/video` and `/api/compile` take, what
+ * `_validate_shot` reads, and what the sidecar records for Reuse to read back.
+ * A second spelling on the client would be a translation layer between four
+ * places, and three of them are on the far side of the network.
+ */
+export type ShotPill = { key: string; value?: string; lang?: string }
 
 export type ShotItem = {
   key: string
   label: string
   glyph?: string
   phrase?: string
-  /** Takes a typed value — dialogue. Preserved verbatim, punctuation included. */
-  valued?: boolean
+  /** `"dialogue"` or `"text"` — takes a typed value, preserved verbatim,
+   *  punctuation included. Dialogue is the one that also carries a language,
+   *  because the guide names the eleven and forbids inventing one. */
+  valued?: 'dialogue' | 'text'
+  /** The placeholder for that value: what to type, not what the field is. */
+  hint?: string
   solo?: boolean
   needs?: 'audio' | null
 }
@@ -64,19 +78,36 @@ export type LoraEntry = {
   files: LoraFile[]
 }
 
+/** The model's own defaults. Every one is optional because the two families
+ *  genuinely differ: H3 is guidance-distilled, so it has no `cfg` at all, and a
+ *  `0` here would be a CFG nobody chose rather than a control that is absent. */
+export type VideoDefaults = {
+  steps?: number
+  cfg?: number
+  shift?: number
+  sampler?: string
+  scheduler?: string
+  tier?: string
+  seconds?: number
+}
+
 export type VideoModel = {
   key: string
   label: string
   note: string
-  tiers: Record<string, unknown>
+  /** Tier key → its own label, which already reads "768p" or "544p draft". The
+   *  second word is a fact about the run and belongs on the button. */
+  tiers: Record<string, string>
   lengths: number[]
   samplers: string[]
   schedulers: string[]
-  defaults: Record<string, unknown>
+  defaults: VideoDefaults
   /** Which controls this family actually reads. A control that is present but
    *  ignored is worse than one that is absent, so the composer builds from it. */
   supports: Record<string, boolean>
-  tasks: Record<string, unknown>
+  /** Per task, because a t2v run must never be told to download the 28.6 GB i2v
+   *  pair it will not load. */
+  tasks: Record<string, { ready: boolean; missing?: string[] }>
   ready: boolean
 }
 
@@ -123,3 +154,26 @@ export type JobStatus = {
 }
 
 export type CompileResult = { prompt: string }
+
+/**
+ * What `/api/datasets/{name}/insight` answers: the prose answer to "what is this dataset
+ * teaching the model?".
+ *
+ * Trigger coverage first, because a caption without the trigger trains a LoRA you cannot
+ * summon. `duplicates`, `tag_style` and `thin` are defects; `phrases` is not — it is what
+ * the set is teaching, and reading it is the point.
+ */
+export type Insight = {
+  images: number
+  captioned: number
+  uncaptioned: number
+  trigger_word: string
+  with_trigger: number
+  missing_trigger: string[]
+  median_words: number
+  /** Captions short enough that the image is mostly teaching the trigger word. */
+  thin: string[]
+  duplicates: { caption: string; images: string[]; count: number }[]
+  tag_style: string[]
+  phrases: { phrase: string; count: number; share: number; words: number }[]
+}

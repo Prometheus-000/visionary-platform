@@ -4,7 +4,8 @@ import { failed } from '../api/client'
 import {
   deleteLora, downloadFamily, setToken, startDownload, startGdrive,
 } from '../api/routes'
-import type { AppState, LoraEntry, ModelEntry } from '../api/types'
+import type { AppState, GpuChoice, LoraEntry, ModelEntry } from '../api/types'
+import { useStore } from '../store'
 import { fmtBytes } from '../format'
 import { IconClose } from '../icons'
 import { useDownload } from './useDownload'
@@ -92,16 +93,8 @@ export function Settings({
         <div className="card">
           <label>GPU</label>
           <div className="row" style={{ gap: 10 }}>
-            <div className="opt" data-lb="Images">
-              <select id="g-gpu" defaultValue={state?.gpus.image.default}>
-                {(state?.gpus.image.options ?? []).map((o) => <option key={o}>{o}</option>)}
-              </select>
-            </div>
-            <div className="opt" data-lb="Video">
-              <select id="v-gpu" defaultValue={state?.gpus.video.default}>
-                {(state?.gpus.video.options ?? []).map((o) => <option key={o}>{o}</option>)}
-              </select>
-            </div>
+            <GpuSelect id="g-gpu" label="Images" side="image" spec={state?.gpus.image} />
+            <GpuSelect id="v-gpu" label="Video" side="video" spec={state?.gpus.video} />
           </div>
           <p className="muted" style={{ margin: '9px 2px 0' }}>
             Changing a card costs one cold start while the model loads. Runs after it are warm.
@@ -263,6 +256,46 @@ export function Settings({
           })}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * One warning, once per card, and only when you actually change it.
+ *
+ * Switching starts a container that does not exist yet — on the video side that is
+ * 42.5 GB of weights, so the cost is worth a sentence before it is spent rather than a
+ * progress bar that sits still for minutes afterwards. Declining puts the select back,
+ * because a confirm that leaves the control showing the answer you refused is a control
+ * that lies about what the next run will use.
+ *
+ * The choice is store state and not just a DOM value: `imageBody` and `videoBody` read
+ * `gpu` off the store, so a select nothing wrote to would send the deployment's default
+ * on every run no matter what this said.
+ */
+function GpuSelect({ id, label, side, spec }: {
+  id: string
+  label: string
+  side: 'image' | 'video'
+  spec: GpuChoice | undefined
+}) {
+  const value = useStore((s) => s.gpu[side])
+  const setGpu = useStore((s) => s.setGpu)
+  return (
+    <div className="opt" data-lb={label}>
+      <span className="lead">{label}</span>
+      <select id={id} value={value || spec?.default || ''}
+              onChange={(e) => {
+                const next = e.target.value
+                if (next === spec?.default
+                    || confirm(`Switch to ${next}?\n\nThis card has no warm container, `
+                      + 'so the next run pays a cold start while the model loads. '
+                      + 'Runs after it are warm.')) {
+                  setGpu({ [side]: next })
+                }
+              }}>
+        {(spec?.options ?? []).map((o) => <option key={o}>{o}</option>)}
+      </select>
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { fileUrl } from '../api/routes'
+import type { ShotPill } from '../api/types'
 
 /**
  * A generation, as `/api/gallery` returns it — newest first, no job id needed.
@@ -24,13 +25,17 @@ export type GalleryItem = {
   job_id: string
   kind: 'image' | 'video'
   files: string[]
+  /** Set only by the two callers that open the viewer on something that is not a gallery
+   *  row — a dataset image, and the canvas's own full-screen. Never present on anything
+   *  `/api/gallery` returned. */
+  src?: string
   created?: number
   modified?: number
   prompt?: string
   /** Present only when the compiler did something. Absent on every prompt
    *  written before the shot palette, which is why `promptOf` falls back. */
   prompt_typed?: string
-  shot?: { key: string; text?: string }[]
+  shot?: ShotPill[]
   model?: string
   seed?: number
   seeds?: number[]
@@ -41,14 +46,23 @@ export type GalleryItem = {
   sampler?: string
   scheduler?: string
   shift?: number
+  switch_at?: number
   seconds?: number
   fps?: number
   frames?: number
   negative_prompt?: string
-  loras?: unknown[]
-  regions?: unknown[]
+  /** `expert` only exists on the video stack and `applied` only on the image one, which
+   *  is why both are optional rather than this being two types. `applied === false` is
+   *  the test everywhere — see the `=== false` note in useGenerate. */
+  loras?: { name?: string; unet?: number; expert?: string; applied?: boolean
+            text_encoder?: number | null }[]
+  /** As `_validate_regions` writes them *back*: `lora`/`strength` rather than the
+   *  `loras` stack the page sends, and the box as a four-tuple. Reuse reads this shape,
+   *  not the one it posted. */
+  regions?: { prompt?: string; lora?: string; strength?: number; box?: number[] }[]
   references?: number
   ref_videos?: number
+  ref_roles?: string[]
   region_weight?: number
 }
 
@@ -60,7 +74,11 @@ export function promptOf(it: GalleryItem): string {
 }
 
 export function coverUrl(it: GalleryItem): string {
-  return fileUrl(it.job_id, it.files[0] ?? '')
+  // `src` first, because two things reach the viewer with a URL and no job behind it: a
+  // dataset image, which is addressed by set and filename, and the canvas's own
+  // full-screen, which already has the src it is displaying. Making those synthesise a
+  // job id to get a URL back out would be a lie in a field other code reads.
+  return it.src ?? fileUrl(it.job_id, it.files[0] ?? '')
 }
 
 /**

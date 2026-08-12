@@ -1,186 +1,264 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { failed } from './api/client'
-import { getState } from './api/routes'
-import { autoGrow } from './console/fieldMax'
+import { fileUrl, getState } from './api/routes'
 import { Canvas } from './canvas/Canvas'
 import { useGenerate } from './canvas/useGenerate'
+import { Console } from './console/Console'
 import { Gallery, useGallery } from './gallery/Gallery'
+import { LastShot } from './gallery/LastShot'
+import { MetaSheet } from './gallery/MetaSheet'
 import { Viewer } from './gallery/Viewer'
 import type { GalleryItem } from './gallery/types'
-import { IconGear, IconPanel, IconTrain } from './icons'
+import { IconBack, IconGear, IconPanel, IconTrain } from './icons'
+import { fileToB64, toB64 } from './media/files'
 import { Settings } from './settings/Settings'
-import { generateBody, useStore } from './store'
+import { Train } from './train/Train'
+import { supports, useStore } from './store'
+import { useVideo } from './video/useVideo'
 
 /**
  * The shell: header, stage, canvas, console.
  *
- * Structure follows UI_HTML's, class for class, because the stylesheet is
- * being kept verbatim and it selects on `.top`, `.views`, `.stage`, `.canvas`,
- * `.console` and `.field`. Renaming any of those would mean rewriting the CSS,
- * which is the one thing the port is not doing.
+ * Structure follows UI_HTML's, class for class, because the stylesheet is kept verbatim and
+ * it selects on `.top`, `.views`, `.stage`, `.canvas`, `.console` and `.field`. Renaming
+ * any of those would mean rewriting the CSS, which is the one thing the port is not doing.
  *
- * The canvas is the largest thing on screen and the console is a bar beneath
- * it — never a rail beside it. That is measured rather than preferred: fitting
- * each render aspect into a 1512x982 canvas leaves 0px of dead vertical space
- * at every aspect and 152–1068px horizontal, so the picture is height-bound
- * everywhere and the bar always comes out of the picture.
+ * **Generate is the page, not a destination.** It has no nav item; the wordmark is how you
+ * get back to it. Train is one door, labelled with where it leads rather than where you
+ * are, so two things never look equally selected — and it carries the training run's
+ * progress, because a run lasts hours and you are meant to leave and keep working.
  */
 export function App() {
-  const { state, stateError, setState, setStateError } = useStore()
-  const prompt = useStore((s) => s.prompt)
-  const setPrompt = useStore((s) => s.setPrompt)
-
-  const consoleRef = useRef<HTMLDivElement>(null)
-  const fieldRef = useRef<HTMLTextAreaElement>(null)
-
+  const s = useStore()
   const { items, reload } = useGallery()
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shown, setShown] = useState<{ rows: GalleryItem[]; i: number } | null>(null)
-  const { run, start, cancel } = useGenerate()
+  const [meta, setMeta] = useState<GalleryItem | null>(null)
 
-  // Generate reads only the store, so a keyboard shortcut and the button send
-  // the same request and Phase 6 can move the controls without touching this.
+  const landed = useCallback(() => {
+    // A result landed: the boxes come off the picture, and the gallery has a new newest.
+    useStore.getState().setFreshRender(true)
+    void reload()
+  }, [reload])
+
+  const gen = useGenerate(landed)
+  const vid = useVideo(landed)
+
   const fire = useCallback(() => {
-    const s = useStore.getState()
-    if (!s.prompt.trim() && !s.regions.length) return
-    void start(generateBody(s))
-  }, [start])
+    if (useStore.getState().kind === 'image') void gen.start()
+    else void vid.start()
+  }, [gen, vid])
 
-  // Settings is where weights arrive, so closing it has to refresh the state
-  // the composer reads — a LoRA deleted or a family downloaded changes what the
-  // picker can offer.
+  const stopRun = useCallback(() => {
+    if (useStore.getState().kind === 'image') void gen.cancel()
+    else void vid.cancel()
+  }, [gen, vid])
+
   const reloadState = useCallback(async () => {
     const r = await getState()
-    if (failed(r)) setStateError(r.error)
-    else setState(r)
-  }, [setState, setStateError])
+    // `{error}` rather than a throw — see api/client.ts. Treating this as an exception is
+    // what left the composer looking like a deployment with no weights on it.
+    if (failed(r)) useStore.getState().setStateError(r.error)
+    else useStore.getState().setState(r)
+  }, [])
 
   useEffect(() => {
-    let live = true
-    void (async () => {
-      const r = await getState()
-      if (!live) return
-      // `{error}` rather than a throw — see api/client.ts. Treating this as an
-      // exception is what left the composer looking like a deployment with no
-      // weights on it.
-      if (failed(r)) setStateError(r.error)
-      else setState(r)
-    })()
-    return () => {
-      live = false
-    }
-  }, [setState, setStateError])
+    void reloadState()
+  }, [reloadState])
 
-  // The console has to watch itself, because the prompt is not the only thing
-  // that grows: arming Regions adds a bar and picking pills adds a rail, and
-  // both happen long after the last keystroke. Without this the field keeps
-  // whatever height it won when it was the only claimant — measured, a long
-  // prompt sat at 30.0% and climbed to 38.1% when the others arrived.
-  //
-  // It converges in one pass because `fieldMax` subtracts the field's own
-  // height, so `other` does not move when the field does.
-  useLayoutEffect(() => {
-    const con = consoleRef.current
-    const field = fieldRef.current
-    if (!con || !field) return
-    const grow = () => autoGrow(field, con)
-    grow()
-    const ro = new ResizeObserver(grow)
-    ro.observe(con)
-    window.addEventListener('resize', grow)
+  // The GPU pickers are built once from what the deployment offers: the list only changes
+  // on redeploy, and rebuilding it would reset a card chosen between two polls.
+  useEffect(() => {
+    if (!s.state || s.gpu.image) return
+    s.setGpu({ image: s.state.gpus.image.default, video: s.state.gpus.video.default })
+  }, [s])
+
+  /* A file is over the window: light every place it could go. See the drag-intent block in
+     the stylesheet for what that means and why it is the only moment this app is willing to
+     spend pixels explaining itself.
+
+     Driven off `dragover` and a timer rather than dragenter/dragleave counting. The counting
+     version is the textbook one and is wrong here: every child element the cursor crosses
+     fires its own leave, and on a page whose targets contain images, boxes and eight resize
+     handles the depth counter drifts and the reveal strobes. `dragover` repeats while the
+     drag is alive, so "still dragging" is a fact the browser re-states every few hundred
+     milliseconds, and the only thing that needs guessing is when it stopped. */
+  useEffect(() => {
+    let off: number | undefined
+    const over = (e: DragEvent) => {
+      // Files only. Dragging a text selection out of the prompt field must not make the
+      // page look like it wants to eat it.
+      if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return
+      document.body.classList.add('dragging')
+      window.clearTimeout(off)
+      // `dragend` fires on a drag that started inside the page; `drop` fires on one that
+      // came from outside and landed. Neither fires when a drag leaves the window
+      // entirely, which is what the timer is for.
+      off = window.setTimeout(() => document.body.classList.remove('dragging'), 300)
+    }
+    const stop = () => {
+      window.clearTimeout(off)
+      document.body.classList.remove('dragging')
+    }
+    window.addEventListener('dragover', over)
+    window.addEventListener('drop', stop)
+    window.addEventListener('dragend', stop)
     return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', grow)
+      window.removeEventListener('dragover', over)
+      window.removeEventListener('drop', stop)
+      window.removeEventListener('dragend', stop)
+      stop()
     }
   }, [])
 
-  useLayoutEffect(() => {
-    autoGrow(fieldRef.current, consoleRef.current)
-  }, [prompt])
+  /* What is on the canvas right now, if anything — the thing Space acts on. */
+  const canvasSrc = s.kind === 'video'
+    ? (vid.run.jobId && vid.run.file ? fileUrl(vid.run.jobId, vid.run.file) : null)
+    : (gen.run.jobId && gen.run.files[0] ? fileUrl(gen.run.jobId, gen.run.files[0]) : null)
+
+  const lightbox = useCallback((src: string, kind: 'image' | 'video') => {
+    setShown({ rows: [{ job_id: '', kind, files: [], src }], i: 0 })
+  }, [])
+
+  /* Space, because ⌘Space is Spotlight on a stock Mac and never reaches the page. Guarded
+     on where the caret is rather than on a modifier — a space inside the prompt is a
+     space. */
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== ' ' && e.code !== 'Space') return
+      if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return
+      const t = e.target as HTMLElement | null
+      if (t?.matches?.('input,textarea,select') || t?.isContentEditable) return
+      if (document.querySelector('.lb,.menu,.pal,.scrim')) return
+      if (!canvasSrc) return
+      e.preventDefault()
+      lightbox(canvasSrc, s.kind)
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [canvasSrc, s.kind, lightbox])
+
+  /**
+   * The hand-off. A still you just made becomes the thing the next clip animates, without a
+   * download and a re-upload — which is the whole point of image and video sharing one
+   * workspace.
+   *
+   * A reference moves the model too. Only one family has a reference checkpoint, so
+   * switching to it is the useful reading of the button — the alternative is accepting the
+   * image and then dropping it the moment the panel redraws.
+   *
+   * The bytes are fetched rather than reused from a data URL: the canvas stills are a
+   * streamed `<img src>`, so the base64 the video side needs does not exist client-side.
+   */
+  const handoff = useCallback(
+    async (jobId: string, file: string, as: 'first' | 'reference' | 'refvideo') => {
+      const b64 = await fileToB64(fileUrl(jobId, file))
+      if (!b64) {
+        alert('Could not read that file.')
+        return
+      }
+      const st = useStore.getState()
+      if (as === 'first') {
+        st.setKeyframe('first', b64)
+      } else {
+        if (!supports(st).references) {
+          const m = st.state?.video_models.find((x) => x.supports.references && x.ready)
+          if (!m) {
+            alert('References need MiniMax-H3 — download it under Settings.')
+            return
+          }
+          st.setVid({ model: m.key })
+        }
+        const img = as === 'reference'
+        const max = img ? (st.state?.max_refs ?? 9) : (st.state?.max_ref_videos ?? 3)
+        const bucket = img ? st.refs : st.refVids
+        if (bucket.length >= max) {
+          alert(`${max} references is the model's limit.`)
+          return
+        }
+        if (img) st.setRefs([...bucket, b64])
+        else st.setRefVids([...bucket, b64])
+      }
+      st.setKind('video')
+      setGalleryOpen(false)
+      setShown(null)
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#prompt')?.focus())
+    },
+    [],
+  )
+
+  const train = s.mode === 'train'
 
   return (
     <>
       <header className="top">
-        <button className="brand" id="go-home" type="button">
+        <button className="brand" id="go-home" type="button"
+                onClick={() => { setGalleryOpen(false); s.setMode('generate') }}>
           Visionary
         </button>
         <span className="grow" />
-        {/* Train is one door, labelled with where it leads rather than where
-            you are, so two things never look equally selected. Generate has no
-            nav item because it is not a place you go — it is the page. */}
-        <button className="door" id="door" type="button">
-          <IconTrain />
-          Train
-        </button>
-        <button className="ico" id="t-drawer" title="Gallery" type="button"
-                onClick={() => setDrawerOpen((d) => !d)}>
-          <IconPanel />
-        </button>
+        <Door />
+        {/* The drawer toggle is a Generate control; it has nothing to say in Train. */}
+        {!train && (
+          <button className={`ico${drawerOpen ? ' on' : ''}`} id="t-drawer" title="Gallery"
+                  type="button" onClick={() => setDrawerOpen((d) => !d)}>
+            <IconPanel />
+          </button>
+        )}
         <button className="ico" id="t-settings" title="Settings" type="button"
-                onClick={() => setSettingsOpen(true)}>
+                onClick={() => { setSettingsOpen(true); void reloadState() }}>
           <IconGear />
         </button>
       </header>
 
       <div className="views">
-        <div className={`view studio${drawerOpen ? '' : ' nodrawer'}`} id="v-generate">
-          <div className="stage">
-            <Canvas
-              run={run}
-              onOpen={(jobId, _file, i) => setShown({
-                rows: run.files.map((f) => ({ job_id: jobId, kind: 'image', files: [f] })),
-                i,
-              })}
-              onHandoff={() => void 0}
-              blank={
-                stateError ? <div className="err-box">{stateError}</div>
-                  : state ? 'Describe an image and press Generate.'
-                  : 'Loading…'
-              }
-            />
-
-            <div className="console" ref={consoleRef}>
-              <div className="field">
-                <textarea
-                  id="prompt"
-                  ref={fieldRef}
-                  rows={1}
-                  placeholder="Describe an image…"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  // Shift+Enter keeps the newline, because prompts here are
-                  // prose and paragraphs in them are real. isComposing, because
-                  // an IME's Enter is committing a character, not submitting.
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.shiftKey || e.altKey) return
-                    e.preventDefault()
-                    fire()
-                  }}
-                />
-              </div>
-              <div className="row" style={{ gap: 10, marginTop: 10 }}>
-                {run.error && <div className="err-box grow" id="gen-err">{run.error}</div>}
-                <span className="grow" />
-                {run.running
-                  ? <button className="b" type="button" onClick={() => void cancel()}>Stop</button>
-                  : <button className="b" id="go-gen" type="button" onClick={fire}>Generate</button>}
-              </div>
+        {train ? (
+          <Train onLightbox={(src) => lightbox(src, 'image')} />
+        ) : (
+          <div className={`view studio${drawerOpen ? '' : ' nodrawer'}`} id="v-generate">
+            <div className="stage">
+              <Canvas
+                run={gen.run}
+                vidRun={vid.run}
+                onOpen={(jobId, i) => setShown({
+                  rows: gen.run.files.map((f) => ({ job_id: jobId, kind: 'image', files: [f] })),
+                  i,
+                })}
+                onOpenVideo={(src) => lightbox(src, 'video')}
+                onHandoff={(jobId, file, as) => void handoff(jobId, file, as)}
+                onFirstFrame={async (f) => {
+                  const b64 = await toB64(f)
+                  if (b64) useStore.getState().setKeyframe('first', b64)
+                  else alert('Could not read that image.')
+                }}
+                onClear={() => (s.kind === 'image' ? gen.clear() : vid.clear())}
+                blank={
+                  s.stateError ? <div className="err-box">{s.stateError}</div>
+                    : s.state ? null
+                    : 'Loading…'
+                }
+              />
+              <Console run={gen.run} vidRun={vid.run} onGenerate={fire} onStop={stopRun}
+                       lastShot={<LastShot items={items}
+                                           onOpen={(rows, i) => setShown({ rows, i })} />} />
             </div>
-          </div>
 
-          <Gallery
-            items={items}
-            open={galleryOpen}
-            onClose={() => setGalleryOpen(false)}
-            onReload={() => {
-              setGalleryOpen(true)
-              void reload()
-            }}
-          />
-        </div>
+            <Gallery
+              items={items}
+              open={galleryOpen}
+              onClose={() => setGalleryOpen(false)}
+              onReload={() => {
+                setGalleryOpen(true)
+                void reload()
+              }}
+              onMeta={setMeta}
+              onHandoff={(it, as) => void handoff(it.job_id, it.files[0] ?? '', as)}
+            />
+          </div>
+        )}
       </div>
 
       {shown && (
@@ -193,12 +271,55 @@ export function App() {
         />
       )}
 
+      {meta && <MetaSheet item={meta} onClose={() => setMeta(null)} />}
+
       <Settings
-        state={state}
+        state={s.state}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onReload={() => void reloadState()}
       />
     </>
+  )
+}
+
+/**
+ * One button instead of two, and no moment where both look equally selectable.
+ *
+ * In Generate it doubles as the training readout: a run outlives the visit that started it,
+ * and the control that takes you back is the honest place to say how far along it is.
+ */
+function Door() {
+  const mode = useStore((st) => st.mode)
+  const setMode = useStore((st) => st.setMode)
+  const pct = useStore((st) => st.trainPct)
+  const c = 2 * Math.PI * 6
+
+  if (mode === 'train') {
+    return (
+      <button className="door" id="door" type="button" onClick={() => setMode('generate')}>
+        <IconBack />
+        Generate
+      </button>
+    )
+  }
+  if (pct == null) {
+    return (
+      <button className="door" id="door" type="button" onClick={() => setMode('train')}>
+        <IconTrain />
+        Train
+      </button>
+    )
+  }
+  return (
+    <button className="door live" id="door" type="button" onClick={() => setMode('train')}>
+      <svg className="ring" viewBox="0 0 16 16">
+        <circle className="bg" cx="8" cy="8" r="6" />
+        <circle className="fg" cx="8" cy="8" r="6"
+                strokeDasharray={c.toFixed(2)}
+                strokeDashoffset={(c * (1 - pct / 100)).toFixed(2)} />
+      </svg>
+      Training {pct}%
+    </button>
   )
 }

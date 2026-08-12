@@ -12,7 +12,7 @@
  * both ordinary, and the routes take them as path parameters.
  */
 import { api, post, type Res } from './client'
-import type { AppState, CompileResult, JobStatus, ShotPill } from './types'
+import type { AppState, CompileResult, Insight, JobStatus, ShotPill } from './types'
 
 const seg = encodeURIComponent
 
@@ -20,7 +20,12 @@ const seg = encodeURIComponent
 
 export const getState = () => api<AppState>('/api/state')
 export const getWhere = () => api<Record<string, unknown>>('/api/where')
-export const setToken = (token: string) => post<{ ok?: boolean }>('/api/token', { token })
+/** `hf_token`, which is the field `set_token` reads. It was `token` here, and
+ *  the route answers `{ok: true, hf_token_set: false}` to that — a 200 that
+ *  cleared the token it was asked to save, so Save reported success and the
+ *  gated downloads went on failing with no visible connection between the two. */
+export const setToken = (hfToken: string) =>
+  post<{ ok?: boolean; hf_token_set?: boolean }>('/api/token', { hf_token: hfToken })
 
 /**
  * What a download route answers with.
@@ -97,8 +102,12 @@ export const captionDataset = (name: string, body: unknown) =>
   post<Record<string, unknown>>(`/api/datasets/${seg(name)}/caption`, body)
 export const removeImage = (name: string, body: unknown) =>
   post<Record<string, unknown>>(`/api/datasets/${seg(name)}/remove`, body)
-export const datasetInsight = (name: string) =>
-  api<Record<string, unknown>>(`/api/datasets/${seg(name)}/insight`)
+/** The trigger word rides in the query, because trigger coverage is the first
+ *  thing the panel reports and the word is typed on the page rather than stored
+ *  — asking without it answers "0 of 24 have the trigger" for a set that is
+ *  fine. */
+export const datasetInsight = (name: string, trigger = '') =>
+  api<Insight>(`/api/datasets/${seg(name)}/insight?trigger=${seg(trigger)}`)
 export const prependTrigger = (name: string, body: unknown) =>
   post<Record<string, unknown>>(`/api/datasets/${seg(name)}/prepend-trigger`, body)
 
