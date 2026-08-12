@@ -971,11 +971,23 @@ vocabulary with three compilers behind it, and nobody types
 model reading intent instead of a table matching pills — is the same idea with
 a better front half, and the direction this is going.
 
-Reproducibility does not argue against this, because it never depended on the
-compiler: a run is reproducible because the metadata exists, and replaying the
-recorded prompt gives the same shot whether a dict wrote it or a model did. The
-same intent producing a different prompt twice is not a defect to be engineered
-around. It is what a conversation is.
+Reproducing a prompt is not worth protecting in the first place. A prompt is a
+guess at how to speak unnaturally to one text encoder — an artefact of which
+checkpoint you happened to be feeding on the day, with no value of its own. The
+same intent producing a different prompt twice is not a defect to engineer
+around; it is what a conversation is, and the second prompt is no less arbitrary
+than the first.
+
+**What is worth keeping is the intent, and that is what the sidecar should be
+read as recording.** `prompt_typed` and `shot` are the durable half — what you
+actually meant — and the compiled `prompt` is a receipt: this is what this
+encoder was told, this once. The gallery and Reuse prefer the typed one, which
+reads as a legibility choice and is really the deeper one.
+
+It also pays off the moment a model is replaced. Intent recompiles for whatever
+comes next; a stored prompt is worth nothing to a checkpoint that wants a
+different grammar, and every prompt in the gallery would otherwise be tied to
+the encoder it was written against.
 
 **And that is the actual shape of it: you argue with the picture, you do not
 author a prompt.** "Make her older." "The light is too warm." "No, the other
