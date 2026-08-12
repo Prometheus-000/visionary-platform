@@ -7496,9 +7496,6 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .shot .acts button svg{width:100%;height:100%;display:block}
 /* Lit, unlike its two neighbours, because it is the only one of the three
    that restores something rather than starting something. */
-/* The one that restores something rather than starting something, so it reads
-   at full strength while its neighbours stay dim until hovered. */
-.shot .acts .show-regions{color:#e8e8e8}
 #vid-out{position:relative}
 #vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
   border:1px solid var(--line);background:#000}
@@ -12381,18 +12378,6 @@ function regionsVisible(){
 // A result landed: the boxes come off the picture. They are still armed and
 // still masking their LoRAs — this is only about what is drawn.
 function shotLanded(){ freshRender=true; syncRegionVis() }
-// The way back, on the result rather than in the strip. It sits with Animate
-// and As reference because those are the other three things you do to a picture
-// you just made, and because looking at the render is exactly when you decide
-// the boxes were wrong. Only present while there are boxes to bring back, so a
-// non-regional render is unchanged.
-function syncShowRegions(){
-  const on = window.REGIONS_READY && regionOn() && freshRender && regions.length>0;
-  $$('#gen-out [data-regions]').forEach(b=>{
-    b.classList.toggle('hide',!on);
-    b.onclick=e=>{ e.stopPropagation(); revealRegions() };
-  });
-}
 // And you asked for them back. Deliberately narrow: the 50/50 split is right
 // most of the time, so a set of boxes is placed once and rendered against dozens
 // of times, changing only the prompt. Restoring them on a keystroke would put
@@ -12406,7 +12391,6 @@ function revealRegions(){
 }
 function syncRegionVis(){
   const l=$('#region-layer'); if(l) l.classList.toggle('show', regionsVisible());
-  if(typeof syncShowRegions==='function') syncShowRegions();
   if(typeof drawRegionMap==='function') drawRegionMap();
 }
 // The count, so the mode stays legible with nothing on the picture. Without it
@@ -12722,7 +12706,6 @@ $('#go-gen').onclick=async()=>{
         `<figure class="shot"><img src="/api/file/${r.job_id}/${encodeURIComponent(f)}" alt=""`+
         ` decoding="async" fetchpriority="high">`+
         `<span class="acts">`+
-        `<button class="show-regions hide" data-regions title="Show the region boxes">${ICON.regions}</button>`+
         `<button data-n="${n}" data-as="first" title="Animate — use as the first frame of a clip">${ICON.play}</button>`+
         `<button data-n="${n}" data-as="reference" title="Use as a reference image">${ICON.photo}</button>`+
         `</span></figure>`).join('')
