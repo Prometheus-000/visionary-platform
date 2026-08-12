@@ -1034,6 +1034,22 @@ situated, full of corrections that only make sense against what was on screen at
 the time, and useless without the reactions that produced it. Nobody has the
 same argument twice, including the person who had it.
 
+**The strongest version of this is not conversation, it is owning the weights.**
+Authorship at the prompt is thin — it is the last few centimetres of a pipeline
+somebody else built. Authorship in a LoRA trained on your own photographs is the
+model itself learning what you meant, and it is why training is Phase 1 here
+rather than an advanced feature bolted on later. The trainer is in the
+application, the picker reads the volume rather than a registry, and a dataset
+is a folder of your images with your captions beside them. That shape is not an
+accident and it is not for convenience: it is what a tool looks like when the
+person using it makes their own instruments.
+
+It is also a standing veto. Nothing in this application browses, searches or
+recommends somebody else's weights, and a "discover models" surface is the exact
+feature that would look obviously helpful in a pull request and would undo the
+paragraph above. Pulling a specific file you were sent is fine — that is what
+the Drive route is for. A marketplace is not.
+
 Which is where this stops being a philosophy and becomes the file above: if
 intent is the durable record and the prompt is a receipt, then what the sidecar
 keeps *is* the authorship. The technical decision and the artistic one are the
