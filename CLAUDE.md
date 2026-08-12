@@ -472,15 +472,13 @@ two domains, and the page follows the domains.
   the shot pills, the regions. One button holds what you touch rarely — the
   model, the sampler, steps, CFG, shift, the seed, the batch count.
 
-  The axis is frequency, and getting that wrong is easy because two plausible
-  alternatives are close enough to survive a first look. "Is this advanced" is a
-  claim about *difficulty*, and it produced a drawer holding five controls that
-  are not difficult, only rare. "Per-generation against per-session" is a claim
-  about *scope*, and it fails on its own examples: almost nothing in the row
-  genuinely changes every take, and CFG is not a thing you set once a session
-  either — it is a thing you almost never set. Neither difficulty nor scope
-  predicts where your hand goes. Frequency does, and it is the only one of the
-  three you can answer by watching yourself work.
+  The axis is frequency, and the near miss worth recording is *scope* —
+  per-generation against per-session — because it sounds right and fails on its
+  own examples. Almost nothing in the row genuinely changes every take: you do
+  not pick a new aspect ratio per render. And CFG is not a thing you set once a
+  session either; it is a thing you almost never set. Scope does not predict
+  where a hand goes. Frequency does, and it is the one you can answer by
+  watching yourself work.
 
   It also dissolves the case that looked like an exception under the other two.
   The seed *is* different on every render, so by scope it belongs in the row —
@@ -757,9 +755,9 @@ uncaptioned dataset, a prompt too long to belong in a gallery card.
 ## Where the console redesign got to
 
 **Promote and demote — done.** The rule that settled it is under "The page":
-sort by how often you reach for a control, not by whether it is advanced and not
-by whether it is per-take or per-session. What you touch constantly is the row;
-what you touch rarely is behind the model button. Measured, the image strip was 1016px
+sort by how often you reach for a control, not by whether it is per-take or
+per-session. What you touch constantly is the row; what you touch rarely is
+behind the model button. Measured, the image strip was 1016px
 of controls and the video 979px, most of it spent on things a take does not
 change. Seed and the batch count went into the Sampling popover — a seed is
 *reused off a result*, so the gesture happens after a render and not before, and
