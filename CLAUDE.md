@@ -957,6 +957,32 @@ place for exactly one thing — showing what you would be touching before you
 touch it — which is spatial feedback about scope rather than a control being
 revealed. "No hover" is not "remove the shortcuts".
 
+**A prompt is a compilation target, not something the user writes.** Nobody
+should have to learn a text encoder. Every model arrives with its own grammar —
+H3 wants a six-field document, Wan wants prose, Krea 2 wants prose with the
+camera clauses dropped — and asking a person to hold three formats in their head
+so a checkpoint can be fed correctly is the tool making its problem into theirs.
+The user says what they want; the app knows what each model needs; the prompt
+itself is an implementation detail they should never have to see.
+
+Half of this is already built and is the proof it works: `SHOT_VOCAB` is one
+vocabulary with three compilers behind it, and nobody types
+`integrated_multimodal_description:`. Replacing the prompt field entirely — a
+model reading intent instead of a table matching pills — is the same idea with
+a better front half, and the direction this is going.
+
+Two things it must not break on the way, both already true and both easy to lose:
+
+- **A run stays reproducible from its record.** The sidecar keeps what ran and
+  what you chose, separately, and it does that precisely because a compiler
+  sitting between the two can change. If the compiler becomes a model, it
+  becomes nondeterministic, and the recorded output is then the only thing that
+  can reproduce a shot a year later. That is why the split exists — not tidiness.
+- **It stays free to leave.** The pills are keys on a table, so a job record
+  means something without the app that wrote it. An LLM in the path must not
+  turn a reproducible run into a prompt only one version of one service can
+  regenerate.
+
 **The failure to guard against is not the model, the latency or the scope.** It
 is month four, when something does not fit cleanly and the cheapest fix is a
 panel. That is the moment this becomes a node graph with better typography.
