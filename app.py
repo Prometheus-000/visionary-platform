@@ -320,17 +320,25 @@ trainer_image = (
     # does not pull a default-CUDA wheel over the top.
     #
     # `extra_index_url` is pypi.org, and it is not decoration — without it this
-    # build stopped working one day having changed nothing. torch 2.5.1 pins
-    # `nvidia-cudnn-cu12==9.1.0.70` exactly, the CUDA base image puts NVIDIA's
-    # own index in front of PyPI, and NVIDIA prunes old versions from it: that
-    # file is gone from pypi.nvidia.com (which now starts at 9.1.1.17) and still
-    # present on pypi.org. So pip resolved cudnn against an index that no longer
-    # carried the pin and failed the whole image with "No matching distribution",
-    # naming a package nothing in this file mentions.
+    # build stopped working one day having changed nothing.
     #
-    # Worth knowing for the next one, because the shape recurs: a pinned wheel
-    # is only as reproducible as the index you let pip reach for its transitive
-    # deps, and a vendor index is a moving target in a way pypi.org is not.
+    # torch 2.5.1 pins `nvidia-cudnn-cu12==9.1.0.70` exactly, and the PyTorch
+    # index is a *proxy*: its listing for that package is a page of hrefs
+    # pointing at pypi.nvidia.com. NVIDIA pruned 9.1.0.70 from their CDN — their
+    # 9.1 line now starts at 9.1.1.17 — so the link went, and PyTorch's
+    # generated listing went with it. pip was reading only the index it was
+    # told to and that index had stopped carrying a version the wheel beside it
+    # still requires. The failure names a package nothing in this file mentions.
+    #
+    # Nothing injected a second index; the base image sets no pip config at all.
+    # That was checked, because the first explanation written here was that the
+    # CUDA image put NVIDIA's index in front of PyPI, and it is not true.
+    #
+    # The rule the shape teaches: an index that proxies someone else's files
+    # inherits their retention policy, so a pin is only as reproducible as the
+    # *least durable* host in the chain that serves it. pypi.org still has the
+    # file. Give pip somewhere else to look whenever the primary index is a
+    # vendor's.
     .pip_install(
         "torch==2.5.1",
         "torchvision==0.20.1",
