@@ -101,11 +101,30 @@ in for free.
 
 ## Layout
 
-    app.py              the whole application — images, jobs, API, and UI_HTML
+    app.py              the whole application — images, jobs, API
+    web/                the front end: React + TypeScript, built by Vite
     comfy_nodes/        our own ComfyUI nodes — one shim, see visionary_boxes
     ai-toolkit/         training reference
     tools/              smoke tests, the local UI preview
+    tools/ui-checks/    parity checks — each takes a URL, runs on either page
     tools/_from_app.py  pulls plain-Python pieces out of app.py by AST
+
+**The front end is built into the image, not mounted from your disk.** That is
+what keeps `modal deploy app.py` the entire install: mounting a local
+`web/dist` would be simpler and would quietly make the deploy command a lie —
+a fresh clone has no dist, and a stale one deploys whatever you last built,
+which is the worst of the three because it looks like it worked. Node is a
+build-time dependency of the image; nothing at runtime needs it.
+
+The lockfile is copied before the sources so that editing a component re-runs
+`npm run build` and not `npm ci`. Modal invalidates from the first changed
+layer down, so the order of those four lines is a minute per deploy.
+
+`UI_HTML` is still in app.py and is no longer served. It is the oracle the port
+was checked against — `preview_ui.py` serves it with no flags and the shipped
+bundle with `--dist` — and it should go once a real deploy has been exercised.
+Do not read it as a description of intended behaviour; see the arrow-key note
+under "The page".
 
 `_from_app.py` exists because two tools need the *real* thing rather than a
 copy: `smoke_prompt.py` checking a compiler against a reimplementation would be

@@ -29,6 +29,10 @@ export default defineConfig({
     // paths in index.html have to work from wherever it is mounted.
     outDir: 'dist',
     emptyOutDir: true,
-    sourcemap: true,
+    // Off. The map is 1.4 MB against a 313 kB bundle — four times the thing it
+    // describes — and it would be built into the image and served off the same
+    // container the UI comes from. Debugging a deployed build happens by
+    // reproducing it locally with `npm run dev`, where the map is free.
+    sourcemap: false,
   },
 })

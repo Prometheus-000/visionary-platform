@@ -41,7 +41,11 @@ APP = Path(__file__).resolve().parent.parent / "app.py"
 # hand out a free port instead of this file naming one: two of these cannot share
 # 8777, so working on the page from two windows meant the second one refusing to
 # start against a port the first had taken.
-PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT") or 8777)
+_ARGS = [a for a in sys.argv[1:] if a != "--dist"]
+PORT = int(_ARGS[0] if _ARGS else os.environ.get("PORT") or 8777)
+# Serve web/dist rather than UI_HTML — see do_GET.
+DIST = (Path(__file__).resolve().parent.parent / "web" / "dist") \
+    if "--dist" in sys.argv else None
 
 # The one thing here that is not a stub. The shot palette is eighty-odd tiles
 # built from a table in app.py, and a hand-written copy of that table would be a
@@ -618,6 +622,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
 
+        # `--dist` serves the built React bundle instead of UI_HTML, which is
+        # what app.py does in production. Worth having as a mode rather than a
+        # separate harness: it is the only way to exercise the bundle the way it
+        # actually ships — absolute /assets paths, hashed filenames, no dev
+        # server rewriting anything — against the same stubbed API and the same
+        # checks. A bundle that works under `npm run dev` and 404s its own CSS
+        # when mounted is a class of failure neither of those alone would catch.
+        if DIST:
+            if path == "/":
+                return self.reply((DIST / "index.html").read_text(),
+                                  "text/html; charset=utf-8")
+            if path.startswith("/assets/"):
+                f = DIST / path[len("/"):]
+                if f.is_file():
+                    kind = ("text/css" if f.suffix == ".css"
+                            else "text/javascript" if f.suffix == ".js"
+                            else "application/octet-stream")
+                    return self.reply(f.read_bytes(), kind)
+                self.send_error(404)
+                return
         if path == "/":
             return self.reply(ui_html(), "text/html; charset=utf-8")
         if path == "/api/state":

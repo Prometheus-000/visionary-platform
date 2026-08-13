@@ -150,3 +150,17 @@ stops being somewhere you can write. Checking the symptom reports the design as
 a bug on the shortest viewport anyone uses. What is pinned instead is
 `field == max(FLOOR, min(CEIL, innerHeight*0.30 - other))`, which holds
 everywhere and is what a React `fieldMax` has to reproduce.
+
+## Against the shipped bundle
+
+Every check takes a URL, so all three targets use the same command:
+
+    python3 tools/preview_ui.py 8791            # UI_HTML, the old page
+    python3 tools/preview_ui.py 8795 --dist     # web/dist, what app.py serves
+    npm --prefix web run dev                    # :5173, the dev server
+
+`--dist` is the one that matters before a deploy. It serves the built bundle as
+static files at absolute `/assets/…` paths, which is exactly how the web
+container serves it and is not what the dev server does — a bundle that works
+under `npm run dev` and 404s its own stylesheet when mounted is a failure
+neither the dev server nor a unit test would show.

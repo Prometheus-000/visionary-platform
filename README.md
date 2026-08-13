@@ -398,9 +398,12 @@ Being honest about coverage, since "it deploys" is not "it works":
 
 ## Working on the UI locally
 
-The front end is one self-contained string in `app.py` with no build step, so
-it can be served locally against stubbed JSON instead of paying an image build
-and a cold start per CSS change:
+The front end is React and TypeScript under `web/`, built by Vite into the
+image at deploy time — so `modal deploy app.py` remains the whole install and
+no local Node is needed to ship. For development, `npm run dev` in `web/`
+proxies to `tools/preview_ui.py`, which serves the real prompt compilers and
+the real shot vocabulary against stubbed jobs: the entire UI is workable with
+no Modal account, no GPU and nothing billed.
 
 ```bash
 python3 tools/preview_ui.py 8777

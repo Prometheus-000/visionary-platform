@@ -266,6 +266,25 @@ web_image = (
     # is a second set of behaviour that only ever runs when things are already
     # going wrong. Retries stay on hf_transfer and start over.
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    # ---- the front end, built into the image ------------------------------
+    #
+    # `modal deploy app.py` is the entire install, and that is the whole reason
+    # the build happens here rather than on your machine. Mounting a local
+    # `web/dist` would be simpler and would quietly make the deploy command a
+    # lie: a fresh clone has no dist, and a stale one deploys whatever you last
+    # built, which is the worst of the three because it looks like it worked.
+    # Node is a build-time dependency only — nothing at runtime needs it.
+    #
+    # Layered in this order on purpose. The lockfile lands before the sources,
+    # so editing a component re-runs `npm run build` (about a second) and not
+    # `npm ci` (about a minute) — Modal invalidates from the first changed layer
+    # down, so the order of these four lines is the difference.
+    .apt_install("nodejs", "npm")
+    .add_local_file("web/package.json", "/build/web/package.json", copy=True)
+    .add_local_file("web/package-lock.json", "/build/web/package-lock.json", copy=True)
+    .run_commands("cd /build/web && npm ci")
+    .add_local_dir("web", "/build/web", copy=True, ignore=["node_modules", "dist"])
+    .run_commands("cd /build/web && npm run build")
 )
 
 trainer_image = (
@@ -5967,12 +5986,49 @@ class VideoGenerator:
 def web():
     from fastapi import FastAPI, Request
     from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+    from fastapi.staticfiles import StaticFiles
 
     api = FastAPI()
 
+    # Where the build landed. A constant rather than a search, because a page
+    # that cannot be found should say which path was empty — the same reason
+    # _require_models() prints the path it wanted.
+    DIST = Path("/build/web/dist")
+
+    # Hashed filenames, so the bytes at a given name never change and the
+    # browser never needs to ask again. index.html is the opposite: it is the
+    # one unhashed file and it is what points at the current hashes, so a cached
+    # copy of it is a deploy that never arrives.
+    #
+    # check_dir=False because StaticFiles raises at construction on a missing
+    # directory, and this line runs at import: a build that did not produce a
+    # bundle would take the whole container down with a stack trace about a
+    # path, rather than reaching the route below that explains what is missing.
+    # A dead API is a worse answer than a page that says why it is empty.
+    api.mount("/assets",
+              StaticFiles(directory=str(DIST / "assets"), check_dir=False),
+              name="assets")
+
     @api.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return UI_HTML
+    def index() -> HTMLResponse:
+        page = DIST / "index.html"
+        if not page.is_file():
+            # Diagnosing itself rather than 500ing: this can only happen if the
+            # image built without the front end, and the three facts that
+            # separate "npm build failed" from "mounted at the wrong path" are
+            # what it wants, not a traceback.
+            listing = "\n".join(sorted(p.name for p in DIST.iterdir())) \
+                if DIST.is_dir() else "(the directory does not exist)"
+            return HTMLResponse(
+                "<pre>No front end in this image.\n\n"
+                f"wanted:  {page}\n"
+                f"in {DIST}:\n{listing}\n</pre>",
+                status_code=503,
+            )
+        return HTMLResponse(
+            page.read_text(),
+            headers={"cache-control": "no-store"},
+        )
 
     @api.get("/api/where")
     def where() -> dict[str, Any]:
@@ -7160,7 +7216,27 @@ def web():
 
 
 # --------------------------------------------------------------------------
-# UI — one page, no build step, no dependencies
+# UI — the previous front end. NOT SERVED.
+#
+# `/` serves the React build out of /build/web/dist; nothing reads this string
+# at runtime any more. It is still here for one reason: it is the oracle the
+# port was verified against. Every check under tools/ui-checks/ takes a URL and
+# runs against either front end, and `tools/preview_ui.py` with no flags serves
+# this page while `--dist` serves the shipped bundle — which is how "the React
+# side is wrong" was told apart from "the fixture was wrong" more than once,
+# including a training run that only appeared to work here because it was
+# polling a job id that did not exist.
+#
+# Deleting it is a two-line change — this string and `ui_html()` — and it
+# retires the vanilla half of all eleven checks with it. Worth doing once a
+# real deploy has been exercised, and not before: right now this is the only
+# second opinion in the repo.
+#
+# One thing it should NOT be treated as: a description of intended behaviour.
+# The size boxes here do not take arrow keys — the delegated handler reaches a
+# hidden pair of inputs while the visible ones sit in a popover appended to
+# <body> — and `probe_size.py` is expected to fail those two rows against this
+# page and pass against the build.
 # --------------------------------------------------------------------------
 
 UI_HTML = r"""<!doctype html>
