@@ -343,7 +343,7 @@ or a missing weight is rejected on CPU in milliseconds, before a GPU is rented.
 
 ## Verifying a deployment
 
-Two smoke tests, both cheap, both runnable against your own account:
+Three smoke tests, all cheap, all runnable against your own account:
 
 ```bash
 modal run tools/smoke_graphs.py
@@ -369,6 +369,18 @@ result says whether the model refused.
 ```bash
 python3 tools/smoke_prompt.py
 ```
+
+```bash
+python3 tools/smoke_pins.py
+```
+
+Asks whether every pinned wheel in `app.py` still exists, before a deploy
+spends twenty minutes finding out. It resolves and installs nothing, inside
+each image's own base layer — remotely rather than locally, because a local
+`pip --dry-run --platform` cannot evaluate `platform_system == "Linux"` markers
+and silently drops the `nvidia-*` dependencies, which is the exact class of
+failure this exists to catch. Run it after any version bump, and when a build
+that worked last week stops.
 
 Checks the shot compiler against the format MiniMax published: the alignment
 sentences verbatim for each of the four tasks, the three field labels once each
