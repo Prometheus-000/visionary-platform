@@ -279,7 +279,29 @@ web_image = (
     # so editing a component re-runs `npm run build` (about a second) and not
     # `npm ci` (about a minute) — Modal invalidates from the first changed layer
     # down, so the order of these four lines is the difference.
-    .apt_install("nodejs", "npm")
+    # A pinned tarball, not `apt_install("nodejs", "npm")`.
+    #
+    # Debian bookworm ships Node 18.20.4, and Vite 7 wants 20.19+ — it built
+    # anyway and printed "Please upgrade your Node.js version" every time,
+    # which is a build that works by luck on a floor upstream has already
+    # declared unsupported. The same shape as the cudnn pin NVIDIA pruned:
+    # a version resolved by somebody else's release schedule, quietly, until
+    # the day it stops.
+    #
+    # NODE_VERSION is here rather than in a variable at the top because it is
+    # the only place it can be read from — it belongs with the layer it builds,
+    # the way COMFY_SHA belongs with the clone. Bump it deliberately.
+    .apt_install("curl", "xz-utils")
+    .run_commands(
+        "curl -fsSL https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz"
+        " -o /tmp/node.tar.xz",
+        "mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1",
+        "rm /tmp/node.tar.xz",
+        # Symlinked rather than put on PATH with .env, which *replaces* the
+        # variable: node would be reachable and whatever Modal had put there
+        # would not be.
+        "ln -sf /opt/node/bin/node /opt/node/bin/npm /opt/node/bin/npx /usr/local/bin/",
+    )
     .add_local_file("web/package.json", "/build/web/package.json", copy=True)
     .add_local_file("web/package-lock.json", "/build/web/package-lock.json", copy=True)
     .run_commands("cd /build/web && npm ci")
