@@ -1,6 +1,11 @@
 /*
- * Generated from the ICON table in app.py by tools/extract_icons.py.
- * Do not edit here — re-run the script.
+ * The icon set. Edit here — this is the source.
+ *
+ * Generated once from the ICON table in app.py, by a script that has since
+ * been deleted along with the table it read. Twenty-five hand-transcriptions
+ * would have been twenty-five chances to typo a path, and a wrong `d` is a
+ * shape nobody notices is wrong until they look for it — but that was a
+ * migration, and a generator with nothing left to read is worse than none.
  *
  * These are inline because a sprite sheet or an icon font would be a second
  * asset to serve for twenty-five small shapes, and they are sized by CSS

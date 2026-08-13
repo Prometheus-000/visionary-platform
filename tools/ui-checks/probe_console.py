@@ -28,9 +28,11 @@ on the shortest viewport anyone uses. So what is pinned is
 which is true at every viewport, says *why* the console is over when it is over,
 and is exactly what a React `fieldMax` has to reproduce.
 """
+import sys
+
 from playwright.sync_api import sync_playwright
 
-URL = "http://localhost:8791"
+URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8791"
 
 # Mirrored from the page, and deliberately not imported: if these three drift
 # apart from `CONSOLE_BUDGET`/`FIELD_FLOOR`/`FIELD_CEIL` in the source, the
@@ -84,7 +86,7 @@ def measure(pg, label, rows):
     })
 
 
-def pills(pg, n):
+def pills(pg, side, n):
     """
     Fill the rail from the served vocabulary rather than a hand-written list.
 
@@ -92,25 +94,44 @@ def pills(pg, n):
     copy of the vocabulary here would be a rail of pills the compiler does not
     have — which is the same class of fault this file exists to catch.
     """
-    pg.evaluate("""(n) => {
-      shot = shotVocab.flatMap(g => g.items.map(i => g.key + '.' + i.key))
-               .slice(0, n).map(key => ({key}));
-      drawShotRail();
-    }""", n)
+    # Through the palette, not by assigning a global. The old page exposed
+    # `shot` and `drawShotRail()` on window and this reached straight for them,
+    # which is why it kept passing after the port: `capture()` read a
+    # module-level URL and ignored argv, so pointing it at the React build
+    # measured the old page twice and reported it as agreement.
+    pg.click(f"#{'v' if side == 'video' else 'g'}-shot")
+    pg.wait_for_timeout(250)
+    tiles = pg.locator(".tiles button.tl:not([disabled])")
+    got = tiles.count()
+    # Loud, because the failure this replaces was silent. A selector that
+    # matches nothing measures a console with no rail on it and reports the
+    # budget as comfortably met — which is exactly what "+ pill rail" showing
+    # the same height as "resting" looks like.
+    if got < n:
+        raise AssertionError(
+            f"wanted {n} shot tiles on the {side} side, found {got} — "
+            "the palette markup moved and this probe is measuring nothing")
+    for i in range(n):
+        tiles.nth(i).click()
+    pg.keyboard.press("Escape")
 
 
 def run(pg, side):
     rows = []
-    pg.evaluate("(k) => setKind(k)", side)
+    # The kind chip inside the prompt field, which is the only way a person
+    # changes this too.
+    if pg.evaluate("() => document.querySelector('#kind-toggle')?.title || ''"
+                   ).lower().startswith("video") != (side == "video"):
+        pg.click("#kind-toggle")
     pg.wait_for_timeout(400)
     measure(pg, f"{side} · resting", rows)
 
     if side == "image":
-        pg.evaluate("() => setRegional(true)")
+        pg.click("#g-regional")
         pg.wait_for_timeout(450)
         measure(pg, f"{side} · + regions", rows)
 
-    pills(pg, 16)
+    pills(pg, side, 16)
     pg.wait_for_timeout(400)
     measure(pg, f"{side} · + pill rail", rows)
 
@@ -118,13 +139,15 @@ def run(pg, side):
     pg.wait_for_timeout(500)
     measure(pg, f"{side} · + long prompt  << WORST", rows)
 
-    # Back to rest, so the other side is measured from a clean console rather
-    # than from whatever this one left behind.
-    pg.fill("#prompt", "")
-    pg.evaluate("() => { shot = []; drawShotRail(); }")
-    if side == "image":
-        pg.evaluate("() => setRegional(false)")
-    pg.wait_for_timeout(300)
+    # Back to rest by reloading, not by undoing sixteen clicks. Un-picking the
+    # pills one at a time was the obvious version and it hangs: a `.spill` that
+    # has scrolled behind the rail's overflow never becomes clickable, and
+    # Playwright waits its full timeout on each one — sixteen pills times two
+    # sides times three viewports. The page holds no state worth preserving
+    # between sides, so a reload is both faster and exact.
+    pg.reload(wait_until="networkidle")
+    pg.wait_for_timeout(900)
+    need(pg, "#prompt")
     return rows
 
 
@@ -179,7 +202,6 @@ def report(data):
 
 
 if __name__ == "__main__":
-    import sys
     data = capture()
     bad = report(data)
     if bad:

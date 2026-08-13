@@ -1,27 +1,37 @@
 """
-Freeze what the page currently does, so a rewrite has something to fail against.
+What the page did before the rewrite, frozen, so the rewrite has something to
+fail against.
 
-    /opt/homebrew/bin/python3.11 tools/preview_ui.py 8791 &
-    python3.11 tools/ui-checks/baseline.py capture    # writes baseline/*.json
-    python3.11 tools/ui-checks/baseline.py check      # re-runs and diffs
+    python3 tools/preview_ui.py 8791 &
+    python3 tools/ui-checks/baseline.py check      # re-runs and diffs
+    python3 tools/ui-checks/baseline.py capture    # only to move the contract
 
-The React port is a rewrite of 4,544 lines of a page whose value is mostly in
-decisions that are not inferable from the code they produced — the console
-budget, the separator rule, which pills a silent model drops. Those survive a
-rewrite only if something fails when they do not, and "someone looks at it"
-is not that thing: every one of them looks fine.
+The port was a rewrite of a page whose value is mostly in decisions that are
+not inferable from the code they produced — the console budget, the separator
+rule, which pills a silent model drops. Those survive a rewrite only if
+something fails when they do not, and "someone looks at it" is not that thing:
+every one of them looks fine.
 
-So `capture` is run against the current page and the result is committed. From
-then on `check` is the contract. A diff is not automatically a bug — it is a
-question, and the answer belongs in the commit that changes the baseline.
+**These numbers were captured from a page that no longer exists**, and that is
+the point rather than a problem with them. UI_HTML is deleted; this file is the
+only remaining record of what it measured, and `check` now runs the React build
+against it. A diff is not automatically a bug — it is a question, and the answer
+belongs in the commit that changes the baseline. Re-capturing to make a failure
+go away is the one use of `capture` that defeats the file.
 
 Two probes, deliberately split by what they need:
 
-  * `compile` talks HTTP only, so it runs anywhere and is the one that matters
-    most — the compilers are staying exactly where they are, and the whole
-    point of `/api/compile` is that the page never grows its own copy.
-  * `console` needs Chrome, because the thing being pinned is a measured
-    height and there is no way to measure it without laying the page out.
+One probe now. `compile` talks HTTP only, so it runs anywhere, and it is the
+one that matters most: the compilers never moved, and the whole point of
+`/api/compile` is that the front end never grows its own copy of them.
+
+There was a `console` probe too, pinning measured console and field heights. It
+drove the old page through its JS globals (`setKind(...)`), which the React
+build has no equivalent of, so it could not survive the string it was written
+against. Nothing was lost: `probe_console.py` asserts the *rule* those numbers
+existed to protect — that the field is exactly `fieldMax()` at every viewport
+and state — against whatever page it is pointed at, which is strictly better
+than a frozen measurement of a page that no longer exists.
 """
 import json
 import subprocess
@@ -34,15 +44,9 @@ URL = "http://localhost:8791"
 
 
 def probes():
-    """Imported lazily: `compile` must still run on a machine with no Chrome."""
+    """Imported lazily, so this runs on a machine with no Chrome."""
     import probe_compile
-    probes = {"compile": probe_compile.capture}
-    try:
-        import probe_console
-        probes["console"] = probe_console.capture
-    except ImportError as exc:                      # playwright absent
-        print(f"  (skipping console probe: {exc})", file=sys.stderr)
-    return probes
+    return {"compile": probe_compile.capture}
 
 
 def reachable():

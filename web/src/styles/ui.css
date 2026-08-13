@@ -1,5 +1,10 @@
 /*
- * Extracted from UI_HTML in app.py by tools/extract_css.py — do not edit here.
+ * The stylesheet. Edit here — this is the source.
+ *
+ * Lifted byte for byte out of app.py's UI_HTML when the front end was ported,
+ * by a script that has since been deleted along with the string it read. It
+ * was copied rather than rewritten on purpose: the measurements in it are the
+ * expensive part, and a stylesheet retyped is a stylesheet re-derived.
  *
  * Every measured decision in this file is documented in CLAUDE.md under
  * "The page". The ones most easily lost to a tidy-up:
@@ -718,7 +723,23 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    is part of the prompt. It costs nothing while empty — not a collapsed row, no
    element at all — which is the condition for putting anything above the
    options strip at all. */
-#shot-rail{margin:8px 2px 0;gap:6px}
+/* One row, scrolled — never wrapped.
+   A rail that wraps buys its extra pills out of the console's 30% budget, and
+   the console takes that out of the canvas: sixteen pills measured 223px
+   against 160px resting, 63px of picture spent on a list you already read. A
+   scroller costs one row at any number of pills, so the budget stops depending
+   on how much you said.
+   overflow-x with no visible scrollbar: the rail is short, the pills are the
+   affordance, and a scrollbar under a single row of chips is chrome announcing
+   a gesture the content already implies. scroll-padding keeps a pill from
+   landing half-under the fade. */
+#shot-rail{margin:8px 2px 0;gap:6px;flex-wrap:nowrap;overflow-x:auto;
+  scrollbar-width:none;scroll-padding-inline:12px;
+  /* The pills are chips, not text: without this they compress to nothing
+     rather than running off the end, which is the whole point of scrolling. */
+  }
+#shot-rail::-webkit-scrollbar{display:none}
+#shot-rail>*{flex:none}
 #shot-rail:empty{display:none;margin:0}
 .spill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.07);
   border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:3px 5px 3px 7px;

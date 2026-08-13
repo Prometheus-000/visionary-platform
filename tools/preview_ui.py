@@ -1,21 +1,31 @@
 """
-Serve UI_HTML on localhost with a stubbed API, so the frontend can be looked at
-without a deploy.
+The stubbed API the front end is developed against, and a static server for the
+built bundle.
 
-The real UI is a @modal.asgi_app(): reaching it means building a remote image,
-mounting the volume, and paying a cold start — minutes, for a CSS change. But
-UI_HTML is one self-contained string with no build step, so the whole frontend
-can be exercised locally against fake JSON. This is the dev server the project
-does not otherwise have.
+    npm --prefix web run build && python3 tools/preview_ui.py [port]
 
-    python3 tools/preview_ui.py [port]
+Two ways in, and they want different things:
+
+- **`npm run dev` (:5173)** proxies /api here and serves the sources with HMR.
+  That is the edit loop.
+- **this server on its own** serves `web/dist` exactly as the web container
+  does — absolute /assets paths, hashed filenames, nothing rewriting anything.
+  That is the only way to exercise the artifact that actually ships, and it is
+  what every check under tools/ui-checks/ is pointed at. A bundle that works
+  under the dev server and 404s its own stylesheet when mounted is a failure
+  neither the dev server nor a unit test would show.
+
+What makes it worth having at all is the API half: the real prompt compilers
+and the real shot vocabulary, pulled out of app.py by AST, answering against
+stubbed jobs and files. So the whole front end is workable with no Modal
+account, no GPU, no deployment and nothing billed.
 
 Two deliberate choices:
 
-- **app.py is re-read on every request.** Caching it at import meant editing
-  UI_HTML and reloading showed the old page, which reads as "my change did not
-  work" rather than "the server is stale". Reload is the edit loop, so reload
-  has to be honest.
+- **app.py is re-read when it changes.** A vocabulary captured at import meant
+  editing a pill and reloading showed the old palette, which reads as "my
+  change did not work" rather than "the server is stale". Reload is the edit
+  loop, so reload has to be honest.
 - **Threaded.** A gallery is a grid, so opening it fires a dozen concurrent
   media requests. The single-threaded version dropped most of them and the
   covers came back blank — a layout bug that was not in the layout.
@@ -41,11 +51,8 @@ APP = Path(__file__).resolve().parent.parent / "app.py"
 # hand out a free port instead of this file naming one: two of these cannot share
 # 8777, so working on the page from two windows meant the second one refusing to
 # start against a port the first had taken.
-_ARGS = [a for a in sys.argv[1:] if a != "--dist"]
-PORT = int(_ARGS[0] if _ARGS else os.environ.get("PORT") or 8777)
-# Serve web/dist rather than UI_HTML — see do_GET.
-DIST = (Path(__file__).resolve().parent.parent / "web" / "dist") \
-    if "--dist" in sys.argv else None
+PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT") or 8777)
+DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 # The one thing here that is not a stub. The shot palette is eighty-odd tiles
 # built from a table in app.py, and a hand-written copy of that table would be a
@@ -57,7 +64,7 @@ DIST = (Path(__file__).resolve().parent.parent / "web" / "dist") \
 #
 # Re-pulled when app.py changes, for the reason at the top of this file: reload
 # is the edit loop, so reload has to be honest, and a vocabulary captured at
-# import is exactly the staleness `ui_html()` refuses to have. Keyed on mtime
+# import is exactly the staleness this refuses to have. Keyed on mtime
 # rather than re-parsed per request because every gallery thumbnail is a
 # request and an AST parse of ten thousand lines is not free.
 _APP_CACHE: dict = {}
@@ -68,13 +75,6 @@ def app_api() -> dict:
     if _APP_CACHE.get("stamp") != stamp:
         _APP_CACHE.update(stamp=stamp, api=pull(SHOT | CAPTION))
     return _APP_CACHE["api"]
-
-
-def ui_html() -> str:
-    """Pull UI_HTML back out of app.py. Split, not import — importing app.py
-    pulls in modal and builds image definitions at module scope."""
-    src = APP.read_text()
-    return src.split('UI_HTML = r"""', 1)[1].rsplit('"""', 1)[0]
 
 
 # --------------------------------------------------------------------------
@@ -622,28 +622,29 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
 
-        # `--dist` serves the built React bundle instead of UI_HTML, which is
-        # what app.py does in production. Worth having as a mode rather than a
-        # separate harness: it is the only way to exercise the bundle the way it
-        # actually ships — absolute /assets paths, hashed filenames, no dev
-        # server rewriting anything — against the same stubbed API and the same
-        # checks. A bundle that works under `npm run dev` and 404s its own CSS
-        # when mounted is a class of failure neither of those alone would catch.
-        if DIST:
-            if path == "/":
-                return self.reply((DIST / "index.html").read_text(),
-                                  "text/html; charset=utf-8")
-            if path.startswith("/assets/"):
-                f = DIST / path[len("/"):]
-                if f.is_file():
-                    kind = ("text/css" if f.suffix == ".css"
-                            else "text/javascript" if f.suffix == ".js"
-                            else "application/octet-stream")
-                    return self.reply(f.read_bytes(), kind)
+        # The built bundle, served the way the web container serves it. See the
+        # note at the top of this file for why that is not the same thing as
+        # what `npm run dev` serves.
+        if path == "/":
+            page = DIST / "index.html"
+            if not page.is_file():
+                # The one error this server can hit that is not a stub gap, and
+                # it has exactly one cause. Saying so beats a traceback about a
+                # missing file, which reads like the tool is broken.
+                return self.reply(
+                    "<pre>No build in web/dist.\n\n"
+                    "  npm --prefix web run build\n</pre>",
+                    "text/html; charset=utf-8", code=503)
+            return self.reply(page.read_text(), "text/html; charset=utf-8")
+        if path.startswith("/assets/"):
+            f = DIST / path.lstrip("/")
+            if not f.is_file():
                 self.send_error(404)
                 return
-        if path == "/":
-            return self.reply(ui_html(), "text/html; charset=utf-8")
+            kind = ("text/css" if f.suffix == ".css"
+                    else "text/javascript" if f.suffix == ".js"
+                    else "application/octet-stream")
+            return self.reply(f.read_bytes(), kind)
         if path == "/api/state":
             api = app_api()
             return self.reply({
@@ -850,5 +851,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Visionary UI preview  ->  http://127.0.0.1:{PORT}")
-    print(f"Serving UI_HTML from {APP}, re-read on every reload.")
+    print(f"Serving {DIST} with a stubbed API; compilers pulled from {APP}.")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

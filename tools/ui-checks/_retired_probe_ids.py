@@ -35,6 +35,9 @@ from collections import Counter
 
 from playwright.sync_api import sync_playwright
 
+# Retired with UI_HTML: this diffed the two front ends id by id, and there is
+# only one now. Kept out of the suite rather than rewritten — probe_ids answered
+# "did the port drop a control", which is a question with no subject any more.
 VANILLA = "http://localhost:8791"
 REACT = "http://localhost:5173"
 

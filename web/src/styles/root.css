@@ -1,7 +1,7 @@
 /*
  * The one thing React changes about the page's geometry, and nowhere else.
  *
- * UI_HTML puts the layout on <body> — `display:flex; flex-direction:column;
+ * The old page put the layout on <body> — `display:flex; flex-direction:column;
  * height:100dvh` — and `.top` and `.views` are its direct children. React
  * mounts into #root, so that div lands between them: an unstyled block parent,
  * which means `.top{flex:0 0 var(--head)}` has no flex container to act on and
