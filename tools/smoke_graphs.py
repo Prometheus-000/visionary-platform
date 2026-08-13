@@ -302,6 +302,23 @@ def _check_model_sampling(_schema: dict) -> list[str]:
     this file does — so it is checked against the model config itself rather
     than against a number written down twice.
     """
+    # ComfyUI is a git clone at /opt/comfyui, not an installed package, so
+    # `comfy` is importable only with that directory on the path — which is why
+    # the server is started with `cwd=COMFY`. Every other check here asks the
+    # running server over HTTP and so never needed the import; this one reads
+    # the model config directly, and was the only line in the file that had
+    # never executed.
+    if str(COMFY) not in sys.path:
+        sys.path.insert(0, str(COMFY))
+    # And it has to be told it is on CPU *before* that import, because reaching
+    # `supported_models` drags in `comfy.model_management`, which resolves a
+    # torch device at module scope and dies with "Found no NVIDIA driver" on
+    # this container. The server process is spared that by `--cpu`; nothing
+    # parses argv on this path, so the same flag is set on the same `args`
+    # object model_management reads.
+    import comfy.cli_args
+
+    comfy.cli_args.args.cpu = True
     import comfy.supported_models
 
     bad: list[str] = []
@@ -446,3 +463,20 @@ def main() -> None:
         print("\n" + "\n".join("  " + f for f in failures), flush=True)
         raise SystemExit(f"\n{len(failures)} structural problem(s) in the video graphs.")
     print("\nAll video graphs are wired to nodes that exist.", flush=True)
+
+
+# Not `main()`. `main` is a `modal.Function` after decoration, so calling it
+# here raises "'Function' object is not callable", and `main.local()` would get
+# further only to spawn ComfyUI from /opt/comfyui — a path in `comfy_image`,
+# not on your laptop. There is no local form of this check to fall back to.
+#
+# The guard is here because the failure without it was silence: run under an
+# interpreter that has modal and the module imports, defines every function,
+# prints nothing and exits 0. A check that reports success by not running is
+# worse than no check, and this file is the only thing asserting that the
+# graphs name nodes that exist.
+if __name__ == "__main__":
+    raise SystemExit(
+        "This is a Modal function, not a local script: it drives the ComfyUI "
+        f"in comfy_image at {COMFY}, which exists in the container and not "
+        "here.\n\n    modal run tools/smoke_graphs.py\n")
