@@ -296,10 +296,24 @@ trainer_image = (
     .apt_install("git", "libgl1", "libglib2.0-0")
     # torch first from the cu124 index so musubi's install sees it satisfied and
     # does not pull a default-CUDA wheel over the top.
+    #
+    # `extra_index_url` is pypi.org, and it is not decoration — without it this
+    # build stopped working one day having changed nothing. torch 2.5.1 pins
+    # `nvidia-cudnn-cu12==9.1.0.70` exactly, the CUDA base image puts NVIDIA's
+    # own index in front of PyPI, and NVIDIA prunes old versions from it: that
+    # file is gone from pypi.nvidia.com (which now starts at 9.1.1.17) and still
+    # present on pypi.org. So pip resolved cudnn against an index that no longer
+    # carried the pin and failed the whole image with "No matching distribution",
+    # naming a package nothing in this file mentions.
+    #
+    # Worth knowing for the next one, because the shape recurs: a pinned wheel
+    # is only as reproducible as the index you let pip reach for its transitive
+    # deps, and a vendor index is a moving target in a way pypi.org is not.
     .pip_install(
         "torch==2.5.1",
         "torchvision==0.20.1",
         index_url="https://download.pytorch.org/whl/cu124",
+        extra_index_url="https://pypi.org/simple",
     )
     .run_commands(
         "git clone --depth 1 https://github.com/kohya-ss/musubi-tuner /opt/musubi-tuner",
