@@ -849,12 +849,65 @@ detour around.
    LoRA — done. One backend, one image, two GPU classes.
    - A box per character, each LoRA masked to its own rectangle
    - Scene and outfit transfer, when the identity-edit LoRA is downloaded
-5. Video LoRA training — Wan 2.2 is the target, which is why phase 3 loads LoRAs
+5. Video LoRA training — Wan 2.2 was the target, which is why phase 3 loads
+   LoRAs. **Tabled, and the reason is a number** — see below.
 6. **The Dynamic Canvas** — next, and sketched rather than specified below
 
 The end state is one application where a generated still flows into a clip
 without a round trip through the filesystem — the "Animate" and "As reference"
 buttons on a finished image are the first piece of that.
+
+### Phase 5 — Wan LoRA training, and why it is tabled
+
+The pipeline is nearly free and the weights are not. That is the whole finding,
+and it is recorded here because everything above it argues the opposite — phase
+3 loads LoRAs *so that* this could happen, and the trainer already runs musubi.
+
+`train_job` is already the exact three-step shape Wan wants. Only the names change:
+
+| | Krea 2, today | Wan 2.2 |
+|---|---|---|
+| latents | `krea2_cache_latents.py --vae` | `wan_cache_latents.py --vae` |
+| text | `krea2_cache_text_encoder_outputs.py --text_encoder` | `wan_cache_text_encoder_outputs.py --t5` |
+| train | `krea2_train_network.py`, `networks.lora_krea2` | `wan_train_network.py`, `networks.lora_wan`, `--task t2v-A14B` |
+
+The A14B pair trains in one run rather than two — `--dit <low>
+--dit_high_noise <high> --timestep_boundary 0.875` — so it extends the existing
+job/status/stop contract with a recipe parameter and invents nothing. By the
+rule against building a second way to do the first thing, this is the shape it
+should take whenever it happens.
+
+**What stops it: musubi cannot train the weights this platform downloads.** Its
+Wan doc is explicit that *"fp8_scaled models are not supported even with
+`--fp8_scaled`"*, and every 14B DiT in `MODELS` is `fp8_scaled` because that is
+the right choice for inference. The text encoder is the same story — we hold
+`umt5_xxl_fp8_e4m3fn_scaled.safetensors`, musubi wants
+`models_t5_umt5-xxl-enc-bf16.pth`. Only the VAE is shared, and it is shared
+exactly: `wan_2.1_vae.safetensors` is the file musubi's own doc names.
+
+So training needs a second copy of models already on the volume, at a precision
+inference does not want:
+
+- `wan2.2_t2v_{high,low}_noise_14B_fp16.safetensors` — 26.6 GB each, 53.2 GB the pair
+- the bf16 T5 `.pth` from `Wan-AI/Wan2.1-I2V-14B-720P` — about 11 GB
+
+Roughly 64 GB, of which 53 is a duplicate at a different dtype. At 244 MB/s
+that is four minutes of transfer, so the cost is storage rather than time — but
+it is storage on a volume whose only way to reclaim space is the Modal CLI.
+
+Two things follow, and they outlive the decision to wait:
+
+- **The catalogue's one-entry-per-model assumption does not survive training.**
+  Whenever this is picked up, those entries have to say why two precisions of
+  one weight exist, or the next person reading the list deletes the one that
+  looks redundant.
+- **"Downloaded" and "trainable" become different questions.** A Train surface
+  offering Wan cannot check `present` — it has to check for the training-capable
+  file specifically, or it offers a run that dies after the dataset is cached.
+
+Tabled rather than abandoned: nothing above is a blocker, it is a bill, and it
+should be paid deliberately rather than by a pull request that quietly adds
+64 GB to a catalogue.
 
 ### Phase 6 — The Dynamic Canvas
 
