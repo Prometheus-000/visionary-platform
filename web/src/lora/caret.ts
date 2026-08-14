@@ -62,8 +62,9 @@ export function applyWrite(w: Written): void {
   })
 }
 
-/** Forget the field when it unmounts — the region prompt goes away with the
- *  inspector row, and a stale element would take writes that paint nowhere. */
+/** Forget the field when it goes — a region's prompt lives in the card its box
+ *  opens, so it is torn down and rebuilt as the selection moves, and a stale
+ *  element would keep taking writes that paint nowhere. */
 export function dropCaret(el: Field): void {
   if (sink?.el === el) sink = null
 }

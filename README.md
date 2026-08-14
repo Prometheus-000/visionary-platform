@@ -71,17 +71,31 @@ saying why.
 zero everywhere outside the box — so there is no pathway left for one
 character's identity to reach another's. The boxes *are* the list: drag to
 place one, drag to move it, drag a handle to size it, and they snap to halves,
-thirds and quarters and to each other. The console keeps one inspector row for
-whichever box is selected, which is the same height at eight boxes as at one.
+thirds and quarters and to each other.
+
+**And the box is where you say who is in it.** Touch one and it opens into a
+card rooted in its own edge, carrying the sentence, the strength, the photograph
+and the four coordinates. Nothing about a region lives under the canvas any
+more: you no longer drag a rectangle at the top of the screen and describe it at
+the bottom. The frame has the same card, reached by a button in the corner,
+because scene, outfit and the global region weight are about every box at once
+and belong to none of them — so the scope is simply where the card is. It costs
+the console nothing: arming used to add a 44px row, and now measures at zero.
 
 A box takes a photograph as well as a LoRA — a latent mold that pulls that
 rectangle toward that face during sampling, which is worth having on a platform
 whose other half is a trainer. Drop a photo on the bare canvas instead and it
 becomes the **scene**: the picture is generated inside it, with lighting,
-perspective and shadows integrated rather than the subjects pasted in. A second
-tile takes an outfit. Both need the Krea 2 identity-edit weight, so without it
-they are dimmed rather than hidden — a weight-gated control is a purchase you
-have not made yet, and hiding it hides the decision rather than the capability.
+perspective and shadows integrated rather than the subjects pasted in. The
+frame's card takes an outfit too. Both need the Krea 2 identity-edit weight, so
+without it they are dimmed rather than hidden — a weight-gated control is a
+purchase you have not made yet, and hiding it hides the decision rather than the
+capability.
+
+All three are one record with a role on it — this character, this scene, this
+outfit — which is what a ControlNet would be too, if one existed for this model:
+a picture with a structural role, frame-wide on the frame and masked on a box,
+needing no control that is not already there.
 
 **LoRAs are written in the prompt.** `<lora:my_style:0.8>`, the syntax anyone who
 has trained these models already types. Strength defaults to 1 and the token
@@ -114,7 +128,7 @@ invisible from the positive.
 **The console has a budget: 30% of the viewport.** Everything else in it is fixed
 or conditional, so the prompt field is the only part that grows without asking —
 and it is the part that yields. It takes whatever the budget has left, down to a
-two-line floor, and re-measures when the region bar or the pill rail appears.
+two-line floor, and re-measures when the pill rail appears.
 
 **It is designed for a tablet in portrait, and desktop inherits.** Below 1024px
 the layout stacks, the gallery crops to a 1:1 grid, and the last generation
@@ -124,8 +138,10 @@ desktop for months, including a drag that was broken on trackpads specifically.
 
 **Nothing sits on top of a render.** Animate and As reference are icons under the
 bottom-left corner that appear on hover. Regional boxes come off the picture the
-moment a render lands and are reached again through a map of them in the console
-— one control the same size at eight boxes as at one.
+moment a render lands, and two things bring them back: the mode button, which
+reveals rather than disarms on the first press after a result, and a file
+dragged over the window — which is also the only moment the page says a box will
+take a photograph.
 
 **Copy is a last resort — but a number is not a value it can show.** Design
 first, then an icon, then words. A control that shows its own value gets no

@@ -176,19 +176,19 @@ svg{width:100%;height:100%;display:block}
    has a popover open — and those are the same fact, so they get the same paint.
    `+ LoRA` is in here too: it was a bordered `.s` button sitting among unbounded
    ones, which made the odd one out look like the important one. */
-#c-image>.opts .opt,#c-video>.opts .opt,#region-bar .opt,
+#c-image>.opts .opt,#c-video>.opts .opt,.rins .opt,
 #c-image>.opts button.s,#c-video>.opts button.s{
   background:none;border-color:transparent;border-width:0;color:var(--mut)}
-#c-image>.opts .opt:hover,#c-video>.opts .opt:hover,#region-bar .opt:hover,
-#c-image>.opts .opt:focus-within,#c-video>.opts .opt:focus-within,#region-bar .opt:focus-within,
-#c-image>.opts .opt.on,#c-video>.opts .opt.on,#region-bar .opt.on,
+#c-image>.opts .opt:hover,#c-video>.opts .opt:hover,.rins .opt:hover,
+#c-image>.opts .opt:focus-within,#c-video>.opts .opt:focus-within,.rins .opt:focus-within,
+#c-image>.opts .opt.on,#c-video>.opts .opt.on,.rins .opt.on,
 #c-image>.opts button.s:hover,#c-video>.opts button.s:hover,
 #c-image>.opts button.s:focus-visible,#c-video>.opts button.s:focus-visible{
   background:rgba(255,255,255,.10);border-color:transparent;color:var(--fg)}
 /* The one exception, by content rather than by id: anything holding a text box
    you type into keeps its edges, because an empty field has nothing to show and
    no edge to aim at. */
-#region-bar .opt.wide{background:rgba(255,255,255,.05);
+.rins .opt.wide{background:rgba(255,255,255,.05);
   border-color:var(--line);border-width:1px}
 /* The glyph is the same ink as the word beside it. Pinned to --dim it stayed
    dark while the label brightened on hover and on `.on`, so a control that was
@@ -392,13 +392,39 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    border would describe the grid instead of the picture. --shot-h is set per
    batch size so four images are a contact sheet you can see at once, not a
    scroll. */
+/* One canvas at a time. The batch used to be a two-up grid at half height, which is
+   the arrangement that broke the regions — one set of boxes applies to the whole
+   batch, so there was no single surface to draw them on. Each result now fills the
+   canvas and the track slides between them like frames of film.
+
+   `overflow:hidden` on the viewport and a transform on the track, so stepping costs
+   one compositor frame and nothing re-fetches: every frame stays mounted, and an
+   <img> already decoded is an <img> that does not flash on the way back. */
+.film{overflow:hidden;margin:0 auto;max-width:100%;width:100%}
+.film-track{display:flex;will-change:transform;
+  transition:transform .34s cubic-bezier(.22,.61,.36,1)}
+.film-cell{flex:0 0 100%;min-width:0;display:flex;justify-content:center;align-items:flex-start}
+@media (prefers-reduced-motion:reduce){.film-track{transition:none}}
+/* `‹ 2 / 4 ›`. Quiet at rest like everything else that sits near the picture, and
+   present only when there is a batch — one result has nothing to step through. */
+.film-nav{display:flex;align-items:center;justify-content:center;gap:4px;
+  margin:10px auto 0;opacity:.5;transition:opacity .12s}
+#canvas:hover .film-nav,.film-nav:focus-within{opacity:1}
+.film-nav .count{font-size:12px;color:var(--dim);
+  font-variant-numeric:tabular-nums;min-width:52px;text-align:center}
+.film-nav .ico{width:26px;height:26px;border-radius:8px;font-size:17px;line-height:1}
+.film-nav .ico:disabled{opacity:.25;cursor:default;background:none}
 .shots{display:grid;gap:16px;margin:0 auto}
 .shot{position:relative;width:fit-content;max-width:100%;justify-self:center;
   border-radius:16px;overflow:hidden;border:1px solid var(--line);background:rgba(255,255,255,.02)}
-/* zoom-in, because it does: the still on the canvas opens the same lightbox the
-   gallery card does. A result you have to send to the gallery to look at
-   properly is a result the canvas is only pretending to show you. */
-.shot img{display:block;max-width:100%;max-height:var(--shot-h,none);width:auto;height:auto;cursor:zoom-in}
+/* No zoom cursor any more, and the rule it used to carry is superseded rather than
+   forgotten: it said the canvas was "only pretending to show you" the picture, which
+   was true when a batch was four half-height thumbnails. The film strip shows every
+   result at full canvas size, so the lightbox stopped being how you see a render and
+   went back to being the chrome-off view — the expand button and Space. What replaced
+   the click is one rule with no geography in it: a click addresses whatever is under
+   it, so over a region it opens that region and over bare picture it does nothing. */
+.shot img{display:block;max-width:100%;max-height:var(--shot-h,none);width:auto;height:auto}
 /* Quiet at rest rather than absent. These two are the whole "a still flows into
    a clip without a round trip through the filesystem" claim, and at opacity:0
    they were a feature you had to already know about to find — nothing on the
@@ -420,7 +446,17 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .shot .acts{position:absolute;left:1px;bottom:3px;display:flex;gap:8px;opacity:0;
   transition:opacity .12s}
 .shot:hover .acts,.shot .acts:focus-within{opacity:1}
-.shot{padding-bottom:26px}
+/* Named, because two elements have to agree on it. `#region-layer` is `inset:0`
+   inside this figure, and an absolutely-positioned child resolves `inset`
+   against the *padding* box — so with a bare 26px here every box drawn over a
+   render was 26px taller than the picture it was masking, offset and scaled by
+   26/(imgH+26) against the pixels the backend would actually mask. Exact over
+   `.frame`, which has no padding, and wrong over every still. This is the same
+   percentage-vs-padded-box trap the `.acts` comment above records; the layer
+   never got the fix, because nothing on screen shows a box and its mask
+   disagreeing. */
+.shot{--acts-h:26px;padding-bottom:var(--acts-h)}
+.shot>#region-layer{bottom:var(--acts-h)}
 .shot .acts button{width:20px;height:20px;flex:none;border:0;background:none;padding:0;
   border-radius:5px;color:var(--dim);cursor:pointer}
 .shot .acts button:hover{color:var(--fg);background:none}
@@ -1113,7 +1149,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 @media (hover:none){
   .gal .quick{opacity:1}
   .tile .rm{opacity:1}
-  .shot .acts,#canvas-acts{opacity:.85}
+  .shot .acts,#canvas-acts,.film-nav{opacity:.85}
   /* Handles ride on .sel already, which a tap sets — so a box you have selected
      is resizable and one you have not is not cluttered with eight dots. */
 }
@@ -1125,32 +1161,6 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   .opt select,.opt input{height:42px}
   .b{min-height:44px}
 }
-/* The region map. Same height as the 36px controls beside it so the bar stays
-   one row, and the frame is drawn rather than bordered so the boxes sit inside
-   the picture's proportions rather than inside a button's. */
-.rmap{width:52px;height:32px;flex:none;padding:4px 6px;border:1px solid var(--line);
-  border-radius:10px;background:rgba(255,255,255,.03);cursor:pointer}
-.rmap:hover{border-color:rgba(255,255,255,.4)}
-.rmap:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:1px}
-.rmap svg{width:100%;height:100%;display:block;overflow:visible}
-.rmap .fr{fill:none;stroke:rgba(255,255,255,.22);stroke-width:1}
-/* Unselected boxes are outlines and the selected one is filled, which is the
-   same distinction the canvas draws — a box you are editing against boxes that
-   are merely there. */
-/* No fill on the unselected ones. A translucent fill per box looks fine at two
-   and stacks into grey mush at five, which is exactly the count where you need
-   the map to tell them apart. Outlines do not accumulate; the one solid
-   rectangle is unambiguous at any number. */
-.rmap .bx{fill:none;stroke:rgba(255,255,255,.38);stroke-width:1;cursor:pointer}
-.rmap .bx:hover{stroke:rgba(255,255,255,.85)}
-.rmap .bx.on{fill:rgba(255,255,255,.85);stroke:#fff}
-.rmap-wrap{display:inline-flex;align-items:center;gap:1px;flex:none}
-.rmap-step{width:18px;height:32px;flex:none;border:0;background:none;color:var(--dim);
-  cursor:pointer;font-size:15px;line-height:1;padding:0;border-radius:7px}
-.rmap-step:hover{color:var(--fg);background:rgba(255,255,255,.08)}
-.rmap-at{position:absolute;right:3px;bottom:1px;font-weight:600;font-size:8.5px;line-height:1;color:var(--fg);
-  text-shadow:0 0 3px #000;pointer-events:none;font-variant-numeric:tabular-nums}
-.rmap{position:relative}
 .pad{padding:26px}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
@@ -1236,16 +1246,27 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    an invisible box that only *looks* gone is not the fix that was asked for.
    The way back in is the region bar, which is on screen the whole time regions
    are armed — click into its prompt and the boxes come back. */
-#region-layer{position:absolute;inset:0;touch-action:none;cursor:crosshair;
-  opacity:0;pointer-events:none;transition:opacity .16s ease}
-#region-layer.show{opacity:1;pointer-events:auto}
-#region-layer.off{display:none}
+/* Always listening, and what it *draws* is the mode. A region you cannot touch is not
+   addressable, so over a render this layer keeps its pointer events in every mode —
+   `off` is about paint, not about reach. That is the Phase 6 rule arriving early:
+   every element addressable at all times, none of them drawn as a control.
+
+   Crosshair only where a drag draws something. In `off`/`content` the cursor is the
+   ordinary one over bare picture and a pointer over a region, because there the click
+   opens a card rather than starting a rectangle. */
+#region-layer{position:absolute;inset:0;touch-action:none;pointer-events:auto}
+#region-layer.geometry{cursor:crosshair}
 /* A region of the picture, not a line on top of it. The 1px white stroke read
    as UI at every size and fought whatever was underneath — bright plate or
    dark, it was the most contrasty thing in the frame. Corner brackets plus a
    barely-there wash say "this area" and leave the middle of the box clear,
    which is where the render you are judging actually is. */
-.rbox{position:absolute;border-radius:5px;cursor:move;touch-action:none;overflow:hidden;
+/* No `overflow:hidden`. It was here to clip the face photo and the tag to the
+   rounded corner, and it also clipped all eight resize handles — which straddle
+   the border at -5px, so every handle on every box was a 6px target rather than
+   an 11px one. The two children carry their own radius instead, which clips the
+   two things that needed clipping and nothing that did not. */
+.rbox{position:absolute;border-radius:5px;cursor:move;touch-action:none;
   background:rgba(255,255,255,.045);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.16),inset 0 0 0 2px rgba(0,0,0,.18)}
 /* The brackets. Drawn with two gradients per corner so there is no extra
@@ -1268,10 +1289,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .rbox.sel{background:rgba(255,255,255,.08);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.42),inset 0 0 0 2px rgba(0,0,0,.22)}
 .rbox>.face{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.5;
-  pointer-events:none}
+  border-radius:5px;pointer-events:none}
 .rbox>.tag{position:absolute;left:0;top:0;max-width:100%;padding:3px 7px;
+  border-radius:5px 0 6px 0;
   background:rgba(0,0,0,.6);backdrop-filter:blur(8px);color:#fff;
-  border-radius:0 0 6px 0;font-weight:500;font-size:11px;line-height:1.25;white-space:nowrap;
+  font-weight:500;font-size:11px;line-height:1.25;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .rbox>.tag em{font-style:normal;color:var(--mut)}
 /* Handles are hidden until the box is worth resizing — eight dots on every box
@@ -1287,11 +1309,130 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .rbox>i[data-h=s]{left:50%;bottom:-5px;margin-left:-5px;cursor:ns-resize}
 .rbox>i[data-h=w]{left:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
 .rbox>i[data-h=e]{right:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+/* Everything above is the `geometry` treatment. In the other two modes a box is a
+   hit target rather than a drawing: the render is what you are looking at, and the
+   regions are addressable without being drawn on top of it. This is the half of
+   "nothing sits on top of a render" that survived the canvas-native rework — nothing
+   is *drawn* by default, and touching still works.
+
+   Everything a box paints has to be undone, not just the stroke: the wash, the
+   brackets, the handles, the identity photo and the name tag are each a mark on the
+   picture. Missing one of them is a render with a mystery smudge in the corner. */
+#region-layer:not(.geometry) .rbox{background:none;box-shadow:none;opacity:1;cursor:pointer}
+#region-layer:not(.geometry) .rbox::before,
+#region-layer:not(.geometry) .rbox::after,
+#region-layer:not(.geometry) .rbox>i,
+#region-layer:not(.geometry) .rbox>.face,
+#region-layer:not(.geometry) .rbox>.tag{display:none}
+/* The one job hover has in this codebase: showing what you would be touching before
+   you touch it. A hairline, because it is an answer to "is there something here",
+   not a control — and the selected box keeps it while its card is open so the card
+   has a visible scope. */
+#region-layer:not(.geometry) .rbox:hover,
+#region-layer.content .rbox.sel{
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.55),inset 0 0 0 2px rgba(0,0,0,.28)}
+/* No pointer to hover with, so there is nothing to disclose and a sticky :hover from
+   the last tap would be a mark left on the picture. Long press is the way in there. */
+@media (hover:none){#region-layer:not(.geometry) .rbox:hover{box-shadow:none}}
+
 /* Snap guides: drawn only while a drag is landing on one, so the line is
    feedback rather than furniture. */
 #region-layer>.guide{position:absolute;background:rgba(255,255,255,.55);pointer-events:none}
 #region-layer>.guide.v{top:0;bottom:0;width:1px}
 #region-layer>.guide.h{left:0;right:0;height:1px}
+
+/* The cold-canvas invitation --------------------------------------------
+   No boxes yet, so the layer *is* the "place a character" prompt rather than a
+   glyph and a line of copy off in the corner — the empty canvas is the biggest,
+   most-attended surface in the app and it was spending that on a 44px icon. Two
+   faint columns show what a region is and where it lands; they are
+   pointer-transparent so the drag they illustrate lands on the surface
+   underneath, not on them. The caption is the only child that takes the pointer,
+   which is why `onPointerDown` bails on `.rinvite` — clicking the button must not
+   also start drawing a box behind it. */
+#region-layer>.rghost{position:absolute;top:0;bottom:0;pointer-events:none;
+  box-sizing:border-box;border:1.5px dashed rgba(255,255,255,.2);border-radius:6px}
+.rinvite{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;
+  display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center;
+  max-width:min(82%,320px)}
+.rinvite-h{margin:0;color:#eee;font-size:15px;font-weight:600;
+  text-shadow:0 1px 6px rgba(0,0,0,.5)}
+.rinvite-s{margin:0;color:var(--dim);font-size:12.5px;text-shadow:0 1px 6px rgba(0,0,0,.5)}
+.rinvite-b{border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);
+  color:#eee;border-radius:999px;padding:6px 14px;font-size:12.5px;cursor:pointer;
+  backdrop-filter:blur(6px);transition:background .12s,border-color .12s}
+.rinvite-b:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.34)}
+
+/* A run reports itself as a hairline along the top edge, because the previous
+   render stays put until its replacement lands — blanking the picture to show a
+   centred bar is for a cold run with nothing to keep. */
+#canvas-prog{position:absolute;top:0;left:0;right:0;z-index:5;height:2.5px;
+  background:rgba(255,255,255,.09);overflow:hidden;pointer-events:none}
+#canvas-prog>i{display:block;height:100%;background:#fff;
+  border-radius:0 2px 2px 0;transition:width .4s}
+
+/* The box, opened --------------------------------------------------------
+   A rectangle on screen can be 60px wide and what it holds needs about 280, so
+   the card cannot *be* the box — but it can be rooted in it, hanging off the
+   box's near edge, which is the difference between the object answering and a
+   panel arriving next to the object.
+
+   A child of the layer rather than a portal, and that is the load-bearing
+   choice. Every other floating thing here is `Popover`, positioned in viewport
+   pixels, which is why it closes on scroll — right for a menu, absurd for the
+   field you are typing into. Living inside `#region-layer` makes the card a
+   percentage of the same box the rectangles are a percentage of: it moves when
+   they move and is clipped by the frame, which is correct rather than a
+   limitation. The card belongs to the picture.
+
+   Solid, not blurred. A backdrop blur over a scene plate means judging the
+   plate through something, which is the reason the floating console was built
+   and thrown away. */
+/* The cap clears the frame button in the opposite corner rather than the frame
+   edge, because a card pinned inside a full-height box is bottom-anchored and
+   would otherwise run under it. */
+.rins{position:absolute;z-index:8;width:296px;max-width:calc(100% - 52px);
+  display:flex;flex-direction:column;gap:5px;padding:8px;
+  border-radius:12px;border:1px solid rgba(255,255,255,.24);background:#101010;
+  box-shadow:0 16px 44px rgba(0,0,0,.62);
+  touch-action:auto;cursor:default}
+/* Out of the way of the gesture, without being taken down and rebuilt around it.
+   Unmounting was the first version and it re-ran the card's mount effects on
+   every release, which pulled focus into the prompt after *moving* a box —
+   reintroducing the ⌫ fault this whole card exists downstream of. */
+.rins.dragging{opacity:0;pointer-events:none}
+.rins-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+/* The four coordinates read as one control, so they are spaced tighter than the
+   things above them are spaced from each other. */
+.rins-row.nums{gap:1px}
+.rins .opt.wide{flex:1 1 110px;min-width:0}
+.rins .opt.wide input{width:100%;min-width:0}
+.rins .grow{flex:1 1 auto}
+/* Which engine the run takes, which no arrangement of rectangles can show: one
+   masked sampling pass, or a krea2edit compose that regenerates the whole frame
+   and is several times slower. */
+.rins-note{margin:2px 3px 0;font-size:11.5px;line-height:1.35;color:var(--mut)}
+/* Where the frame's own card sits. Bottom-left, and capped short of the button
+   in the opposite corner so the two never overlap on a narrow frame. */
+.rins.frame-card{left:8px;bottom:8px;max-width:calc(100% - 52px)}
+/* A refused drop, said on the canvas. It replaced an `alert()`: a modal that
+   stops the app to deliver one sentence is the wrong weight for it, and the
+   sentence is about a control that is visible and dimmed an inch away. Amber,
+   the same ink the LoRA note uses for a name that resolves to no file. */
+.rins-refusal{position:absolute;left:8px;right:44px;bottom:8px;z-index:9;margin:0;
+  padding:7px 10px;border-radius:9px;background:rgba(0,0,0,.86);
+  color:#f3c07a;font-size:12px;line-height:1.35}
+/* The frame is a place too, and this is how you reach it — because a tap on
+   bare canvas is already taken, it draws a rectangle. Present only once there
+   is a box, since with none of them there is nothing at frame scope to say. */
+.rframe-btn{position:absolute;right:8px;bottom:8px;z-index:7;
+  width:28px;height:28px;display:grid;place-items:center;padding:0;
+  border:1px solid rgba(255,255,255,.16);border-radius:9px;
+  background:rgba(0,0,0,.62);color:var(--dim);cursor:pointer;touch-action:auto}
+.rframe-btn:hover{color:var(--fg);border-color:rgba(255,255,255,.42)}
+.rframe-btn.on{color:var(--fg);background:rgba(255,255,255,.14);
+  border-color:rgba(255,255,255,.36)}
+.rframe-btn svg{width:15px;height:15px;display:block}
 
 /* Drag-intent reveal -----------------------------------------------------
    Every one of this app's best gestures is a drop, and every one of them was

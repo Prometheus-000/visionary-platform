@@ -37,6 +37,9 @@ import type { AppState, ShotGroup, ShotItem, ShotPill, VideoModel } from './api/
 
 export type Kind = 'image' | 'video'
 export type Mode = 'generate' | 'train'
+/** What the region layer draws. See `Store.edit` for what each one means and why
+ *  editing a box's contents and redrawing the box are two states rather than one. */
+export type EditMode = 'off' | 'content' | 'geometry'
 
 /**
  * A region is a rectangle in 0..1 of the frame, plus what it is told to be. Its
@@ -57,15 +60,64 @@ export type Region = {
   h: number
   prompt: string
   /** Carried as a bool in the job record, never the bytes — it is polled. */
-  ref: string | null
+  attachments: Attachment[]
 }
 
 let regionSeq = 0
 export const newRegion = (r: Partial<Region> = {}): Region => ({
   id: `r${++regionSeq}`,
-  x: 0, y: 0, w: 0.5, h: 1, prompt: '', ref: null,
+  x: 0, y: 0, w: 0.5, h: 1, prompt: '', attachments: [],
   ...r,
 })
+
+/**
+ * What a picture given to a place is *for*.
+ *
+ * Three roles, because three are wired. A photograph in a box is that character's
+ * likeness — V9's `regions_json.ref_image`, a latent mold that pulls the rectangle
+ * toward that face during sampling. The two frame-scope plates are the scene the
+ * picture is generated inside and an outfit transferred onto the subjects. They reach
+ * the backend under three different names and they are one thing: a picture, and what
+ * it is for. That is the whole reason this type exists rather than a `ref` on a box
+ * and a `{scene, outfit}` record somewhere else — two spellings of one idea are two
+ * drop handlers, two inspectors, and two places to add the next one.
+ *
+ * It is also the axis the next capability arrives on. A ControlNet is a picture with a
+ * structural role: `depth`, `pose`, `edges`. The V12 node already returns
+ * (MODEL, +COND, −COND), so a `ControlNetApplyAdvanced` slots between it and the
+ * sampler without touching anything above it — which means adding one should be a
+ * catalogue entry, a preprocessor on a CPU container, a branch in the graph builder,
+ * and a role here. Dropped on the frame it is frame-wide; dropped on a box it is
+ * masked; and neither needs a control that does not already exist. If it ever wants a
+ * panel, this type was the wrong shape and the panel is the tell.
+ */
+export type Role = 'identity' | 'scene' | 'outfit'
+
+/** One picture, and what it is for. The bytes are base64 with no `data:` prefix,
+ *  because that is what the wire takes and converting at the edges twice is how a
+ *  prefix ends up inside a payload. */
+export type Attachment = { role: Role; image: string }
+
+/** Everything a picture can be given to. The frame is one of these, which is what stops
+ *  "a photo on a box" and "a photo on the canvas" from being two systems. */
+export type Placed = { attachments: Attachment[] }
+
+/** At most one per role per place: a box takes one likeness, the frame takes one scene
+ *  and one outfit. That is the node's shape rather than a simplification of it. */
+export const attached = (p: Placed | undefined, role: Role): string | null =>
+  p?.attachments.find((a) => a.role === role)?.image ?? null
+
+/** Replaces by role rather than appending, and removes the entry on null rather than
+ *  storing an empty one — `attached` returning `''` and returning `null` would be two
+ *  spellings of "no picture" and the wire only has the one. */
+export const setAttached = (
+  list: Attachment[],
+  role: Role,
+  image: string | null,
+): Attachment[] => {
+  const rest = list.filter((a) => a.role !== role)
+  return image ? [...rest, { role, image }] : rest
+}
 
 /** Every value an image run is priced by. `''` is "the checkpoint decides", and
  *  is not the same as a zero: the route's `num()` falls back to its default on
@@ -106,7 +158,6 @@ export type VideoComposer = {
   refSize: 'match' | 'max'
 }
 
-export type Plates = { scene: string | null; outfit: string | null }
 export type Keyframes = { first: string | null; last: string | null }
 
 const IMAGE: ImageComposer = {
@@ -181,26 +232,65 @@ export type Store = {
   setGpu: (patch: Partial<{ image: string; video: string }>) => void
 
   /* ---- regions ---------------------------------------------------------- */
-  regional: boolean
+  // There is no `regional` flag. Regions are on when there is a rectangle on the
+  // canvas and off when the last one is deleted — a mode you arm is a mode you
+  // can forget you are in, and the boxes already say which it is. `regionsLive`
+  // derives it where the payload and the notes need a boolean.
   regions: Region[]
   /** Index, not id: `_pair_boxes` is positional and so is every readout. */
   rsel: number
   regionWeight: string
-  plate: Plates
-  /** A result landed, so the boxes come off the picture. They are still armed
-   *  and still masking their LoRAs — this is only about what is drawn. */
-  freshRender: boolean
-  /** Held open through a drag, or by a fresh arm whose two seeded rectangles
-   *  are the instruction. */
-  regionPeek: boolean
-  setRegional: (on: boolean) => void
+  /** The frame is a place too, and the scene and outfit plates are its attachments.
+   *  A record with a slot per plate was the same shape as a region's `ref` written
+   *  twice more, and it is what made frame scope and box scope two systems. */
+  frame: Placed
+  /**
+   * What the region layer is *drawing*, which is not the same question as whether
+   * regions are on. They are on whenever a box exists; this is only about what is
+   * on screen, and it exists because two different acts were being served by one
+   * control and one of them was paying for the other.
+   *
+   * - `off` — the default the moment a render lands. Nothing is drawn. The boxes
+   *   are still there, still masking their LoRAs, still sent with the next run;
+   *   they are simply *addressable rather than drawn*, which is the Phase 6 rule
+   *   arriving early rather than a relaxation of "nothing sits on top of a render".
+   *   Hover names what you would be touching; a plain click opens it.
+   * - `content` — one region's card, for the frequent act: its sentence and its
+   *   photograph. A sentence is not geometry, so this draws no rectangles and no
+   *   handles — only the hairline of the box whose card is open, because a card
+   *   with no scope is a card about nothing in particular.
+   * - `geometry` — the rare act: every box, its handles, the snapping and the
+   *   frame's own card. Reached by ⌘-click, or a long press where there is no
+   *   modifier to hold. Clearing the canvas first was the earlier answer and it was
+   *   invented friction: ⌘ already means "geometry" on the frame, where ⌘-drag is
+   *   "a new box, here", so it means the same thing over a render.
+   *
+   * The mode is per-surface in one respect: the frame, before any render exists,
+   * has nothing to protect and is always `geometry`. See `regions/RegionLayer.tsx`.
+   */
+  edit: EditMode
+  /** The pointer is down on a box. Two jobs, and they are the same fact: hold
+   *  the boxes up through a drag that started before a render was cleared, and
+   *  put the inspector away while you are dragging the thing it describes. */
+  boxDrag: boolean
+  /** A file is somewhere over the window. The one moment "you can drop a photo
+   *  on a box" needs saying — and the only way anyone finds that gesture — so
+   *  it brings the boxes back even over a finished render. `body.dragging`
+   *  carries the same fact to the stylesheet; this is the half React reads, and
+   *  its absence is why the port's boxes stayed hidden through a drag and the
+   *  drop could not land on one. */
+  fileOver: boolean
   setRegions: (r: Region[]) => void
   patchRegion: (i: number, patch: Partial<Region>) => void
   select: (i: number) => void
   setRegionWeight: (v: string) => void
-  setPlate: (slot: keyof Plates, b64: string | null) => void
-  setFreshRender: (on: boolean) => void
-  setRegionPeek: (on: boolean) => void
+  /** One picture onto one place. `where` is a region's index or the frame, and that
+   *  argument is the entire difference between "this character" and "this scene" —
+   *  same gesture, same record, different target. */
+  attach: (where: number | 'frame', role: Role, image: string | null) => void
+  setEdit: (m: EditMode) => void
+  setBoxDrag: (on: boolean) => void
+  setFileOver: (on: boolean) => void
 
   /* ---- every picture the model can be given ----------------------------- */
   keyframe: Keyframes
@@ -282,22 +372,30 @@ export const useStore = create<Store>((set, get) => ({
   gpu: { image: '', video: '' },
   setGpu: (patch) => set((s) => ({ gpu: { ...s.gpu, ...patch } })),
 
-  regional: false,
   regions: [],
   rsel: -1,
   regionWeight: '1',
-  plate: { scene: null, outfit: null },
-  freshRender: false,
-  regionPeek: false,
-  setRegional: (regional) => set({ regional }),
+  frame: { attachments: [] },
+  edit: 'geometry',
+  boxDrag: false,
+  fileOver: false,
   setRegions: (regions) => set({ regions }),
   patchRegion: (i, patch) =>
     set((s) => ({ regions: s.regions.map((r, n) => (n === i ? { ...r, ...patch } : r)) })),
   select: (i) => set((s) => ({ rsel: i >= 0 && i < s.regions.length ? i : -1 })),
   setRegionWeight: (regionWeight) => set({ regionWeight }),
-  setPlate: (slot, b64) => set((s) => ({ plate: { ...s.plate, [slot]: b64 } })),
-  setFreshRender: (freshRender) => set({ freshRender }),
-  setRegionPeek: (regionPeek) => set({ regionPeek }),
+  attach: (where, role, image) => set((s) => (
+    where === 'frame'
+      ? { frame: { attachments: setAttached(s.frame.attachments, role, image) } }
+      : {
+          regions: s.regions.map((r, n) => (n === where
+            ? { ...r, attachments: setAttached(r.attachments, role, image) }
+            : r)),
+        }
+  )),
+  setEdit: (edit) => set({ edit }),
+  setBoxDrag: (boxDrag) => set({ boxDrag }),
+  setFileOver: (fileOver) => set({ fileOver }),
 
   keyframe: { first: null, last: null },
   refs: [],
@@ -325,6 +423,12 @@ export function shotItem(vocab: ShotGroup[], key: string): ShotItem | undefined 
 /** The chosen video family, or null when nothing is selected. The composer shows
  *  only the controls this says the model reads — a control that is present but
  *  ignored is worse than one that is absent. */
+/** Regions are on when there is a box, and off when the last is gone — there is no
+ *  separate flag. Kind is part of it: the boxes are an image-side thing, so a stack
+ *  of rectangles left behind by switching to video is not "regions on". */
+export const regionsLive = (s: Pick<Store, 'kind' | 'regions'>): boolean =>
+  s.kind === 'image' && s.regions.length > 0
+
 export function videoModel(s: Pick<Store, 'state' | 'vid'>): VideoModel | null {
   return s.state?.video_models.find((m) => m.key === s.vid.model) ?? null
 }

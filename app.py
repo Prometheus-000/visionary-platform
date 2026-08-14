@@ -1412,6 +1412,14 @@ _RELOAD_LOCK = threading.Lock()
 _RELOAD_SEQ = 0
 _RELOAD_OK = True
 
+# How long an insisting reload waits out an open-files refusal, in seconds
+# between attempts. Three tries, half a second of waiting at the very worst.
+# Sized against what actually holds the descriptor: a still off a warm volume is
+# tens of milliseconds, so the first pause covers the ordinary case, and a clip
+# streaming to a slow connection is seconds — far past anything worth sleeping
+# for inside a request handler. That one is what the False is for.
+RELOAD_INSIST_BACKOFF = (0.15, 0.35)
+
 
 def _reload_volume_locked() -> bool:
     try:
@@ -1424,6 +1432,38 @@ def _reload_volume_locked() -> bool:
         # and this line is the only thing that distinguishes it from a typo.
         print(f"[volume] reload skipped, weights still mapped ({exc})", flush=True)
         return False
+
+
+def _reload_insist() -> bool:
+    """
+    Reload, and try again briefly if it was refused. Returns whether it landed.
+
+    For the three routes whose answer is wrong rather than merely old without
+    one: listing the gallery, and the two that delete out of it. All three are
+    asked about a run that finished moments ago, which is the one case a stale
+    view cannot describe — it lists work that does not exist yet, and refuses to
+    delete work it cannot see.
+
+    What refuses the reload is worth naming, because it is us. Every `/api/file`
+    is a `FileResponse` holding a descriptor open on /workspace for the length
+    of the transfer, and the page paints the new stills and asks for the listing
+    in the same tick — so a gallery refresh manufactures the window that blocks
+    its own reload, and the more results there are to paint, the wider it gets.
+    Those transfers end on their own, which is what makes waiting the fix and
+    a few hundred milliseconds enough of it.
+
+    Everywhere else keeps the single attempt. A reload is a freshness step, and
+    for a route that is not being asked about something written seconds ago,
+    a stale view costs a listing that catches up on the next request; sleeping
+    in the handler would spend one of twenty slots to buy that.
+    """
+    ok = _reload_volume()
+    for pause in RELOAD_INSIST_BACKOFF:
+        if ok:
+            break
+        time.sleep(pause)
+        ok = _reload_volume()
+    return ok
 
 
 def _sizes_on_disk(dests: Any) -> dict[Path, int]:
@@ -1459,6 +1499,43 @@ def _sizes_on_disk(dests: Any) -> dict[Path, int]:
             listings[dest.parent] = entries
         out[dest] = entries.get(dest.name, 0)
     return out
+
+
+def _listed(path: Path, root: Path) -> bool:
+    """
+    Is `path` visible, asking each directory below `root` what it holds?
+
+    `_sizes_on_disk` above is the same lesson at one level; this is it at
+    several, and the extra levels are not theoretical. `/api/file` looks up
+    `outputs/{job}/{name}` for a run that finished a moment ago, so the name
+    that misses is the *directory* — `{job}` did not exist when this container
+    last synced. A stat caches that miss below us, and `volume.reload()` brings
+    the volume forward without invalidating a name already asked about, so the
+    retry after the reload can answer "not there" about a file that is there.
+    That is the 404-on-a-fresh-render whose symptom is a broken picture on the
+    canvas with the run sitting on the volume.
+
+    Walking down by readdir never consults a cached name: each level reports
+    what it holds now. It is also how `_gallery()` has always listed, which is
+    why the gallery could show a card whose image would not load.
+
+    `root` is the confinement, not a convenience: it is the last directory
+    taken on trust, so nothing above it is walked and a caller cannot use this
+    to probe outside the tree it names.
+    """
+    try:
+        rel = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    here = root
+    for part in rel.parts:
+        try:
+            if not any(e.name == part for e in os.scandir(here)):
+                return False
+        except OSError:
+            return False
+        here = here / part
+    return True
 
 
 def _model_status() -> list[dict[str, Any]]:
@@ -3624,6 +3701,21 @@ KREA2_EDIT_LORA = MODEL_CATALOGUE["krea2_edit"]["dest"].name
 # each, below which a face has no pixels to be recognisable in.
 MAX_REGIONS = 8
 
+# The long edge of a region's own photograph, and of the two plates, enforced
+# where it binds. The page shrinks to this number before it uploads, and that
+# copy is an optimisation: eight uncapped photographs base64'd into one JSON
+# body is a request measured in tens of megabytes, sent by a browser to a route
+# that had no opinion about it. The video side has had a server-side cap since
+# `ref_image_size: "max"` was found by whoever had the biggest camera; this side
+# never did, so the only thing standing between a phone's 4032x3024 and the VAE
+# encoder was a `<canvas>` in the client.
+#
+# A separate constant from H3_REF_MAX_SIDE despite the equal value, because the
+# reasons do not travel: H3's is the number below which the node's own scale is
+# exactly 1.0, and this one is about the payload and the encoder. They are free
+# to diverge, and a shared name would make that look like a mistake.
+REGION_REF_MAX_SIDE = 1536
+
 
 def _validate_regions(raw: Any) -> list[dict[str, Any]]:
     """
@@ -4196,16 +4288,24 @@ class ImageGenerator:
                         )
                     _require_models("krea2_edit")
                     plates[slot] = self._comfy.stage(job_id, params[slot], slot)
+                    _fit_reference(COMFY / "input" / plates[slot],
+                                   REGION_REF_MAX_SIDE, "image")
 
             # Each region's own photo, staged the same way the plates are and
             # deliberately without their two gates: a mold is not an
             # `extra_ref_*`, so it neither turns on krea2edit nor needs the
             # identity-edit weight. The staged name goes back onto the row,
             # which is what `_krea2_graph` reads into `regions_json`.
+            # Capped on arrival, like the video side's references and for a
+            # different reason — see REGION_REF_MAX_SIDE. Behind the route
+            # rather than in the page, because the page is one of the ways in
+            # and the reuse path is another.
             for i, region in enumerate(regions):
                 if region["ref"]:
                     region["ref_image"] = self._comfy.stage(
                         job_id, region["ref"], f"region{i}")
+                    _fit_reference(COMFY / "input" / region["ref_image"],
+                                   REGION_REF_MAX_SIDE, "image")
 
             # Once, and reused by both the graph and the sidecar. Validating
             # again after the render would re-stat the volume, so a LoRA deleted
@@ -4476,9 +4576,9 @@ def _fit_canvas(image_path: Path, *, short: int, align: int) -> tuple[int, int]:
     return short, (src_h * short // src_w) // align * align
 
 
-def _fit_reference(path: Path) -> None:
+def _fit_reference(path: Path, cap: int = H3_REF_MAX_SIDE, tag: str = "video") -> None:
     """
-    Shrink one staged reference to H3_REF_MAX_SIDE, in place.
+    Shrink one staged reference in place, to whatever cap the caller is bound by.
 
     Bounding the file is what bounds the run: under 2048 on the short edge the
     node's "max" scale is exactly 1.0, so the pixels written here are the pixels
@@ -4486,9 +4586,14 @@ def _fit_reference(path: Path) -> None:
     same reason `ref_max_side` is pinned to 0 on the image side — two things
     resizing the same photograph is two things to check when it comes out soft.
 
-    Applied to both modes. "match" is already bounded in tokens, but not in what
-    PIL and the VAE encoder chew through on the way there, and one rule is
+    Applied to both H3 modes. "match" is already bounded in tokens, but not in
+    what PIL and the VAE encoder chew through on the way there, and one rule is
     easier to hold than one rule per mode.
+
+    The image side passes its own cap, for its own reason — see
+    REGION_REF_MAX_SIDE. Same mechanism, because two things resizing a
+    photograph is the failure this function exists to prevent, and a second
+    copy of it on the other route would be exactly that.
 
     Rewrites only when it actually resizes — and bakes the EXIF rotation in when
     it does, because ComfyUI's LoadImage is the reader that applies the tag here
@@ -4503,20 +4608,20 @@ def _fit_reference(path: Path) -> None:
         with Image.open(path) as im:
             src = _upright(im)
             w, h = src.size
-            if max(w, h) <= H3_REF_MAX_SIDE:
+            if max(w, h) <= cap:
                 return
-            scale = H3_REF_MAX_SIDE / max(w, h)
+            scale = cap / max(w, h)
             size = (max(1, round(w * scale)), max(1, round(h * scale)))
             src.resize(size, Image.LANCZOS).save(tmp, "PNG")
         tmp.replace(path)
-        print(f"[video] reference {path.name}: {w}x{h} -> {size[0]}x{size[1]}",
+        print(f"[{tag}] reference {path.name}: {w}x{h} -> {size[0]}x{size[1]}",
               flush=True)
     except Exception as exc:
         # A reference that cannot be read is not one that can be measured
         # either, and LoadImage is about to fail on it with a better message
         # than anything guessable from here.
         tmp.unlink(missing_ok=True)
-        print(f"[video] could not cap reference {path.name}: {exc}", flush=True)
+        print(f"[{tag}] could not cap reference {path.name}: {exc}", flush=True)
 
 
 def _h3_frames(seconds: float) -> int:
@@ -7122,9 +7227,22 @@ def web():
 
     @api.get("/api/gallery")
     def gallery() -> dict[str, Any]:
-        """Everything on the volume, newest first — no job id required."""
-        _reload_volume()
-        return {"items": _gallery()}
+        """
+        Everything on the volume, newest first — no job id required.
+
+        `stale` is the reload this could not have — see `_reload_insist`. Every
+        other caller of `_reload_volume()` discards that answer, which is why a
+        refused reload and a successful one used to produce the same listing and
+        the same silence. Here the difference is the whole route: a listing taken
+        without a reload cannot contain the run that just finished, which is the
+        run the caller is asking about.
+
+        Not an error and not something to apologise for on screen. It is the one
+        fact that separates "nothing new" from "not looked at", and the client's
+        cue to come back once it has stopped loading pictures.
+        """
+        fresh = _reload_insist()
+        return {"items": _gallery(), "stale": not fresh}
 
     @api.get("/api/file/{job_id}/{name}")
     def output_file(job_id: str, name: str):
@@ -7154,10 +7272,21 @@ def web():
         # A file that is already visible needs no reload at all; only a file
         # written by the GPU container since this one last synced does, and that
         # is exactly the miss case.
+        #
+        # The second look is not a second `is_file()`. The first one missed,
+        # which is what put a negative entry under the name — and a reload does
+        # not clear those, so asking the same way twice can 404 a file the
+        # reload just brought in.
+        #
+        # Both halves, because for a fresh run the name that misses is the job
+        # *directory*: `_listed` walks down to it by readdir, and
+        # `_sizes_on_disk` then answers for the file itself — filtering to
+        # regular files, so a directory that happened to match the name is a
+        # 404 here rather than a 500 out of FileResponse.
         path = OUTPUTS / job_id / name
         if not path.is_file():
             _reload_volume()
-            if not path.is_file():
+            if not (_listed(path.parent, OUTPUTS) and _sizes_on_disk([path])[path]):
                 return JSONResponse({"error": "Not found."}, status_code=404)
         return FileResponse(
             str(path),
@@ -7170,9 +7299,12 @@ def web():
         """Delete a result and its files. Unlinked, not recoverable."""
         if not NAME_RE.match(job_id):
             return {"error": "Invalid job_id."}
-        _reload_volume()
+        # Insisting, because the card you are most likely to delete on impulse
+        # is the one that just appeared, and a refused reload turns that into
+        # "Not found" about a folder that is sitting on the volume.
+        _reload_insist()
         d = OUTPUTS / job_id
-        if not d.is_dir():
+        if not _listed(d, OUTPUTS):
             return {"error": "Not found."}
         shutil.rmtree(d, ignore_errors=True)
         _drop_legacy_trash(OUTPUTS)
@@ -7202,17 +7334,24 @@ def web():
         if any(not isinstance(j, str) or not NAME_RE.match(j) for j in job_ids):
             return {"error": "Invalid job_id."}
 
-        _reload_volume()
-        removed = 0
+        _reload_insist()
+        removed, missing = 0, []
         for job_id in dict.fromkeys(job_ids):
             d = OUTPUTS / job_id
-            if d.is_dir():
+            if _listed(d, OUTPUTS):
                 shutil.rmtree(d, ignore_errors=True)
                 removed += 1
+            else:
+                missing.append(job_id)
 
         _drop_legacy_trash(OUTPUTS)
         volume.commit()
-        return {"ok": True, "removed": removed}
+        # Named, not just subtracted from the count. The list is the agreement,
+        # so a folder in it that could not be found is the one thing this route
+        # owes an answer about — and the cause is nearly always a view too old
+        # to hold it, which is a different problem from a bad id.
+        return {"ok": True, "removed": removed,
+                **({"missing": missing} if missing else {})}
 
     # There was a GET /api/outputs/{job_id} here that returned every PNG of a run
     # base64'd into one JSON body. It is gone rather than left unused: /api/file
@@ -7240,13 +7379,21 @@ def web():
         # waiting on — with it, the reload overlaps the client's own round trip
         # and every still is served off a warm view.
         if rec.get("status") == "completed" and job_id not in _warmed:
-            if len(_warmed) > 256:
-                _warmed.clear()
-            _warmed.add(job_id)
             try:
-                _reload_volume()
+                warmed = _reload_volume()
             except Exception as exc:
                 print(f"[status] warm reload failed for {job_id}: {exc}", flush=True)
+                warmed = False
+            # Marked only once it has actually happened. It used to be marked
+            # first, which made a refused reload permanent for that job: the
+            # set said the one-time thing was done and no later poll would try
+            # again. A refusal here is not rare — it is whatever media the page
+            # is streaming — and this is the reload the gallery leans on, so
+            # the flag has to record the reload rather than the attempt.
+            if warmed:
+                if len(_warmed) > 256:
+                    _warmed.clear()
+                _warmed.add(job_id)
         return rec
 
     @api.post("/api/stop/{job_id}")

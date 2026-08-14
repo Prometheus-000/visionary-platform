@@ -11,7 +11,7 @@ asserts the selector exists before it measures anything.
 
 The budget is 30% of the viewport. `fieldMax()` hands the prompt whatever is
 left after everything else, so the worst case is not a long prompt on its own —
-it is a long prompt with the pill rail wrapped *and* the region bar present,
+it is a long prompt with the pill rail wrapped and regions armed,
 because those arrive long after the last keystroke. That is the state the
 ResizeObserver exists for, and the one that measured 38.1% without it.
 
@@ -127,7 +127,10 @@ def run(pg, side):
     measure(pg, f"{side} · resting", rows)
 
     if side == "image":
-        pg.click("#g-regional")
+        # Arming lands boxes on the canvas, not a row in the console — which is the
+        # whole point of this measurement: the region UI costs the console nothing,
+        # so this row should read the same height as resting.
+        pg.click(".rinvite-b")
         pg.wait_for_timeout(450)
         measure(pg, f"{side} · + regions", rows)
 

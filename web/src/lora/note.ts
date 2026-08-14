@@ -13,7 +13,7 @@
  * box without touching a token.
  */
 import type { Store } from '../store'
-import { supports, videoModel } from '../store'
+import { attached, regionsLive, supports, videoModel } from '../store'
 import { loraAlternatives, loraIndex, parseLoras, stripLoras } from './tokens'
 
 export function loraNote(s: Store): string {
@@ -46,7 +46,7 @@ export function loraNote(s: Store): string {
       bits.push(`Region ${i + 1} names more than one LoRA — a region takes one.`)
   })
 
-  if (s.regional) {
+  if (regionsLive(s)) {
     // The same LoRA in the prompt and in a box is the one combination that
     // quietly undoes the feature: the prompt copy goes onto the global
     // LoraLoader chain and patches the whole canvas, so the box's mask is still
@@ -91,10 +91,10 @@ export function loraNote(s: Store): string {
  * mold on the fast path, so it never moves the run onto the slow one.
  */
 export function regionNote(s: Store, live: number): string {
-  if (!s.regional || !live) return ''
-  const molds = s.regions.filter((r) => r.ref).length
+  if (!regionsLive(s) || !live) return ''
+  const molds = s.regions.filter((r) => attached(r, 'identity')).length
   const tail = molds ? ` ${molds} with a reference photo.` : ''
-  if (s.plate.scene || s.plate.outfit) {
+  if (attached(s.frame, 'scene') || attached(s.frame, 'outfit')) {
     return `${live} region${live > 1 ? 's' : ''} composed into the reference — `
       + `slower, and it re-renders the whole frame.${tail}`
   }
@@ -104,7 +104,7 @@ export function regionNote(s: Store, live: number): string {
   // and do not hold their ground equally.
   const index = loraIndex(s.state)
   const soft = s.regions.filter((r) =>
-    stripLoras(r.prompt || '').trim() && !r.ref
+    stripLoras(r.prompt || '').trim() && !attached(r, 'identity')
     && !parseLoras(index, r.prompt || '').some((t) => t.hit)).length
   const softNote = soft ? ` ${soft} described only — placed by the words, not held by a mask.` : ''
   return `${live} region${live > 1 ? 's' : ''}, one pass. `

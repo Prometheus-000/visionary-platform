@@ -77,7 +77,7 @@ export function reuse(it: GalleryItem): void {
         prompt: [r.prompt, tok].filter(Boolean).join(' '),
         // The sidecar records whether a box had a photo, never the photo — it was
         // uploaded bytes staged into a container that is long gone.
-        ref: null,
+        attachments: [],
         x: Number(box[0]) || 0,
         y: Number(box[1]) || 0,
         w: box[2] != null ? Number(box[2]) : 1,
@@ -86,10 +86,11 @@ export function reuse(it: GalleryItem): void {
     }))
     s.select(saved.length ? 0 : -1)
     if (it.region_weight != null) s.setRegionWeight(String(it.region_weight))
-    s.setRegional(saved.length > 0)
-    s.setFreshRender(false)
-    s.setPlate('scene', null)
-    s.setPlate('outfit', null)
+    // Reuse restores boxes onto an empty canvas, so they are meant to be seen and
+    // adjusted — that is the geometry surface, not a render to keep clean.
+    s.setEdit('geometry')
+    s.attach('frame', 'scene', null)
+    s.attach('frame', 'outfit', null)
     return
   }
 

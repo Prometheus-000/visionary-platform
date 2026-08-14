@@ -458,6 +458,32 @@ still writing cannot be swept out from under itself.
 The UI is not organised the way this file is. There are three subsystems and
 two domains, and the page follows the domains.
 
+- **One canvas at a time, and a batch is frames of film rather than a contact
+  sheet.** A batch of four used to be a two-up grid at half height each, and
+  that arrangement is what broke the regions: one set of boxes applies to the
+  whole batch, so there is no single surface to draw them on, and they landed on
+  the first cell of the four you were trying to compare. Drawing them four times
+  would have said the wrong thing; drawing them once said it about one arbitrary
+  cell.
+
+  So each result fills the canvas and `‹ 1 / 4 ›` steps between them, one
+  sliding out as the next slides in. The result on screen *is* the canvas —
+  which is the shape the rest of this file has been heading toward anyway, and
+  the surface an inpaint acts on when there is one. Every frame stays mounted
+  and the track is a transform, so stepping costs a compositor frame and nothing
+  re-fetches.
+
+  It also retires a rule rather than leaving it to rot: the still on the canvas
+  used to open the lightbox on click, because *"a result you have to send to the
+  gallery to look at properly is a result the canvas is only pretending to show
+  you"* — true when a batch was four half-height thumbnails, and answered
+  directly by showing every result at full canvas size. What replaced the click
+  is one rule with no geography in it: **a click addresses whatever is under
+  it** — over a region it opens that region, over bare picture it does nothing.
+  Full screen is the expand button and Space. The alternative was a click that
+  meant two different things depending on invisible geometry, which hover can
+  disclose on a desktop and cannot on glass.
+
 - **The canvas is the largest thing on screen, always.** Options live in a bar
   under it, never a rail beside it: a settings column costs the picture 384px
   of the one dimension it cannot get back, and vertical is the cheap axis. The
@@ -514,7 +540,7 @@ two domains, and the page follows the domains.
 
 - **The console has a budget, and the prompt is what yields to it.** 30% of the
   viewport. Everything else in there is fixed or conditional — the strip is one
-  row, the rail appears with the first pill, the region bar with the first box —
+  row, the rail appears with the first pill, and the boxes cost it nothing —
   so the prompt field is the only part that grows without asking, and measuring
   showed it was also the part that broke the budget alone: at a flat 168px cap
   the worst case was 39.8% of a 1440x900 window, 136 of which was the field.
@@ -527,14 +553,27 @@ two domains, and the page follows the domains.
   height, so `other` does not move when the field does.
 
 - **An icon invites, a tooltip names, a click teaches — and in the composer row
-  that is enough.** Shot and Regions carry no words. This reverses the labelling
-  added when `#g-regional` moved out of Advanced, and the reversal is narrower
-  than it looks rather than a change of mind: that note argued a glyph cannot
-  announce a capability nobody knows exists, which is true of a *destination* and
-  false of a control sitting in the row you are already working in. The icon is
-  what makes you hover; the tooltip supplies the word; the click supplies the
-  feature — and on glass the tap does all three at once, which is the case the
-  labels were never helping anyway.
+  that is enough.** Shot carries no words. This reverses the labelling added when
+  it moved out of Advanced, and the reversal is narrower than it looks rather
+  than a change of mind: that note argued a glyph cannot announce a capability
+  nobody knows exists, which is true of a *destination* and false of a control
+  sitting in the row you are already working in. The icon is what makes you
+  hover; the tooltip supplies the word; the click supplies the feature — and on
+  glass the tap does all three at once, which is the case the labels were never
+  helping anyway.
+
+  **Regions is no longer in this row at all, and that is the limit of the rule
+  rather than an exception to it.** `#g-regional` was a 34px glyph in the
+  settings strip, which is where a capability goes to not be found: two opaque
+  marks side by side flattened the two biggest features in the app into one
+  confusing pair, and the count riding half-outside the active state read as an
+  error pip rather than "2 regions". The icon was doing the one job an icon
+  cannot do — announcing a capability to someone who does not know it exists —
+  because the row it sat in is not a row a new user is looking at. Regions is a
+  canvas verb, so it went to the canvas: you place a character by drawing on the
+  empty frame, and the empty canvas says so in words, once, where the attention
+  already is. What is left in the row are controls, which is what the rule was
+  always about.
 
   It does not generalise past the row. `#ins-toggle` keeps "Captions" because it
   wears the same sliders glyph as two unrelated panels, so its icon is not
@@ -637,21 +676,76 @@ two domains, and the page follows the domains.
   pack's guidance for a character is 1.3–1.4 and the main prompt is a style
   stack far more often than a character.
 
-- **A region is drawn on the canvas, not described under it.** The boxes are the
-  list: drag on the frame to place one, drag it to move it, drag a handle to
-  size it. The console keeps one inspector row for whichever box is selected.
+- **A region is drawn on the canvas, and so is everything about it.** The boxes
+  are the list: drag on the frame to place one, drag it to move it, drag a
+  handle to size it. Touch one and it *opens* — a card rooted in the box's own
+  near edge, holding its sentence, its LoRA strength, its photograph and its
+  four coordinates. Selection is the open state; there is no toggle and nothing
+  to dismiss.
 
-  It used to be a row per region — a sentence and four coordinates — and the row
-  needed a 32px picture of those coordinates beside it to be legible at all,
-  which is the whole argument. "0.5 0 0.5 1" is a rectangle you rebuild in your
-  head every time; the rectangle is not. The numbers survive in the inspector,
-  where they are the escape hatch and, during a drag, a readout that moves —
-  dragging teaches the numbers, and the numbers never taught the dragging.
+  **Editing what is inside a box and redrawing the box are two different acts,
+  and one control for both taxed the frequent one.** Changing a region's
+  sentence or its photograph is what you do a dozen times an hour; moving the
+  rectangle is rare, and mostly happens once before the first render. A sentence
+  is not geometry, so the frequent act needs no rectangles on screen at all —
+  which is what `store.edit` encodes, in three states:
 
-  The cost was the other half. A row was ~74px, so the eight boxes the backend
-  allows came to ~592px of console against a 54dvh cap: the feature's fullest
-  state broke the rule the console exists to hold. One inspector row is the same
-  height at eight boxes as at one.
+  - `off`, the moment any render lands. Nothing is drawn. The boxes are still
+    there, still masking their LoRAs, still sent with the next run; they are
+    *addressable rather than drawn*. Hover names what you would be touching, a
+    plain click opens it, and that is the whole entry — there is no chip and no
+    glyph, because a control that reveals the boxes is a control competing with
+    the picture it would reveal them on.
+  - `content`, the frequent act: that one box's card, with only its own hairline
+    for scope. No handles, no other rectangles, and **no four coordinates** —
+    they are the escape hatch for the *rectangle*, so putting them over a render
+    you are judging is the other scope leaking back in.
+  - `geometry`, the rare one: every box, its handles, the snapping, the frame's
+    own card. Asked for with **⌘-click**, or a long press where there is no
+    modifier to hold.
+
+  **⌘ means geometry, and it means it in both places.** ⌘-drag on the frame was
+  already "a new box, here", so this is the existing meaning extended rather
+  than a second rule. It gates the mode and nothing else: one press that both
+  revealed the boxes and drew one would answer "show me the boxes" by adding a
+  ninth to the eight it just showed you. Gating geometry behind *clearing the
+  canvas* was the version before this, and it was invented friction — a step
+  that exists to protect a render nobody was being asked to give up.
+
+  The four coordinates were the right parameter and the wrong primary. "0.5 0
+  0.5 1" is a rectangle you rebuild in your head every time; the rectangle is
+  not. They survive in the card, where they are the escape hatch and, during a
+  drag, a readout that moves — dragging teaches the numbers, and the numbers
+  never taught the dragging.
+
+  Two arrangements preceded this and each fixed the last one's cost. A row per
+  region was a sentence and four numbers that needed a 32px picture of those
+  numbers beside it to be legible at all, and at ~74px each the eight boxes the
+  backend allows came to ~592px of console against a 54dvh cap: the feature's
+  fullest state broke the rule the console exists to hold. One shared inspector
+  row fixed the height and left the other half — you dragged a rectangle at the
+  top of the screen and said who was in it at the bottom, and the row could not
+  say which of the two scopes in it you were looking at. The card costs the
+  console nothing at all: `probe_console.py` measures arming at 0px, where the
+  row cost 44.
+
+  **A card is not a portal.** Every other floating thing here is `Popover`,
+  positioned in viewport pixels, which is why it closes on scroll — right for a
+  menu and absurd for the field you are typing into. The card is a child of the
+  region layer, so it is a percentage of the same box the rectangles are a
+  percentage of: it moves when they move and is clipped by the frame, which is
+  the correct answer rather than a limitation. It also has three placements
+  rather than two — under the box, over it, and *inside* it pinned to its own
+  bottom edge, because the two rectangles arming seeds are full-height columns
+  and the very first card anyone sees is the one with nowhere outside the box to
+  go.
+
+  It stays mounted through a drag and goes transparent instead. Unmounting was
+  the first version and it re-ran the card's mount effects on release, which
+  pulled focus into the prompt after *moving* a box — so ⌫ edited text instead
+  of deleting the rectangle, which is exactly the keyboard fault this redesign
+  set out to fix, reintroduced by the fix. `check_regions.py` found it on its
+  first run, which is the argument for that file existing.
 
   Boxes snap to halves, thirds and quarters and to each other, which is what
   makes an even split a gesture rather than a menu; Alt suppresses it. Arming
@@ -660,6 +754,81 @@ two domains, and the page follows the domains.
   drawn *on* is the frame at the render's aspect, or the scene plate if one is
   dropped, or the last render — adjusting boxes against the picture you actually
   got is the reason they are still there afterwards.
+
+- **The frame is a place too, and it has the same card.** Scene, outfit and the
+  region weight are about every box at once, so they cannot live on any one
+  rectangle. They used to sit in the same row as the selected box's own fields,
+  separated by a rule and by nothing else — two scopes in one strip, with the
+  reader left to infer which was which. Now the scope *is* where the card is,
+  and it is reached by one button in the corner of the layer, because a tap on
+  bare canvas is already taken: it draws a rectangle. Escape is the keyboard
+  half of the same thing. There is always exactly one card and it is about
+  whatever is selected.
+
+  The frame's card is also the only thing on screen that can say which engine
+  the run takes — a plate moves the render onto a krea2edit compose that
+  regenerates the whole frame and is several times slower, and no arrangement of
+  rectangles shows that.
+
+- **The map went with the row.** A 52px SVG of the boxes lived beside the
+  inspector because the boxes come off the picture the moment a render lands,
+  and something had to lead back to them. Two things did, and it was the lesser:
+  the mode button reveals rather than disarms on the first press after a render,
+  and a file dragged over the window brings them back on its own. What the map
+  additionally did — reach a box that is overlapped or off-screen — is Tab,
+  which cycles them and always could, once clicking one actually focused it.
+
+  **`Nothing sits on top of a render` survives, and the three states above are
+  what it costs to keep it.** It is written here because a canvas-native rework
+  is exactly the moment someone assumes it was relaxed. A finished render puts
+  the boxes away and the card with them, every time, including after the render
+  you asked for while editing them — `off` is re-entered on every land, so the
+  clean picture is never something you have to restore. A persistent hairline
+  was considered and rejected for the same reason it always was: chrome on the
+  one surface the layout exists to keep clear.
+
+  What did change is the second half of the sentence. Nothing is *drawn* on a
+  render; the regions are still *there*, and touching one opens it. That is not
+  a relaxation, it is Phase 6's own rule arriving early — *every element
+  addressable at all times, none of them drawn as a control* — and it is the
+  first place in this app where the two halves of that rule are separable at
+  all. The distinction to hold on to: this rule is about paint, and it never had
+  anything to say about reach.
+
+- **What a place carries is attachments, and an attachment has a role.** A
+  photograph in a box is that character's likeness; the two frame-scope plates
+  are the scene the picture is generated inside and an outfit transferred onto
+  the subjects. They reach the backend under three different names — a region's
+  `ref`, `scene`, `outfit` — and they are one thing: a picture, and what it is
+  for. So the page holds one record for all three, and one function attaches it,
+  taking the place as an argument. That argument is the entire difference
+  between "this character" and "this scene".
+
+  This is the axis the next capability arrives on, and it is worth writing down
+  before there is anything at stake. **There is no ControlNet in this backend** —
+  no node, no mask primitive, nothing in the catalogue — so this is a question
+  about shape rather than a feature to build, which is the cheap time to answer
+  it. The shape is already latent in three places and named in none: the region
+  mold's V12 parameters are `ref_strength`, `ref_start_percent`,
+  `ref_end_percent` and `ref_feather` scoped to a box, which is ControlNet's
+  parameter set exactly and is hardcoded; `refs_json` is already a positional
+  list of `{role, note}`, pinned to scene and object; and the video side's
+  `SHOT_REF_ROLES` is the same vocabulary in the open.
+
+  So a ControlNet is `depth`, `pose` or `edges` — a role on a picture, not a
+  feature. V12 returns `(MODEL, +COND, −COND)`, so a `ControlNetApplyAdvanced`
+  slots between it and the `KSampler` without touching anything above it, and
+  adding one should be four things: a catalogue entry, which gets download UI
+  and status for free; a preprocessor on a **CPU** container; a branch in
+  `_krea2_graph`; and a row in the role table. **Zero new front-end surface** —
+  dropped on the frame it is frame-wide, dropped on a box it is masked.
+
+  **The standing veto: no conditioning panel, no layers list, no "control"
+  tab.** When four roles exist, a list of them somewhere is the obvious cheap
+  fix and it is precisely the month-four failure Phase 6 names. An attachment is
+  drawn on the thing it is attached to, or it is not drawn. And `Derived or
+  invented, always visible` lands here too: a depth map is derived, so it has to
+  be visible on the attachment and cheap to reroll.
 
 - **Every picture the model can be given sits in one row, and the two halves
   dim each other.** Keyframes and references are the same decision made two
@@ -782,19 +951,20 @@ two domains, and the page follows the domains.
   `data-step`; a shift of 1.15 stepped by 8 leaves behind every value the model
   accepts.
 
-  **That paragraph describes an intent `app.py` does not deliver, and the React
-  front end does.** The handler is delegated from `#c-image`, `#c-video` and
-  `#region-bar`; the sizer popover is appended to `<body>`. With it open there
-  are two pairs of boxes — `#g-w`/`#g-h`, inside a listening section and
-  invisible, and `#sz-w`/`#sz-h`, visible and outside every one of them. So the
-  arrows step the inputs nobody can focus and do nothing on the boxes you
-  actually type in. Never fixed here because the page is being replaced;
-  recorded because a rule that reads as shipped is one nobody thinks to test.
+  **That paragraph described an intent the page did not deliver for most of its
+  life, and the note is kept because the shape of the fault recurs.** In
+  `UI_HTML` the handler was delegated from three sections and the sizer popover
+  was appended to `<body>`, so with it open there were two pairs of boxes —
+  `#g-w`/`#g-h`, inside a listening section and invisible, and `#sz-w`/`#sz-h`,
+  visible and outside every one of them. The arrows stepped the inputs nobody
+  could focus and did nothing to the boxes you actually type in, and nobody
+  noticed for months, because a rule that reads as shipped is one nobody thinks
+  to test.
 
-  The port does not inherit it: there the component owns its own keys, so where
-  a popover renders stops being able to break them. `tools/ui-checks/probe_size.py`
-  asserts it against either front end and is expected to fail those two rows on
-  `app.py` alone.
+  The React front end does not inherit it: the component owns its own keys, so
+  where a popover renders stops being able to break them.
+  `tools/ui-checks/probe_size.py` asserts it and now passes every row — it used
+  to fail two by design, and that exemption went with `UI_HTML`.
 
 `tools/preview_ui.py` serves `UI_HTML` against stubbed JSON, so the front end
 is worked on locally instead of paying an image build and a cold start per CSS
@@ -926,7 +1096,11 @@ count on every object regardless of what the object is. The numeric escape hatch
 beside them, because it is precision work you occasionally need and a drag
 cannot give.
 
-It eliminates the region bar, which raises the question worth settling first,
+**The region bar and the map are gone as of the canvas-native rework above**,
+and the question below is answered: the map went with the row rather than being
+rehomed, because the boxes still come off a finished render and two cheaper
+things already lead back to them. The rest of this section stands. It
+eliminates the region bar, which raised the question worth settling first,
 because the answer decides whether this is a move or a deletion: of the three
 things in that bar only one is regional. The scene and outfit plates only exist
 when regions are armed, so they follow. The region prompt becomes canvas-native,

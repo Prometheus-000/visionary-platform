@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { dataUrl } from '../media/files'
 import { readSize } from '../console/size'
-import { useStore } from '../store'
+import { attached, useStore } from '../store'
 import { RegionLayer } from './RegionLayer'
 
 /**
@@ -22,7 +22,7 @@ import { RegionLayer } from './RegionLayer'
  */
 export function Frame() {
   const img = useStore((s) => s.img)
-  const plate = useStore((s) => s.plate)
+  const scene = attached(useStore((s) => s.frame), 'scene')
   const el = useRef<HTMLDivElement>(null)
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
 
@@ -68,10 +68,10 @@ export function Frame() {
                   ['--frame-h' as string]: `${box?.h ?? 0}px` }}>
       {/* A frame you can see the background in is the difference between placing
           people in a room and placing rectangles in a void. */}
-      {plate.scene && <img className="plate" src={dataUrl(plate.scene)} alt="" />}
+      {scene && <img className="plate" src={dataUrl(scene)} alt="" />}
       {/* Thirds are a viewfinder for an empty frame; over a photograph they are just
           lines on someone's picture. */}
-      {!plate.scene && <div className="thirds" />}
+      {!scene && <div className="thirds" />}
       <RegionLayer />
     </div>
   )

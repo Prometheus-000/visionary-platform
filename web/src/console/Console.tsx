@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
-import { IconRegions, IconShot } from '../icons'
+import { IconShot } from '../icons'
 import { usePopover } from '../ui/Popover'
 import { LoraButton } from '../lora/LoraButton'
-import { loraNote, regionNote } from '../lora/note'
-import { loraIndex } from '../lora/tokens'
-import { readRegions } from '../regions/geometry'
-import { RegionBar } from '../regions/RegionBar'
-import { RegionMap } from '../regions/RegionMap'
+import { loraNote } from '../lora/note'
 import { Palette } from '../shot/Palette'
 import { Peek } from '../shot/Peek'
 import { Rail } from '../shot/Rail'
 import { SourceRow } from '../video/SourceRow'
-import { newRegion, supports, useStore } from '../store'
+import { supports, useStore } from '../store'
 import { Field } from './Field'
 import { autoGrow } from './fieldMax'
 import { dropUnsupported, videoReady } from './resolve'
@@ -38,7 +34,7 @@ import type { VideoRun } from '../video/useVideo'
  *
  * **The console has a budget — 30% of the viewport — and the prompt is what yields to
  * it.** Everything else in here is fixed or conditional: the strip is one row, the rail
- * appears with the first pill, the region bar with the first box. See `fieldMax.ts`.
+ * appears with the first pill, and the boxes cost nothing. See `fieldMax.ts`.
  */
 export function Console({
   run,
@@ -59,7 +55,6 @@ export function Console({
   const s = useStore()
   const box = useRef<HTMLDivElement>(null)
   const shot = usePopover()
-  const index = loraIndex(s.state)
 
   // The console has to watch itself, because the prompt is not the only thing that
   // grows: arming Regions adds a bar and picking pills adds a rail, and both happen
@@ -106,43 +101,8 @@ export function Console({
     s.setVid({ model: (ready[0] ?? s.state.video_models[0])?.key ?? '' })
   }, [s])
 
-  /** And you asked for the boxes back. Deliberately narrow: the 50/50 split is right
-   *  most of the time, so a set of boxes is placed once and rendered against dozens of
-   *  times, changing only the prompt. Restoring them on a keystroke would put
-   *  rectangles back over the picture on the single most common action in the app —
-   *  the original complaint, arriving through the fix for it. Only an explicit ask
-   *  counts: the mode button, or the region bar, which you reach only when adjusting a
-   *  box. */
-  const reveal = useCallback(() => useStore.getState().setFreshRender(false), [])
-
-  const arm = () => {
-    // Reveal before toggle. While regions are armed and a fresh render has put them
-    // away, this button's job is to bring them back — disarming the mode from a button
-    // lit with a count, without the boxes ever being on screen, is the one destructive
-    // reading this control has never had.
-    if (s.regional && s.freshRender) return reveal()
-    const on = !s.regional
-    s.setRegional(on)
-    // Two half-width columns, seeded. Two rectangles appearing on the canvas is the
-    // whole instruction — a sentence telling you to drag would be read on every visit
-    // forever to be useful once.
-    if (on && !s.regions.length) {
-      s.setRegions([
-        newRegion({ x: 0, y: 0, w: 0.5, h: 1 }),
-        newRegion({ x: 0.5, y: 0, w: 0.5, h: 1 }),
-      ])
-      s.select(0)
-    }
-    if (on) {
-      s.setFreshRender(false)
-      requestAnimationFrame(() => document.querySelector<HTMLInputElement>('#r-prompt')?.focus())
-    }
-  }
-
   const image = s.kind === 'image'
   const note = loraNote(s)
-  const liveRegions = readRegions(index, s.regions, s.regional).length
-  const rNote = regionNote(s, liveRegions)
   const busy = image ? run.running : vidRun.running
   const err = image ? run.error : vidRun.error
 
@@ -180,19 +140,11 @@ export function Console({
                     onClick={shot.toggle}>
               <IconShot />
             </button>
-            {/* No label. An icon invites, a tooltip names, a click teaches — and in the
-                row you are already working in that is enough. This reverses the
-                labelling added when the button moved out of Advanced, and the reversal
-                is narrower than it looks: a glyph cannot announce a capability nobody
-                knows exists, which is true of a *destination* and false of a control
-                sitting in the row you are already in. */}
-            <button className={['opt', 'ib', s.regional ? 'on' : '',
-                                s.regions.length ? 'counted' : ''].filter(Boolean).join(' ')}
-                    id="g-regional" type="button" data-count={s.regions.length || ''}
-                    title="Place each character in their own box on the canvas — one LoRA, or one photo, per box."
-                    onClick={arm}>
-              <IconRegions />
-            </button>
+            {/* Regions has no glyph here any more. It is a canvas verb, not a console
+                setting: you place a character by drawing a box on the empty canvas, and
+                once a render puts the boxes away the chip on the canvas brings them
+                back. A 34px toggle in the settings row was the most hidden entry to one
+                of the app's biggest features — the thing this move exists to fix. */}
             <span className="actions">
               <span className="muted" id="gen-model-line">{modelNote}</span>
               <ImageSampling />
@@ -246,8 +198,6 @@ export function Console({
           in the prompt above it would be the page telling you what you can see. */}
       {note && <p className="muted warn" id="lora-note">{note}</p>}
 
-      <RegionBar onReveal={reveal} Map={RegionMap} />
-      {rNote && <p className="muted" id="region-note" style={{ margin: '7px 2px 0' }}>{rNote}</p>}
 
       {busy && (
         <div id="gen-prog" style={{ marginTop: 9 }}>

@@ -8,7 +8,7 @@
  *
  * Why it is not a constant cap: the console has a 30% budget and everything
  * else in it is fixed or conditional — the strip is one row, the rail appears
- * with the first pill, the region bar with the first box. The prompt is the
+ * with the first pill, and the boxes cost it nothing at all. The prompt is the
  * only part that grows without asking, and measuring showed it was also the
  * part that broke the budget alone: at a flat 168px cap the worst case was
  * 39.8% of a 1440x900 window, 136 of which was the field.

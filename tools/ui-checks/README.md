@@ -101,14 +101,23 @@ it still holds.
   reference tray shipped dead — and how the React port's video canvas shipped
   without its first-frame drop, which this is what caught.
 
+- `check_regions.py` — the boxes and the card that opens out of them: a drag
+  draws one, a release inside the threshold lands on the landmark and the same
+  release with Alt does not, a box snaps to another box's edge, clicking one and
+  pressing ⌫ deletes it, the card's numbers move with the drag, a render puts the
+  boxes away and a file over the window brings them back, and a box drawn at the
+  top of a still has its edge on the *picture* rather than 26px above it. The
+  last two were broken when it was written; the ⌫ row broke again an hour later,
+  when keeping the card mounted through a drag turned out to matter, and that is
+  the row that caught it.
 - `probe_size.py` — the ratio picker and the pixel boxes as one control: a
   preset writes the boxes, typing selects Custom, the swap transposes the
-  *bucket* rather than the pixels, and nothing is snapped while you type.
-  **Fails two rows on vanilla, by design.** ⌘↑ on Width and Height has never
-  worked there: the handler is delegated from `#c-image`, `#c-video` and
-  `#region-bar`, and the sizer popover is appended to `<body>`, so with it open
-  there are two pairs — `#g-w`/`#g-h`, reachable and invisible, and
-  `#sz-w`/`#sz-h`, visible and unreachable.
+  *bucket* rather than the pixels, and nothing is snapped while you type. It
+  used to fail two rows by design, because ⌘↑ on Width and Height never worked
+  on the vanilla page — the handler was delegated from three sections and the
+  sizer popover was appended to `<body>`, so the arrows stepped a pair of inputs
+  nobody could focus. There is no vanilla page now and the component owns its
+  own keys, so all rows pass and a failure here is a real one.
 - `probe_lora.py` — what the note says about `<lora:…>` tokens. The stub volume
   holds `Portrait` and `portrait`, and `high` in both Wan speed folders, so the
   case rule and the shortest-unambiguous-name rule are checked against real
@@ -116,10 +125,6 @@ it still holds.
 - `probe_clause.py` — ⌥← / ⌥→. The invariant is not that the text is unchanged
   — the point is that it changes — it is that the *separator sequence* is: same
   characters, same order, same count.
-- `probe_ids.py` — runs against both at once. Duplicate ids fail; everything
-  else is a report. A component shared by the two composer strips put `#go-gen`
-  on the page twice, and `querySelector` then returns the image one forever, so
-  the video button reads as dead rather than as invalid markup.
 - `check_train.py` — Train and the dataset editor: every hyperparameter carries
   its name, drafts and saved sets are separated, the captioner offers two menus,
   and a run reports step, epoch, rate, ETA and a falling loss before it ends
@@ -153,14 +158,16 @@ everywhere and is what a React `fieldMax` has to reproduce.
 
 ## Against the shipped bundle
 
-Every check takes a URL, so all three targets use the same command:
+Every check takes a URL, and there are two targets left now that UI_HTML is
+deleted:
 
-    python3 tools/preview_ui.py 8791            # UI_HTML, the old page
-    python3 tools/preview_ui.py 8795 --dist     # web/dist, what app.py serves
-    npm --prefix web run dev                    # :5173, the dev server
+    npm --prefix web run build && python3 tools/preview_ui.py 8791
+    npm --prefix web run dev                    # :5173, proxying /api to 8791
 
-`--dist` is the one that matters before a deploy. It serves the built bundle as
-static files at absolute `/assets/…` paths, which is exactly how the web
-container serves it and is not what the dev server does — a bundle that works
-under `npm run dev` and 404s its own stylesheet when mounted is a failure
-neither the dev server nor a unit test would show.
+The first is the one that matters before a deploy. `preview_ui.py` serves
+`web/dist` as static files at absolute `/assets/…` paths, which is exactly how
+the web container serves it and is not what the dev server does — a bundle that
+works under `npm run dev` and 404s its own stylesheet when mounted is a failure
+neither the dev server nor a unit test would show. Remember the build: the
+static server reads `web/dist` off disk, so without it you are checking the
+previous commit's front end and every row still passes.

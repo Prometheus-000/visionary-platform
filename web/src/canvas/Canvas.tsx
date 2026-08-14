@@ -1,10 +1,10 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { fileUrl } from '../api/routes'
 import { IconClose, IconExpand, IconPhoto, IconPlay } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
-import { useStore } from '../store'
+import { attached, regionsLive, useStore } from '../store'
 import { layoutShots } from './layoutShots'
 import type { RunState } from './useGenerate'
 import type { VideoRun } from '../video/useVideo'
@@ -18,12 +18,20 @@ import type { VideoRun } from '../video/useVideo'
  * *every* aspect and 152–1068px horizontal, so the picture is height-bound everywhere
  * and the bar always comes out of it.
  *
- * **Where the boxes are drawn is decided here.** A still wins over the frame, because
- * adjusting boxes against the picture you actually got is the whole point of them still
- * being there after a render; a plate wins over the still, because a plate is what you
- * are composing *into*, so the last render is no longer the subject. With a batch it is
- * the first still only: one set of boxes applies to the whole batch, and drawing them
- * four times would say otherwise.
+ * **One canvas at a time is the law.** A batch used to be a two-up contact sheet at half
+ * height, and that is the arrangement that broke the regions: one set of boxes applies to
+ * the whole batch, so there was no single surface to draw them on, and at four or eight
+ * they landed on the first cell of the grid you were trying to judge. Now each result
+ * fills the canvas and the strip slides between them like frames of film — `‹ 1 / 4 ›` is
+ * the whole control. The one on screen *is* the canvas, which is also the surface an
+ * inpaint would act on when there is one.
+ *
+ * **Where the boxes are drawn is decided here.** The current still wins over the frame,
+ * because adjusting boxes against the picture you actually got is the point of them still
+ * being reachable after a render; a plate wins over the still, because a plate is what
+ * you are composing *into*, so the last render is no longer the subject. What is *drawn*
+ * on that surface is `store.edit`'s business, not this file's — after a render the answer
+ * is nothing at all.
  */
 export function Canvas({
   run,
@@ -49,6 +57,7 @@ export function Canvas({
   const canvasRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const capRef = useRef<HTMLParagraphElement>(null)
+  const navRef = useRef<HTMLDivElement>(null)
 
   const image = s.kind === 'image'
   const n = image ? run.files.length : 0
@@ -56,12 +65,21 @@ export function Canvas({
     ? fileUrl(vidRun.jobId, vidRun.file)
     : null
 
+  /** Which frame of the strip is the canvas. Local, because nothing outside this
+   *  component has an opinion about it and it changes at click rate. */
+  const [cur, setCur] = useState(0)
+  // A new render is its own strip, so it starts at its first frame. Keyed on the job
+  // rather than on `n` — two runs of four would otherwise leave you on frame 3 of a
+  // batch you have not seen.
+  useEffect(() => { setCur(0) }, [run.jobId])
+  const at = Math.min(cur, Math.max(0, n - 1))
+
   // The canvas changes height whenever the console does, so the fit is recomputed on
   // that signal rather than set once at generation time.
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const fit = () => layoutShots(gridRef.current, canvas, capRef.current, n)
+    const fit = () => layoutShots(gridRef.current, canvas, capRef.current, n, navRef.current)
     fit()
     const ro = new ResizeObserver(fit)
     ro.observe(canvas)
@@ -71,10 +89,39 @@ export function Canvas({
   // The boxes are an image-side thing and the canvas is the same element, so switching
   // kinds has to take the layer with it — otherwise the rectangles sit over a clip they
   // mean nothing to.
-  const boxesOnShot = image && s.regional && n > 0 && !s.plate.scene && !s.plate.outfit
-  const boxesOnFrame = image && s.regional && !boxesOnShot
   const running = image ? run.running : vidRun.running
   const shown = image ? n > 0 : !!vidSrc
+  const ready = !!s.state && !s.stateError
+
+  const boxesOnShot = regionsLive(s) && n > 0
+    && !attached(s.frame, 'scene') && !attached(s.frame, 'outfit')
+  // The frame is the region surface, and now the empty-canvas invitation too. With no
+  // render it carries either the boxes you placed or — when there are none — the cold
+  // "drag to place a character" prompt, which is the whole reason `RegionLayer` has an
+  // invite state. It still replaces the placeholder glyph rather than sitting beside
+  // it: an empty frame and an empty-state glyph are two answers to one question.
+  const emptyImage = image && n === 0 && !running && ready
+  const boxesOnFrame = image && !boxesOnShot && (regionsLive(s) || emptyImage)
+
+  // ← / → step the strip. Guarded exactly like the Space binding in App: not while
+  // typing, not behind a lightbox or a menu, and not while a box is selected — there
+  // the arrows nudge the rectangle, which is the layer's own binding and the more
+  // specific one.
+  useEffect(() => {
+    if (n < 2) return
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      const t = e.target as HTMLElement | null
+      if (t?.matches?.('input,textarea,select') || t?.isContentEditable) return
+      if (t?.closest?.('#region-layer')) return
+      if (document.querySelector('.lb,.menu,.pal,.scrim')) return
+      e.preventDefault()
+      setCur((p) => Math.min(n - 1, Math.max(0, p + (e.key === 'ArrowRight' ? 1 : -1))))
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [n])
 
   return (
     <div className="canvas" id="canvas" ref={canvasRef}>
@@ -91,7 +138,11 @@ export function Canvas({
         </div>
       )}
 
-      {running && (
+      {/* The full placeholder is for a *cold* run — nothing on screen to keep. Once
+          there is a render, a new one replaces it when it lands, not when it is asked
+          for, so the old picture stays and the run reports itself as a hairline along
+          the top edge rather than by blanking what you were judging. */}
+      {running && !shown && (
         <div className="blank" id="canvas-empty">
           <div style={{ minWidth: 260 }}>
             <div className="bar">
@@ -99,6 +150,11 @@ export function Canvas({
             </div>
             <p className="muted" style={{ marginTop: 8 }}>{image ? run.phase : vidRun.phase}</p>
           </div>
+        </div>
+      )}
+      {running && shown && (
+        <div className="prog-top" id="canvas-prog" aria-hidden="true">
+          <i style={{ width: `${image ? run.percent : vidRun.percent}%` }} />
         </div>
       )}
 
@@ -117,11 +173,11 @@ export function Canvas({
           <button className="ico" id="canvas-full" title="Full screen — Space" type="button"
                   onClick={() => {
                     if (vidSrc) onOpenVideo(vidSrc)
-                    else if (run.jobId) onOpen(run.jobId, 0)
+                    else if (run.jobId) onOpen(run.jobId, at)
                   }}>
             <IconExpand />
           </button>
-          <button className="ico" id="canvas-clear" title="Clear the canvas" type="button"
+          <button className="ico" id="canvas-clear" title="Clear the canvas — ⌫" type="button"
                   onClick={onClear}>
             <IconClose />
           </button>
@@ -131,37 +187,60 @@ export function Canvas({
       {/* Streamed by filename, not fetched as base64 first. The status record already
           carries `files`, so an extra round trip buys nothing except a JSON body with
           megabytes of base64 in it — which has to arrive whole, and be decoded, before
-          any of the four stills can paint. Each <img> paints as its own bytes land, off
-          the same route and the same cache the gallery uses. */}
+          any of the stills can paint. Each <img> paints as its own bytes land, off the
+          same route and the same cache the gallery uses — and every frame of the strip
+          is mounted, so stepping to the next one is a transform rather than a fetch. */}
       {image && (
-        <div className="shots" id="gen-out" ref={gridRef} hidden={!n}>
-          {run.jobId && run.files.map((f, i) => (
-            <figure className={`shot${s.regional ? ' can-drop' : ''}`} key={f}>
-              <img src={fileUrl(run.jobId!, f)} alt="" decoding="async" fetchPriority="high"
-                   // The same viewer the gallery card opens. A still on the canvas is
-                   // fitted to whatever the console left it — at four-up, half of that
-                   // — so seeing it at size should not cost a trip through the gallery
-                   // to a copy of the image already on screen.
-                   onClick={() => onOpen(run.jobId!, i)} />
-              {/* Each still carries its own way into video. Two, because they are
-                  genuinely different jobs: a first frame is the shot the clip starts
-                  on, a reference is a subject the clip is about. */}
-              <span className="acts">
-                <button type="button" title="Animate — use as the first frame of a clip"
-                        onClick={() => onHandoff(run.jobId!, f, 'first')}>
-                  <IconPlay />
-                </button>
-                <button type="button" title="Use as a reference image"
-                        onClick={() => onHandoff(run.jobId!, f, 'reference')}>
-                  <IconPhoto />
-                </button>
-              </span>
-              {/* Inside the still, so the boxes land on the picture with no
-                  measurement — and with no reparenting, which is what used to make
-                  this element deletable by an innerHTML write. */}
-              {boxesOnShot && i === 0 && <RegionLayer />}
-            </figure>
-          ))}
+        <div className="film" id="gen-out" ref={gridRef} hidden={!n}>
+          <div className="film-track" style={{ transform: `translateX(-${at * 100}%)` }}>
+            {run.jobId && run.files.map((f, i) => (
+              <div className="film-cell" key={f} aria-hidden={i !== at}>
+                <figure className={`shot${regionsLive(s) ? ' can-drop' : ''}`}>
+                  {/* No click-to-zoom. It used to open the lightbox, which was right
+                      when a batch was four thumbnails and the canvas was only
+                      pretending to show you the picture — the strip shows it at full
+                      canvas size now. What replaced it is one rule with no geography
+                      in it: a click on the canvas addresses whatever is under it, so
+                      over a region it opens that region and over bare picture it does
+                      nothing. Full screen is the expand button and Space. */}
+                  <img src={fileUrl(run.jobId!, f)} alt="" decoding="async"
+                       fetchPriority={i === at ? 'high' : 'auto'} />
+                  {/* Each still carries its own way into video. Two, because they are
+                      genuinely different jobs: a first frame is the shot the clip starts
+                      on, a reference is a subject the clip is about. */}
+                  <span className="acts">
+                    <button type="button" title="Animate — use as the first frame of a clip"
+                            onClick={() => onHandoff(run.jobId!, f, 'first')}>
+                      <IconPlay />
+                    </button>
+                    <button type="button" title="Use as a reference image"
+                            onClick={() => onHandoff(run.jobId!, f, 'reference')}>
+                      <IconPhoto />
+                    </button>
+                  </span>
+                  {/* Inside the still, so the boxes land on the picture with no
+                      measurement — and with no reparenting, which is what used to make
+                      this element deletable by an innerHTML write. On the shown frame
+                      only: one set of boxes applies to the whole batch, and mounting a
+                      layer per frame would be four cards claiming the same regions. */}
+                  {boxesOnShot && i === at && <RegionLayer over="render" />}
+                </figure>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* `‹ 2 / 4 ›`. The whole batch control, and it only exists when there is a batch
+          — one result is one canvas and has nothing to step through. Quiet at rest like
+          everything else that sits near the picture. */}
+      {image && n > 1 && (
+        <div className="film-nav" id="gen-nav" ref={navRef}>
+          <button type="button" className="ico" id="gen-prev" title="Previous — ←"
+                  disabled={at === 0} onClick={() => setCur(at - 1)}>‹</button>
+          <span className="count">{at + 1} / {n}</span>
+          <button type="button" className="ico" id="gen-next" title="Next — →"
+                  disabled={at >= n - 1} onClick={() => setCur(at + 1)}>›</button>
         </div>
       )}
 

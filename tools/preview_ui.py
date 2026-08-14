@@ -588,8 +588,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/train":
             return self.reply({"ok": True, "job_id": "train%03d" % (len(RUNS) + 1)})
 
+        # `num_images` is echoed rather than fixed at two, because the batch is the
+        # case the canvas is hardest to get right: one canvas at a time with `‹ 1 / 4 ›`
+        # is only exercisable if the stub can actually return four. A fixed pair made
+        # the strip look correct in the one arity that needs no navigation.
         if path == "/api/generate":
-            RUNS["gen000"] = {"polls": 0, "stopped": False}
+            try:
+                n = int(json.loads(body or b"{}").get("num_images") or 1)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                n = 1
+            RUNS["gen000"] = {"polls": 0, "stopped": False, "n": max(1, min(8, n))}
             return self.reply({"ok": True, "job_id": "gen000"})
 
         # A family's queue. Worth stubbing rather than falling through to the
@@ -692,11 +700,15 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             item = next((i for i in GALLERY if i["job_id"] == m.group(1)), None)
             w, h = (item["width"], item["height"]) if item else (1024, 1024)
+            # Labelled and coloured by *file*, not by job. Every frame of a batch
+            # comes off one job id, so seeding on that alone drew four identical
+            # rectangles — and the film strip's whole job is to move between them,
+            # which is unfalsifiable when every frame looks the same.
+            tag = f"{m.group(1)} · {m.group(2)}"
             # Videos get a still too. A stub cannot mux a real clip, and a card
             # that renders is worth more here than a card that is honest about
             # being empty — the video path itself is only reachable on Modal.
-            return self.reply(swatch(w, h, m.group(1), hash(m.group(1))),
-                              "image/svg+xml")
+            return self.reply(swatch(w, h, tag, hash(tag)), "image/svg+xml")
 
         # A finished job, with results. This used to land `{"images": []}`,
         # which meant the canvas — the largest thing on the page, and the one
@@ -743,14 +755,16 @@ class Handler(BaseHTTPRequestHandler):
                     "total_steps": total,
                     "percent": int(job["polls"] * 100 / total),
                 })
+            n = int(job.get("n") or 2)
             return self.reply({
                 "status": "completed", "percent": 100,
                 # Filenames, not base64 — the canvas streams these off /api/file
                 # exactly as the gallery does, and stubbing the old inlined shape
-                # would be testing a path the page no longer takes.
-                "files": ["120000_00.png", "120000_01.png"],
+                # would be testing a path the page no longer takes. As many as were
+                # asked for, so the film strip has something to page through.
+                "files": ["120000_%02d.png" % i for i in range(n)],
                 "job_id": m.group(1), "output_dir": "/workspace/outputs/" + m.group(1),
-                "seeds": [4242, 4243], "sampler": "Euler", "scheduler": "Simple",
+                "seeds": [4242 + i for i in range(n)], "sampler": "Euler", "scheduler": "Simple",
                 "steps": 8, "cfg_scale": 1.0, "shift": 1.15, "duration_s": 6.2,
                 "width": 1024, "height": 1024,
                 "loras": [{"name": "my_style", "unet": 0.8, "applied": True},

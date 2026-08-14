@@ -5,7 +5,7 @@ import { generate, status, stop } from '../api/routes'
 import type { JobStatus } from '../api/types'
 import { loraIndex, readLoras, stripLoras } from '../lora/tokens'
 import { readRegions } from '../regions/geometry'
-import { negAllowed, readShot, useStore, type Store } from '../store'
+import { attached, negAllowed, readShot, regionsLive, useStore, type Store } from '../store'
 import { readSize } from '../console/size'
 
 /**
@@ -20,11 +20,21 @@ import { readSize } from '../console/size'
  */
 export type RunState = {
   running: boolean
+  /** The render on screen — the last one that *completed*. It is deliberately not
+   *  cleared when the next run starts: a new render replaces the old one when it
+   *  lands, not when it is asked for, so an iteration you are judging stays up
+   *  through the two minutes it takes to make its successor. `finish` is the only
+   *  thing that moves it. */
   jobId: string | null
+  files: string[]
+  /** The job being polled right now, which is *not* `jobId` until it completes.
+   *  Two ids because the bytes on screen and the work in flight are two different
+   *  renders during a run — `fileUrl(jobId, f)` has to keep addressing the old
+   *  job's files while `runId` is the one `/api/status` is asked about. */
+  runId: string | null
   percent: number
   phase: string
   error: string | null
-  files: string[]
   /** The facts about the render, in the page's order: seeds, then the sampler line,
    *  then how long it took. */
   meta: string[]
@@ -33,8 +43,8 @@ export type RunState = {
 }
 
 const IDLE: RunState = {
-  running: false, jobId: null, percent: 0, phase: '',
-  error: null, files: [], meta: [], skipped: [],
+  running: false, jobId: null, files: [], runId: null, percent: 0, phase: '',
+  error: null, meta: [], skipped: [],
 }
 
 /**
@@ -51,7 +61,7 @@ const IDLE: RunState = {
 export function imageBody(s: Store): Record<string, unknown> {
   const index = loraIndex(s.state)
   const [width, height] = readSize(s.img)
-  const regions = readRegions(index, s.regions, s.regional)
+  const regions = readRegions(index, s.regions, regionsLive(s))
   return {
     prompt: stripLoras(s.prompt),
     negative_prompt: negAllowed(s) ? s.negative : '',
@@ -63,8 +73,8 @@ export function imageBody(s: Store): Record<string, unknown> {
     // Only when there are boxes to compose around — the backend rejects a plate
     // without regions, and sending one anyway would turn a hidden tile that still
     // holds an image into an error nobody could see the cause of.
-    scene: regions.length ? s.plate.scene : null,
-    outfit: regions.length ? s.plate.outfit : null,
+    scene: regions.length ? attached(s.frame, 'scene') : null,
+    outfit: regions.length ? attached(s.frame, 'outfit') : null,
     width,
     height,
     num_images: s.img.n,
@@ -108,7 +118,13 @@ export function useGenerate(onLanded: () => void) {
       s.duration_s ? `${String(s.duration_s)}s` : '',
     ].filter(Boolean)
 
-    setRun({ running: false, jobId, percent: 100, phase: '', error: null, files, meta, skipped })
+    // Replaces the on-screen render atomically: the new job's id and files land in
+    // the same set as `running:false`, so there is never a frame where the old
+    // `jobId` is paired with the new `files`.
+    setRun((p) => ({
+      ...p, running: false, jobId, runId: null, files, percent: 100, phase: '',
+      error: null, meta, skipped,
+    }))
     onLanded()
   }, [onLanded])
 
@@ -116,29 +132,38 @@ export function useGenerate(onLanded: () => void) {
     const s = useStore.getState()
     const body = imageBody(s)
     if (!body.prompt && !(body.regions as unknown[]).length) return
-    setRun({ ...IDLE, running: true, phase: 'Queued…' })
+    // Keep the previous render (jobId/files/meta) on screen and only overlay a
+    // progress state on it — see the `jobId` note above. A cold first run has no
+    // previous render, so this shows the full placeholder; an iteration keeps the
+    // last picture up until its replacement is ready.
+    setRun((p) => ({
+      ...p, running: true, runId: null, percent: 0, phase: 'Queued…', error: null,
+    }))
     const r = await generate(body)
     if (failed(r)) {
-      setRun({ ...IDLE, error: r.error })
+      // Leave the last render up; a failed request should not blank what you were
+      // iterating on. Only the error and the stopped-running state change.
+      setRun((p) => ({ ...p, running: false, runId: null, error: r.error }))
       return
     }
-    const jobId = r.job_id
-    setRun((p) => ({ ...p, jobId }))
+    const runId = r.job_id
+    setRun((p) => ({ ...p, runId }))
 
     const t = everyMs(async () => {
-      const st = await status(jobId)
+      const st = await status(runId)
       if (failed(st)) return
       if (st.status === 'completed') {
         clearInterval(t)
-        finish(st, jobId)
+        finish(st, runId)
       } else if (st.status === 'failed') {
         clearInterval(t)
-        setRun({ ...IDLE, error: st.error || 'Generation failed' })
+        setRun((p) => ({ ...p, running: false, runId: null, error: st.error || 'Generation failed' }))
       } else if (st.status === 'stopped') {
         clearInterval(t)
-        // Said out loud. A cancelled run used to just hide the bar, which is the same
-        // thing the screen does when a run finishes with nothing to show.
-        setRun({ ...IDLE, meta: ['Cancelled.'] })
+        // The previous render coming back is the feedback now — a stopped run leaves
+        // the picture it was replacing exactly where it was, so there is nothing to
+        // say that the returned image does not already say.
+        setRun((p) => ({ ...p, running: false, runId: null, phase: '' }))
       } else {
         setRun((prev) => ({
           ...prev,
@@ -158,10 +183,10 @@ export function useGenerate(onLanded: () => void) {
    *  container survives and the next request is warm. Disabled rather than removed on
    *  press, because a Stop that vanishes on click reads as a click that missed. */
   const cancel = useCallback(async () => {
-    if (!run.jobId) return
+    if (!run.runId) return
     setRun((p) => ({ ...p, phase: 'Stopping…' }))
-    await stop(run.jobId)
-  }, [run.jobId])
+    await stop(run.runId)
+  }, [run.runId])
 
   const clear = useCallback(() => setRun(IDLE), [])
 

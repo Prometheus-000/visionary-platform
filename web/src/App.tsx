@@ -20,9 +20,11 @@ import { useVideo } from './video/useVideo'
 /**
  * The shell: header, stage, canvas, console.
  *
- * Structure follows UI_HTML's, class for class, because the stylesheet is kept verbatim and
- * it selects on `.top`, `.views`, `.stage`, `.canvas`, `.console` and `.field`. Renaming
- * any of those would mean rewriting the CSS, which is the one thing the port is not doing.
+ * Structure follows UI_HTML's, class for class, because `styles/ui.css` was lifted out of
+ * it byte for byte and selects on `.top`, `.views`, `.stage`, `.canvas`, `.console` and
+ * `.field`. UI_HTML is deleted and the stylesheet is the source now, so new rules are
+ * written here like anywhere else — but renaming one of those classes still costs a
+ * rewrite of the block that measures against it, which is the expensive part.
  *
  * **Generate is the page, not a destination.** It has no nav item; the wordmark is how you
  * get back to it. Train is one door, labelled with where it leads rather than where you
@@ -40,7 +42,9 @@ export function App() {
 
   const landed = useCallback(() => {
     // A result landed: the boxes come off the picture, and the gallery has a new newest.
-    useStore.getState().setFreshRender(true)
+    // Off on *every* land, which is the whole "editing is a choice" rule — the regions
+    // themselves are untouched and go with the next run, they are just not drawn.
+    useStore.getState().setEdit('off')
     void reload()
   }, [reload])
 
@@ -55,6 +59,18 @@ export function App() {
   const stopRun = useCallback(() => {
     if (useStore.getState().kind === 'image') void gen.cancel()
     else void vid.cancel()
+  }, [gen, vid])
+
+  /* Clears the canvas back to the frame, where the boxes are drawn and draggable. It is
+     no longer the *only* way to reach geometry — ⌘-click over a render does that — but
+     it is still where you go to start a set over. `geometry` rather than `off` because
+     with no render there is nothing to keep clean. Shared by the canvas ✕ and the ⌫
+     shortcut so the two cannot drift. */
+  const clearCanvas = useCallback(() => {
+    const st = useStore.getState()
+    if (st.kind === 'image') gen.clear()
+    else vid.clear()
+    st.setEdit('geometry')
   }, [gen, vid])
 
   const reloadState = useCallback(async () => {
@@ -93,15 +109,25 @@ export function App() {
       // page look like it wants to eat it.
       if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return
       document.body.classList.add('dragging')
+      // The same fact in the two places that need it. The stylesheet reads the class to
+      // light every eligible target; `RegionLayer` reads the flag to bring the boxes
+      // back over a finished render, because a drop cannot land on a box that is at
+      // `pointer-events:none` — which is the state the port shipped in, and it made the
+      // one gesture nobody discovers on their own undiscoverable by construction.
+      useStore.getState().setFileOver(true)
       window.clearTimeout(off)
       // `dragend` fires on a drag that started inside the page; `drop` fires on one that
       // came from outside and landed. Neither fires when a drag leaves the window
       // entirely, which is what the timer is for.
-      off = window.setTimeout(() => document.body.classList.remove('dragging'), 300)
+      off = window.setTimeout(() => {
+        document.body.classList.remove('dragging')
+        useStore.getState().setFileOver(false)
+      }, 300)
     }
     const stop = () => {
       window.clearTimeout(off)
       document.body.classList.remove('dragging')
+      useStore.getState().setFileOver(false)
     }
     window.addEventListener('dragover', over)
     window.addEventListener('drop', stop)
@@ -140,6 +166,64 @@ export function App() {
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [canvasSrc, s.kind, lightbox])
+
+  /* ⌘/Ctrl+Enter generates from anywhere — the point being *from a region's prompt
+     field*, which is what turns the edit-and-regenerate loop into one keystroke. The
+     main prompt's own textarea already binds it (see Field), so the caret being there
+     is skipped to avoid firing twice. */
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.isComposing) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest?.('#prompt,#neg')) return
+      if (gen.run.running || vid.run.running) return
+      e.preventDefault()
+      fire()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [fire, gen.run.running, vid.run.running])
+
+  /* Escape puts the picture back. The layer has its own Escape — it is what selects the
+     frame — but that one is a handler on the layer, so it only fires when focus is
+     already inside it, and the gesture that reveals geometry is a ⌘-click that leaves
+     focus on the body. So the way *out* of the mode was unreachable from the state the
+     way *in* leaves you in, which the region check found on its first run against it.
+     Guarded so anything modal still wins: a lightbox or a menu owns Escape while open. */
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (document.querySelector('.lb,.menu,.pal,.scrim')) return
+      if (useStore.getState().edit === 'off') return
+      // Only over a render. On the frame there is nothing to return to, and `off`
+      // there would hide the boxes with no way to ask for them back.
+      if (!document.querySelector('#gen-out .film-cell')) return
+      e.preventDefault()
+      useStore.getState().setEdit('off')
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+
+  /* ⌫ / Delete clears the canvas, so starting over is a keystroke rather than a hunt
+     for the small ✕. Guarded to the one meaning it can have: not while typing, and not
+     while a region box is focused — there the same key deletes the box, and stealing it
+     would be the keyboard fault the canvas-native regions redesign set out to fix. */
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Backspace' && e.key !== 'Delete') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t?.matches?.('input,textarea,select') || t?.isContentEditable) return
+      if (t?.closest?.('#region-layer')) return
+      if (document.querySelector('.lb,.menu,.pal,.scrim')) return
+      if (!canvasSrc) return
+      e.preventDefault()
+      clearCanvas()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [canvasSrc, clearCanvas])
 
   /**
    * The hand-off. A still you just made becomes the thing the next clip animates, without a
@@ -234,7 +318,7 @@ export function App() {
                   if (b64) useStore.getState().setKeyframe('first', b64)
                   else alert('Could not read that image.')
                 }}
-                onClear={() => (s.kind === 'image' ? gen.clear() : vid.clear())}
+                onClear={clearCanvas}
                 blank={
                   s.stateError ? <div className="err-box">{s.stateError}</div>
                     : s.state ? null

@@ -8,7 +8,7 @@
  * are a readout that moves while you drag. Dragging is what teaches them; they never
  * taught the dragging.
  */
-import type { Region } from '../store'
+import { attached, type Region } from '../store'
 import { parseLoras, stripLoras, type LoraFile } from '../lora/tokens'
 
 /** Below this a box is not grabbable, and 0 is rejected by the backend outright. */
@@ -59,7 +59,7 @@ export function snapEdge(
  *  rectangle is filled by the scene prompt, a box with an identity in it is a
  *  person — and it is the same one the old 32px plots drew. */
 export const regionArmed = (index: LoraFile[], r: Region): boolean =>
-  !!(r.ref || parseLoras(index, r.prompt || '').some((t) => t.hit))
+  !!(attached(r, 'identity') || parseLoras(index, r.prompt || '').some((t) => t.hit))
 
 /** What the box calls itself. The LoRA name is the identity, so it wins; the prompt
  *  is the fallback because a photo-only box still has words worth showing. */
@@ -68,7 +68,7 @@ export function regionTag(index: LoraFile[], r: Region): { text: string; muted: 
   if (hit?.hit) return { text: hit.hit.token, muted: false }
   const words = stripLoras(r.prompt || '').trim()
   if (words) return { text: words.length > 28 ? `${words.slice(0, 27)}…` : words, muted: false }
-  return r.ref ? { text: 'photo', muted: true } : { text: '', muted: false }
+  return attached(r, 'identity') ? { text: 'photo', muted: true } : { text: '', muted: false }
 }
 
 /** Overwrites, unlike the Columns/Rows select it replaces: that filled only the
@@ -105,7 +105,7 @@ export function readRegions(index: LoraFile[], regions: Region[], on: boolean) {
       return {
         prompt: stripLoras(r.prompt || ''),
         loras: toks.map((t) => ({ path: t.hit!.path, unet: parseFloat(t.a) || 1 })),
-        ref: r.ref || null,
+        ref: attached(r, 'identity'),
         x: r.x, y: r.y, width: r.w, height: r.h,
       }
     })

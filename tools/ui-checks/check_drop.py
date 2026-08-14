@@ -118,14 +118,22 @@ with sync_playwright() as pw:
 
     print("\nIMAGE side")
     to_image()
-    # Arming Regions is the whole reveal: the plates live in the region bar,
-    # which only exists when regions do.
-    pg.click("#g-regional")
+    # Arming Regions is the first half of the reveal: nothing regional exists
+    # until it does, and it is placed on the canvas now — the empty-canvas
+    # invitation's "split into two columns" is the arm. The second half is the
+    # frame button in the corner of the layer — the plates are frame-scope, so
+    # they live in the frame's card, and arming selects a *box*, whose card is a
+    # different one. Two gestures, and both are gestures rather than page globals,
+    # because a check that reaches past the interface can pass while the interface
+    # is unreachable.
+    pg.click(".rinvite-b")
     pg.wait_for_timeout(600)
-    report("scene plate", "#g-drop-scene")
-    report("outfit plate", "#g-drop-outfit")
     report("region layer", "#region-layer")
     report("a region box", "#region-layer .rbox")
+    pg.click(".rframe-btn")
+    pg.wait_for_timeout(300)
+    report("scene plate", "#g-drop-scene")
+    report("outfit plate", "#g-drop-outfit")
     # `#canvas .frame` is deliberately not tested. The drop is listened for on
     # #region-layer, which covers the frame and paints `hot` onto the frame as
     # its *host* — so a real drag is cancelled on the layer and the frame never
