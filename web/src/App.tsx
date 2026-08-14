@@ -91,8 +91,41 @@ export function App() {
     else useStore.getState().setState(r)
   }, [])
 
+  /* Fetched once at mount, and that one answer decides the whole page — which sizes
+     exist, which LoRAs are offered, whether Generate is even enabled. So when it comes
+     back wrong the app is wrong until you reload it by hand, and the hand-reload people
+     actually found was the gear, because opening Settings calls this again. "Click the
+     gear and the weights appear" is that bug wearing a workaround.
+
+     What comes back wrong is a listing that says the volume holds nothing while it holds
+     26 GB of Krea 2 — seen once against a real deployment, with `/api/state` fetched from
+     that same page reporting `turbo.present: true` a moment later, and not reproducible
+     on demand. The cause is below us: `_sizes_on_disk` reads a directory rather than
+     statting each file *because* a failed lookup is cached under the mount, and a readdir
+     that lands before the mount has caught up is the same fault one level up.
+
+     So this re-checks rather than diagnoses. Bounded at three attempts, and only while
+     the answer is still "there is no DiT here" — the one state that is both the symptom
+     and the thing that disables the button. A genuinely empty volume pays two extra
+     requests on a CPU route once per load and then settles, which is the right price for
+     an install that otherwise tells you to download weights you already have. */
   useEffect(() => {
-    void reloadState()
+    let alive = true
+    const hasDit = () => {
+      const st = useStore.getState().state
+      return !!st?.models.some((m) => (m.key === 'turbo' || m.key === 'raw') && m.present)
+    }
+    void (async () => {
+      for (const wait of [0, 700, 1800]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait))
+        if (!alive) return
+        await reloadState()
+        // Stop on a real answer, and on a real error — retrying a 500 three times just
+        // makes the same complaint three times slower.
+        if (!alive || hasDit() || useStore.getState().stateError) return
+      }
+    })()
+    return () => { alive = false }
   }, [reloadState])
 
   // The GPU pickers are built once from what the deployment offers: the list only changes

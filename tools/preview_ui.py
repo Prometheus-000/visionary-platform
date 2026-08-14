@@ -373,6 +373,7 @@ STATE = {
 # DATASETS above and for the same reason: this flow is judged by what the card
 # does over several polls, and a fixed reply cannot show a transfer moving.
 GDRIVE = {"mode": "ok", "folder": "", "polls": 0}
+_COLD = {"n": 0}
 
 CAPTIONS = [
     "ohwx_style a photograph of a person seated by a window in soft daylight.",
@@ -673,6 +674,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(f.read_bytes(), kind)
         if path == "/api/state":
             api = app_api()
+            # COLDSTART=n makes the first n answers claim the volume is empty, which is
+            # the fault the page's re-check exists for and the only way to exercise it.
+            _COLD["n"] += 1
+            if _COLD["n"] <= int(os.environ.get("COLDSTART") or 0):
+                return self.reply({**STATE, "models": [dict(m, present=False, size_gb=0)
+                                                        for m in STATE["models"]],
+                                   "loras": [], "shot_vocab": api["SHOT_VOCAB"],
+                                   "shot_langs": api["H3_LANGUAGES"], "shot_roles": [],
+                                   "caption_presets": [], "caption_models": [],
+                                   "caption_defaults": {"preset": "", "model": ""}})
             return self.reply({
                 **STATE,
                 "shot_vocab": api["SHOT_VOCAB"],
