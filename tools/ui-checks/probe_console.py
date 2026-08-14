@@ -99,9 +99,10 @@ def pills(pg, side, n):
     # which is why it kept passing after the port: `capture()` read a
     # module-level URL and ignored argv, so pointing it at the React build
     # measured the old page twice and reported it as agreement.
-    # One door now, at the head of the rail, shared by both sides — the two glyphs
-    # in the settings strips are gone.
-    pg.click("#shot-add")
+    # The door is in the strip, one per side, sharing one palette. It carries a
+    # word now rather than being a bare glyph — see `ShotDoor` — but the id is
+    # unchanged, which is why this line did not have to move with it.
+    pg.click(f"#{'v' if side == 'video' else 'g'}-shot")
     pg.wait_for_timeout(250)
     tiles = pg.locator(".tiles button.tl:not([disabled])")
     got = tiles.count()

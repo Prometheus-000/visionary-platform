@@ -779,40 +779,31 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    affordance, and a scrollbar under a single row of chips is chrome announcing
    a gesture the content already implies. scroll-padding keeps a pill from
    landing half-under the fade. */
-/* The door and the rail are siblings, not parent and child. Sixteen pills scroll,
-   and a door inside that scroller is a door that leaves the screen exactly when
-   there are enough pills to want a new one. */
-.rail-row{display:flex;align-items:center;gap:8px;margin:8px 2px 0;min-width:0}
-#shot-rail{margin:0;flex:1 1 auto;gap:6px;flex-wrap:nowrap;overflow-x:auto;
+#shot-rail{margin:8px 2px 0;gap:6px;flex-wrap:nowrap;overflow-x:auto;
   scrollbar-width:none;scroll-padding-inline:12px;
   /* The pills are chips, not text: without this they compress to nothing
      rather than running off the end, which is the whole point of scrolling. */
   }
 
-/* The door to the vocabulary. Dashed and worded while the rail is empty, because
-   that is the state a new user is in and the one an icon cannot speak to: eighty-
-   seven tiles behind one press is a destination, and the rule that lets a glyph
-   stand alone covers controls whose home you are already in.
+/* The door to the vocabulary, in the strip with `+ LoRA`.
 
-   The tile animates on hover and is frozen otherwise. That is not a compromise —
-   it is the same rule the pills follow: the page at rest is running nothing, so a
-   teaser looping under the prompt forever would be motion competing with the
-   canvas. Hover is what starts it, which is also the moment you are asking. */
-.shot-add{display:inline-flex;align-items:center;gap:7px;flex:none;cursor:pointer;
-  border:1px dashed rgba(255,255,255,.2);background:none;border-radius:999px;
-  padding:3px 12px 3px 7px;color:var(--dim);font-size:12.5px;
-  transition:border-color .12s,color .12s,background .12s}
-.shot-add:hover,.shot-add:focus-visible{border-color:rgba(255,255,255,.34);
-  color:#eee;background:rgba(255,255,255,.05)}
-.shot-add>.gl{width:26px;height:18px;flex:none;opacity:.85}
-.shot-add .gl *{animation-play-state:paused;animation-delay:-1.2s}
-.shot-add:hover .gl *,.shot-add:focus-visible .gl *{animation-play-state:running}
-.shot-add b{font-weight:500;white-space:nowrap}
-/* Compact once there are pills: the rail is the presence by then, and this is
-   only the way back. Solid rather than dashed, because a dashed outline means
-   "there is nothing here yet" and by now there is. */
-.shot-add:not(.hero){padding:3px 11px;border-style:solid;
-  border-color:rgba(255,255,255,.13)}
+   It had its own row at the head of the rail for a while, which is the right
+   *room* — these are words that land in the prompt — and the wrong price: 34px of
+   a console capped at 30% of the viewport, at rest, forever, to hold one button.
+   Measured, resting went 120px to 154px and the rail with pills in it only ever
+   added 29px on top, because then the row is carrying something.
+
+   The tile stays and animates on hover, frozen otherwise. That is not a
+   compromise, it is the same rule the pills follow: the page at rest is running
+   nothing, so a teaser looping under the prompt forever would be motion competing
+   with the canvas. Hover is what starts it, which is also the moment you asked. */
+/* `.opt.ib>svg` is (0,2,1) and sets 20x20 for the strip's square glyphs, so this
+   has to out-specify it rather than merely follow it — the tile is 44x30 and a
+   square box crops the frame it draws. */
+.opt.ib.shot-door>.gl{width:26px;height:18px;flex:none;opacity:.85;color:inherit}
+.shot-door .gl *{animation-play-state:paused;animation-delay:-1.2s}
+.shot-door:hover .gl *,.shot-door:focus-visible .gl *{animation-play-state:running}
+
 #shot-rail::-webkit-scrollbar{display:none}
 #shot-rail>*{flex:none}
 #shot-rail:empty{display:none;margin:0}

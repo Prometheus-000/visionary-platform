@@ -581,12 +581,14 @@ two domains, and the page follows the domains.
   strip is a row you scan when you already know what you want, which is why an
   icon works there for a *control* and fails there for a *destination*.
 
-  So each went to the surface it acts on, and each took a word with it. Regions
-  is a canvas verb — you place a character by drawing on the empty frame, and the
-  empty canvas says so in words, once, where the attention already is. Shot
-  writes into the prompt, so its door is at the head of the rail its words land
-  in. What is left in the strip are controls, which is what the rule was always
-  about.
+  So each took a word, and one of them moved. Regions is a canvas verb — you place
+  a character by drawing on the empty frame, and the empty canvas says so in words,
+  once, where the attention already is, so it left the strip entirely. Shot stayed
+  where it was and gained the word it was missing: it writes into the prompt, and
+  `+ LoRA` beside it is the same kind of door. Giving it a row of its own was tried
+  and cost 34px at rest for one button — see the palette note below. What is left
+  in the strip are controls and two doors that say where they go, which is what the
+  rule was always about.
 
   It does not generalise past the row. `#ins-toggle` keeps "Captions" because it
   wears the same sliders glyph as two unrelated panels, so its icon is not
@@ -900,7 +902,7 @@ two domains, and the page follows the domains.
   versus "a woman" changes the take is not something anyone can infer — and a
   take is two to three minutes, so every guess is paid for at that rate.
 
-  So the closed vocabulary is a **palette**: a door at the head of the pill rail,
+  So the closed vocabulary is a **palette**: a door in the strip beside `+ LoRA`,
   a popover of small animated tiles, and the pills themselves under the prompt.
   The prompt field keeps only what nothing else can say — who is in the shot and
   what happens. This is the "a control that shows its own value gets no label"
@@ -908,13 +910,12 @@ two domains, and the page follows the domains.
   where an icon can teach: a tile *shows* a dolly-out, which is the thing neither
   the word nor a static picture does.
 
-  **The door was a glyph in the options strip, and that was the wrong room.**
-  Words go in the prompt, so the way to them belongs at the prompt — at the head
-  of the rail the pills land in, where the relationship between the door and what
-  comes out of it needs no caption. In the strip it was a 34px mark beside
-  `+ LoRA`, in a row you scan when you already know what you want, next to a
-  second opaque mark doing the same disappearing act for regions. Both are gone
-  from there now, each to the surface it acts on.
+  **The door was a wordless glyph, and that — not its room — was the fault.** It
+  was a 34px mark beside `+ LoRA`, in a row you scan when you already know what
+  you want, next to a second opaque mark doing the same disappearing act for
+  regions. Regions left that row for good, because it is a canvas verb. Shot did
+  not: it writes into the prompt, and `+ LoRA` is already precedent for the strip
+  hosting a door that does that. What it needed was a word.
 
   It carries the word "Shot", and the icon rule is what says so rather than what
   it breaks: a glyph can carry a control whose home you are already in, and it
@@ -925,14 +926,19 @@ two domains, and the page follows the domains.
   for attention you have not asked it for. Hover is the asking. The glyph follows
   the kind — a dolly-out on video, a framing on images — because the camera group
   is video-only and teasing a move the model cannot make is a promise the run
-  will not keep. Once there are pills the rail is the presence, and the door
-  shrinks to a plain `+ Shot`.
+  will not keep.
 
-  The rail therefore costs one row always, where it used to cost nothing while
-  empty. That reverses a rule, and the number is why it is affordable: the worst
-  case is set by a long prompt with sixteen pills, and by then the rail was on
-  screen anyway, so it is unchanged at 30.0%. Only resting moved — 120px to
-  154px, at 15.7% of the viewport.
+  **It sat at the head of the pill rail for a version, and the measurement is what
+  moved it back.** The rail is the right *room* — the door and the words that come
+  out of it in one place, needing no caption — and it was the wrong price. A row
+  that exists only to hold one button costs 34px of a console capped at 30% of the
+  viewport, at rest, forever: resting went 120px to 154px, while the rail carrying
+  sixteen pills only ever added 29px on top of that, because then the row is
+  holding something. `#shot-rail:empty{display:none}` is back, and the rule it
+  encodes — the rail costs nothing until there is something in it — turns out to be
+  load-bearing rather than tidy. A line per button is not a price this console can
+  pay, and the general form is worth keeping: **a row is affordable when it carries
+  content, and never when it carries one control.**
 
   Three rules hold the rest together:
 

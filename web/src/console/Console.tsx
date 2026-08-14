@@ -1,8 +1,11 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
+import { usePopover } from '../ui/Popover'
 import { LoraButton } from '../lora/LoraButton'
 import { loraNote } from '../lora/note'
+import { Palette } from '../shot/Palette'
 import { Peek } from '../shot/Peek'
+import { ShotDoor } from '../shot/ShotDoor'
 import { Rail } from '../shot/Rail'
 import { SourceRow } from '../video/SourceRow'
 import { supports, useStore } from '../store'
@@ -52,6 +55,7 @@ export function Console({
 }) {
   const s = useStore()
   const box = useRef<HTMLDivElement>(null)
+  const pal = usePopover()
 
   // The console has to watch itself, because the prompt is not the only thing that
   // grows: arming Regions adds a bar and picking pills adds a rail, and both happen
@@ -128,15 +132,12 @@ export function Console({
           <div className="opts">
             <SizeButton />
             <LoraButton id="add-lora" />
-            {/* The two glyphs that used to sit here are gone, and they left for the
-                same reason: a 34px opaque mark in a row of controls is where a
-                capability goes to not be found, and side by side they flattened the
-                two biggest features in the app into one confusing pair. Each went to
-                the place it acts on. Regions is a canvas verb — you place a character
-                by drawing on the empty frame. Shot writes into the prompt, so its
-                door is at the head of the rail its words land in, one row down; see
-                `Rail`. What is left here are controls, which is what the icon rule
-                was always about. */}
+            {/* Regions left this row for good — it is a canvas verb, and you place a
+                character by drawing on the empty frame. Shot stayed, next to `+ LoRA`,
+                because both write into the prompt rather than beside it; what changed
+                is that it carries a word now instead of being a 34px opaque mark. See
+                `ShotDoor` for why it is here rather than on the rail. */}
+            <ShotDoor id="g-shot" kind="image" on={!!s.shot.length} onClick={pal.toggle} />
             <span className="actions">
               <span className="muted" id="gen-model-line">{modelNote}</span>
               <ImageSampling />
@@ -157,6 +158,7 @@ export function Console({
                 A14B pair forces — which expert a LoRA patches — rides in the token as a
                 third field, read off the filename when the matched pair names it. */}
             {supports(s).loras && <LoraButton id="v-add-lora" />}
+            <ShotDoor id="v-shot" kind="video" on={!!s.shot.length} onClick={pal.toggle} />
             <span className="actions">
               <span className="muted" id="v-model-line">{vid.note}</span>
               <VideoSampling />
@@ -167,6 +169,11 @@ export function Console({
           </div>
         </div>
       </Field>
+
+      {/* One palette, shared by both strips' doors — the vocabulary is one table with
+          three compilers behind it, so a second popover per side would be a second
+          place for the dimming rules to drift. */}
+      {pal.open && <Palette anchor={pal.anchor} onClose={pal.close} />}
 
       {/* Every picture the model can be given. Lifted out of the video strip when that
           moved into the field: this is a row of pictures, not a row of controls, and it
