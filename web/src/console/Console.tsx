@@ -1,10 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
-import { IconShot } from '../icons'
-import { usePopover } from '../ui/Popover'
 import { LoraButton } from '../lora/LoraButton'
 import { loraNote } from '../lora/note'
-import { Palette } from '../shot/Palette'
 import { Peek } from '../shot/Peek'
 import { Rail } from '../shot/Rail'
 import { SourceRow } from '../video/SourceRow'
@@ -21,9 +18,10 @@ import type { VideoRun } from '../video/useVideo'
  * The bar under the canvas.
  *
  * **Sorted by how often you reach for something, and by nothing else.** The row holds
- * what you touch constantly — the dimensions, the LoRAs, the shot pills, the regions.
- * One button holds what you touch rarely: the model, the sampler, steps, CFG, shift,
- * the seed, the batch count.
+ * what you touch constantly — the dimensions and the LoRAs. One button holds what you
+ * touch rarely: the model, the sampler, steps, CFG, shift, the seed, the batch count.
+ * Shot and Regions were in this row and are not any more: they are not settings, they
+ * are the two things the app is for, and each now lives on the surface it acts on.
  *
  * The near miss worth recording is *scope* — per-generation against per-session —
  * because it sounds right and fails on its own examples. Almost nothing in the row
@@ -34,7 +32,7 @@ import type { VideoRun } from '../video/useVideo'
  *
  * **The console has a budget — 30% of the viewport — and the prompt is what yields to
  * it.** Everything else in here is fixed or conditional: the strip is one row, the rail
- * appears with the first pill, and the boxes cost nothing. See `fieldMax.ts`.
+ * is one row, and the boxes cost nothing — they are on the canvas. See `fieldMax.ts`.
  */
 export function Console({
   run,
@@ -54,7 +52,6 @@ export function Console({
 }) {
   const s = useStore()
   const box = useRef<HTMLDivElement>(null)
-  const shot = usePopover()
 
   // The console has to watch itself, because the prompt is not the only thing that
   // grows: arming Regions adds a bar and picking pills adds a rail, and both happen
@@ -131,20 +128,15 @@ export function Console({
           <div className="opts">
             <SizeButton />
             <LoraButton id="add-lora" />
-            {/* One icon for the whole vocabulary, next to `+ LoRA` because both write
-                into the prompt rather than beside it — the difference is only that
-                this one writes words the model was trained on and you would otherwise
-                have to guess. */}
-            <button className={`opt ib${s.shot.length ? ' on' : ''}`} id="g-shot" type="button"
-                    title="Framing, angle, light and tone, as words this model reads."
-                    onClick={shot.toggle}>
-              <IconShot />
-            </button>
-            {/* Regions has no glyph here any more. It is a canvas verb, not a console
-                setting: you place a character by drawing a box on the empty canvas, and
-                once a render puts the boxes away the chip on the canvas brings them
-                back. A 34px toggle in the settings row was the most hidden entry to one
-                of the app's biggest features — the thing this move exists to fix. */}
+            {/* The two glyphs that used to sit here are gone, and they left for the
+                same reason: a 34px opaque mark in a row of controls is where a
+                capability goes to not be found, and side by side they flattened the
+                two biggest features in the app into one confusing pair. Each went to
+                the place it acts on. Regions is a canvas verb — you place a character
+                by drawing on the empty frame. Shot writes into the prompt, so its
+                door is at the head of the rail its words land in, one row down; see
+                `Rail`. What is left here are controls, which is what the icon rule
+                was always about. */}
             <span className="actions">
               <span className="muted" id="gen-model-line">{modelNote}</span>
               <ImageSampling />
@@ -165,11 +157,6 @@ export function Console({
                 A14B pair forces — which expert a LoRA patches — rides in the token as a
                 third field, read off the filename when the matched pair names it. */}
             {supports(s).loras && <LoraButton id="v-add-lora" />}
-            <button className={`opt ib${s.shot.length ? ' on' : ''}`} id="v-shot" type="button"
-                    title="Shot size, camera move, light, action and sound — the fields H3 reads."
-                    onClick={shot.toggle}>
-              <IconShot />
-            </button>
             <span className="actions">
               <span className="muted" id="v-model-line">{vid.note}</span>
               <VideoSampling />
@@ -180,11 +167,6 @@ export function Console({
           </div>
         </div>
       </Field>
-
-      {/* One palette, shared by both strips' buttons — the vocabulary is one table with
-          three compilers behind it, so a second popover per side would be a second
-          place for the dimming rules to drift. */}
-      {shot.open && <Palette anchor={shot.anchor} onClose={shot.close} />}
 
       {/* Every picture the model can be given. Lifted out of the video strip when that
           moved into the field: this is a row of pictures, not a row of controls, and it

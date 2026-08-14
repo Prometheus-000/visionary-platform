@@ -99,7 +99,9 @@ def pills(pg, side, n):
     # which is why it kept passing after the port: `capture()` read a
     # module-level URL and ignored argv, so pointing it at the React build
     # measured the old page twice and reported it as agreement.
-    pg.click(f"#{'v' if side == 'video' else 'g'}-shot")
+    # One door now, at the head of the rail, shared by both sides — the two glyphs
+    # in the settings strips are gone.
+    pg.click("#shot-add")
     pg.wait_for_timeout(250)
     tiles = pg.locator(".tiles button.tl:not([disabled])")
     got = tiles.count()

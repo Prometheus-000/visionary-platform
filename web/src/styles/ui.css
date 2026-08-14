@@ -756,9 +756,19 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 
 /* The pill rail ----------------------------------------------------------
    One rail, shared by Image and Video, because the prompt is shared and a pill
-   is part of the prompt. It costs nothing while empty — not a collapsed row, no
-   element at all — which is the condition for putting anything above the
-   options strip at all. */
+   is part of the prompt.
+
+   **It used to cost nothing while empty — not a collapsed row, no element at
+   all — and now it costs one row, on purpose.** That rule was written when the
+   way in was a glyph in the options strip, which is exactly the arrangement
+   that made the feature unfindable: a row you scan when you already know what
+   you want is no place for the thing that has to announce itself. The door
+   moved here, so the row is always present.
+
+   The 34px is charged to the state that can afford it. `fieldMax` hands the
+   prompt whatever is left, so the *worst* case — a long prompt with sixteen
+   pills — is unchanged at 30.0%, because by then the rail was on screen
+   anyway. What moved is resting, 120px to 154px, at 15.7% of the viewport. */
 /* One row, scrolled — never wrapped.
    A rail that wraps buys its extra pills out of the console's 30% budget, and
    the console takes that out of the canvas: sixteen pills measured 223px
@@ -769,11 +779,40 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    affordance, and a scrollbar under a single row of chips is chrome announcing
    a gesture the content already implies. scroll-padding keeps a pill from
    landing half-under the fade. */
-#shot-rail{margin:8px 2px 0;gap:6px;flex-wrap:nowrap;overflow-x:auto;
+/* The door and the rail are siblings, not parent and child. Sixteen pills scroll,
+   and a door inside that scroller is a door that leaves the screen exactly when
+   there are enough pills to want a new one. */
+.rail-row{display:flex;align-items:center;gap:8px;margin:8px 2px 0;min-width:0}
+#shot-rail{margin:0;flex:1 1 auto;gap:6px;flex-wrap:nowrap;overflow-x:auto;
   scrollbar-width:none;scroll-padding-inline:12px;
   /* The pills are chips, not text: without this they compress to nothing
      rather than running off the end, which is the whole point of scrolling. */
   }
+
+/* The door to the vocabulary. Dashed and worded while the rail is empty, because
+   that is the state a new user is in and the one an icon cannot speak to: eighty-
+   seven tiles behind one press is a destination, and the rule that lets a glyph
+   stand alone covers controls whose home you are already in.
+
+   The tile animates on hover and is frozen otherwise. That is not a compromise —
+   it is the same rule the pills follow: the page at rest is running nothing, so a
+   teaser looping under the prompt forever would be motion competing with the
+   canvas. Hover is what starts it, which is also the moment you are asking. */
+.shot-add{display:inline-flex;align-items:center;gap:7px;flex:none;cursor:pointer;
+  border:1px dashed rgba(255,255,255,.2);background:none;border-radius:999px;
+  padding:3px 12px 3px 7px;color:var(--dim);font-size:12.5px;
+  transition:border-color .12s,color .12s,background .12s}
+.shot-add:hover,.shot-add:focus-visible{border-color:rgba(255,255,255,.34);
+  color:#eee;background:rgba(255,255,255,.05)}
+.shot-add>.gl{width:26px;height:18px;flex:none;opacity:.85}
+.shot-add .gl *{animation-play-state:paused;animation-delay:-1.2s}
+.shot-add:hover .gl *,.shot-add:focus-visible .gl *{animation-play-state:running}
+.shot-add b{font-weight:500;white-space:nowrap}
+/* Compact once there are pills: the rail is the presence by then, and this is
+   only the way back. Solid rather than dashed, because a dashed outline means
+   "there is nothing here yet" and by now there is. */
+.shot-add:not(.hero){padding:3px 11px;border-style:solid;
+  border-color:rgba(255,255,255,.13)}
 #shot-rail::-webkit-scrollbar{display:none}
 #shot-rail>*{flex:none}
 #shot-rail:empty{display:none;margin:0}

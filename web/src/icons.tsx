@@ -145,12 +145,6 @@ export function IconRegions() {
   )
 }
 
-export function IconShot() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5" opacity=".45"/><ellipse cx="10" cy="12.5" rx="2.1" ry="3" fill="currentColor" stroke="none"/><path d="M14.6 9.4a4.4 4.4 0 0 1 0 6.2"/><path d="M17.4 7.6a7.2 7.2 0 0 1 0 9.8"/></svg>
-  )
-}
-
 export function IconArrange() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><rect x="3.5" y="6" width="5" height="12" rx="1.4"/><rect x="9.5" y="6" width="5" height="12" rx="1.4"/><rect x="15.5" y="6" width="5" height="12" rx="1.4"/></svg>

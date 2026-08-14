@@ -552,28 +552,24 @@ two domains, and the page follows the domains.
   arrived. It converges in one pass because `fieldMax` subtracts the field's own
   height, so `other` does not move when the field does.
 
-- **An icon invites, a tooltip names, a click teaches — and in the composer row
-  that is enough.** Shot carries no words. This reverses the labelling added when
-  it moved out of Advanced, and the reversal is narrower than it looks rather
-  than a change of mind: that note argued a glyph cannot announce a capability
-  nobody knows exists, which is true of a *destination* and false of a control
-  sitting in the row you are already working in. The icon is what makes you
-  hover; the tooltip supplies the word; the click supplies the feature — and on
-  glass the tap does all three at once, which is the case the labels were never
-  helping anyway.
+- **An icon invites, a tooltip names, a click teaches — and for a control whose
+  home you are already in, that is enough.** The rule survives; what changed is
+  that neither of the two things it was being used to justify was a control.
 
-  **Regions is no longer in this row at all, and that is the limit of the rule
-  rather than an exception to it.** `#g-regional` was a 34px glyph in the
-  settings strip, which is where a capability goes to not be found: two opaque
-  marks side by side flattened the two biggest features in the app into one
-  confusing pair, and the count riding half-outside the active state read as an
-  error pip rather than "2 regions". The icon was doing the one job an icon
-  cannot do — announcing a capability to someone who does not know it exists —
-  because the row it sat in is not a row a new user is looking at. Regions is a
-  canvas verb, so it went to the canvas: you place a character by drawing on the
-  empty frame, and the empty canvas says so in words, once, where the attention
-  already is. What is left in the row are controls, which is what the rule was
-  always about.
+  `#g-shot` and `#g-regional` were 34px glyphs in the settings strip, side by
+  side, and together they flattened the two biggest features in the app into one
+  confusing pair — with a count riding half-outside the regions button that read
+  as an error pip rather than "2 regions". Both were doing the one job an icon
+  cannot do: announcing a capability to someone who does not know it exists. The
+  strip is a row you scan when you already know what you want, which is why an
+  icon works there for a *control* and fails there for a *destination*.
+
+  So each went to the surface it acts on, and each took a word with it. Regions
+  is a canvas verb — you place a character by drawing on the empty frame, and the
+  empty canvas says so in words, once, where the attention already is. Shot
+  writes into the prompt, so its door is at the head of the rail its words land
+  in. What is left in the strip are controls, which is what the rule was always
+  about.
 
   It does not generalise past the row. `#ins-toggle` keeps "Captions" because it
   wears the same sliders glyph as two unrelated panels, so its icon is not
@@ -887,13 +883,39 @@ two domains, and the page follows the domains.
   versus "a woman" changes the take is not something anyone can infer — and a
   take is two to three minutes, so every guess is paid for at that rate.
 
-  So the closed vocabulary is a **palette**: one icon in the strip, a popover of
-  small animated tiles, and a rail of pills under the prompt. The prompt field
-  keeps only what nothing else can say — who is in the shot and what happens.
-  This is the "a control that shows its own value gets no label" rule applied to
-  words instead of numbers, and it is the one place on the page where an icon
-  can teach: a tile *shows* a dolly-out, which is the thing neither the word nor
-  a static picture does.
+  So the closed vocabulary is a **palette**: a door at the head of the pill rail,
+  a popover of small animated tiles, and the pills themselves under the prompt.
+  The prompt field keeps only what nothing else can say — who is in the shot and
+  what happens. This is the "a control that shows its own value gets no label"
+  rule applied to words instead of numbers, and it is the one place on the page
+  where an icon can teach: a tile *shows* a dolly-out, which is the thing neither
+  the word nor a static picture does.
+
+  **The door was a glyph in the options strip, and that was the wrong room.**
+  Words go in the prompt, so the way to them belongs at the prompt — at the head
+  of the rail the pills land in, where the relationship between the door and what
+  comes out of it needs no caption. In the strip it was a 34px mark beside
+  `+ LoRA`, in a row you scan when you already know what you want, next to a
+  second opaque mark doing the same disappearing act for regions. Both are gone
+  from there now, each to the surface it acts on.
+
+  It carries the word "Shot", and the icon rule is what says so rather than what
+  it breaks: a glyph can carry a control whose home you are already in, and it
+  cannot announce a *destination* — and eighty-seven tiles behind one press is a
+  destination. The tile beside the word is the teaser, and it **animates on hover
+  and is frozen otherwise**, which is the pills' own rule: the page at rest runs
+  nothing, so a loop under the prompt would be motion competing with the canvas
+  for attention you have not asked it for. Hover is the asking. The glyph follows
+  the kind — a dolly-out on video, a framing on images — because the camera group
+  is video-only and teasing a move the model cannot make is a promise the run
+  will not keep. Once there are pills the rail is the presence, and the door
+  shrinks to a plain `+ Shot`.
+
+  The rail therefore costs one row always, where it used to cost nothing while
+  empty. That reverses a rule, and the number is why it is affordable: the worst
+  case is set by a long prompt with sixteen pills, and by then the rail was on
+  screen anyway, so it is unchanged at 30.0%. Only resting moved — 120px to
+  154px, at 15.7% of the viewport.
 
   Three rules hold the rest together:
 
@@ -985,6 +1007,11 @@ is chosen once a session and already confirms a cold start when it changes. The
 video side finally got the size control the image side had, collapsing a
 separate aspect select and tier select into one button reading `16:9 · 768p`.
 Result: 732px and 652px.
+
+Two more have left the strip since, and not to a popover: `#g-shot` and
+`#g-regional` were not controls at all. See the icon rule under "The page" —
+each went to the surface it acts on, which leaves this row holding the size, the
+LoRA picker and the model button, and nothing that has to introduce itself.
 
 **Unbounded buttons — done.** Ten controls each in their own box is ten boxes
 competing with the picture above them, and the chrome is not what makes a
