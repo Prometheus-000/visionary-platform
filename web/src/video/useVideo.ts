@@ -20,8 +20,17 @@ import { resolveVid } from '../console/resolve'
  */
 export type VideoRun = {
   running: boolean
+  /** The clip on screen — the last run that *completed*. Not cleared when the next
+   *  one starts: a new clip replaces the old one when it lands, not when it is asked
+   *  for. It matters more here than on the image side, because a take is two to three
+   *  minutes and blanking the canvas means the thing you were judging is gone for all
+   *  of them. `finish` is the only thing that moves it. */
   jobId: string | null
   file: string | null
+  /** The job being polled right now, which is *not* `jobId` until it completes. Two
+   *  ids because the bytes on screen and the work in flight are two different clips
+   *  during a run. */
+  runId: string | null
   percent: number
   phase: string
   error: string | null
@@ -29,7 +38,8 @@ export type VideoRun = {
 }
 
 const IDLE: VideoRun = {
-  running: false, jobId: null, file: null, percent: 0, phase: '', error: null, meta: [],
+  running: false, jobId: null, file: null, runId: null, percent: 0, phase: '',
+  error: null, meta: [],
 }
 
 export function videoBody(s: Store): Record<string, unknown> {
@@ -74,33 +84,47 @@ export function useVideo(onLanded: () => void) {
       st.steps ? `${String(st.steps)} steps` : '',
       st.duration_s ? `${String(st.duration_s)}s` : '',
     ].filter(Boolean)
-    setRun({ running: false, jobId, file, percent: 100, phase: '', error: null, meta })
+    // Atomically, so there is never a frame pairing the old jobId with the new file.
+    setRun((p) => ({
+      ...p, running: false, jobId, file, runId: null, percent: 100, phase: '',
+      error: null, meta,
+    }))
     onLanded()
   }, [onLanded])
 
   const start = useCallback(async () => {
     const s = useStore.getState()
     if (!stripLoras(s.prompt)) return
-    setRun({ ...IDLE, running: true, phase: 'Queued…' })
+    // Keep the last clip on screen and overlay a progress state on it — see `jobId`
+    // above. A cold first run has nothing to keep and shows the full placeholder.
+    setRun((p) => ({
+      ...p, running: true, runId: null, percent: 0, phase: 'Queued…', error: null,
+    }))
     const r = await video(videoBody(s))
     if (failed(r)) {
-      setRun({ ...IDLE, error: r.error })
+      // The last clip stays: a request that never started should not blank what you
+      // were watching.
+      setRun((p) => ({ ...p, running: false, runId: null, error: r.error }))
       return
     }
-    const jobId = r.job_id
-    setRun((p) => ({ ...p, jobId }))
+    const runId = r.job_id
+    setRun((p) => ({ ...p, runId }))
     const t = everyMs(async () => {
-      const st = await status(jobId)
+      const st = await status(runId)
       if (failed(st)) return
       if (st.status === 'completed') {
         clearInterval(t)
-        finish(st, jobId)
+        finish(st, runId)
       } else if (st.status === 'failed') {
         clearInterval(t)
-        setRun({ ...IDLE, error: st.error || 'Generation failed' })
+        setRun((p) => ({
+          ...p, running: false, runId: null, error: st.error || 'Generation failed',
+        }))
       } else if (st.status === 'stopped') {
         clearInterval(t)
-        setRun({ ...IDLE, meta: ['Cancelled.'] })
+        // The previous clip coming back is the feedback — there is nothing to say
+        // that the returned picture does not already say.
+        setRun((p) => ({ ...p, running: false, runId: null, phase: '' }))
       } else {
         setRun((p) => ({
           ...p,
@@ -116,10 +140,10 @@ export function useVideo(onLanded: () => void) {
   }, [finish])
 
   const cancel = useCallback(async () => {
-    if (!run.jobId) return
+    if (!run.runId) return
     setRun((p) => ({ ...p, phase: 'Stopping…' }))
-    await stop(run.jobId)
-  }, [run.jobId])
+    await stop(run.runId)
+  }, [run.runId])
 
   /** The canvas only. The prompt, the pills, the boxes and the settings are all still
    *  what you were working on — this clears the result, which is the one thing "clear"

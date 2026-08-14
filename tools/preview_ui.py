@@ -600,6 +600,20 @@ class Handler(BaseHTTPRequestHandler):
             RUNS["gen000"] = {"polls": 0, "stopped": False, "n": max(1, min(8, n))}
             return self.reply({"ok": True, "job_id": "gen000"})
 
+        # A clip, with the same shape the image side has. Worth stubbing rather than
+        # falling through to the no-job-id reply: without it `/api/video` answered
+        # `{"ok": true}`, the page polled `/api/status/undefined`, and the catch-all
+        # said "completed" — so a take appeared instantly and every state a video run
+        # is actually in, including the minutes of weight loading it opens with, was
+        # unreachable here. That is the same fault the `/api/train` note below records.
+        if path == "/api/video":
+            # A new id per take, because the thing worth watching here is the *swap*:
+            # the previous clip stays up until its replacement lands, and with one
+            # reused id "replaced" and "never changed" are the same two frames.
+            job = "vid%03d" % sum(1 for k in RUNS if k.startswith("vid"))
+            RUNS[job] = {"polls": 0, "stopped": False}
+            return self.reply({"ok": True, "job_id": job})
+
         # A family's queue. Worth stubbing rather than falling through to the
         # no-job-id reply, because the state this button spends all its time in
         # is the one the reply cannot produce: several files deep, one of them
@@ -770,6 +784,33 @@ class Handler(BaseHTTPRequestHandler):
                 "loras": [{"name": "my_style", "unet": 0.8, "applied": True},
                           {"name": "gone", "unet": 1.0, "applied": False,
                            "reason": "no matching keys"}],
+            })
+
+        # The clip. Longer than the image run and opening on the phase that has no
+        # step count, because the first minutes of a real take are 42.5 GB landing on
+        # the card — which is the state the page names rather than showing a bar
+        # sitting at zero looking stuck.
+        m = re.match(r"/api/status/(vid\d+)$", path)
+        if m:
+            job = RUNS.setdefault(m.group(1), {"polls": 0, "stopped": False})
+            job["polls"] += 1
+            total = 10
+            if job["stopped"]:
+                return self.reply({"status": "stopped"})
+            if job["polls"] <= 2:
+                return self.reply({"status": "running", "phase": "loading", "percent": 0})
+            if job["polls"] < total:
+                step = job["polls"] - 2
+                return self.reply({
+                    "status": "running", "phase": "sampling", "step": step,
+                    "total_steps": total - 2, "eta": "%ds" % (2 * (total - job["polls"])),
+                    "percent": int(step * 100 / (total - 2)),
+                })
+            return self.reply({
+                "status": "completed", "percent": 100, "files": ["clip.mp4"],
+                "job_id": m.group(1), "width": 1280, "height": 720,
+                "seconds": 5, "frames": 120, "fps": 24, "seed": 4242,
+                "steps": 20, "duration_s": 214.0,
             })
 
         # Hours, not seconds — so the fields a long run is read by are the ones

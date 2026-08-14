@@ -484,6 +484,23 @@ two domains, and the page follows the domains.
   meant two different things depending on invisible geometry, which hover can
   disclose on a desktop and cannot on glass.
 
+- **A render is replaced when the next one lands, not when it is asked for.**
+  Pressing Generate used to blank the canvas immediately: `start()` reset the
+  whole run record, so the thing you were judging disappeared for the length of
+  the run and came back as something else. On the image side that is seconds; on
+  the video side a take is two to three minutes, and the shot you were deciding
+  about is gone for all of them — at exactly the moment you wanted to compare.
+
+  So the run record carries two ids. `jobId`/`files` are the render *on screen*,
+  moved only by `finish`, and `runId` is the job being polled. They are different
+  renders for the length of a run, which is the whole point: `fileUrl(jobId, f)`
+  keeps addressing the old job's bytes while the new one is sampled. A run that
+  fails or is stopped leaves the picture up too — a request that never produced
+  anything should not take away the last one that did.
+
+  What reports the run instead is a hairline along the top edge of the canvas.
+  The full centred bar is for a cold start, where there is nothing to keep.
+
 - **The canvas is the largest thing on screen, always.** Options live in a bar
   under it, never a rail beside it: a settings column costs the picture 384px
   of the one dimension it cannot get back, and vertical is the cheap axis. The
