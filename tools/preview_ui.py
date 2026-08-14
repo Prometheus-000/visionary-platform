@@ -43,6 +43,7 @@ import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from _from_app import CAPTION, SHOT, pull
 
@@ -167,7 +168,10 @@ GALLERY = [
              "region_weight": 1.0}
         ),
     }
-    for i in range(14)
+    # More than the drawer's 24-card cap, deliberately. The drawer renders a slice
+    # and used to hand that same slice to the viewer, so a picture opened from it
+    # dead-ended at 24 — a fault no stub shorter than the cap can express.
+    for i in range(30)
 ]
 
 # Two unsaved sets and three saved ones, because the rail has to be looked at
@@ -686,7 +690,21 @@ class Handler(BaseHTTPRequestHandler):
                                      "model": api["DEFAULT_CAPTION_MODEL"]},
             })
         if path == "/api/gallery":
-            return self.reply({"items": GALLERY})
+            # `total` and `stale` are half the gallery's contract now: the cap is
+            # stated rather than silent, and a listing that knows it is behind says
+            # so. Without them here the retry path and the "showing N of M" line are
+            # unexercised in the one place they would be developed.
+            #
+            # `stale` is driven by a query flag rather than hard-coded false, because
+            # the check that matters is "exactly one bounded retry chain, not a loop",
+            # and that needs a server that can actually answer stale.
+            q = parse_qs(urlparse(self.path).query)
+            before = float((q.get("before") or ["0"])[0] or 0)
+            limit = int((q.get("limit") or ["200"])[0] or 200)
+            rows = [g for g in GALLERY
+                    if not before or (g.get("modified") or 0) < before]
+            return self.reply({"items": rows[:limit], "total": len(GALLERY),
+                               "stale": (q.get("stale") or ["0"])[0] == "1"})
         if path == "/api/datasets":
             return self.reply({"datasets": DATASETS})
 
@@ -710,7 +728,7 @@ class Handler(BaseHTTPRequestHandler):
         # Any job id, not just the gallery's: the canvas now streams a finished
         # run's stills off this route by (job, file), so a pattern that only
         # matched `job\d+` served the gallery and left the canvas broken.
-        m = re.match(r"/api/file/([A-Za-z0-9_-]+)/(.+)$", path)
+        m = re.match(r"/api/(?:file|cover)/([A-Za-z0-9_-]+)/(.+)$", path)
         if m:
             item = next((i for i in GALLERY if i["job_id"] == m.group(1)), None)
             w, h = (item["width"], item["height"]) if item else (1024, 1024)

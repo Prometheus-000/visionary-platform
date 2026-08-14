@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react'
 import { everyMs, failed } from '../api/client'
 import { status, stop, video } from '../api/routes'
 import type { JobStatus } from '../api/types'
+import type { GalleryItem } from '../gallery/types'
 import { loraIndex, readVidLoras, stripLoras } from '../lora/tokens'
 import { negAllowed, readShot, useStore, type Store } from '../store'
 import { resolveVid } from '../console/resolve'
@@ -72,7 +73,7 @@ export function videoBody(s: Store): Record<string, unknown> {
   }
 }
 
-export function useVideo(onLanded: () => void) {
+export function useVideo(onLanded: (it: GalleryItem) => void) {
   const [run, setRun] = useState<VideoRun>(IDLE)
 
   const finish = useCallback((st: JobStatus, jobId: string) => {
@@ -89,7 +90,12 @@ export function useVideo(onLanded: () => void) {
       ...p, running: false, jobId, file, runId: null, percent: 100, phase: '',
       error: null, meta,
     }))
-    onLanded()
+    // See useGenerate: the run reports itself rather than the page re-asking the
+    // volume about work it just watched finish.
+    if (file) {
+      onLanded({ ...(st as Partial<GalleryItem>), job_id: jobId, kind: 'video',
+                 files: [file], created: Date.now() / 1000 })
+    }
   }, [onLanded])
 
   const start = useCallback(async () => {

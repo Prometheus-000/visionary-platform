@@ -232,6 +232,15 @@ check("a sentence that closes itself is not closed twice",
       G["_compile_image_prompt"]("She reads a letter.",
                                  G["_validate_shot"]([{"key": "framing.cu"}])),
       "A close-up. She reads a letter.")
+# Krea reads front-to-back, so a stack of shot description ahead of the subject
+# renders the shot and loses the person. One clause leads; the rest fall behind.
+check("only the first image clause leads, the rest follow the subject",
+      G["_compile_image_prompt"](
+          "a portrait of ohwx_subject",
+          G["_validate_shot"]([{"key": "framing.mcu"}, {"key": "angle.low"},
+                               {"key": "light.window"}])),
+      "A medium close-up, a portrait of ohwx_subject. Shot from a low angle, "
+      "lit by soft daylight from a window.")
 
 # The document is one field per line, so a newline anywhere inside it ends a
 # field early and leaves the rest of the sentence looking like the start of

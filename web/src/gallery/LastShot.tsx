@@ -1,4 +1,4 @@
-import { fileUrl } from '../api/routes'
+import { coverUrl, fileUrl } from '../api/routes'
 import type { GalleryItem } from './types'
 
 /**
@@ -26,13 +26,18 @@ export function LastShot({ items, onOpen }: {
   // generation, and a hole where a picture goes is worse than a symbol only if there is
   // something to put in it.
   if (!it?.files[0]) return null
-  const src = fileUrl(it.job_id, it.files[0])
   return (
     <button className="ico shot-back" title="Last generation" type="button"
             onClick={() => onOpen(items, 0)}>
       {it.kind === 'video'
-        ? <video src={`${src}#t=0.04`} preload="metadata" muted playsInline />
-        : <img src={src} alt="" />}
+        // No cover for a clip, so this one keeps the original and the `#t=` seek. One
+        // element, always on screen, so there is nothing to gate.
+        ? <video src={`${fileUrl(it.job_id, it.files[0])}#t=0.04`} preload="metadata"
+                 muted playsInline />
+        // 36px, 44px on touch — and until now it was handed the full-resolution PNG,
+        // holding a descriptor on the volume for the newest file in the gallery at
+        // exactly the moment the listing wants to reload.
+        : <img src={coverUrl(it.job_id, it.files[0])} alt="" />}
     </button>
   )
 }

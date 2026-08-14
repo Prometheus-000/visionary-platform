@@ -1,4 +1,4 @@
-import { fileUrl } from '../api/routes'
+import { coverUrl, fileUrl } from '../api/routes'
 import type { ShotPill } from '../api/types'
 
 /**
@@ -73,12 +73,28 @@ export function promptOf(it: GalleryItem): string {
   return (it.prompt_typed || it.prompt || '').trim()
 }
 
-export function coverUrl(it: GalleryItem): string {
+export function fullUrl(it: GalleryItem): string {
   // `src` first, because two things reach the viewer with a URL and no job behind it: a
   // dataset image, which is addressed by set and filename, and the canvas's own
   // full-screen, which already has the src it is displaying. Making those synthesise a
   // job id to get a URL back out would be a lie in a field other code reads.
   return it.src ?? fileUrl(it.job_id, it.files[0] ?? '')
+}
+
+/**
+ * The same item small: what a card shows, never what the viewer shows.
+ *
+ * This was one function called `coverUrl` doing both jobs, which is exactly why one
+ * route served both — a 232px grid cell was handed the full-resolution PNG, and so was
+ * the 36px last-generation button. Two names is the fix, because the distinction is not
+ * a detail of the URL, it is the difference between a picture you are judging and a
+ * picture you are picking out of a grid.
+ *
+ * Same `src` precedence as `fullUrl`, so a caller that already holds bytes is never sent
+ * to a route that would have to invent a job id to answer.
+ */
+export function coverOf(it: GalleryItem): string {
+  return it.src ?? coverUrl(it.job_id, it.files[0] ?? '')
 }
 
 /**

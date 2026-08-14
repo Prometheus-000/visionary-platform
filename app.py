@@ -1438,11 +1438,22 @@ def _reload_insist() -> bool:
     """
     Reload, and try again briefly if it was refused. Returns whether it landed.
 
-    For the three routes whose answer is wrong rather than merely old without
-    one: listing the gallery, and the two that delete out of it. All three are
-    asked about a run that finished moments ago, which is the one case a stale
-    view cannot describe — it lists work that does not exist yet, and refuses to
-    delete work it cannot see.
+    For the routes whose answer is wrong rather than merely old without one:
+    the two that delete out of the gallery, and — for a narrower reason than
+    it used to be — listing it. All are asked about a run that finished moments
+    ago, which is the one case a stale view cannot describe.
+
+    Deleting is unchanged: `_listed` and `rmtree` read and mutate the mount, so
+    a view too old to hold the folder refuses to delete work that is sitting
+    right there.
+
+    Listing is not. `/api/gallery` takes its item set from `_output_entries`,
+    which asks Modal rather than the mount, so a refused reload can no longer
+    make a result invisible — which is what it did, for as long as one warm
+    container lasted. What the reload still buys that route is the *mount*: the
+    sidecars it reads per item, and the covers the page asks for immediately
+    afterwards. So it stays, and `stale` narrows to mean the mount is behind
+    the listing rather than the listing being behind the volume.
 
     What refuses the reload is worth naming, because it is us. Every `/api/file`
     is a `FileResponse` holding a descriptor open on /workspace for the length
@@ -1527,6 +1538,8 @@ def _listed(path: Path, root: Path) -> bool:
         rel = path.resolve().relative_to(root.resolve())
     except ValueError:
         return False
+    if str(rel) in _LISTED_OK:
+        return True
     here = root
     for part in rel.parts:
         try:
@@ -1535,7 +1548,30 @@ def _listed(path: Path, root: Path) -> bool:
         except OSError:
             return False
         here = here / part
+    _LISTED_OK.add(str(rel))
     return True
+
+
+# Paths this container has already proven present, so a readdir is paid once.
+#
+# The walk above is O(entries in the directory) per level, and `outputs/` holds
+# one directory per result — so on a volume with hundreds of them, confirming a
+# job folder is a scan of the whole listing. A batch of four stills asks about
+# the same folder four times, and the canvas asks the moment a run lands, which
+# is exactly when a person is waiting.
+#
+# Only *positive* answers are kept. A miss is the case this function exists to
+# re-ask, since the file it is looking for is one the GPU container may be
+# writing right now; caching that would reintroduce the negative-dentry fault
+# one layer up. A path that exists stops existing only through the two delete
+# routes, and both discard from here.
+_LISTED_OK: set[str] = set()
+
+
+def _forget_listed(rel: str) -> None:
+    """Drop a deleted path, and anything under it, from the positive cache."""
+    for key in [k for k in _LISTED_OK if k == rel or k.startswith(f"{rel}/")]:
+        _LISTED_OK.discard(key)
 
 
 def _model_status() -> list[dict[str, Any]]:
@@ -3570,44 +3606,161 @@ def _write_output_meta(out_dir: Path, **fields: Any) -> None:
         print(f"[meta] {out_dir.name}: {exc}")
 
 
-def _gallery(limit: int = 200) -> list[dict[str, Any]]:
+def _keep_entry(job: str, name: str) -> bool:
     """
-    Every output folder on the volume, newest first.
+    Is `outputs/{job}/{name}` a result, rather than something beside one?
+
+    Shared by both listing sources so they cannot disagree about what a
+    gallery item is — which they would, because they fail differently. The
+    mount walk is protected by `p.is_file()` skipping the `.thumbs/`
+    directory; a flat recursive listing has no such protection, and a cover
+    is a `.jpg`, which is in `MEDIA_TYPES`. Every cover the gallery generates
+    would come back as a result to make a cover of.
+    """
+    return (
+        not job.startswith(".")
+        and not name.startswith(".")
+        and Path(name).suffix.lower() in MEDIA_TYPES
+    )
+
+
+def _entries_by_rpc() -> dict[str, list[tuple[str, float]]]:
+    """
+    {job_id: [(filename, mtime)]} asked of Modal, not of the mount.
+
+    `volume.listdir` is a metadata RPC against the volume's committed state.
+    It does not read `/workspace`, so it needs no `volume.reload()` — and
+    therefore **cannot be refused for open files**, which is the whole reason
+    it is here. Listing off the mount made the gallery's freshness a
+    downstream consequence of its own picture-loading: every `/api/file` is a
+    `FileResponse` holding a descriptor, a grid opens dozens at once, and a
+    reload refused for the length of that is a listing frozen at whenever this
+    container last synced. One container serves everybody (`max_containers=1`),
+    so that frozen view is what everybody got until it scaled down — results
+    from an arbitrary earlier moment, catching up, then freezing again
+    somewhere else.
+
+    Committed state is exactly the right state to ask for: both job writers
+    `volume.commit()` immediately after their sidecar, so anything a reload
+    could have brought forward is already in this answer.
+
+    Two segments exactly, because the listing is recursive and flat — see
+    `_keep_entry`. Filtering on the count rather than on the name `.thumbs`
+    means anything else ever nested under a job is excluded by construction,
+    rather than by a blocklist somebody has to remember to extend.
+    """
+    out: dict[str, list[tuple[str, float]]] = {}
+    for e in volume.listdir("/outputs", recursive=True):
+        if e.type != modal.volume.FileEntryType.FILE:
+            continue
+        rel = e.path.lstrip("/")
+        # Returned volume-relative in testing, even though "/outputs" went in.
+        # Tolerating both spellings costs one line and survives either.
+        if rel.startswith("outputs/"):
+            rel = rel[len("outputs/"):]
+        parts = rel.split("/")
+        if len(parts) != 2 or not _keep_entry(parts[0], parts[1]):
+            continue
+        out.setdefault(parts[0], []).append((parts[1], float(e.mtime)))
+    return out
+
+
+def _entries_by_walk() -> dict[str, list[tuple[str, float]]]:
+    """The same answer off the mount, for when the RPC cannot give one."""
+    out: dict[str, list[tuple[str, float]]] = {}
+    if not OUTPUTS.is_dir():
+        return out
+    for d in OUTPUTS.iterdir():
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        files = [(p.name, p.stat().st_mtime) for p in d.iterdir()
+                 if p.is_file() and _keep_entry(d.name, p.name)]
+        if files:
+            out[d.name] = files
+    return out
+
+
+def _output_entries() -> dict[str, list[tuple[str, float]]]:
+    """
+    {job_id: [(filename, mtime)]}, by RPC, falling back to the mount.
+
+    Not silent: a fallback that says nothing makes "the gallery is behind
+    again" indistinguishable from "the RPC has been failing all week", which
+    is the same reason `_reload_volume` prints when it skips. An empty or
+    absent `outputs/` is not a failure — it is a volume nobody has generated
+    on yet, which is what the mount walk's own `is_dir()` check has always
+    said.
+    """
+    try:
+        return _entries_by_rpc()
+    except modal.exception.NotFoundError:
+        return {}
+    except Exception as exc:  # noqa: BLE001 — any RPC failure falls back
+        print(f"[gallery] listdir failed ({type(exc).__name__}: {exc}) — "
+              f"listing off the mount, which may be stale", flush=True)
+        return _entries_by_walk()
+
+
+def _gallery(limit: int = 200, before: float = 0.0) -> tuple[list[dict[str, Any]], int]:
+    """
+    A page of output folders, newest first, and how many there are in total.
 
     Keyed by what is on disk, not by a job id the browser happened to keep:
     a reload, a redeploy, or a job whose record expired all leave the work
     reachable. A folder with no sidecar still lists — older results predate
     the metadata and are not less real for it.
+
+    `before` is the previous page's last sort key, so paging is a window over
+    a stable order rather than an offset into a list that grows under it: a
+    run landing between two pages shifts every offset by one and would show
+    you the same card twice. The total is returned because the cap used to be
+    silent, and a purge dialog counting a truncated list said "all 200" on a
+    volume holding 340.
+
+    The sidecar is read only for the page being returned. That is what the
+    RPC buys beyond freshness — mtimes arrive without touching `/workspace`,
+    so the sort and the window are both decided before a single file is
+    opened, and a deep gallery costs the same per request as a shallow one.
     """
-    if not OUTPUTS.is_dir():
-        return []
+    entries = _output_entries()
+
+    rows: list[tuple[float, str, list[str]]] = []
+    for job, files in entries.items():
+        files.sort(key=lambda f: f[0])
+        rows.append((max(m for _, m in files), job, [n for n, _ in files]))
+
+    # Descending, with the job id breaking ties. `mtime` is integer seconds off
+    # the RPC, so two runs in the same second tie, and nothing promises a stable
+    # order underneath — an unstable sort reshuffles the grid between reloads,
+    # which is indistinguishable from the staleness this listing exists to fix.
+    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    total = len(rows)
+    if before:
+        rows = [r for r in rows if r[0] < before]
 
     out: list[dict[str, Any]] = []
-    for d in OUTPUTS.iterdir():
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        files = sorted(
-            (p for p in d.iterdir()
-             if p.is_file() and p.suffix.lower() in MEDIA_TYPES),
-            key=lambda p: p.name,
-        )
-        if not files:
-            continue
+    for modified, job, names in rows[:limit]:
         meta: dict[str, Any] = {}
         try:
-            meta = json.loads((d / OUTPUT_META).read_text())
+            meta = json.loads((OUTPUTS / job / OUTPUT_META).read_text())
         except (OSError, json.JSONDecodeError):
+            # A job the RPC can see whose sidecar the mount has not caught up
+            # to yet. The card is still complete — picture, kind and age all
+            # come from the listing — and Reuse fills in on the next reload.
             pass
         out.append({
-            "job_id": d.name,
-            "kind": "video" if files[0].suffix.lower() == ".mp4" else "image",
-            "files": [p.name for p in files],
-            "modified": max(p.stat().st_mtime for p in files),
+            # The sidecar first, so the derived fields win. It used to be last,
+            # where its `job_id` and `kind` overrode them and happened to agree.
+            # Off an RPC they can disagree, and a directory holding an .mp4
+            # whose sidecar says "image" renders an <img> at a video URL. The
+            # sidecar describes the run; the directory is the result.
             **meta,
+            "job_id": job,
+            "kind": "video" if names[0].lower().endswith(".mp4") else "image",
+            "files": names,
+            "modified": modified,
         })
-
-    out.sort(key=lambda r: r["modified"], reverse=True)
-    return out[:limit]
+    return out, total
 
 
 def _lora_path(raw_path: Any) -> Path:
@@ -5621,10 +5774,31 @@ def _compile_image_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
     Camera, action and the two audio groups never reach here at all — they are
     filtered by `image` in the vocabulary rather than dropped, so a pill the
     image side does not read is dim on the palette rather than silently ignored.
+
+    One shot clause leads; the rest go behind the subject. Every image group —
+    framing, angle, light, tone — sits at slot -10, so left alone they compile
+    into one sentence that runs *entirely* ahead of the subject, and Krea reads
+    a prompt front-to-back: a stack of shot description before "a portrait of
+    k3nan" spends the model's attention on the shot and renders a scene the
+    subject is barely in. A single leading clause is the frame the subject sits
+    in and reads right ("A medium close-up, a portrait of k3nan."); the second
+    onward are what push the person out, so they move to a trailing sentence.
+    The first phrase in the leading bucket wins, which is vocabulary order —
+    framing, then angle, then light, then tone — so the shot the subject sits in
+    leads and the grade follows.
     """
     if not pills:
         return typed
-    return _shot_body(typed, _shot_phrases(pills, side="image"))
+    buckets = _shot_phrases(pills, side="image")
+    lead = next((k for k in sorted(buckets) if k[0] < 0), None)
+    if lead is not None and len(buckets[lead]) > 1:
+        _, join, field = lead
+        head, *tail = buckets[lead]
+        buckets[lead] = [head]
+        # A positive slot so `_shot_body` lands it after the subject, same join
+        # and field so it is closed and capitalised like the sentence it was.
+        buckets[(-lead[0], join, field)] = tail
+    return _shot_body(typed, buckets)
 
 
 def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
@@ -7226,23 +7400,30 @@ def web():
         return {"ok": True, "job_id": job_id, "model": model, "mode": task}
 
     @api.get("/api/gallery")
-    def gallery() -> dict[str, Any]:
+    def gallery(before: float = 0.0, limit: int = 200) -> dict[str, Any]:
         """
-        Everything on the volume, newest first — no job id required.
+        A page of everything on the volume, newest first — no job id required.
 
-        `stale` is the reload this could not have — see `_reload_insist`. Every
-        other caller of `_reload_volume()` discards that answer, which is why a
-        refused reload and a successful one used to produce the same listing and
-        the same silence. Here the difference is the whole route: a listing taken
-        without a reload cannot contain the run that just finished, which is the
-        run the caller is asking about.
+        `stale` used to mean "this listing may be missing the run you just
+        made". It cannot mean that any more: `_output_entries` asks Modal
+        rather than the mount, so the *set* is right whether or not a reload
+        landed. What a refused reload still costs is the mount — the sidecars
+        read below, and the covers this reply is about to send the page after.
+        So `stale` now means: **the mount is behind this listing, so the newest
+        items may be thin and their pictures may not resolve yet.**
 
-        Not an error and not something to apologise for on screen. It is the one
-        fact that separates "nothing new" from "not looked at", and the client's
-        cue to come back once it has stopped loading pictures.
+        Narrower, and still worth reporting. It is the difference between
+        "nothing new" and "not looked at", and the client's cue to come back
+        once it has stopped loading pictures. Not an error, and not something
+        to apologise for on screen.
+
+        `limit` is clamped rather than trusted: the sidecar read is per item,
+        so an unbounded page is an unbounded number of file reads on a route
+        anyone can call.
         """
         fresh = _reload_insist()
-        return {"items": _gallery(), "stale": not fresh}
+        items, total = _gallery(limit=max(1, min(limit, 500)), before=before)
+        return {"items": items, "total": total, "stale": not fresh}
 
     @api.get("/api/file/{job_id}/{name}")
     def output_file(job_id: str, name: str):
@@ -7294,6 +7475,94 @@ def web():
             headers={"Cache-Control": "private, max-age=3600"},
         )
 
+    @api.get("/api/cover/{job_id}/{name}")
+    def output_cover(job_id: str, name: str):
+        """
+        One gallery cover: the same result at 320px, and never a descriptor.
+
+        The grid had no thumbnail at all — a 232px cell was served the full
+        1024px PNG, and the drawer, the mobile grid at 104px and the 36px
+        last-generation button all did the same. That is roughly 37x the bytes
+        it needs, but the bytes were the cheaper half of the cost.
+
+        The expensive half is that `/api/file` answers with `FileResponse`,
+        which holds a descriptor open on /workspace for the length of the
+        transfer *to the client* — so its width is set by the viewer's
+        connection, not by the file. Modal refuses `volume.reload()` while
+        anything on the volume is open, and a grid opens dozens at once, so
+        painting the gallery is what froze the gallery's own listing. Reading
+        the bytes into memory and answering with `Response` closes the
+        descriptor before anything goes on the wire, which is the entire point
+        of this route existing rather than a `?w=320` on the other one.
+
+        Named `/api/cover/...` rather than `/api/thumb/...` because the dataset
+        thumbnail route is also two segments: FastAPI resolves by registration
+        order, and a gallery cover reaching that handler 404s as "Image not
+        found" for a dataset that was never named.
+        """
+        from fastapi.responses import Response
+        from PIL import Image
+
+        if not NAME_RE.match(job_id) or not OUTPUT_FILE_RE.match(name):
+            return JSONResponse({"error": "Invalid name."}, status_code=400)
+        if name.lower().endswith(".mp4"):
+            # Not a fallthrough to the clip. A cover route that sometimes
+            # answers with five megabytes of mp4 is the thing it exists to
+            # prevent; the card falls back to a gated <video>, which paints a
+            # frame from bytes it had to fetch anyway once it is on screen.
+            return JSONResponse(
+                {"error": "No cover for a clip: web_image has no ffmpeg."},
+                status_code=404)
+
+        img = OUTPUTS / job_id / name
+        # The same two-step miss as /api/file, and for the same reason: on a
+        # fresh run the name that misses is the job *directory*, a stat cached
+        # that miss below us, and `volume.reload()` does not clear a name
+        # already asked about. Asking the same way twice 404s a file that is
+        # there — which here would be a card in the grid whose picture never
+        # loads.
+        if not img.is_file():
+            _reload_volume()
+            if not (_listed(img.parent, OUTPUTS) and _sizes_on_disk([img])[img]):
+                return JSONResponse({"error": "Not found."}, status_code=404)
+
+        # The size is in the cache name, which `thumb()` does not do and should.
+        # Its invalidation compares the cached mtime against the source's, and
+        # that knows nothing about THUMB_PX — so raising the constant leaves
+        # every existing thumbnail at the old size, forever and silently. Here
+        # the constant is part of the key, so a raise invalidates by
+        # construction and the orphans go with the folder on delete.
+        thumbs = img.parent / THUMB_DIR
+        cached = thumbs / f"{img.stem}@{THUMB_PX}.jpg"
+        try:
+            if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
+                thumbs.mkdir(exist_ok=True)
+                with Image.open(img) as im:
+                    # Upright even for our own renders: the viewer shows this
+                    # same file at full size and browsers rotate from EXIF while
+                    # PIL does not, so without this the card and the full-screen
+                    # view of one file disagree by 90°.
+                    im = _upright(im).convert("RGB")
+                    im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    im.save(buf, "JPEG", quality=78, optimize=True)
+                # Encoded before the file is touched, so the write is one call
+                # and no descriptor is held across a LANCZOS resample either.
+                cached.write_bytes(buf.getvalue())
+                # No volume.commit(), for the reason the dataset route gives:
+                # a cover is derived data, and a grid of them would be a grid
+                # of commits. A container dying before the write is durable
+                # costs one re-encode.
+            data = cached.read_bytes()
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
+        # A day rather than /api/file's hour: a job directory never changes
+        # after the run that wrote it, so a cover derived from one is immutable
+        # in a way a dataset image — which you can replace in place — is not.
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=86400"})
+
     @api.post("/api/outputs/{job_id}/delete")
     def delete_output(job_id: str) -> dict[str, Any]:
         """Delete a result and its files. Unlinked, not recoverable."""
@@ -7307,6 +7576,7 @@ def web():
         if not _listed(d, OUTPUTS):
             return {"error": "Not found."}
         shutil.rmtree(d, ignore_errors=True)
+        _forget_listed(job_id)
         _drop_legacy_trash(OUTPUTS)
         volume.commit()
         return {"ok": True}
@@ -7340,6 +7610,7 @@ def web():
             d = OUTPUTS / job_id
             if _listed(d, OUTPUTS):
                 shutil.rmtree(d, ignore_errors=True)
+                _forget_listed(job_id)
                 removed += 1
             else:
                 missing.append(job_id)
@@ -7380,7 +7651,16 @@ def web():
         # and every still is served off a warm view.
         if rec.get("status") == "completed" and job_id not in _warmed:
             try:
-                warmed = _reload_volume()
+                # Insisting, not one attempt. This fires once per job, on the
+                # single poll the client is already blocked on, and what it is
+                # racing is the page's own media transfers — so a refusal here
+                # is the common case rather than the rare one, and losing it
+                # costs the canvas four concurrent misses, each paying the
+                # reload lock and a scan of outputs/ in front of the picture
+                # someone is waiting for. Half a second on one poll is the
+                # cheaper side of that trade; every other status poll is
+                # untouched.
+                warmed = _reload_insist()
             except Exception as exc:
                 print(f"[status] warm reload failed for {job_id}: {exc}", flush=True)
                 warmed = False

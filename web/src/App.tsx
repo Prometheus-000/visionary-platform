@@ -33,20 +33,30 @@ import { useVideo } from './video/useVideo'
  */
 export function App() {
   const s = useStore()
-  const { items, reload } = useGallery()
+  const { items, reload, record, drop, total, behind } = useGallery()
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shown, setShown] = useState<{ rows: GalleryItem[]; i: number } | null>(null)
   const [meta, setMeta] = useState<GalleryItem | null>(null)
 
-  const landed = useCallback(() => {
+  const landed = useCallback((it: GalleryItem) => {
     // A result landed: the boxes come off the picture, and the gallery has a new newest.
     // Off on *every* land, which is the whole "editing is a choice" rule — the regions
     // themselves are untouched and go with the next run, they are just not drawn.
     useStore.getState().setEdit('off')
-    void reload()
-  }, [reload])
+    // The new newest, now, from the run itself. The listing is asked afterwards and
+    // fills in the sidecar; it is no longer what decides whether the thing you just
+    // made is on screen.
+    record(it)
+    // Deliberately not in this tick. The canvas paints its stills from /api/file in the
+    // same moment, and /api/gallery spends up to half a second inside `_reload_insist`
+    // taking the volume's reload lock — the one those stills need. Handing them the
+    // window first costs the gallery a beat nobody is watching and buys the picture
+    // someone is.
+    const t = window.setTimeout(() => void reload(), 600)
+    return () => window.clearTimeout(t)
+  }, [reload, record])
 
   const gen = useGenerate(landed)
   const vid = useVideo(landed)
@@ -332,12 +342,15 @@ export function App() {
 
             <Gallery
               items={items}
+              total={total}
+              behind={behind}
               open={galleryOpen}
               onClose={() => setGalleryOpen(false)}
               onReload={() => {
                 setGalleryOpen(true)
                 void reload()
               }}
+              onDropped={drop}
               onMeta={setMeta}
               onHandoff={(it, as) => void handoff(it.job_id, it.files[0] ?? '', as)}
             />

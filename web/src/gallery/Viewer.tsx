@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { coverUrl, type GalleryItem } from './types'
+import { fullUrl, type GalleryItem } from './types'
 
 /**
  * The picture, full screen, and the gesture that pages between them.
@@ -173,7 +173,7 @@ export function Viewer({
   const slide = (i: number) => {
     const s = items[i]
     if (!s) return <div className="lb-slide" key={`empty${i}`} />
-    const u = coverUrl(s)
+    const u = fullUrl(s)
     return (
       <div className="lb-slide" key={`${s.job_id}:${i}`}>
         {s.kind === 'video' ? (

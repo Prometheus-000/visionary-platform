@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react'
 import { everyMs, failed } from '../api/client'
 import { generate, status, stop } from '../api/routes'
 import type { JobStatus } from '../api/types'
+import type { GalleryItem } from '../gallery/types'
 import { loraIndex, readLoras, stripLoras } from '../lora/tokens'
 import { readRegions } from '../regions/geometry'
 import { attached, negAllowed, readShot, regionsLive, useStore, type Store } from '../store'
@@ -88,7 +89,7 @@ export function imageBody(s: Store): Record<string, unknown> {
   }
 }
 
-export function useGenerate(onLanded: () => void) {
+export function useGenerate(onLanded: (it: GalleryItem) => void) {
   const [run, setRun] = useState<RunState>(IDLE)
 
   const finish = useCallback((s: JobStatus, jobId: string) => {
@@ -125,7 +126,12 @@ export function useGenerate(onLanded: () => void) {
       ...p, running: false, jobId, runId: null, files, percent: 100, phase: '',
       error: null, meta, skipped,
     }))
-    onLanded()
+    // The finished run, handed over rather than thrown away. The gallery used to ask
+    // the volume to tell it about a job this function was holding in its hand, and
+    // believe the answer when it came back without one. `**s` first so the four facts
+    // below win — the record is the run's report, and these are what the card draws.
+    onLanded({ ...(s as Partial<GalleryItem>), job_id: jobId, kind: 'image', files,
+               created: Date.now() / 1000 })
   }, [onLanded])
 
   const start = useCallback(async () => {

@@ -157,9 +157,21 @@ export const compile = (body: {
 
 /* ---- outputs and the gallery ----------------------------------------- */
 
-export const gallery = () => api<Record<string, unknown>>('/api/gallery')
+export const gallery = (before = 0, limit = 200) =>
+  api<Record<string, unknown>>(`/api/gallery?before=${before}&limit=${limit}`)
 export const fileUrl = (jobId: string, name: string) =>
   `/api/file/${seg(jobId)}/${seg(name)}`
+/**
+ * The same result at 320px, for anywhere it is shown small.
+ *
+ * Beside `fileUrl` because the pair is the decision, and separating them is
+ * how one gets used where the other belongs — which is what happened: the grid
+ * served full-resolution originals into 232px cells. The cost that mattered was
+ * not the bytes but the descriptor `/api/file` holds open for the length of the
+ * transfer, which is what refuses `volume.reload()` and freezes the listing.
+ */
+export const coverUrl = (jobId: string, name: string) =>
+  `/api/cover/${seg(jobId)}/${seg(name)}`
 export const deleteOutput = (jobId: string, body?: unknown) =>
   post<Record<string, unknown>>(`/api/outputs/${seg(jobId)}/delete`, body)
 export const purgeOutputs = (body?: unknown) =>

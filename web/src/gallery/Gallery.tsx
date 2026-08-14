@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { failed } from '../api/client'
 import { deleteOutput, fileUrl, gallery, purgeOutputs } from '../api/routes'
@@ -6,9 +6,19 @@ import { IconBack, IconExpand, IconRefresh } from '../icons'
 import { Menu, type MenuItem } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
 import { Card } from './Card'
+import { forget, merged, mine, remember } from './mine'
 import { reuse } from './reuse'
 import { Viewer } from './Viewer'
 import type { Filter, GalleryItem } from './types'
+
+/** How many times a listing that admits it is behind is asked again, and how long
+ *  each wait is. Sized against a media transfer finishing rather than a value changing
+ *  on a server — `RELOAD_INSIST_BACKOFF`'s own note says a clip on a slow connection is
+ *  seconds. About four seconds of patience, at zero cost when the reply is fresh. */
+const STALE_TRIES = 2
+const STALE_BACKOFF = [1200, 3000]
+/** One page. The server clamps its own limit; this is what the grid asks for. */
+const PAGE = 200
 
 /**
  * Three layers, and the third is the one that is easy to miss: the drawer beside the canvas,
@@ -19,37 +29,120 @@ import type { Filter, GalleryItem } from './types'
  * Moving between the layers is navigation and lives in the top corners from the moment you
  * are inside — not promoted there after a bottom-centre pill hands you over, which is what a
  * "View all generations" button did and why it read as inconsistent.
+ *
+ * What this hook holds is one listing assembled from two sources: the volume, which is the
+ * record, and what this window watched itself make, which the volume can lag behind. See
+ * `mine.ts` for why that is a merge and not a replacement.
  */
 export function useGallery() {
-  const [items, setItems] = useState<GalleryItem[]>([])
+  const [items, setItems] = useState<GalleryItem[]>(() => mine())
   const [error, setError] = useState<string | null>(null)
+  const [stale, setStale] = useState(false)
+  const [total, setTotal] = useState(0)
+  // Results this window made. Held in a ref as well as in `items` because every merge
+  // needs it and a re-render must not be the thing that keeps it alive.
+  const own = useRef<GalleryItem[]>(mine())
+  // Which request is current. A ref, not state: state would re-render, and would itself
+  // be subject to batching.
+  const gen = useRef(0)
+  // The retry budget *is* state, unlike `gen`. It was a ref, and that made the one thing
+  // it is meant to surface unreachable: `behind` is read during render, a ref does not
+  // re-render, and the reply that exhausts the budget sets `stale` to the value it
+  // already had — so React bailed out and the button never learned it had given up.
+  const [tries, setTries] = useState(0)
 
-  const reload = useCallback(async () => {
-    const r = await gallery()
+  /**
+   * One fetch, applied only if it is still the newest.
+   *
+   * `everyMs` is the first thing anyone reaches for here and it is the wrong tool: it
+   * skips a *tick* while one is out, and this is event-driven — Refresh pressed while a
+   * land is still fetching is the common case, and there is no tick to skip. So the
+   * reply is discarded on arrival instead. Same lesson, other end of the wire.
+   *
+   * The whole reply is dropped, `stale` with it. A superseded stale answer arming the
+   * retry below after a fresh one has landed is the same out-of-order write, one field
+   * over.
+   */
+  const refetch = useCallback(async () => {
+    const mine_ = ++gen.current
+    const r = await gallery(0, PAGE)
+    if (mine_ !== gen.current) return
     if (failed(r)) return setError(r.error)
+    const body = r as { items?: GalleryItem[]; total?: number; stale?: boolean }
     setError(null)
-    setItems(((r as { items?: GalleryItem[] }).items ?? []).filter((i) => i.files?.length))
+    setStale(!!body.stale)
+    setTotal(body.total ?? 0)
+    setItems(merged((body.items ?? []).filter((i) => i.files?.length), own.current))
+  }, [])
+
+  /** A fresh question deserves fresh patience, so every deliberate reload — a land, the
+   *  Refresh button, opening the gallery — resets the retry budget. */
+  const reload = useCallback(async () => {
+    setTries(0)
+    await refetch()
+  }, [refetch])
+
+  /** A finished run, in the grid before the volume has been asked about it. */
+  const record = useCallback((it: GalleryItem) => {
+    own.current = remember(it)
+    setItems((prev) => merged(prev.filter((r) => r.job_id !== it.job_id), own.current))
+  }, [])
+
+  /** Deleted here as well as there, or the next merge puts it straight back. */
+  const drop = useCallback((jobIds: string[]) => {
+    own.current = forget(jobIds)
   }, [])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
-  return { items, error, reload }
+  /**
+   * Come back once it has stopped loading pictures — which is what `stale` is for.
+   *
+   * Three things stop this being a poll, and all three are load-bearing. It is armed by
+   * the *reply*, not a clock, so a fresh gallery runs no timers at all. The budget is
+   * consecutive and hard, because hammering a container that is telling you it cannot
+   * reload is the failure a budget exists to prevent. And the cleanup cancels, so a
+   * deliberate reload replaces a pending retry rather than stacking on it.
+   */
+  useEffect(() => {
+    if (!stale || tries >= STALE_TRIES) return
+    const t = window.setTimeout(() => {
+      setTries((n) => n + 1)
+      void refetch()
+    }, STALE_BACKOFF[tries] ?? STALE_BACKOFF[STALE_BACKOFF.length - 1])
+    return () => window.clearTimeout(t)
+  }, [stale, tries, refetch])
+
+  // Only once it has given up. While it is still retrying there is nothing to say —
+  // the route's own docstring is right that a listing catching up is not an error and
+  // not something to apologise for on screen.
+  const behind = stale && tries >= STALE_TRIES
+  return { items, error, reload, record, drop, total, behind }
 }
 
 export function Gallery({
   items,
+  total,
+  behind,
   open,
   onClose,
   onReload,
+  onDropped,
   onMeta,
   onHandoff,
 }: {
   items: GalleryItem[]
+  /** How many results exist, not how many are listed. The two differ past the cap, and
+   *  the difference used to be invisible — including to the purge dialog. */
+  total: number
+  /** The listing stopped catching up. Said on the Refresh button and nowhere else. */
+  behind: boolean
   open: boolean
   onClose: () => void
   onReload: () => void
+  onDropped: (jobIds: string[]) => void
   onMeta: (it: GalleryItem) => void
   onHandoff: (it: GalleryItem, as: 'first' | 'reference' | 'refvideo') => void
 }) {
@@ -84,6 +177,9 @@ export function Gallery({
     if (!confirm(`Delete ${what}? This cannot be undone.`)) return
     const r = await deleteOutput(it.job_id)
     if (failed(r)) return alert(r.error)
+    // Before the reload, not after: the session record is merged into whatever the
+    // listing returns, so a delete that only reached the volume comes straight back.
+    onDropped([it.job_id])
     onReload()
   }
 
@@ -92,13 +188,23 @@ export function Gallery({
     // put the same button in the same place over very different amounts of work.
     const n = shown.length
     if (!n) return
-    const what = filter === 'all' ? `all ${n} results` : `${n} ${filter}${n === 1 ? '' : 's'}`
+    // "all" only when it is all. The listing is capped, so on a volume holding more than
+    // one page this said "all 200", deleted 200 and left the rest — the one control in
+    // the app that unlinks, undercounting its own blast radius in the opposite direction
+    // from the failure the confirm dialog exists to prevent.
+    const rest = filter === 'all' ? Math.max(0, total - n) : 0
+    const what = filter === 'all'
+      ? (rest ? `${n} of ${total} results` : `all ${n} results`)
+      : `${n} ${filter}${n === 1 ? '' : 's'}`
     if (!confirm(`Permanently delete ${what}?\n\n`
+      + (rest ? `The ${rest} older than these are not included.\n\n` : '')
       + 'The files are unlinked from the volume. This cannot be undone.')) return
     // The ids, not the filter: what goes is exactly what was counted in the dialog, even if
     // a run lands while it is open.
-    const r = await purgeOutputs({ confirm: 'delete', job_ids: shown.map((i) => i.job_id) })
+    const ids = shown.map((i) => i.job_id)
+    const r = await purgeOutputs({ confirm: 'delete', job_ids: ids })
     if (failed(r)) return alert(r.error)
+    onDropped(ids)
     onReload()
   }
 
@@ -117,9 +223,18 @@ export function Gallery({
     { label: 'Delete', danger: true, run: () => void remove(it) },
   ]
 
-  const cards = (rows: GalleryItem[]) => rows.map((it, i) => (
+  /**
+   * `rows` is what gets drawn; `all` is what the viewer can page through.
+   *
+   * They were the same array, and the drawer draws `items.slice(0, 24)` — so opening a
+   * picture from the drawer handed the viewer 24 rows and its counter read "3 / 24" on
+   * a volume holding hundreds. A render cap had quietly become a navigation cap: the
+   * chevrons and the count are a claim about how much there is, not about how many
+   * cards happened to be rendered beside the canvas.
+   */
+  const cards = (rows: GalleryItem[], all: GalleryItem[] = rows) => rows.map((it) => (
     <Card key={`${it.job_id}:${it.files[0]}`} item={it}
-          onOpen={() => setViewing({ rows, i })}
+          onOpen={() => setViewing({ rows: all, i: Math.max(0, all.indexOf(it)) })}
           onDownload={() => download(it)}
           onDelete={() => void remove(it)}
           onMenu={(anchor) => {
@@ -141,7 +256,7 @@ export function Gallery({
               <IconExpand />
             </button>
           </div>
-          <div id="drawer-grid" className="grid">{cards(items.slice(0, 24))}</div>
+          <div id="drawer-grid" className="grid">{cards(items.slice(0, 24), items)}</div>
           {!items.length && (
             <p className="muted" style={{ marginTop: 6 }}>Nothing generated yet.</p>
           )}
@@ -165,7 +280,12 @@ export function Gallery({
                 {f === 'all' ? 'All' : f === 'image' ? 'Images' : 'Video'}
               </button>
             ))}
-            <button className="ico" title="Refresh" type="button" onClick={onReload}>
+            {/* The one place the listing admits it is behind, and only once it has
+                stopped trying. A tooltip naming a state on a control whose home you are
+                already in is what the icon rule licenses; a banner over the grid is
+                not. */}
+            <button className="ico" type="button" onClick={onReload}
+                    title={behind ? 'Refresh — the listing may be behind' : 'Refresh'}>
               <IconRefresh />
             </button>
             <button className="pill danger" type="button" disabled={!shown.length}
@@ -177,6 +297,13 @@ export function Gallery({
           </div>
 
           <div id="gal-grid" className="grid">{cards(shown)}</div>
+          {/* Stated rather than silent. The cap was invisible, so a volume holding more
+              than a page looked like a volume that had lost the rest. */}
+          {filter === 'all' && total > shown.length && (
+            <p className="muted" id="gal-more" style={{ marginTop: 14 }}>
+              Showing the newest {shown.length} of {total}.
+            </p>
+          )}
           {!shown.length && (
             <p className="muted">
               {items.length ? 'Nothing of that kind yet.' : 'Nothing generated yet.'}
