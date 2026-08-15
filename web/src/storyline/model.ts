@@ -249,10 +249,30 @@ export function move(mods: Module[], path: number[], dir: -1 | 1): Module[] {
   return next
 }
 
+/**
+ * Write text into an element — **splitting it if line breaks arrived.**
+ *
+ * A line break already means "separate thought" to whoever typed it, and the
+ * compiler flattens whitespace on the way to the encoder, so an element holding
+ * three lines is three thoughts the storyline is not showing and the prompt
+ * will not keep apart. Pasting a scene is the common case: without this it
+ * lands as one element at 100% of the picture, which is both wrong and the
+ * least useful thing the display could say.
+ */
 export function setText(mods: Module[], path: number[], text: string): Module[] {
   const next = clone(mods)
-  const target = at(next, path.slice(0, -1))[tip(path)]
-  if (target) target.text = text
+  const sibs = at(next, path.slice(0, -1))
+  const target = sibs[tip(path)]
+  if (!target) return next
+
+  const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean)
+  if (lines.length <= 1) {
+    target.text = text
+    return next
+  }
+  target.text = lines[0] ?? ''
+  sibs.splice(tip(path) + 1, 0,
+              ...lines.slice(1).map((l) => ({ ...mod(l), origin: target.origin })))
   return next
 }
 

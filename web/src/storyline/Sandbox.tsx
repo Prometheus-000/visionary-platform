@@ -1,7 +1,6 @@
 import { useState } from 'react'
 
 import { Storyline } from './Storyline'
-import { segment } from './segment'
 import { mod, type Module } from './model'
 import './storyline.css'
 
@@ -38,7 +37,6 @@ const PRESETS: Record<string, () => Module[]> = {
 
 export function Sandbox() {
   const [mods, setMods] = useState<Module[]>(() => PRESETS['corridor (three figures)']!())
-  const [raw, setRaw] = useState('')
 
   return (
     <div className="sb">
@@ -54,26 +52,13 @@ export function Sandbox() {
         </span>
       </header>
 
+      {/* No separate "paste a prompt" control. `setText` splits on line
+          breaks, so pasting a scene straight into the storyline segments it —
+          a second box for the same job was a second door to one room. */}
       <section className="sb-panel">
         <Storyline mods={mods} setMods={setMods} />
       </section>
 
-      <section className="sb-panel sb-paste">
-        <label htmlFor="sb-raw">Or paste a prompt</label>
-        <textarea
-          id="sb-raw" rows={3} value={raw}
-          placeholder="Three young people crowded into a small 1970s public bathroom…"
-          onChange={(e) => setRaw(e.target.value)}
-        />
-        <button type="button" onClick={() => raw.trim() && setMods(segment(raw))}>
-          Segment
-        </button>
-        <p>
-          A stand-in for <code>/api/parse</code>. It breaks on sentence ends and nothing
-          else — deciding what is an anchor and what hangs off it is the real parse, and
-          that instruction is still blocked on experiments.
-        </p>
-      </section>
     </div>
   )
 }

@@ -203,20 +203,49 @@ def openai_compatible(base_url: str, model: str):
     """
     import urllib.request
 
-    def parse(prose: str):
+    schema = G["PARSE_SCHEMA"]["input_schema"]
+    # Spelled at the top level of the request, never under `extra_body` — that
+    # is an OpenAI *client library* concept which flattens into the body, and
+    # sent as a literal key vLLM ignores it silently. The schema would never
+    # bind and the run would score an unconstrained model while reporting a
+    # constrained one.
+    DIALECTS = [
+        ("guided_json", {"guided_json": schema,
+                         "guided_decoding_backend": "xgrammar"}),
+        ("structured_outputs", {"structured_outputs": {"json": schema}}),
+        ("response_format", {"response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "storyline", "schema": schema,
+                            "strict": True}}}),
+    ]
+    chosen: list[str] = []
+
+    def call(extra: dict, prose: str) -> str:
         body = json.dumps({
             "model": model,
             "messages": [{"role": "system", "content": G["PARSE_RULES"]},
                          {"role": "user", "content": prose}],
-            "max_tokens": 2048,
-            "temperature": 0,
-            "extra_body": {"guided_json": G["PARSE_SCHEMA"]["input_schema"],
-                           "guided_decoding_backend": "xgrammar"},
+            "max_tokens": 2048, "temperature": 0, **extra,
         }).encode()
         req = urllib.request.Request(f"{base_url}/chat/completions", body,
                                      {"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=180) as r:
-            said = json.load(r)["choices"][0]["message"]["content"]
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.load(r)["choices"][0]["message"]["content"]
+
+    def parse(prose: str):
+        if not chosen:
+            errs = []
+            for name, extra in DIALECTS:
+                try:
+                    said = call(extra, prose)
+                    chosen.append(name)
+                    print(f"  (schema bound via {name})")
+                    return G["_validate_modules"](json.loads(said).get("elements") or [])
+                except Exception as exc:
+                    errs.append(f"{name}: {exc}")
+            raise SystemExit("No structured-output dialect accepted:\n  "
+                             + "\n  ".join(errs))
+        said = call(dict(DIALECTS[[d[0] for d in DIALECTS].index(chosen[0])][1]), prose)
         return G["_validate_modules"](json.loads(said).get("elements") or [])
 
     return parse

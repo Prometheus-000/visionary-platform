@@ -33,13 +33,19 @@ export function Storyline({
   mods, setMods, onSubmit,
 }: {
   mods: Module[]
-  setMods: (m: Module[]) => void
+  /**
+   * Takes an updater, never a value. Every handler here reads the *current*
+   * storyline rather than the one captured when this render ran — otherwise a
+   * keystroke arriving right after a structural edit clones the stale array and
+   * silently undoes it. That is not theoretical: typing three lines with Enter
+   * between them produced one element containing all three, because each
+   * `onChange` wrote a pre-Enter snapshot back over the split.
+   */
+  setMods: React.Dispatch<React.SetStateAction<Module[]>>
   onSubmit?: () => void
 }) {
   const [focus, setFocus] = useState<string | null>(null)
   const refs = useRef<Record<string, HTMLTextAreaElement | null>>({})
-  const railRef = useRef<HTMLDivElement | null>(null)
-  const [centres, setCentres] = useState<Record<string, number>>({})
 
   const list = useMemo(() => rows(mods), [mods])
   const [tying, setTying] = useState<string | null>(null)
@@ -76,21 +82,6 @@ export function Storyline({
     return out
   }, [list, top])
 
-  useLayoutEffect(() => {
-    const rail = railRef.current
-    if (!rail) return
-    const box = rail.getBoundingClientRect()
-    if (!box.width) return
-    const next: Record<string, number> = {}
-    mods.forEach((m) => {
-      const el = refs.current[m.id]
-      if (!el) return
-      const r = el.getBoundingClientRect()
-      next[m.id] = ((r.left + r.width / 2 - box.left) / box.width) * 100
-    })
-    if (JSON.stringify(next) !== JSON.stringify(centres)) setCentres(next)
-  }, [mods, list, centres])
-
   useEffect(() => {
     if (focus) refs.current[focus]?.focus()
   }, [focus, mods])
@@ -103,39 +94,39 @@ export function Storyline({
     }
   }, [list])
 
-  const gradient = field(
-    mods.map((m, i) => ({
-      pct: centres[m.id] ?? ((i + 0.5) / Math.max(mods.length, 1)) * 100,
-      color: heat(top[i] ?? 0, maxShare),
-    })),
-  )
+  const gradient = field(top, maxShare)
 
   function key(e: React.KeyboardEvent, path: number[], m: Module) {
-    const mk = (next: Module[]) => { setMods(next); setFocus(m.id) }
+    const mk = (op: (p: Module[]) => Module[]) => {
+      setMods(op); setFocus(m.id)
+    }
     if (e.key === 'Tab') {
       e.preventDefault()
-      mk(e.shiftKey ? outdent(mods, path) : indent(mods, path))
+      mk((p) => (e.shiftKey ? outdent(p, path) : indent(p, path)))
     } else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey) {
       e.preventDefault()
-      const [next, id] = insertAfter(mods, path)
-      setMods(next); setFocus(id)
+      let born = ''
+      setMods((p) => { const [next, id] = insertAfter(p, path); born = id; return next })
+      // Focus follows in an effect, after the split has actually landed.
+      queueMicrotask(() => setFocus(born))
     } else if (e.key === 'Enter' && e.metaKey) {
       e.preventDefault(); onSubmit?.()
     } else if (e.key === 'Backspace' && !m.text && list.length > 1) {
       e.preventDefault()
       const i = list.findIndex((r) => r.m.id === m.id)
-      setMods(remove(mods, path)); setFocus(list[Math.max(0, i - 1)]?.m.id ?? null)
+      setMods((p) => remove(p, path)); setFocus(list[Math.max(0, i - 1)]?.m.id ?? null)
     } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.altKey) {
       e.preventDefault()
-      mk(move(mods, path, e.key === 'ArrowUp' ? -1 : 1))
+      mk((p) => move(p, path, e.key === 'ArrowUp' ? -1 : 1))
     }
   }
 
   return (
     <div className="sl">
-      {/* The field, sampled at element centres. Continuous because the encoder
-          is: one composition, not N independent weights. */}
-      <div className="sl-heat" ref={railRef} style={{ background: gradient }} />
+      {/* A map of the prompt: each element holds a span of the bar in order,
+          and the span is its share. Continuous because the encoder is — one
+          composition, not N independent weights. */}
+      <div className="sl-heat" style={{ background: gradient }} />
 
       <div className="sl-rows">
         {list.map(({ m, depth, path }) => (
@@ -168,7 +159,7 @@ export function Storyline({
               onChange={(e) => {
                 e.target.style.height = 'auto'
                 e.target.style.height = `${e.target.scrollHeight}px`
-                setMods(setText(mods, path, e.target.value))
+                setMods((p) => setText(p, path, e.target.value))
               }}
               onKeyDown={(e) => key(e, path, m)}
             />
@@ -178,7 +169,7 @@ export function Storyline({
                   <button
                     key={t} type="button" className="sl-chip"
                     title="Separate these"
-                    onClick={() => setMods(untie(mods, m.id, t))}
+                    onClick={() => setMods((p) => untie(p, m.id, t))}
                   >with {label(byId[t] ?? m)}</button>
                 ))}
                 <button
@@ -194,7 +185,7 @@ export function Storyline({
                 {mods.filter((o) => o.id !== m.id && !m.ties.includes(o.id)).map((o) => (
                   <button
                     key={o.id} type="button"
-                    onClick={() => { setMods(tie(mods, m.id, o.id)); setTying(null) }}
+                    onClick={() => { setMods((p) => tie(p, m.id, o.id)); setTying(null) }}
                   >{label(o)}</button>
                 ))}
               </div>
