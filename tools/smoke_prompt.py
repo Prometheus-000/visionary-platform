@@ -221,9 +221,14 @@ check("roles are positional and padded to the reference count",
 # The one place the compiler's ordinary tidying would corrupt the user's text.
 print("\npunctuation", flush=True)
 check("a lowercase fragment continues the clause rather than following a stop",
-      G["_compile_image_prompt"]("a portrait of ohwx_subject",
-                                 G["_validate_shot"]([{"key": "framing.mcu"}])),
-      "A medium close-up, a portrait of ohwx_subject.")
+      G["_compile_image_prompt"](
+          "A hotel corridor. a tall woman on the left", []),
+      "A hotel corridor. a tall woman on the left")
+# The rule fires where clauses meet, which after the slot fix is between the
+# subject and what follows it rather than ahead of the subject.
+check("and it fires between a storyline's own clauses",
+      G["_shot_join"](["A hotel corridor.", "a tall woman on the left."]),
+      "A hotel corridor, a tall woman on the left.")
 check("a trigger word's case is never changed",
       "ohwx_subject" in G["_compile_image_prompt"](
           "ohwx_subject sits by a window",
@@ -231,16 +236,32 @@ check("a trigger word's case is never changed",
 check("a sentence that closes itself is not closed twice",
       G["_compile_image_prompt"]("She reads a letter.",
                                  G["_validate_shot"]([{"key": "framing.cu"}])),
-      "A close-up. She reads a letter.")
-# Krea reads front-to-back, so a stack of shot description ahead of the subject
-# renders the shot and loses the person. One clause leads; the rest fall behind.
-check("only the first image clause leads, the rest follow the subject",
+      "She reads a letter. In a close-up.")
+# Krea reads front-to-back, and the leading clause is what the subject sits in.
+# Framing and angle are the frame, so they lead; light and tone modify the
+# subject and cannot precede it, or the light becomes the thing described and
+# the subject an apposition to it. This used to be "the first clause leads and
+# the rest follow", which read correctly only because framing is first in
+# vocabulary order — with framing and angle unset, light led.
+check("nothing precedes the subject; light then frame follow it",
       G["_compile_image_prompt"](
           "a portrait of ohwx_subject",
           G["_validate_shot"]([{"key": "framing.mcu"}, {"key": "angle.low"},
                                {"key": "light.window"}])),
-      "A medium close-up, a portrait of ohwx_subject. Shot from a low angle, "
-      "lit by soft daylight from a window.")
+      "a portrait of ohwx_subject. Lit by soft daylight from a window. "
+      "In a medium close-up, shot from a low angle.")
+# The case the old split got wrong, and the reason this is structural now: no
+# framing, no angle, and light must still not lead.
+check("light alone still follows the subject",
+      G["_compile_image_prompt"](
+          "a portrait of ohwx_subject",
+          G["_validate_shot"]([{"key": "light.window"}])),
+      "a portrait of ohwx_subject. Lit by soft daylight from a window.")
+check("tone alone still follows the subject",
+      G["_compile_image_prompt"](
+          "a portrait of ohwx_subject",
+          G["_validate_shot"]([{"key": "tone.noir"}])),
+      "a portrait of ohwx_subject. In high-contrast film noir.")
 
 # The document is one field per line, so a newline anywhere inside it ends a
 # field early and leaves the rest of the sentence looking like the start of

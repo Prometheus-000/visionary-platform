@@ -31,3 +31,21 @@ screenshots for styling inspiration/
 
 # Scratch the author keeps in-tree
 stuff to git ignore/
+
+# Reference images for the prompt work — the Gucci recreations, the Krea 2
+# examples published with the checkpoint, film stills. The *prompts* are in
+# docs/krea2-prompt-template.md and tools/smoke_parse.py because they are the
+# corpus everything is checked against; the pictures are other people's and
+# stay out of the history for the same reason the styling screenshots do.
+Prompt to generation examples/
+*.jpeg
+*.avif
+Jack-Torrance-*.png
+287092__97533.jpg
+
+# Ideation artefacts and design handoffs — the master plan, the rejected
+# prototypes, exported sessions. They informed what got built and none of them
+# build anything. docs/ carries whatever survived.
+master plan/
+chip-based-prompt-mockup/
+session-export-*/

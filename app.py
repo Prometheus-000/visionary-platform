@@ -237,6 +237,10 @@ web_image = (
         # would mean a second build for a 200 kB pure-python package. The rule
         # is to split images when pins fight, not when responsibilities differ.
         "gdown==5.2.0",
+        # The parse. Small dependency, CPU container, and it is the one place a
+        # language model reads the user's words rather than the encoder's — see
+        # `PARSE_RULES`.
+        "anthropic==0.42.0",
     )
     # The single biggest number in this file.
     #
@@ -1192,9 +1196,24 @@ def _stop_requested(job_id: str) -> bool:
 
 def _hf_token() -> str | None:
     """The token pasted into the UI, stored in a Modal Dict. No Secrets needed."""
+    return _pasted_key("hf_token")
+
+
+def _anthropic_key() -> str | None:
+    """The parse's key, stored the same way for the same reason."""
+    return _pasted_key("anthropic_key")
+
+
+def _pasted_key(name: str) -> str | None:
+    """
+    A credential typed into the gear and kept in a Modal Dict.
+
+    Two of these now, which is what turns a habit into a convention worth
+    naming: `modal deploy app.py` stays the entire install, and neither key
+    needs a CLI step, a Secret, or a redeploy to change.
+    """
     try:
-        tok = (config.get("hf_token") or "").strip()
-        return tok or None
+        return (config.get(name) or "").strip() or None
     except Exception:
         return None
 
@@ -5206,26 +5225,26 @@ SHOT_REF_ROLES = {
 #          move does not.
 SHOT_VOCAB: list[dict[str, Any]] = [
     {"key": "framing", "label": "Framing", "pick": "one", "join": "list",
-     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+     "slot": 40, "field": "visual", "image": True, "needs": None, "items": [
         {"key": "xwide", "label": "extreme wide", "glyph": "fr-xw",
-         "phrase": "an extreme wide shot"},
+         "phrase": "in an extreme wide shot"},
         {"key": "wide", "label": "wide", "glyph": "fr-w",
-         "phrase": "a wide shot"},
+         "phrase": "in a wide shot"},
         {"key": "medium", "label": "medium", "glyph": "fr-m",
-         "phrase": "a medium shot"},
+         "phrase": "in a medium shot"},
         {"key": "mcu", "label": "medium close-up", "glyph": "fr-mcu",
-         "phrase": "a medium close-up"},
+         "phrase": "in a medium close-up"},
         {"key": "cu", "label": "close-up", "glyph": "fr-cu",
-         "phrase": "a close-up"},
+         "phrase": "in a close-up"},
         {"key": "xcu", "label": "extreme close-up", "glyph": "fr-xcu",
-         "phrase": "an extreme close-up"},
+         "phrase": "in an extreme close-up"},
         {"key": "ots", "label": "over-the-shoulder", "glyph": "fr-ots",
-         "phrase": "an over-the-shoulder shot"},
+         "phrase": "in an over-the-shoulder shot"},
         {"key": "pov", "label": "POV", "glyph": "fr-pov",
-         "phrase": "a first-person point-of-view shot"},
+         "phrase": "in a first-person point-of-view shot"},
     ]},
     {"key": "angle", "label": "Angle", "pick": "one", "join": "list",
-     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+     "slot": 40, "field": "visual", "image": True, "needs": None, "items": [
         {"key": "eye", "label": "eye level", "glyph": "an-eye",
          "phrase": "shot at eye level"},
         {"key": "low", "label": "low", "glyph": "an-low",
@@ -5240,7 +5259,7 @@ SHOT_VOCAB: list[dict[str, Any]] = [
          "phrase": "shot on a canted Dutch angle"},
     ]},
     {"key": "light", "label": "Light", "pick": "many", "join": "list",
-     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+     "slot": 30, "field": "visual", "image": True, "needs": None, "items": [
         {"key": "window", "label": "window light", "glyph": "li-window",
          "phrase": "lit by soft daylight from a window"},
         {"key": "golden", "label": "golden hour", "glyph": "li-golden",
@@ -5261,7 +5280,7 @@ SHOT_VOCAB: list[dict[str, Any]] = [
          "phrase": "lit from directly above"},
     ]},
     {"key": "tone", "label": "Tone", "pick": "many", "join": "list",
-     "slot": -10, "field": "visual", "image": True, "needs": None, "items": [
+     "slot": 30, "field": "visual", "image": True, "needs": None, "items": [
         {"key": "doc", "label": "documentary", "glyph": "to-doc",
          "phrase": "shot with documentary realism"},
         {"key": "noir", "label": "noir", "glyph": "to-noir",
@@ -5434,6 +5453,292 @@ SHOT_VOCAB: list[dict[str, Any]] = [
 SHOT_ITEMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
     f"{g['key']}.{it['key']}": (g, it) for g in SHOT_VOCAB for it in g["items"]
 }
+
+
+# The module roles — **the encoder's model, never the user's.**
+#
+# These name what a clause *does to the encoder*, which is why the compiler
+# needs them and why they must not reach the interface. A chip reads "tall
+# woman", not "SUBJECT"; an arsenal is filed under whatever key the user
+# invents, not under these. Putting a pipeline's taxonomy on screen is how a
+# tool teaches people to see their work the way the machine does, and it is the
+# one mistake that cannot be undone later. See docs/krea2-prompt-template.md.
+#
+# `text` is the catch-all and the reason nothing regresses: a plain typed prompt
+# is a one-module list of role `text`, and compiles to exactly what it compiles
+# to today.
+MODULE_ROLES = ("text", "declaration", "place", "subject", "behaviour",
+                "secondary", "light", "camera", "register")
+MAX_MODULES = 24
+MODULE_TEXT_MAX = 2000
+# An anchor holding dependents holding their own dependents is the deepest shape
+# the model has produced — a collective, the subjects in it, their wardrobe. The
+# bound exists so a cyclic or runaway payload cannot walk the recursion forever,
+# not because a fourth level would mean anything.
+MAX_MODULE_DEPTH = 4
+
+
+# The parse — the one place a model reads the *user's* words.
+#
+# Everything else in this file speaks to a text encoder. This speaks to a person,
+# and its whole job is to turn what somebody actually typed into the structure
+# the rest of the pipeline needs, so that nobody ever has to learn that
+# structure. A parse that merely reformats faithfully would reproduce every
+# failure in docs/krea2-prompt-template.md, because most of those failures are
+# things a storyteller writes naturally and Krea 2 renders wrong.
+#
+# The rules below are the findings from that document, stated as instructions.
+# They live here rather than in the page for the reason `CAPTION_PRESETS` does:
+# a run has to be reproducible from the job record rather than from whatever
+# text was in a field at the time.
+PARSE_MODEL = "claude-sonnet-5"
+
+PARSE_RULES = """\
+You turn a person's description of a picture into its structure. You never
+rewrite their intent and you never ask them anything.
+
+Return elements in the order they should reach the image encoder. Order is
+placement: subjects described first render further left. Extent is prominence:
+the more words spent on something, the more the picture is about it.
+
+AN ELEMENT IS AN ANCHOR PLUS WHAT HANGS OFF IT.
+Anything described as standing alone becomes a thing in its own right — that is
+how a light with its own sentence turns into a character instead of falling on
+somebody. So:
+- Put a property inside the thing it belongs to, as a child. Light on skin,
+  a garment on a person, a texture on a wall.
+- Leave something at the top level only when it really is its own subject.
+- Never state inherent relations. Hands belong to people and leaves to trees
+  already; saying so spends attention on nothing.
+- **Write a child as a phrase that continues its parent**, because it will be
+  joined straight onto it: "in a purple beret", "with pale blue floral
+  wallpaper", "lit hard across her face". A child written to stand alone
+  collides with its anchor — "a hotel corridor pale blue floral wallpaper" —
+  and nothing downstream can repair that, because the compiler is forbidden
+  from adding words to anyone's sentence.
+
+RELATIONS BETWEEN SUBJECTS ARE PHYSICAL OR THEY ARE NOT STATED.
+Contact, proximity and orientation render, and they tie people into one scene.
+Perception and opinion do not: "C notices her, he dislikes that she is talking
+to B" makes people merge or vanish, because naming another subject inside this
+one's clause opens a second attention site for someone who already has one.
+When you meet one, keep the feeling and drop the reference — it becomes that
+subject's own visible state ("C watches from across the room, jaw set").
+Record real relations as `ties` between elements, not as prose that points
+backwards.
+
+NAME FEELINGS. An emotional word is a compressed physical description this
+encoder decodes well — "resigned" carries dropped shoulders, lowered gaze and
+settled weight at once, and more reliably than a list would. Never write that
+someone is expressionless unless the person asked for that; a default that
+negates interiority is an instruction, not a neutral.
+
+STATE GEOMETRY, NOT QUALITIES. "The corridor runs away to the right and the far
+door is half her height" carries an amount. "Dramatic perspective" has one
+setting and it is maximum.
+
+NOTHING LEADS THE SUBJECT. Whatever is in the first element is what the picture
+is about, so a property must not be there unless the person means it to be the
+subject. Light, grade and camera go last.
+
+MARK EVERY ELEMENT.
+- "derived" — you got it from their words.
+- "invented" — you supplied it. Be honest; invented text is shown differently
+  and is one touch from being changed, which is the only reason you are allowed
+  to invent at all.
+Invent sparingly and never invent a subject.
+
+Keep the person's own words wherever you can. Their phrasing is the record.
+"""
+
+
+PARSE_SCHEMA = {
+    "name": "storyline",
+    "description": "The picture, as elements in the order they reach the encoder.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string",
+                                "description": "Short, stable, e.g. e1 — ties refer to these."},
+                        "text": {"type": "string",
+                                 "description": "The clause, in the person's own words where possible."},
+                        "origin": {"type": "string", "enum": ["derived", "invented"]},
+                        "ties": {"type": "array", "items": {"type": "string"},
+                                 "description": "Ids of elements this one physically relates to."},
+                        "children": {"type": "array", "items": {"type": "object"},
+                                     "description": "Properties of this element, same shape."},
+                    },
+                    "required": ["id", "text", "origin"],
+                },
+            },
+        },
+        "required": ["elements"],
+    },
+}
+
+
+def _parse_storyline(prose: str) -> list[dict[str, Any]]:
+    """
+    A person's description, as structure. Raises with something actionable.
+
+    A tool call rather than free text, so a malformed answer is the SDK's
+    problem rather than a regex's — the same reason `_validate_modules` refuses
+    an unknown role instead of dropping it. Everything it returns still goes
+    through that validator, because a model is one more untrusted caller.
+    """
+    key = _anthropic_key()
+    if not key:
+        raise ValueError("No Anthropic key. Paste one under the gear — it is "
+                         "stored the same way the HuggingFace token is.")
+    import anthropic
+    reply = anthropic.Anthropic(api_key=key).messages.create(
+        model=PARSE_MODEL,
+        max_tokens=2048,
+        system=PARSE_RULES,
+        tools=[PARSE_SCHEMA],
+        tool_choice={"type": "tool", "name": "storyline"},
+        messages=[{"role": "user", "content": prose}],
+    )
+    for block in reply.content:
+        if getattr(block, "type", None) == "tool_use":
+            return _validate_modules(block.input.get("elements") or [])
+    raise ValueError("The parse returned no storyline.")
+
+
+def _validate_modules(raw: Any, _depth: int = 0) -> list[dict[str, Any]]:
+    """
+    Normalise the storyline into what the compiler takes, or say what is wrong.
+
+    **The array order is the order — there is no `order` field.** Carrying both
+    would be two sources of truth for one fact, and the failure mode is silent:
+    a client that reorders the array without renumbering, or renumbers without
+    reordering, gets a prompt whose subjects come out in the wrong places with
+    nothing to indicate why. Order is placement (see the three-axis note in
+    docs/krea2-prompt-template.md), so getting it wrong moves people around the
+    frame — worth being unable to express rather than merely unlikely.
+
+    Empty modules are dropped rather than refused. A module you have started and
+    not finished is a state the storyline can simply show by being visibly
+    empty, which is the same rule `_shot_text` applies to an unfilled pill.
+    """
+    if not raw:
+        return []
+    if _depth >= MAX_MODULE_DEPTH:
+        raise ValueError(f"Storyline nested deeper than {MAX_MODULE_DEPTH}")
+    if isinstance(raw, dict):          # {"modules": [...]} as well as a bare list
+        raw = raw.get("modules") or []
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(f"Not a storyline: {raw!r}")
+
+    out: list[dict[str, Any]] = []
+    for entry in list(raw)[:MAX_MODULES]:
+        if isinstance(entry, str):
+            entry = {"role": "text", "text": entry}
+        if not isinstance(entry, dict):
+            raise ValueError(f"Not a module: {entry!r}")
+        role = str(entry.get("role") or "text")
+        if role not in MODULE_ROLES:
+            raise ValueError(f"No such module role: {role!r}. "
+                             f"One of: {', '.join(MODULE_ROLES)}")
+        text = _oneline(str(entry.get("text") or ""))[:MODULE_TEXT_MAX]
+        if not text:
+            continue
+        origin = str(entry.get("origin") or "derived")
+        if origin not in ("derived", "invented"):
+            raise ValueError(f"No such origin: {origin!r}. "
+                             f"One of: derived, invented")
+        module = {"role": role, "text": text, "origin": origin}
+        if entry.get("id"):
+            module["id"] = str(entry["id"])[:64]
+        # Peer edges. Merge covers containment and nothing else — two girls
+        # beside a woman are not part of her, so nesting them would be a lie and
+        # the relation would fall back into prose, where a reorder breaks it
+        # silently. A tie survives a reorder because it is not a word.
+        ties = entry.get("ties")
+        if isinstance(ties, (list, tuple)):
+            kept = [str(t)[:64] for t in ties if t]
+            if kept:
+                module["ties"] = kept[:MAX_MODULES]
+        kids = _validate_modules(entry.get("children"), _depth + 1)
+        if kids:
+            module["children"] = kids
+        out.append(module)
+    return out
+
+
+def _module_texts(modules: list[dict[str, Any]]) -> list[str]:
+    """
+    One clause per top-level module, in the order they were given.
+
+    **A module's children are folded into its own clause, comma-joined.** That is
+    the whole of "list within a thing, relate between things": an anchor and
+    everything hanging off it is one thing, so its dependents are an inventory
+    and an inventory is correct there — which is why the wardrobe list works and
+    reads as description rather than as tags. Between anchors the clauses stay
+    separate and `_shot_join` relates them, because peers with nothing above them
+    are exactly a set of entities, and a set of entities is what "AI slop" names.
+
+    So merging two modules is not a display convention. It changes the emitted
+    grammar from two clauses to one, which is the difference between a light
+    that is its own character and a light that falls on somebody.
+    """
+    return [_module_clause(m) for m in modules]
+
+
+def _module_clause(module: dict[str, Any]) -> str:
+    """An anchor, then its dependents as one comma list, as one clause."""
+    kids = module.get("children") or []
+    if not kids:
+        return module["text"]
+    return f'{module["text"].rstrip(".")} {", ".join(_module_clause(k) for k in kids)}'
+
+
+def _prominence(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Each module's share of the prompt, which is the share of the *picture*.
+
+    **Extent is what drives prominence, not position** — the finding that
+    corrected this whole design. Order places a subject left to right; the
+    number of words spent on it is what decides how much the picture is about
+    it. So this counts words, and the number it returns belongs to the module
+    rather than to the slot: rearranging carries a share with it, and only
+    editing changes one.
+
+    Words rather than tokens on purpose. We need *shares*, and English prose
+    runs near a constant tokens-per-word, so the two normalise to almost the
+    same number while a word count costs no tokenizer and no model load on a CPU
+    container answering this on every keystroke.
+
+    It answers *where the weight is*, never *how much*. The honest measurement is
+    one encode of the prompt against one encode with a module removed, which is
+    N+1 forward passes through Qwen3-VL and belongs on the GPU container; this
+    is the cheap shape that is right about the ordering of the shares and makes
+    no claim past it.
+    """
+    counts = [_module_words(m) for m in modules]
+    total = sum(counts) or 1
+    return [{"id": m.get("id") or str(i), "role": m["role"],
+             "share": round(c / total, 4)}
+            for i, (m, c) in enumerate(zip(modules, counts))]
+
+
+def _module_words(module: dict[str, Any]) -> int:
+    """
+    A module's extent, summed over everything hanging off it.
+
+    Merging is what makes this the right sum rather than an arbitrary one. A
+    light folded into a subject stops being its own element, so its words become
+    the subject's words and the two warm spots become one — which is the heat
+    travelling with the element, falling out of the arithmetic rather than being
+    animated on top of it.
+    """
+    return (len(module["text"].split())
+            + sum(_module_words(k) for k in module.get("children") or []))
 
 
 def _validate_shot(raw: Any) -> list[dict[str, Any]]:
@@ -5655,25 +5960,37 @@ def _shot_join(parts: list[str]) -> str:
     return out
 
 
-def _shot_body(typed: str, buckets: dict[tuple[int, str, str], list[str]],
+def _shot_body(body: "str | list[str]",
+               buckets: dict[tuple[int, str, str], list[str]],
                *, field: str = "visual") -> str:
     """
-    The typed sentence with its pills folded in around it, in slot order.
+    The user's clauses with the pills folded in around them, in slot order.
 
-    The typed text is closed with a full stop if it does not close itself, and
-    otherwise left alone: it is the one part of the document the user wrote, and
+    Each clause is closed with a full stop if it does not close itself, and
+    otherwise left alone: it is the part of the document the user wrote, and
     rewriting someone's sentence is not something a compiler gets to do.
+
+    **A string and a one-element list compile identically**, which is what makes
+    the storyline additive rather than a migration. A plain typed prompt is one
+    module; a storyline is several; the pills fold around either at the same
+    slots, so nobody who ignores the new surface sees their output change.
+
+    The clauses land together, at the first non-negative slot — they are one
+    body with an internal order, not separate things to interleave pills
+    between. That order is load-bearing: subjects come out of the model left to
+    right in the order they are described, so a compiler that reordered them
+    here would be moving people around the frame.
     """
-    typed = _close(_oneline(typed))
+    parts_in = [body] if isinstance(body, str) else list(body)
+    pending = [t for t in (_close(_oneline(p)) for p in parts_in) if t]
     out: list[str] = []
     for slot, join, fld in sorted(k for k in buckets if k[2] == field):
-        if slot >= 0 and typed:
-            out.append(typed)
-            typed = ""
+        if slot >= 0 and pending:
+            out.extend(pending)
+            pending = []
         parts = buckets[(slot, join, fld)]
         out.append(_shot_sentence(parts) if join == "list" else " ".join(parts))
-    if typed:
-        out.append(typed)
+    out.extend(pending)
     return _shot_join(out)
 
 
@@ -5698,7 +6015,8 @@ def _shot_audio(buckets: dict[tuple[int, str, str], list[str]],
 
 def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
                        task: str, seconds: float,
-                       roles: list[str] | None = None) -> str:
+                       roles: list[str] | None = None,
+                       modules: list[dict[str, Any]] | None = None) -> str:
     """
     The document H3 actually reads, assembled from a sentence and some pills.
 
@@ -5709,8 +6027,14 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
     sentence.
     """
     roles = [r for r in (roles or [])]
-    if not pills and not any(roles):
+    if not pills and not any(roles) and not modules:
         return typed
+    body_in = _module_texts(modules) if modules else typed
+    # The summary is the one line that says what happens, and with a storyline
+    # that line already exists: the declaration is the first module by
+    # construction. Falling back through the typed text to the description's
+    # first sentence keeps the three input shapes answering the same field.
+    lead = (modules[0]["text"] if modules else typed)
     buckets = _shot_phrases(pills, side="video")
 
     lines: list[str] = []
@@ -5737,7 +6061,7 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
             picture = ", ".join(f"<Picture {i + 1}>" for i in range(n))
             subjects = [f"The reference pictures are {picture}."] if n else []
             retain = [f"Retain the appearance of {picture}."] if n else []
-        body = _shot_body(typed, buckets)
+        body = _shot_body(body_in, buckets)
         # The typed line is the summary — it is the one sentence in the document
         # that says what happens. Taking the description's first sentence
         # instead, which is what this did first, summarised a shot as "A
@@ -5746,7 +6070,7 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
         # entirely out of pills.
         lines += [
             f"subject_definitions: {' '.join(subjects)}",
-            f"summary: {_first_sentence(_close(typed)) or _first_sentence(body)}",
+            f"summary: {_first_sentence(_close(lead)) or _first_sentence(body)}",
             f"retention_analysis: {' '.join(retain)}",
             f"detailed_description: {body}",
         ]
@@ -5755,7 +6079,7 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
         if align:
             lines.append(align)
         lines.append(f"integrated_multimodal_description: "
-                     f"{_shot_body(typed, buckets)}")
+                     f"{_shot_body(body_in, buckets)}")
 
     lines.append(f"overall_soundscape: "
                  f"{_shot_audio(buckets, 'sound') or 'N/A'}")
@@ -5767,38 +6091,50 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
     return "\n".join(lines)
 
 
-def _compile_image_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
+def _compile_image_prompt(typed: str, pills: list[dict[str, Any]],
+                          modules: list[dict[str, Any]] | None = None) -> str:
     """
     The same pills as prose, because Krea 2 has no document to fill in.
 
-    Camera, action and the two audio groups never reach here at all — they are
-    filtered by `image` in the vocabulary rather than dropped, so a pill the
-    image side does not read is dim on the palette rather than silently ignored.
+    Action and the two audio groups never reach here at all — they are filtered
+    by `image` in the vocabulary rather than dropped, so a pill the image side
+    does not read is dim on the palette rather than silently ignored.
 
-    One shot clause leads; the rest go behind the subject. Every image group —
-    framing, angle, light, tone — sits at slot -10, so left alone they compile
-    into one sentence that runs *entirely* ahead of the subject, and Krea reads
-    a prompt front-to-back: a stack of shot description before "a portrait of
-    k3nan" spends the model's attention on the shot and renders a scene the
-    subject is barely in. A single leading clause is the frame the subject sits
-    in and reads right ("A medium close-up, a portrait of k3nan."); the second
-    onward are what push the person out, so they move to a trailing sentence.
-    The first phrase in the leading bucket wins, which is vocabulary order —
-    framing, then angle, then light, then tone — so the shot the subject sits in
-    leads and the grade follows.
+    **Nothing precedes the subject.** Whatever occupies the opening clause is
+    what the picture is *about*: the model reads front to back, and a property
+    promoted to that position stops being a property and becomes the character.
+    One mechanic, three faces — light in the lead makes a picture of the light,
+    which is a real thing to want in an abstract render; perspective in the lead
+    makes a picture of perspective, which reads as wild overcorrection when
+    someone wanted a slight angle; and a *compiler* that leads with either makes
+    that choice on nobody's behalf.
+
+    This used to do all three, and the accumulation was the worst of it. All
+    four image groups shared slot -10, so every pill landed ahead of the subject
+    and they **stacked**: light and tone are both `pick: many`, so a framing, an
+    angle, three lights and two tones put seven clauses in front of the person,
+    who arrived last. The first repair was a split performed here — one clause
+    leads, the rest fall behind — which still promoted one thing and chose it by
+    vocabulary order, so with framing and angle unset the winner was light.
+
+    The fix belongs in the vocabulary, and both sides turned out to want the
+    same thing: light and tone at 30, framing and angle at 40 beside the camera
+    move. Video already had `camera` at 40 for the reason H3's guide gives —
+    describe the move after the thing it moves around — and that principle
+    covers the frame it moves *within* just as well, so there is one slot table
+    rather than a per-side exception. Nothing is left here to arrange.
+
+    Framing's phrases moved with its slot. They were noun phrases ("a medium
+    close-up"), which read correctly only when *fused* into a subject noun —
+    "An extreme close-up portrait" — and this machinery cannot fuse, it
+    appositions. So the one arrangement where leading is right was the one it
+    could never produce, while a demoted "A medium close-up." is a bare
+    fragment. "in a medium close-up" reads alone and reads joined to an angle.
     """
+    body = _module_texts(modules) if modules else typed
     if not pills:
-        return typed
-    buckets = _shot_phrases(pills, side="image")
-    lead = next((k for k in sorted(buckets) if k[0] < 0), None)
-    if lead is not None and len(buckets[lead]) > 1:
-        _, join, field = lead
-        head, *tail = buckets[lead]
-        buckets[lead] = [head]
-        # A positive slot so `_shot_body` lands it after the subject, same join
-        # and field so it is closed and capitalised like the sentence it was.
-        buckets[(-lead[0], join, field)] = tail
-    return _shot_body(typed, buckets)
+        return _shot_join([_close(_oneline(t)) for t in body]) if modules else typed
+    return _shot_body(body, _shot_phrases(pills, side="image"))
 
 
 def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
@@ -5823,7 +6159,8 @@ def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
+def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]],
+                        modules: list[dict[str, Any]] | None = None) -> str:
     """
     The same pills as prose again, for the family that reads no document.
 
@@ -5835,9 +6172,10 @@ def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
     made. Dropped by `needs`, not by field: dialogue is the case that breaks the
     simpler rule, landing in the visual description and still being audio.
     """
+    body = _module_texts(modules) if modules else typed
     if not pills:
-        return typed
-    return _shot_body(typed, _shot_phrases(pills, side="video", audio=False))
+        return _shot_join([_close(_oneline(t)) for t in body]) if modules else typed
+    return _shot_body(body, _shot_phrases(pills, side="video", audio=False))
 
 
 def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
@@ -6440,6 +6778,7 @@ def web():
             "models": _model_status(),
             "loras": loras,
             "hf_token_set": bool(_hf_token()),
+            "anthropic_key_set": bool(_anthropic_key()),
             "samplers": SAMPLERS,
             "schedulers": SCHEDULERS,
             # Which of those two menus opens selected. The video side already
@@ -6537,9 +6876,35 @@ def web():
 
     @api.post("/api/token")
     def set_token(payload: dict) -> dict[str, Any]:
-        token = str(payload.get("hf_token") or "").strip()
-        config["hf_token"] = token
-        return {"ok": True, "hf_token_set": bool(token)}
+        if "hf_token" in payload:
+            config["hf_token"] = str(payload.get("hf_token") or "").strip()
+        if "anthropic_key" in payload:
+            config["anthropic_key"] = str(payload.get("anthropic_key") or "").strip()
+        return {"ok": True, "hf_token_set": bool(_hf_token()),
+                "anthropic_key_set": bool(_anthropic_key())}
+
+    @api.post("/api/parse")
+    def parse_prose(payload: dict) -> dict[str, Any]:
+        """
+        Prose in, structure out. **Once, at the boundary — never in the loop.**
+
+        Every gesture after this one is local: dragging, merging, breaking a
+        tie, editing a word. The model does the hard part a single time and the
+        surface stays instant, which is what makes an automatic parse
+        affordable at all.
+
+        A failure returns the reason and no storyline rather than a 500. The
+        page keeps whatever the user typed either way — the structure is
+        additive, so losing it costs a view and never any work.
+        """
+        prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
+        if not prose:
+            return {"ok": True, "elements": []}
+        try:
+            mods = _parse_storyline(prose)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "elements": []}
+        return {"ok": True, "elements": mods, "prominence": _prominence(mods)}
 
     @api.post("/api/download")
     def download(payload: dict) -> dict[str, Any]:
@@ -7147,16 +7512,23 @@ def web():
         typed = str(payload.get("prompt") or "").strip()
         try:
             shot = _validate_shot(payload.get("shot"))
+            modules = _validate_modules(payload.get("modules"))
             n_refs = max(0, min(MAX_H3_REFS, int(payload.get("references") or 0)))
             n_vids = max(0, min(MAX_H3_REF_VIDEOS, int(payload.get("ref_videos") or 0)))
             roles = _validate_ref_roles(payload.get("ref_roles"), n_refs)
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
 
+        # The shares ride along with every compile because the storyline needs
+        # them on the same round trip it already makes on each keystroke — a
+        # second route polled at the same rate would double the traffic to say
+        # something about the string this one just built.
+        share = {"prominence": _prominence(modules)} if modules else {}
+
         if str(payload.get("kind") or "video") == "image":
-            return {"prompt": _compile_image_prompt(typed, shot)}
+            return {"prompt": _compile_image_prompt(typed, shot, modules), **share}
         if str(payload.get("model") or "h3") != "h3":
-            return {"prompt": _compile_wan_prompt(typed, shot)}
+            return {"prompt": _compile_wan_prompt(typed, shot, modules), **share}
 
         d = VIDEO_MODELS["h3"]["defaults"]
         try:
@@ -7165,9 +7537,10 @@ def web():
             seconds = float(d["seconds"])
         return {"prompt": _compile_h3_prompt(
             typed=typed, pills=shot, seconds=seconds, roles=roles,
+            modules=modules,
             task=_h3_task(payload.get("first_frame"), payload.get("last_frame"),
                           n_refs, n_vids),
-        )}
+        ), **share}
 
     @api.post("/api/generate")
     def generate(payload: dict) -> dict[str, Any]:
