@@ -42,7 +42,7 @@ G = pull({
     "MAX_MODULE_DEPTH", "_module_clause", "_module_words", "_shot_phrases",
     "_shot_text", "_shot_sentence", "_shot_join", "_shot_body", "_close",
     "_oneline", "_compile_image_prompt", "_validate_modules", "_module_texts",
-    "_prominence", "PARSE_RULES", "PARSE_SCHEMA", "PARSE_MODEL",
+    "_prominence", "PARSE_RULES", "_ELEMENT", "PARSE_SCHEMA", "PARSE_MODEL",
 })
 
 compile_prompt = lambda mods: G["_compile_image_prompt"]("", [], mods)
@@ -238,11 +238,19 @@ def openai_compatible(base_url: str, model: str):
             for name, extra in DIALECTS:
                 try:
                     said = call(extra, prose)
+                    # Recorded only once the response actually parses. Appending
+                    # on a 200 was enough to lock every later call onto a dialect
+                    # the server accepts and then ignores — vLLM 0.27 takes
+                    # `guided_json` without binding it and returns empty content,
+                    # so the run scored 0% on a model that works.
+                    out = G["_validate_modules"](json.loads(said).get("elements") or [])
                     chosen.append(name)
                     print(f"  (schema bound via {name})")
-                    return G["_validate_modules"](json.loads(said).get("elements") or [])
+                    return out
                 except Exception as exc:
                     errs.append(f"{name}: {exc}")
+                    if "said" in dir() and isinstance(said, str):
+                        errs.append(f"    returned {len(said)} chars: {said[:200]!r}")
             raise SystemExit("No structured-output dialect accepted:\n  "
                              + "\n  ".join(errs))
         said = call(dict(DIALECTS[[d[0] for d in DIALECTS].index(chosen[0])][1]), prose)

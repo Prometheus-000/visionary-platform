@@ -6469,32 +6469,44 @@ Keep the person's own words wherever you can. Their phrasing is the record.
 """
 
 
+# A `$defs`/`$ref` recursion rather than `children: {type: object}`.
+#
+# The loose version is what a schema looks like when nesting is described
+# casually, and under constrained decoding it is a trap: an untyped object
+# permits any JSON forever, so the grammar never pushes the model toward an end
+# and it generates until it hits the token cap. Measured on a 4B that was 40s
+# per request and an empty completion — which reads as a broken model and is a
+# broken schema.
+_ELEMENT = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string",
+               "description": "Short and stable, e.g. e1 — ties refer to these."},
+        "text": {"type": "string",
+                 "description": "The clause, in the person's own words where possible."},
+        "origin": {"type": "string", "enum": ["derived", "invented"]},
+        "ties": {"type": "array", "items": {"type": "string"}, "maxItems": 8,
+                 "description": "Ids this element physically relates to."},
+        "children": {"type": "array", "items": {"$ref": "#/$defs/element"},
+                     "maxItems": 8,
+                     "description": "Properties of this element, same shape."},
+    },
+    "required": ["id", "text", "origin"],
+    "additionalProperties": False,
+}
+
 PARSE_SCHEMA = {
     "name": "storyline",
     "description": "The picture, as elements in the order they reach the encoder.",
     "input_schema": {
         "type": "object",
+        "$defs": {"element": _ELEMENT},
         "properties": {
-            "elements": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string",
-                                "description": "Short, stable, e.g. e1 — ties refer to these."},
-                        "text": {"type": "string",
-                                 "description": "The clause, in the person's own words where possible."},
-                        "origin": {"type": "string", "enum": ["derived", "invented"]},
-                        "ties": {"type": "array", "items": {"type": "string"},
-                                 "description": "Ids of elements this one physically relates to."},
-                        "children": {"type": "array", "items": {"type": "object"},
-                                     "description": "Properties of this element, same shape."},
-                    },
-                    "required": ["id", "text", "origin"],
-                },
-            },
+            "elements": {"type": "array", "items": {"$ref": "#/$defs/element"},
+                         "maxItems": MAX_MODULES},
         },
         "required": ["elements"],
+        "additionalProperties": False,
     },
 }
 
