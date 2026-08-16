@@ -30,7 +30,8 @@ G = pull({
     "SHOT_VOCAB", "MODULE_ROLES", "MAX_MODULES", "MODULE_TEXT_MAX",
     "MAX_MODULE_DEPTH", "_module_clause", "_module_words",
     "_shot_phrases", "_shot_text", "_shot_sentence", "_shot_join", "_shot_body",
-    "_close", "_oneline", "_compile_image_prompt", "_validate_modules",
+    "_close", "_oneline", "_flat", "_compile_image_prompt", "_validate_modules",
+    "_spans_to_text", "MAX_SPANS",
     "_module_texts", "_prominence",
 })
 
@@ -351,6 +352,92 @@ check("an empty module compiles to nothing rather than an error",
       G["_validate_modules"]([{"role": "subject", "text": "  "},
                               {"role": "text", "text": "a portrait"}]),
       [{"role": "text", "text": "a portrait", "origin": "derived"}])
+
+# ── spans: which words in a clause are the person's ─────────────────────────
+#
+# **The failure this is here to catch does not look like a failure.** A mark
+# three characters left of where it belongs is still a mark — dotted underline,
+# right shape, wrong words — and it asserts that somebody wrote something they
+# did not. Nothing on screen suggests it should be doubted, and the only way to
+# notice is to read the sentence and already know the answer. So every case
+# below checks the *text under the offsets*, never the offsets alone.
+print("\nspans", flush=True)
+
+MIXED = [{"text": "Everything is covered in ", "origin": "derived"},
+         {"text": "white dust", "origin": "invented"},
+         {"text": ". A ruined city.", "origin": "derived"}]
+
+
+def marked(mods: list[dict]) -> list[str]:
+    """The words each mark actually covers, which is the only thing that matters."""
+    return [mods[0]["text"][a:b] for a, b in mods[0].get("invented") or []]
+
+
+text, marks = G["_spans_to_text"](MIXED)
+check("runs join back to the clause with nothing added or dropped",
+      text, "Everything is covered in white dust. A ruined city.")
+check("the mark lands on the invented words",
+      [text[a:b] for a, b in marks], ["white dust"])
+
+# A run owns the space in front of it or the one behind it, never both.
+check("a doubled space at a boundary does not shift the offsets",
+      (lambda t, m: (t, [t[a:b] for a, b in m]))(
+          *G["_spans_to_text"]([{"text": "a ", "origin": "derived"},
+                                {"text": " b", "origin": "invented"}])),
+      ("a b", ["b"]))
+check("the clause owns its own edges, not the first and last run",
+      (lambda t, m: (t, [t[a:b] for a, b in m]))(
+          *G["_spans_to_text"]([{"text": "  lead", "origin": "invented"},
+                                {"text": " tail  ", "origin": "derived"}])),
+      ("lead tail", ["lead"]))
+check("a newline inside a run collapses without welding two words together",
+      G["_spans_to_text"]([{"text": "one\n\n", "origin": "derived"},
+                           {"text": "two", "origin": "derived"}])[0],
+      "one two")
+check("two invented runs that touch are one underline, not two",
+      (lambda t, m: (len(m), [t[a:b] for a, b in m]))(
+          *G["_spans_to_text"]([{"text": "a ", "origin": "derived"},
+                                {"text": "ruined", "origin": "invented"},
+                                {"text": " city", "origin": "invented"}])),
+      (1, ["ruined city"]))
+
+check("through the validator, the marks still cover the invented words",
+      marked(G["_validate_modules"]([{
+          "role": "text", "text": "Everything is covered in white dust. A ruined city.",
+          "origin": "derived", "spans": MIXED}])),
+      ["white dust"])
+
+# Dropped whole rather than repaired: no marks reads as "all theirs", which is
+# what the clause meant before spans existed. A guessed repair reads as a fact.
+check("runs that do not agree with the clause are dropped, not repaired",
+      "invented" in G["_validate_modules"]([{
+          "role": "text", "text": "a ruined city", "origin": "derived",
+          "spans": [{"text": "a ruined", "origin": "derived"},
+                    {"text": "metropolis", "origin": "invented"}]}])[0],
+      False)
+check("...and the clause itself survives that",
+      G["_validate_modules"]([{
+          "role": "text", "text": "a ruined city", "origin": "derived",
+          "spans": [{"text": "a ruined", "origin": "derived"},
+                    {"text": "metropolis", "origin": "invented"}]}])[0]["text"],
+      "a ruined city")
+
+# One field answers "which of these words are mine" at both granularities, so
+# the page never has to consult `origin` as well.
+check("an element invented whole needs no runs to be marked whole",
+      marked(G["_validate_modules"]([{"role": "light", "text": "hard side light",
+                                      "origin": "invented"}])),
+      ["hard side light"])
+check("a derived element with no runs carries no marks at all",
+      "invented" in G["_validate_modules"]([{"role": "text", "text": "a woman",
+                                             "origin": "derived"}])[0],
+      False)
+check("a child can be marked too",
+      G["_validate_modules"]([{"role": "subject", "text": "a woman", "origin": "derived",
+                               "children": [{"role": "text", "text": "in a purple beret",
+                                             "origin": "invented"}]}])[0]["children"][0]
+      .get("invented"),
+      [[0, 17]])
 
 # ── report ──────────────────────────────────────────────────────────────────
 print()

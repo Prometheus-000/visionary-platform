@@ -41,7 +41,8 @@ G = pull({
     "SHOT_VOCAB", "MODULE_ROLES", "MAX_MODULES", "MODULE_TEXT_MAX",
     "MAX_MODULE_DEPTH", "_module_clause", "_module_words", "_shot_phrases",
     "_shot_text", "_shot_sentence", "_shot_join", "_shot_body", "_close",
-    "_oneline", "_compile_image_prompt", "_validate_modules", "_module_texts",
+    "_oneline", "_flat", "_compile_image_prompt", "_validate_modules", "_module_texts",
+    "_spans_to_text", "MAX_SPANS", "_SPAN",
     "_prominence", "PARSE_RULES", "_ELEMENT", "PARSE_SCHEMA", "PARSE_MODEL",
 })
 

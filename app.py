@@ -6465,8 +6465,33 @@ MARK EVERY ELEMENT.
   to invent at all.
 Invent sparingly and never invent a subject.
 
+MARK INSIDE THE ELEMENT WHEN THE ELEMENT IS MIXED. Most clauses are part theirs
+and part yours — "a ruined city" is theirs, "no colour left in it" is yours, and
+one flag on the pair says the wrong thing about whichever half it is wrong about.
+So when a clause is mixed, give `spans`: consecutive runs, each marked, that
+**join back to exactly the clause with no character added or dropped**, spaces
+and punctuation included. Keep the run boundaries where the authorship changes,
+not where a phrase feels like it ends — a span is a claim about who wrote it.
+Leave `spans` out when the whole clause has one origin; `origin` already said it.
+
 Keep the person's own words wherever you can. Their phrasing is the record.
 """
+
+
+# Sixteen runs is far more than any clause has needed. The bound exists so a
+# payload cannot spell a sentence one character at a time, not because a
+# seventeenth run would mean anything.
+MAX_SPANS = 16
+
+_SPAN = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "origin": {"type": "string", "enum": ["derived", "invented"]},
+    },
+    "required": ["text", "origin"],
+    "additionalProperties": False,
+}
 
 
 # A `$defs`/`$ref` recursion rather than `children: {type: object}`.
@@ -6487,6 +6512,13 @@ _ELEMENT = {
         "origin": {"type": "string", "enum": ["derived", "invented"]},
         "ties": {"type": "array", "items": {"type": "string"}, "maxItems": 8,
                  "description": "Ids this element physically relates to."},
+        # Text runs rather than offsets, because a model cannot count characters
+        # and can copy its own words. The route answers in offsets, which is what
+        # a renderer needs and what a model cannot be trusted to produce — the
+        # conversion happens here, once, where both halves are in hand.
+        "spans": {"type": "array", "items": _SPAN, "maxItems": MAX_SPANS,
+                  "description": "Only when the clause is mixed. Consecutive "
+                                 "runs that join back to `text` exactly."},
         "children": {"type": "array", "items": {"$ref": "#/$defs/element"},
                      "maxItems": 8,
                      "description": "Properties of this element, same shape."},
@@ -6539,6 +6571,55 @@ def _parse_storyline(prose: str) -> list[dict[str, Any]]:
     raise ValueError("The parse returned no storyline.")
 
 
+def _spans_to_text(raw: Any) -> tuple[str, list[list[int]]]:
+    """
+    The model's text runs, become a clause and the offsets of what it invented.
+
+    **The conversion happens here because it is the one place both halves are in
+    hand.** A model can copy its own words and cannot count characters, so it
+    emits runs; a textarea can only be marked by index, so the page needs
+    offsets. Converting on either side alone means one of them is guessing, and
+    the guess is silent — a mark landing three characters left still looks like
+    a mark, on the wrong words.
+
+    Runs are joined exactly, so the string and the indices into it are produced
+    by the same pass and cannot drift. The only normalisation is whitespace, and
+    it is `_flat` rather than `_oneline` for the reason recorded there.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return "", []
+    buf = ""
+    marks: list[list[int]] = []
+    for entry in list(raw)[:MAX_SPANS]:
+        if isinstance(entry, str):
+            entry = {"text": entry, "origin": "derived"}
+        if not isinstance(entry, dict):
+            continue
+        piece = _flat(str(entry.get("text") or ""))
+        origin = str(entry.get("origin") or "derived")
+        if origin not in ("derived", "invented"):
+            raise ValueError(f"No such origin: {origin!r}. "
+                             f"One of: derived, invented")
+        # A run owns the space in front of it or the one behind it, never both,
+        # and the clause owns neither of its ends.
+        if not buf or buf.endswith(" "):
+            piece = piece.lstrip(" ")
+        if not piece:
+            continue
+        start = len(buf)
+        buf += piece
+        if origin == "invented":
+            # Touching ranges are merged rather than both drawn. The page puts
+            # one underline under one range, and two of them abutting renders as
+            # a seam that means nothing and that the reader has to explain away.
+            if marks and marks[-1][1] == start:
+                marks[-1][1] = len(buf)
+            else:
+                marks.append([start, len(buf)])
+    text = buf.rstrip()
+    return text, [[a, min(b, len(text))] for a, b in marks if a < len(text)]
+
+
 def _validate_modules(raw: Any, _depth: int = 0) -> list[dict[str, Any]]:
     """
     Normalise the storyline into what the compiler takes, or say what is wrong.
@@ -6575,13 +6656,35 @@ def _validate_modules(raw: Any, _depth: int = 0) -> list[dict[str, Any]]:
             raise ValueError(f"No such module role: {role!r}. "
                              f"One of: {', '.join(MODULE_ROLES)}")
         text = _oneline(str(entry.get("text") or ""))[:MODULE_TEXT_MAX]
-        if not text:
-            continue
         origin = str(entry.get("origin") or "derived")
         if origin not in ("derived", "invented"):
             raise ValueError(f"No such origin: {origin!r}. "
                              f"One of: derived, invented")
+        # Spans are authoritative when they agree with the clause and are dropped
+        # whole when they do not. A model that lost a space has told us its runs
+        # are unreliable *for this clause*, and the two failures are not close:
+        # no marks is a clause that looks entirely the person's own, which is the
+        # reading it had before this existed. Marks off by three characters
+        # underline the wrong words and assert something false about authorship,
+        # with nothing on screen to suggest it should be doubted.
+        spanned, marks = _spans_to_text(entry.get("spans"))
+        if spanned and not text:
+            text = spanned[:MODULE_TEXT_MAX]
+        elif spanned != text:
+            marks = []
+        if not text:
+            continue
+        marks = [[a, min(b, len(text))] for a, b in marks if a < len(text)]
+        # An element with no runs is still all one thing, so the whole clause
+        # takes its element's origin. That is what lets the page read `invented`
+        # alone and never have to consult `origin` as well — one field answers
+        # "which of these words are mine", at both granularities.
+        if not marks and origin == "invented":
+            marks = [[0, len(text)]]
+
         module = {"role": role, "text": text, "origin": origin}
+        if marks:
+            module["invented"] = marks
         if entry.get("id"):
             module["id"] = str(entry["id"])[:64]
         # Peer edges. Merge covers containment and nothing else — two girls
@@ -6857,6 +6960,18 @@ def _oneline(text: str) -> str:
     not a rare paste, it is the ordinary case.
     """
     return " ".join(text.split())
+
+
+def _flat(text: str) -> str:
+    """
+    `_oneline` without the strip, because a span's edges are load-bearing.
+
+    Spans tile a clause, so the space between "a ruined city" and "no colour left
+    in it" belongs to one of them. `_oneline` strips, which welds the runs into
+    "a ruined cityno colour left in it" — and the damage is silent, because the
+    offsets it produces are still internally consistent.
+    """
+    return re.sub(r"\s+", " ", text)
 
 
 def _close(text: str) -> str:

@@ -20,6 +20,7 @@ import ast
 import hashlib
 import json
 import math
+import re
 import time
 import typing
 from pathlib import Path
@@ -53,7 +54,7 @@ def pull(names: set[str]) -> dict:
     # inside the functions that need it, so a caller with no Pillow can still
     # pull them and only pays when it calls one.
     ns: dict = {"Any": typing.Any, "Path": Path, "json": json,
-                "hashlib": hashlib, "math": math, "time": time}
+                "hashlib": hashlib, "math": math, "re": re, "time": time}
     exec(compile(ast.Module(body=body, type_ignores=[]), str(APP), "exec"), ns)
     return ns
 
