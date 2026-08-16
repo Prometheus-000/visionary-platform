@@ -1,8 +1,11 @@
 import { useMemo, useRef, useState } from 'react'
 
 import { everyMs, failed } from '../api/client'
-import { caption, captionDataset, imageUrl, prependTrigger, removeImage, status, thumbUrl } from '../api/routes'
+import {
+  caption, captionDataset, clipUrl, imageUrl, prependTrigger, removeImage, status, thumbUrl,
+} from '../api/routes'
 import { IconSliders, IconTag, IconUpload } from '../icons'
+import { useNearViewport } from '../media/inview'
 import { useStore } from '../store'
 import { Insight } from './Insight'
 import type { DatasetImage, useDatasets } from './useDatasets'
@@ -20,15 +23,20 @@ type Ds = ReturnType<typeof useDatasets>
  * obvious gesture did nothing, or worse: the browser's own default is to drop the file into
  * whichever caption box happens to be under the cursor.
  */
-export function Editor({ ds, onLightbox }: {
+export function Editor({ ds, onLightbox, lead }: {
   ds: Ds
   onLightbox: (src: string) => void
+  /** Whatever the screen around this needs at the head of the bar — today, the
+   *  way back to the sessions board. It goes *inside* the sticky bar rather
+   *  than above it, because a set is a long scroll and a back button that
+   *  scrolls away is one you have to scroll up to find. */
+  lead?: React.ReactNode
 }) {
   const state = useStore((s) => s.state)
   const fileInput = useRef<HTMLInputElement>(null)
   const [hot, setHot] = useState(false)
   const [uploading, setUploading] = useState(0)
-  const [filter, setFilter] = useState<'all' | 'uncap' | 'notrig'>('all')
+  const [filter, setFilter] = useState<'all' | 'uncap' | 'notrig' | 'img' | 'vid'>('all')
   const [density, setDensity] = useState(2)
   const [isolated, setIsolated] = useState<{ names: string[]; label: string } | null>(null)
   const [insightOpen, setInsightOpen] = useState(false)
@@ -49,6 +57,11 @@ export function Editor({ ds, onLightbox }: {
     const f = flags(i)
     if (filter === 'uncap') return !f.cap
     if (filter === 'notrig') return f.noTrig
+    // Absent means image: a set listed by an older deploy has no `kind` on its
+    // tiles, and the filter that hid all of them would look like a set that
+    // had lost its contents.
+    if (filter === 'img') return i.kind !== 'video'
+    if (filter === 'vid') return i.kind === 'video'
     return true
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [ds.images, ds.trigger, ds.insight, filter, isolated])
@@ -57,7 +70,8 @@ export function Editor({ ds, onLightbox }: {
   /* XHR, not fetch — fetch reports no upload progress, and an eighty-image set is a
      transfer whose only honest readout is bytes moving. */
   const upload = async (list: FileList | File[]) => {
-    const keep = [...list].filter((f) => /\.(png|jpe?g|webp|bmp|avif|zip|txt)$/i.test(f.name))
+    const keep = [...list].filter(
+      (f) => /\.(png|jpe?g|webp|bmp|avif|mp4|mov|webm|mkv|m4v|zip|txt)$/i.test(f.name))
     if (!keep.length || uploading) return
     let name = ds.open
     if (!name) {
@@ -116,13 +130,17 @@ export function Editor({ ds, onLightbox }: {
 
   if (!ds.open) {
     return (
+      <>
+      {/* On the drop target too: this is where "+ New set" from the session
+          form lands, and with no set open there is no bar to carry it. */}
+      {!!lead && <div className="opts" style={{ marginTop: 0, marginBottom: 12 }}>{lead}</div>}
       <div className={`drop hero can-drop${hot ? ' hot' : ''}`} id="drop"
            onClick={() => { if (!uploading) fileInput.current?.click() }}
            onDragOver={(e) => { e.preventDefault(); setHot(true) }}
            onDragLeave={() => setHot(false)}
            onDrop={drop}>
         <input ref={fileInput} type="file" id="files" multiple className="hide"
-               accept="image/*,.zip,.txt"
+               accept="image/*,video/*,.zip,.txt"
                onChange={(e) => {
                  void upload(e.target.files ?? [])
                  e.target.value = ''
@@ -133,7 +151,7 @@ export function Editor({ ds, onLightbox }: {
             images are. */}
         <div className="drop-face">
           <div className="glyph" id="drop-glyph"><IconUpload /></div>
-          <b id="drop-title">{uploading ? 'Uploading…' : 'Drop images or a .zip'}</b>
+          <b id="drop-title">{uploading ? 'Uploading…' : 'Drop images, clips or a .zip'}</b>
           <div className="muted" id="drop-sub" style={{ marginTop: 7 }}>
             {ds.error ?? ''}
           </div>
@@ -144,11 +162,17 @@ export function Editor({ ds, onLightbox }: {
           </div>
         )}
       </div>
+      </>
     )
   }
 
   const cols = [10, 8, 6, 5, 3][Math.max(0, Math.min(4, density))] ?? 6
   const captioned = ds.images.filter((i) => (i.caption || '').trim()).length
+  // Counted apart, and never summed. A set of 24 images and 6 clips is not a
+  // set of 30 of anything — one of those numbers is what the trainer will read
+  // and the other is not, and a single total hides which is which.
+  const clips = ds.images.filter((i) => i.kind === 'video').length
+  const stills = ds.images.length - clips
   const shown = isolated
     ? ` · ${isolated.names.length} of ${ds.images.length} · ${isolated.label}`
     : visible.length === ds.images.length ? '' : ` · showing ${visible.length}`
@@ -161,6 +185,7 @@ export function Editor({ ds, onLightbox }: {
          }}
          onDrop={drop}>
       <div className="opts sheet-bar">
+        {lead}
         {/* A saved set states its name; a draft is still asking for one, so for a draft
             the name field *is* the title rather than sitting next to a heading that
             repeats it. */}
@@ -189,10 +214,20 @@ export function Editor({ ds, onLightbox }: {
           </>
         )}
         <span className="muted" id="ds-count">
-          {ds.images.length} image{ds.images.length === 1 ? '' : 's'} · {captioned} captioned{shown}
+          {stills} image{stills === 1 ? '' : 's'}
+          {clips ? ` · ${clips} clip${clips === 1 ? '' : 's'}` : ''}
+          {' · '}{captioned} captioned{shown}
         </span>
-        {([['all', 'All', 'Show every image'],
-           ['uncap', 'Uncaptioned', 'Only images with no caption'],
+        {/* The two kind filters appear only when the set holds both kinds. A
+            "Clips" button on a set of photographs is a control that can only
+            ever empty the grid, and the count line above already says there
+            are none. */}
+        {([['all', 'All', 'Show everything'],
+           ...(clips && stills
+             ? [['img', 'Images', 'Only the still images — what the trainer reads today'] as const,
+                ['vid', 'Clips', 'Only the video files'] as const]
+             : []),
+           ['uncap', 'Uncaptioned', 'Only files with no caption'],
            ['notrig', 'No trigger', 'Only captions missing the trigger word']] as const)
           .map(([k, label, title]) => (
             // `f-{key}`, matching app.py. Unlike the page, the active one is
@@ -233,7 +268,7 @@ export function Editor({ ds, onLightbox }: {
         </span>
       </div>
 
-      <input ref={fileInput} type="file" multiple className="hide" accept="image/*,.zip,.txt"
+      <input ref={fileInput} type="file" multiple className="hide" accept="image/*,video/*,.zip,.txt"
              onChange={(e) => {
                void upload(e.target.files ?? [])
                e.target.value = ''
@@ -273,11 +308,11 @@ export function Editor({ ds, onLightbox }: {
             : `${Math.round(i.bytes / 1024)} KB`
           return (
             <div key={i.name}
-                 className={['tile', f.thin ? 'thin' : '', f.noTrig ? 'notrig' : '',
+                 className={['tile', i.kind === 'video' ? 'vid' : '',
+                             f.thin ? 'thin' : '', f.noTrig ? 'notrig' : '',
                              isolated ? 'sel' : ''].filter(Boolean).join(' ')}>
               <div className="ph">
-                <img loading="lazy" src={thumbUrl(ds.open!, i.name)} alt=""
-                     onClick={() => onLightbox(imageUrl(ds.open!, i.name))} />
+                <Frame set={ds.open!} item={i} onLightbox={onLightbox} />
                 <div className="dim">{i.width ? `${i.width}×${i.height} · ` : ''}{sz}</div>
                 <button className="rm" title="Delete" type="button"
                         onClick={async () => {
@@ -292,6 +327,48 @@ export function Editor({ ds, onLightbox }: {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/**
+ * What a tile paints, which is not the same route for the two kinds.
+ *
+ * An image has a thumbnail cached beside the dataset. A clip has none —
+ * `web_image` has no ffmpeg, so there is nothing on the server that can make a
+ * picture of one — so the tile does what a gallery card does: loads metadata
+ * only and seeks to `#t=` so the browser paints a frame out of bytes it already
+ * had to fetch. Not `#t=0`: seeking to exactly zero is not required to decode a
+ * frame and some browsers leave the canvas blank.
+ *
+ * Gated behind the observer, because that request is unconditional and a grid
+ * of them at once is what jams the volume — see `useNearViewport`.
+ *
+ * The corner mark is the treatment that tells the two apart at a glance, and it
+ * is a mark rather than a border tint because the tile already spends its
+ * border on two caption defects.
+ */
+function Frame({ set, item, onLightbox }: {
+  set: string
+  item: DatasetImage
+  onLightbox: (src: string) => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const isVideo = item.kind === 'video'
+  const near = useNearViewport(box, isVideo)
+  if (!isVideo) {
+    return (
+      <img loading="lazy" src={thumbUrl(set, item.name)} alt=""
+           onClick={() => onLightbox(imageUrl(set, item.name))} />
+    )
+  }
+  return (
+    <div className="clip" ref={box}>
+      {near && (
+        <video src={`${clipUrl(set, item.name)}#t=0.04`} preload="metadata" muted playsInline
+               onClick={() => onLightbox(clipUrl(set, item.name))} />
+      )}
+      <span className="kind" title="A clip. Nothing trains on these yet.">▶</span>
     </div>
   )
 }

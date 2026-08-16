@@ -190,15 +190,10 @@ export type Store = {
   /* ---- where you are ---------------------------------------------------- */
   mode: Mode
   kind: Kind
-  /** Percent, or null when nothing is training. The door carries it, because a
-   *  run outlives the visit that started it and the control that takes you back
-   *  is the honest place to say how far along it is. */
-  trainPct: number | null
   setMode: (m: Mode) => void
   /** The prompt survives the switch, because a shot you described as a still is
    *  the same sentence you would describe as a clip. */
   setKind: (k: Kind) => void
-  setTrainPct: (p: number | null) => void
 
   /* ---- the composer ----------------------------------------------------- */
   prompt: string
@@ -313,10 +308,8 @@ export const useStore = create<Store>((set, get) => ({
 
   mode: 'generate',
   kind: 'image',
-  trainPct: null,
   setMode: (mode) => set({ mode }),
   setKind: (kind) => set({ kind }),
-  setTrainPct: (trainPct) => set({ trainPct }),
 
   prompt: '',
   negative: '',

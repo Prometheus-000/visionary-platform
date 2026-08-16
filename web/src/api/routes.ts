@@ -12,7 +12,7 @@
  * both ordinary, and the routes take them as path parameters.
  */
 import { api, post, type Res } from './client'
-import type { AppState, CompileResult, Insight, JobStatus, ShotPill } from './types'
+import type { AppState, CompileResult, Insight, JobStatus, Session, ShotPill } from './types'
 
 const seg = encodeURIComponent
 
@@ -117,11 +117,44 @@ export const thumbUrl = (name: string, file: string) =>
   `/api/thumb/${seg(name)}/${seg(file)}`
 export const imageUrl = (name: string, file: string) =>
   `/api/image/${seg(name)}/${seg(file)}`
+/** A clip in a set, streamed with Range so a tile can seek to one frame rather
+ *  than fetch the file. There is no thumbnail route for one — web_image has no
+ *  ffmpeg — so the tile paints its own poster the way a gallery card does. */
+export const clipUrl = (name: string, file: string) =>
+  `/api/clip/${seg(name)}/${seg(file)}`
 
 /* ---- jobs ------------------------------------------------------------ */
 
 export const caption = (body: unknown) => post<{ job_id: string }>('/api/caption', body)
 export const train = (body: unknown) => post<{ job_id: string }>('/api/train', body)
+
+/* ---- training sessions ------------------------------------------------ */
+
+/**
+ * The board. One request for every card, live fields included.
+ *
+ * Not one poll per card: a browser gives an origin about six connections, and
+ * the whole point of running four LoRAs at once is that the fifth thing on
+ * screen — the contact sheet you are captioning while they train — still
+ * loads. The server merges each card with its job record, which it holds
+ * anyway.
+ */
+export const listSessions = () =>
+  api<{ sessions: Session[]; total?: number }>('/api/sessions')
+/** Create when `id` is absent, save an edit when it is there. The server
+ *  refuses an edit to a running card rather than letting the dials and the
+ *  process disagree about what is training. */
+export const putSession = (body: unknown) =>
+  post<{ session: Session }>('/api/sessions', body)
+export const startSession = (id: string) =>
+  post<{ job_id?: string; session?: Session; already?: boolean }>(`/api/sessions/${seg(id)}/start`)
+/** Cooperative, and the card stays with the progress it reached. */
+export const stopSession = (id: string) =>
+  post<{ session?: Session }>(`/api/sessions/${seg(id)}/stop`)
+/** The card goes; anything it started is asked to stop on the way out. What it
+ *  wrote into `loras/` is not touched — that is deleted where LoRAs are. */
+export const deleteSession = (id: string) =>
+  post<{ ok?: boolean }>(`/api/sessions/${seg(id)}/delete`)
 export const generate = (body: unknown) => post<{ job_id: string }>('/api/generate', body)
 export const video = (body: unknown) => post<{ job_id: string }>('/api/video', body)
 

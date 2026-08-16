@@ -9,11 +9,13 @@ import { Gallery, useGallery } from './gallery/Gallery'
 import { LastShot } from './gallery/LastShot'
 import { MetaSheet } from './gallery/MetaSheet'
 import { Viewer } from './gallery/Viewer'
+import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
 import { IconBack, IconGear, IconPanel, IconTrain } from './icons'
 import { fileToB64, toB64 } from './media/files'
 import { Settings } from './settings/Settings'
 import { Train } from './train/Train'
+import { isActive, useSessions } from './train/useSessions'
 import { supports, useStore } from './store'
 import { useVideo } from './video/useVideo'
 
@@ -318,6 +320,11 @@ export function App() {
   )
 
   const train = s.mode === 'train'
+  // Lifted out of Train, because the door reports training from Generate and
+  // Train is not mounted there. It polls at the board's rate while Train is
+  // open, slowly while something is running elsewhere, and not at all
+  // otherwise — see `useSessions`.
+  const sess = useSessions(train)
 
   return (
     <>
@@ -327,7 +334,7 @@ export function App() {
           Visionary
         </button>
         <span className="grow" />
-        <Door />
+        <Door running={sess.rows.filter(isActive)} />
         {/* The drawer toggle is a Generate control; it has nothing to say in Train. */}
         {!train && (
           <button className={`ico${drawerOpen ? ' on' : ''}`} id="t-drawer" title="Gallery"
@@ -343,7 +350,12 @@ export function App() {
 
       <div className="views">
         {train ? (
-          <Train onLightbox={(src) => lightbox(src, 'image')} />
+          // A set can hold clips now, and the viewer needs to know which it is being
+          // handed. The route is the tell — `/api/clip/` is the only thing that serves
+          // one — which keeps the Editor's callback one argument wide rather than making
+          // every caller classify a file for it.
+          <Train sess={sess}
+                 onLightbox={(src) => lightbox(src, src.startsWith('/api/clip/') ? 'video' : 'image')} />
         ) : (
           <div className={`view studio${drawerOpen ? '' : ' nodrawer'}`} id="v-generate">
             <div className="stage">
@@ -418,11 +430,17 @@ export function App() {
  *
  * In Generate it doubles as the training readout: a run outlives the visit that started it,
  * and the control that takes you back is the honest place to say how far along it is.
+ *
+ * With more than one run going it says the count instead of a percent, and the
+ * ring averages them. Naming one of four runs would be naming whichever the
+ * server listed first, which is a number about a card you cannot see from here.
  */
-function Door() {
+function Door({ running }: { running: Session[] }) {
   const mode = useStore((st) => st.mode)
   const setMode = useStore((st) => st.setMode)
-  const pct = useStore((st) => st.trainPct)
+  const pct = running.length
+    ? Math.round(running.reduce((a, r) => a + Number(r.percent ?? 0), 0) / running.length)
+    : null
   const c = 2 * Math.PI * 6
 
   if (mode === 'train') {
@@ -449,7 +467,7 @@ function Door() {
                 strokeDasharray={c.toFixed(2)}
                 strokeDashoffset={(c * (1 - pct / 100)).toFixed(2)} />
       </svg>
-      Training {pct}%
+      {running.length > 1 ? `Training · ${running.length} runs` : `Training ${pct}%`}
     </button>
   )
 }

@@ -45,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from _from_app import CAPTION, SHOT, pull
+from _from_app import CAPTION, SHOT, TRAINER, pull
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
 # Argument first, then $PORT, then a default. The env var is what lets a launcher
@@ -74,7 +74,7 @@ _APP_CACHE: dict = {}
 def app_api() -> dict:
     stamp = APP.stat().st_mtime_ns
     if _APP_CACHE.get("stamp") != stamp:
-        _APP_CACHE.update(stamp=stamp, api=pull(SHOT | CAPTION))
+        _APP_CACHE.update(stamp=stamp, api=pull(SHOT | CAPTION | TRAINER))
     return _APP_CACHE["api"]
 
 
@@ -180,6 +180,12 @@ GALLERY = [
 DATASETS = [
     {"name": "set_2", "count": 31, "uncaptioned": 31, "cover": "0.png",
      "trigger_word": "", "saved": False},
+    # A mixed set, because the two kind filters only appear when a set holds
+    # both — so without one here the filter row's five-button state, the
+    # two-number count line and the clip tile's own treatment are all
+    # unreachable from this server.
+    {"name": "wan_takes", "count": 9, "videos": 6, "uncaptioned": 4, "cover": "0.png",
+     "trigger_word": "k3nan", "saved": True},
     {"name": "beach_walk", "count": 12, "uncaptioned": 3, "cover": "0.png",
      "trigger_word": "", "saved": False},
     {"name": "studio_portraits", "count": 24, "uncaptioned": 0, "cover": "0.png",
@@ -401,12 +407,20 @@ def shape_of(name: str) -> tuple:
     return SHAPES[int(stem) % len(SHAPES)]
 
 
-def images(n: int = 24) -> list:
+def images(n: int = 24, videos: int = 0) -> list:
     out = []
     for i in range(n):
         w, h = shape_of(str(i))
-        out.append({"name": f"{i}.png", "caption": CAPTIONS[i % len(CAPTIONS)],
+        out.append({"name": f"{i}.png", "kind": "image",
+                    "caption": CAPTIONS[i % len(CAPTIONS)],
                     "bytes": 780_000 + i * 4_100, "width": w, "height": h})
+    # No width or height, exactly as the route answers for one: web_image has no
+    # ffmpeg, so nothing on the server can measure a clip, and the tile that
+    # printed "1024×1024" under one would be printing a number nobody produced.
+    for i in range(videos):
+        out.append({"name": f"clip_{i}.mp4", "kind": "video",
+                    "caption": CAPTIONS[i % len(CAPTIONS)] if i % 2 else "",
+                    "bytes": 18_400_000 + i * 900_000})
     return out
 
 
@@ -427,6 +441,106 @@ INSIGHT = {
 # than per-request, because a run only reads as a run if consecutive polls
 # disagree with each other.
 RUNS: dict = {}
+
+
+def train_status(job_id: str, name: str = "probe_lora") -> dict:
+    """
+    One training run's live fields, advanced by a poll.
+
+    Called from `/api/status/{job}` and from the sessions listing, and written
+    once for both: the board polls the listing rather than a status per card,
+    so a second copy of this here would be a board that disagrees with the
+    status route about the same run.
+    """
+    job = RUNS.setdefault(job_id, {"polls": 0, "stopped": False})
+    job["polls"] += 1
+    epochs, per_epoch = 4, 3
+    total = epochs * per_epoch
+    n = job["polls"]
+    out = "/workspace/loras/" + name
+    if job["stopped"]:
+        # A stop is cooperative: the trainer finishes the step it is on and
+        # unwinds, so for a moment the run is still running *and* stopping. Held
+        # for one poll here rather than flipping straight to stopped, because
+        # that moment is a state the card has words for and this is the only
+        # server it can be developed against.
+        job.setdefault("stopped_at", n)
+        if n - job["stopped_at"] < 1:
+            return {"status": "running", "phase": "training", "step": n,
+                    "total_steps": total, "percent": int(min(n, total) * 100 / total),
+                    "epoch": min(epochs, n // per_epoch + 1), "total_epochs": epochs}
+        # Checkpoints already written survive a stop, which is what the dialog
+        # promises by name.
+        done = min(epochs, n // per_epoch)
+        return {
+            "status": "stopped", "percent": int(min(n, total) * 100 / total),
+            "note": "Stopped after %d epoch%s." % (done, "" if done == 1 else "s"),
+            "output_dir": out,
+            "files": ["%s-%06d.safetensors" % (name, i + 1) for i in range(done)],
+            "duration_s": 60 * n,
+        }
+    if n < total:
+        return {
+            "status": "running", "phase": "training",
+            "step": n, "total_steps": total,
+            "epoch": min(epochs, n // per_epoch + 1), "total_epochs": epochs,
+            "rate": "1.8it/s", "eta": "%d:%02d" % ((total - n) // 2, 0),
+            "elapsed": "%d:%02d" % (n // 2, (n * 30) % 60),
+            "loss": round(0.182 - 0.011 * n, 4),
+            "percent": int(n * 100 / total),
+        }
+    return {
+        "status": "completed", "percent": 100,
+        "note": "4 epochs, 4 checkpoints. Pick one in the LoRA picker.",
+        "output_dir": out,
+        "files": ["%s-%06d.safetensors" % (name, i + 1) for i in range(epochs)],
+        "duration_s": 60 * total, "loss": 0.0709,
+    }
+
+
+# The board, seeded with the three states a card is read in: one training, one
+# finished, and one saved half-written on the way to making a set — which is the
+# state the "+ New set" path leaves behind and the only one with an instruction
+# on it rather than a status.
+def _params(**over) -> dict:
+    return {**app_api()["TRAIN_DEFAULTS"], **over}
+
+
+SESSIONS: list = []
+
+
+def seed_sessions() -> None:
+    if SESSIONS:
+        return
+    SESSIONS.extend([
+        {"id": "s1", "lora_name": "k3nan_v3", "trigger_word": "k3nan",
+         "dataset": "studio_portraits", "params": _params(network_dim=64, network_alpha=32),
+         "job_id": "train900", "created": time.time() - 400, "runs": 1},
+        {"id": "s2", "lora_name": "street_look", "trigger_word": "ohwx_night",
+         "dataset": "street_night", "params": _params(max_train_epochs=12),
+         "job_id": "train901", "created": time.time() - 9000, "runs": 2},
+        {"id": "s3", "lora_name": "", "trigger_word": "", "dataset": "",
+         "params": _params(), "job_id": "", "created": time.time() - 60, "runs": 0},
+    ])
+    # The finished one is finished on its first poll rather than four minutes
+    # in: a board with nothing terminal on it cannot show Run again, Edit or
+    # Delete, which is half of what a card does.
+    RUNS["train901"] = {"polls": 99, "stopped": False}
+
+
+def session_view(rec: dict) -> dict:
+    """`_session_view` in app.py, to the extent a stub can be: status is derived
+    from the run rather than stored, because a card that remembers being
+    `running` is exactly the bug the real one refuses to have."""
+    if not rec.get("job_id"):
+        return {**rec, "status": "draft"}
+    live = train_status(rec["job_id"], rec.get("lora_name") or "probe_lora")
+    # Only while it is still unwinding, the same as `_session_view`: the flag is
+    # never cleared, so a card reading it alone says "Stopping…" over a run that
+    # stopped an hour ago.
+    stopping = (bool(RUNS.get(rec["job_id"], {}).get("stopped"))
+                and live.get("status") in ("running", "queued"))
+    return {**rec, **live, "stopping": stopping}
 
 
 def swatch(w: int, h: int, label: str, seed: int) -> bytes:
@@ -469,6 +583,53 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         path = self.path.split("?")[0]
+
+        # The board mutates in memory for the same reason the rail does: every
+        # one of these is judged by what the card does next — a run that starts,
+        # a card that goes, a half-written one that comes back with what you
+        # typed still in it. A flat {"ok": true} leaves the page redrawing the
+        # state it started in, which is the one state that needed no server.
+        seed_sessions()
+        m = re.match(r"/api/sessions/([^/]+)/(start|stop|delete)$", path)
+        if m:
+            sid, verb = m.group(1), m.group(2)
+            rec = next((r for r in SESSIONS if r["id"] == sid), None)
+            if not rec:
+                return self.reply({"error": "That session is gone."})
+            if verb == "delete":
+                if rec.get("job_id"):
+                    RUNS.setdefault(rec["job_id"], {"polls": 0})["stopped"] = True
+                SESSIONS.remove(rec)
+                return self.reply({"ok": True})
+            if verb == "stop":
+                RUNS.setdefault(rec["job_id"], {"polls": 0})["stopped"] = True
+                return self.reply({"ok": True, "session": session_view(rec)})
+            # A fresh job id per start, so Run again on a finished card is a new
+            # run rather than the old one's terminal record showing through.
+            rec["job_id"] = "train%03d" % (len(RUNS) + 902)
+            rec["runs"] = int(rec.get("runs") or 0) + 1
+            RUNS[rec["job_id"]] = {"polls": 0, "stopped": False}
+            return self.reply({"ok": True, "job_id": rec["job_id"],
+                               "session": session_view(rec)})
+
+        if path == "/api/sessions":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            rec = next((r for r in SESSIONS if r["id"] == p.get("id")), None)
+            fields = {"lora_name": str(p.get("lora_name") or ""),
+                      "trigger_word": str(p.get("trigger_word") or ""),
+                      "dataset": str(p.get("dataset") or ""),
+                      "params": _params(**{k: v for k, v in (p.get("params") or {}).items()
+                                           if k in app_api()["TRAIN_DEFAULTS"]})}
+            if rec:
+                rec.update(fields)
+            else:
+                rec = {"id": "s%d" % (len(SESSIONS) + 4), "job_id": "", "runs": 0,
+                       "created": time.time(), **fields}
+                SESSIONS.insert(0, rec)
+            return self.reply({"ok": True, "session": session_view(rec)})
 
         # Saving and culling mutate the list in memory, because both are
         # judged by what the rail does next — a set moving out of Unsaved, a
@@ -582,16 +743,26 @@ class Handler(BaseHTTPRequestHandler):
                                      n_refs, int(p.get("ref_videos") or 0)),
             )})
 
-        # A training run, so the console below the tiles can be exercised.
-        # Without this the route fell through to the catch-all {"ok": true} and
-        # returned no job_id at all — and the two front ends then diverged in a
-        # way that flattered the wrong one. The page polled /api/status/undefined,
-        # which the catch-all answered "completed", so it painted Done 100% for a
-        # run that was never queued; the React side declined to poll a job it had
-        # not been given and sat at "Starting…" forever. Neither was reporting
-        # what happened, and only the second one looked broken.
+        # `/api/train` is the one-call form: make the card, then start it. The
+        # page does not use it — the board posts a session and starts that — but
+        # it is the route a script has, and a stub that answered `{"ok": true}`
+        # with no job id is what taught the last front end to poll
+        # /api/status/undefined and paint Done for a run nobody queued.
         if path == "/api/train":
-            return self.reply({"ok": True, "job_id": "train%03d" % (len(RUNS) + 1)})
+            seed_sessions()
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            job = "train%03d" % (len(RUNS) + 902)
+            RUNS[job] = {"polls": 0, "stopped": False}
+            rec = {"id": "s%d" % (len(SESSIONS) + 4), "job_id": job, "runs": 1,
+                   "created": time.time(),
+                   "lora_name": str(p.get("lora_name") or "probe_lora"),
+                   "trigger_word": str(p.get("trigger_word") or ""),
+                   "dataset": str(p.get("dataset") or ""), "params": _params()}
+            SESSIONS.insert(0, rec)
+            return self.reply({"ok": True, "job_id": job, "session": session_view(rec)})
 
         # `num_images` is echoed rather than fixed at two, because the batch is the
         # case the canvas is hardest to get right: one canvas at a time with `‹ 1 / 4 ›`
@@ -699,6 +870,17 @@ class Handler(BaseHTTPRequestHandler):
                                    for k, m in api["CAPTION_MODELS"].items()],
                 "caption_defaults": {"preset": api["DEFAULT_CAPTION_PRESET"],
                                      "model": api["DEFAULT_CAPTION_MODEL"]},
+                # The session form's three menus, shaped exactly as `state()`
+                # serves them. Pulled rather than transcribed for the reason the
+                # shot vocabulary is: a menu offering a value the route rejects
+                # by name is a preview of a form that does not exist.
+                "train_optimizers": [dict(v, key=k)
+                                     for k, v in api["TRAIN_OPTIMIZERS"].items()],
+                "lr_schedulers": [dict(v, key=k)
+                                  for k, v in api["LR_SCHEDULERS"].items()],
+                "timestep_samplings": [dict(v, key=k)
+                                       for k, v in api["TIMESTEP_SAMPLINGS"].items()],
+                "train_defaults": api["TRAIN_DEFAULTS"],
             })
         if path == "/api/gallery":
             # `total` and `stale` are half the gallery's contract now: the cap is
@@ -716,6 +898,13 @@ class Handler(BaseHTTPRequestHandler):
                     if not before or (g.get("modified") or 0) < before]
             return self.reply({"items": rows[:limit], "total": len(GALLERY),
                                "stale": (q.get("stale") or ["0"])[0] == "1"})
+        if path == "/api/sessions":
+            seed_sessions()
+            # `total` alongside the rows, as the route serves it: the listing is
+            # bounded because it is polled, and the board's "showing 3 of 140"
+            # line has nothing to read without it.
+            return self.reply({"sessions": [session_view(r) for r in SESSIONS],
+                               "total": len(SESSIONS)})
         if path == "/api/datasets":
             return self.reply({"datasets": DATASETS})
 
@@ -728,10 +917,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({
                 "trigger_word": (row or {}).get("trigger_word", ""),
                 "saved": (row or {}).get("saved", True),
-                "images": images((row or {}).get("count", 0)),
+                "images": images((row or {}).get("count", 0),
+                                 (row or {}).get("videos", 0)),
             })
 
-        m = re.match(r"/api/(?:thumb|image)/[^/]+/(.+)$", path)
+        # A clip off a set. The stub cannot mux an mp4, so what a tile gets is
+        # the same swatch the gallery's clips get — the `<video>` paints nothing
+        # from it, which leaves the frame black with its corner mark on it. That
+        # is enough to develop the treatment against: what is being checked here
+        # is the mark, the filter and the counts, and the only way to see a real
+        # first frame is a real file on a real volume.
+        m = re.match(r"/api/(?:thumb|image|clip)/[^/]+/(.+)$", path)
         if m:
             w, h = shape_of(m.group(1))
             return self.reply(swatch(w, h, m.group(1), hash(m.group(1))),
@@ -843,45 +1039,12 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         # Hours, not seconds — so the fields a long run is read by are the ones
-        # stubbed: epoch over total, step over total, rate, ETA and a loss that
-        # actually falls. A bar alone cannot tell "training" from "stuck", which
-        # is the whole reason the run meta line exists.
+        # stubbed: epoch over total, step over total, rate, elapsed against ETA
+        # and a loss that actually falls. A bar alone cannot tell "training"
+        # from "stuck", which is the whole reason the card's meta line exists.
         m = re.match(r"/api/status/(train\d+)$", path)
         if m:
-            job = RUNS.setdefault(m.group(1), {"polls": 0, "stopped": False})
-            job["polls"] += 1
-            epochs, per_epoch = 4, 3
-            total = epochs * per_epoch
-            n = job["polls"]
-            if job["stopped"]:
-                # Checkpoints already written survive a stop, which is what the
-                # button promises by name.
-                done_epochs = min(epochs, n // per_epoch)
-                return self.reply({
-                    "status": "stopped", "percent": int(n * 100 / total),
-                    "note": "Stopped after %d epoch%s." % (done_epochs,
-                                                           "" if done_epochs == 1 else "s"),
-                    "output_dir": "/workspace/loras/probe_lora",
-                    "files": ["probe_lora-%06d.safetensors" % (i + 1)
-                              for i in range(done_epochs)],
-                    "duration_s": 60 * n,
-                })
-            if n < total:
-                return self.reply({
-                    "status": "running", "phase": "training",
-                    "step": n, "total_steps": total,
-                    "epoch": min(epochs, n // per_epoch + 1), "total_epochs": epochs,
-                    "rate": "1.8 it/s", "eta": "%dm" % max(1, (total - n) // 2),
-                    "loss": round(0.182 - 0.011 * n, 4),
-                    "percent": int(n * 100 / total),
-                })
-            return self.reply({
-                "status": "completed", "percent": 100,
-                "note": "4 epochs, 4 checkpoints. Pick one in the LoRA picker.",
-                "output_dir": "/workspace/loras/probe_lora",
-                "files": ["probe_lora-%06d.safetensors" % (i + 1) for i in range(epochs)],
-                "duration_s": 60 * total, "loss": 0.0709,
-            })
+            return self.reply(train_status(m.group(1)))
 
         # Three files, sequentially, with the queue position in the phase — the
         # thing a per-family button exists to show. Stopping mid-queue reports

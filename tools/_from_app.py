@@ -66,3 +66,11 @@ CAPTION = {
     "CAPTION_MODELS", "CAPTION_PRESETS",
     "DEFAULT_CAPTION_MODEL", "DEFAULT_CAPTION_PRESET",
 }
+
+# The trainer's three menus and its dial defaults, for the same reason again:
+# the session form builds itself out of these, and a hand-written copy here
+# would be a form offering an optimizer `/api/sessions` rejects by name — or
+# worse, one it accepts and the GPU container dies on.
+TRAINER = {
+    "TRAIN_OPTIMIZERS", "LR_SCHEDULERS", "TIMESTEP_SAMPLINGS", "TRAIN_DEFAULTS",
+}

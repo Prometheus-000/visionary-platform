@@ -1013,6 +1013,57 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 }
 @media (hover:none) and (max-width:1024px){ .shot-back{width:44px;height:44px} }
 
+/* Training sessions ------------------------------------------------------ */
+/* A card per run, and the board is what Train opens on. The card is the whole
+   run surface — there is no page for one — so it carries everything the
+   terminal would tell you: the bar, tqdm's numbers, and the dials that are the
+   only difference between two cards training the same set. */
+#sess-board{display:flex;flex-direction:column;min-height:0}
+.board-head{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
+  padding:14px 28px 11px;background:var(--bg);border-bottom:1px solid var(--line)}
+#sess-list{display:flex;flex-direction:column;gap:10px}
+.sess{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;
+  padding:13px 15px 12px}
+/* Only what is going gets a lit edge. Four finished cards all glowing is four
+   cards saying nothing, which is the state a board spends most of its life in. */
+.sess.running,.sess.queued{border-color:rgba(255,255,255,.28)}
+.sess.failed{border-color:rgba(248,113,113,.32)}
+.sess-head{display:flex;align-items:center;gap:10px}
+.sess-name{font-size:14px;font-weight:600;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;flex:1}
+.sess-sub{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;margin-top:4px}
+.sess-row{display:flex;align-items:baseline;gap:12px;margin-top:7px}
+/* The dials, as one line of label-and-value pairs. Small, because they are what
+   you read when comparing two cards and never what you read first. */
+.sess-dials{display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:9px;
+  font-size:11.5px;color:var(--dim)}
+.sess-dials span{white-space:nowrap}
+.sess-dials i{font-style:normal;opacity:.62;margin-right:5px}
+.sess-note{margin:9px 0 0;font-size:12px}
+.sess-note.err{color:#fca5a5}
+.sess-acts{display:flex;align-items:center;gap:8px;margin-top:12px}
+.sess-acts .b{margin-left:auto}
+/* `margin-left:auto` on .b puts the primary action at the right end; inside the
+   stop dialog there is a .grow doing that job, so the auto margin would push
+   the two buttons apart from each other rather than away from the text. */
+#stop-ask .sess-acts .b{margin-left:0}
+button.s.danger{color:#f87171;border-color:rgba(248,113,113,.3)}
+button.s.danger:hover{background:rgba(248,113,113,.14)}
+/* A status is a word, not a colour — a colour alone cannot say "Queued". The
+   colour is what makes the word findable in a column of cards. */
+.chip{flex:none;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.08);color:var(--dim)}
+.chip.running,.chip.queued{background:rgba(74,222,128,.16);color:#4ade80}
+.chip.completed{background:rgba(255,255,255,.14);color:#fff}
+.chip.failed{background:rgba(248,113,113,.16);color:#f87171}
+.chip.stopped{background:rgba(251,191,36,.14);color:#fbbf24}
+/* The dataset name is a place, so it is written as one. Underlined on hover
+   only: a card with two permanently underlined words in it reads as a form. */
+.sess .link{border:0;background:none;padding:0;color:var(--fg);font:inherit;font-size:12px;
+  cursor:pointer}
+.sess .link:hover{text-decoration:underline}
+#sess-empty{text-align:center;max-width:420px;margin:0 auto}
+
 /* Datasets -------------------------------------------------------------- */
 /* flex-column, not the default: a <button> centres its content vertically, so
    once one card in the row is taller than another the covers float in the
@@ -1075,6 +1126,16 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    pixels and no element. Snapping the height to whole lines was tried and
    reverted — it buys a tidier edge and pays for it by making a four-line
    caption end flush, indistinguishable from one that really stops there. */
+/* A clip in a set. There is no thumbnail route for one — web_image has no
+   ffmpeg — so the tile paints its own first frame out of a range request, and
+   the corner mark is what tells the two kinds apart at a glance. A mark rather
+   than a border tint, because the tile already spends its border on saying
+   which captions are thin and which are missing the trigger. */
+.tile .clip{position:absolute;inset:0}
+.tile .clip video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+  display:block;cursor:zoom-in;background:#000}
+.tile .clip .kind{position:absolute;top:6px;left:6px;font-size:9px;line-height:1;
+  padding:4px 5px;border-radius:6px;background:rgba(0,0,0,.66);color:#eee}
 .tile textarea{border:0;border-top:1px solid var(--line);border-radius:0;background:none;resize:none;
   font-size:12px;padding:8px 9px;min-height:66px;line-height:1.45}
 .tile textarea.dirty{background:rgba(56,189,248,.08)}

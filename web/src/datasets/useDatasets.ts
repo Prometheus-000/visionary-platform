@@ -19,7 +19,11 @@ import { SESSION, beat, keepAlive } from './session'
  */
 export type DatasetRow = {
   name: string
+  /** Images. Deliberately not "media": every reader of this means images by it
+   *  — the trainer's gate, the rail's line, the button that refuses an empty
+   *  set — and only one of the two numbers can be trained on today. */
   count: number
+  videos?: number
   uncaptioned?: number
   cover?: string
   saved?: boolean
@@ -28,6 +32,10 @@ export type DatasetRow = {
 
 export type DatasetImage = {
   name: string
+  /** A clip has no dimensions here and no thumbnail route: web_image has no
+   *  ffmpeg, so the tile paints its own first frame the way a gallery card
+   *  does. Absent means image, so a set listed by an older deploy still reads. */
+  kind?: 'image' | 'video'
   caption: string
   bytes: number
   width?: number
@@ -137,9 +145,11 @@ export function useDatasets() {
    *  it is not coming back. */
   const remove = useCallback(async (name: string) => {
     const d = rows.find((x) => x.name === name)
-    if (d?.count && !confirm(
-      `Permanently delete “${name}”?\n\n${d.count} image${d.count === 1 ? '' : 's'} and `
-      + 'their captions are unlinked from the volume. This cannot be undone.',
+    const held = (d?.count ?? 0) + (d?.videos ?? 0)
+    if (held && !confirm(
+      `Permanently delete “${name}”?\n\n${d!.count} image${d!.count === 1 ? '' : 's'}`
+      + (d!.videos ? ` and ${d!.videos} clip${d!.videos === 1 ? '' : 's'}` : '')
+      + ' and their captions are unlinked from the volume. This cannot be undone.',
     )) return
     const r = await deleteDataset(name)
     if (failed(r)) return setError(r.error)

@@ -1,260 +1,186 @@
 import { useEffect, useState } from 'react'
 
-import { everyMs, failed } from '../api/client'
-import { status, stop, thumbUrl, train } from '../api/routes'
-import { IconSliders, IconTag, IconTrigger } from '../icons'
+import { thumbUrl } from '../api/routes'
 import { Editor } from '../datasets/Editor'
 import { useDatasets } from '../datasets/useDatasets'
 import { useStore } from '../store'
+import { SessionCard } from './SessionCard'
+import { SessionForm } from './SessionForm'
+import { type Draft, isActive, paramsToForm, type useSessions } from './useSessions'
+import type { Session, TrainParams } from '../api/types'
 
 /**
- * Train: the same shape as Generate, for the same reason.
+ * Train: a board of sessions, and the sets they train on.
  *
- * Subject in the middle, your library on the right, the console pinned along the bottom.
- * The console is what makes this layout work here — a set of eighty images is a long
- * scroll, and the controls that start the run must not be somewhere down inside it.
+ * **A run is a card, and there is no page for one.** The console under the
+ * contact sheet is gone — it held a single `job` in component state, which made
+ * "one run at a time" a property of the page rather than of the backend, and
+ * `train_job` never shared anything between runs. A board is what the backend
+ * could always do; four cards is four containers and four bills, and nothing to
+ * coordinate.
  *
- * **Train no longer owns a dataset; it picks one.** The set you are looking at is the set
- * you train, so there is no second place to choose one and nothing that can disagree with
- * the contact sheet.
+ * **Making a set is untangled from starting a run.** They were one screen
+ * because a run needed a set in front of it; now the set is a menu in the form,
+ * with "+ New set" as its last option — so the set you are building and the run
+ * you are setting up stop being the same act, and the half-finished card is
+ * what carries you between them.
  */
-const DIALS = {
-  dim: { label: 'Rank', value: '32', title: 'Network dimension — how much the LoRA can learn. Higher fits more and overfits sooner.' },
-  epochs: { label: 'Epochs', value: '30', title: 'Passes over the set. A checkpoint is saved each one, so this is also how many you get to choose between.' },
-  lr: { label: 'Learning rate', value: '0.0001', title: 'Step size per update. 1e-4 is the usual starting point for a rank-32 LoRA.' },
-  alpha: { label: 'Alpha', value: '32', title: "Scales the LoRA's contribution: the effective strength is alpha ÷ rank. Equal to rank means no scaling." },
-  res: { label: 'Resolution', value: '1024', title: 'Training pixels per side. Images are bucketed to it; higher costs VRAM quadratically.' },
-  rep: { label: 'Repeats', value: '1', title: 'How many times each image is seen per epoch. Raise it for a set too small to fill an epoch.' },
-  bs: { label: 'Batch size', value: '1', title: 'Images per update. Higher is steadier and needs more VRAM.' },
-  seed: { label: 'Seed', value: '42', title: 'Fixes shuffling and noise so two runs differing in one dial are actually comparable.' },
-} as const
-
-type Dial = keyof typeof DIALS
-
-export function Train({ onLightbox }: { onLightbox: (src: string) => void }) {
-  const setTrainPct = useStore((s) => s.setTrainPct)
+export function Train({ sess, onLightbox }: {
+  sess: ReturnType<typeof useSessions>
+  onLightbox: (src: string) => void
+}) {
+  const state = useStore((s) => s.state)
   const ds = useDatasets()
-  const [name, setName] = useState('')
-  const [trig, setTrig] = useState('')
-  const [dials, setDials] = useState<Record<Dial, string>>(
-    Object.fromEntries(Object.entries(DIALS).map(([k, v]) => [k, v.value])) as Record<Dial, string>,
-  )
-  const [adv, setAdv] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [job, setJob] = useState<string | null>(null)
-  const [run, setRun] = useState<{
-    phase: string; pct: number; meta: string; done?: string; note?: string; dir?: string
-    files?: number; minutes?: number
-  } | null>(null)
+  // Two screens on one stage: the board, and the set you clicked through to.
+  // Explicit rather than keyed on `ds.open` being null, because "+ New set"
+  // lands on the sets screen with nothing open — which is the drop target, and
+  // is the whole point of that path.
+  const [screen, setScreen] = useState<'board' | 'sets'>('board')
+  const [form, setForm] = useState<Draft | null>(null)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     void ds.load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Only a saved set lends its name. A draft's handle is `set_3`, a placeholder standing in
-  // for a name you have not chosen yet — proposing it as the LoRA's name would turn it into
-  // one by default.
-  useEffect(() => {
-    const row = ds.rows.find((r) => r.name === ds.open)
-    if (!row) return
-    if (row.trigger_word && !trig) setTrig(row.trigger_word)
-    if (row.saved && !name) setName(row.name)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ds.open, ds.rows])
-
-  const row = ds.rows.find((r) => r.name === ds.open)
-  const ready = !!row && row.count > 0 && !!name.trim() && !!trig.trim()
-  const hint = !ds.open ? 'Drop images, or pick a set'
-    : !row || !row.count ? 'This set is empty'
-    : !name.trim() || !trig.trim() ? 'Name it and set a trigger word'
-    : ''
-
-  const start = async () => {
-    setErr(null)
-    const r = await train({
-      dataset: ds.open, lora_name: name.trim(), trigger_word: trig.trim(),
-      network_dim: dials.dim, network_alpha: dials.alpha, max_train_epochs: dials.epochs,
-      learning_rate: dials.lr, resolution: dials.res, num_repeats: dials.rep,
-      batch_size: dials.bs, seed: dials.seed,
-    })
-    if (failed(r)) return setErr(r.error)
-    // A 200 with no job id is not a started run. Without this the poll has
-    // nothing to key on, so the console sat at "Starting…" for good — the one
-    // state that looks like patience and is actually a dead end. Say it instead:
-    // an error you can hit twice should explain itself the first time.
-    if (!r.job_id) {
-      return setErr('The run was accepted but came back with no job id, so there is nothing to follow.')
-    }
-    setJob(r.job_id)
-    setRun({ phase: 'Starting…', pct: 0, meta: '' })
+  const openSet = (name: string) => {
+    setScreen('sets')
+    void ds.choose(name)
   }
 
-  // 3000ms, not 400: a training run is hours long, and its own container publishes step,
-  // epoch, rate and loss. Polling it at the generate loop's interval would spend the
-  // browser's six connections on a progress bar.
-  useEffect(() => {
-    if (!job) return
-    const t = everyMs(async () => {
-      const s = await status(job)
-      if (failed(s)) return
-      const bits = [
-        s.step ? `step ${s.step}/${String(s.total_steps ?? '?')}` : '',
-        s.epoch ? `epoch ${String(s.epoch)}/${String(s.total_epochs ?? '?')}` : '',
-        s.rate ? String(s.rate) : '',
-        s.eta ? `ETA ${String(s.eta)}` : '',
-        typeof s.loss === 'number' ? `loss ${s.loss.toFixed(4)}` : '',
-      ].filter(Boolean)
-      setRun({ phase: String(s.phase ?? 'Working…'), pct: Number(s.percent ?? 0), meta: bits.join(' · ') })
-      setTrainPct(Number(s.percent ?? 0))
-      if (s.status === 'completed' || s.status === 'stopped') {
-        clearInterval(t)
-        // The door goes back to being a door. A finished run left at 100% would read as
-        // one still going, and the result is on the Train side anyway.
-        setTrainPct(null)
-        setRun({
-          phase: s.status === 'stopped' ? 'Stopped' : 'Done', pct: 100, meta: bits.join(' · '),
-          done: s.status === 'stopped' ? 'Stopped' : 'Training complete',
-          note: String(s.note ?? ''), dir: String(s.output_dir ?? ''),
-          files: (s.files as unknown[] | undefined)?.length ?? 0,
-          minutes: Math.round(Number(s.duration_s ?? 0) / 60),
-        })
-      } else if (s.status === 'failed') {
-        clearInterval(t)
-        setTrainPct(null)
-        setRun(null)
-        setErr(s.error || 'Training failed')
-      }
-    }, 3000)
-    return () => clearInterval(t)
-  }, [job, setTrainPct])
+  const blank = (): Draft => ({
+    lora_name: '', trigger_word: '', dataset: '',
+    params: paramsToForm(undefined, (state?.train_defaults ?? {}) as TrainParams),
+  })
 
-  // `a-{key}`, matching app.py. The ids are how every check addresses these,
-  // and a control a check cannot find reads as a feature that is not there.
-  const dial = (k: Dial, cls = 'opt n') => (
-    <div className={cls} data-lb={DIALS[k].label} key={k}>
-      <span className="lead">{DIALS[k].label}</span>
-      <input id={`a-${k}`} type="number" title={DIALS[k].title} value={dials[k]}
-             step={k === 'lr' ? 0.00001 : k === 'res' ? 64 : undefined}
-             onChange={(e) => setDials((d) => ({ ...d, [k]: e.target.value }))} />
-    </div>
-  )
+  const edit = (s: Session): Draft => ({
+    id: s.id, lora_name: s.lora_name, trigger_word: s.trigger_word, dataset: s.dataset,
+    params: paramsToForm(s.params, (state?.train_defaults ?? {}) as TrainParams),
+  })
 
-  const running = !!run && !run.done
+  const save = async (d: Draft, start: boolean) => {
+    setSaving(true)
+    const saved = await sess.save(d)
+    setSaving(false)
+    if (!saved) return
+    setForm(null)
+    // The id off the reply, not out of `sess.rows`: the reload has happened but
+    // this closure still holds the list from before it, so a freshly created
+    // card is not in there to be found.
+    if (start && saved.session?.id) await sess.start(saved.session.id)
+  }
+
+  const active = sess.rows.filter(isActive).length
 
   return (
     <div className="view studio" id="v-train">
       <div className="stage">
         <div className="canvas" id="t-canvas">
-          {err && <div className="err-box">{err}</div>}
-          <Editor ds={ds} onLightbox={onLightbox} />
-        </div>
-
-        {/* Pinned, so eighty images cannot push it off. */}
-        <div className="console" id="t-console">
-          {!running && (
-            <div className="opts" style={{ marginTop: 0 }}>
-              {/* Named, not iconed. These are the dials that decide whether a run is worth
-                  its hours, and a glyph beside a bare "32" cannot say which of rank,
-                  alpha, epochs or batch size you are looking at. An icon is a rebus for a
-                  word you already know — it cannot tell you *which* hyperparameter you are
-                  looking at. So the tooltip is spent on what the number does. */}
-              <div className="opt wide">
-                <IconTag />
-                <input id="lname" placeholder="LoRA name" spellCheck={false}
-                       value={name} onChange={(e) => setName(e.target.value)} />
-              </div>
-              <div className="opt mid">
-                <IconTrigger />
-                <input id="ltrig" placeholder="trigger word" spellCheck={false}
-                       value={trig} onChange={(e) => setTrig(e.target.value)} />
-              </div>
-              {dial('dim')}
-              {dial('epochs')}
-              {/* Not `.n`: the narrow box fits three digits, and 0.0001 is six. A learning
-                  rate clipped to "0.000" is worse than no field at all. */}
-              {dial('lr', 'opt')}
-              <span className="actions">
-                <span className="muted" id="train-hint">{hint}</span>
-                <button className={`opt ib${adv ? ' on' : ''}`} id="t-toggle-adv" type="button"
-                        title="Advanced" onClick={() => setAdv((v) => !v)}>
-                  <IconSliders />
-                </button>
-                <button className="b" id="go-train" type="button" disabled={!ready}
-                        onClick={() => void start()}>
-                  Start training
-                </button>
-              </span>
-            </div>
-          )}
-
-          {adv && !running && (
-            <div id="train-adv" className="adv">
-              <div className="opts" style={{ marginTop: 0 }}>
-                {dial('alpha')}
-                {dial('res')}
-                {dial('rep')}
-                {dial('bs')}
-                {dial('seed')}
-                <span className="actions"><span className="muted">Krea 2 RAW · bf16</span></span>
-              </div>
-            </div>
-          )}
-
-          {run && (
-            <div id="step-run" style={{ marginTop: 11 }}>
-              <div className="row">
-                <b id="run-phase" className="grow">{run.phase}</b>
-                <span className="muted" id="run-pct">{run.pct}%</span>
-              </div>
-              <div className="bar"><i id="run-bar" style={{ width: `${run.pct}%` }} /></div>
-              <div className="row" style={{ marginTop: 9 }}>
-                <span className="muted grow" id="run-meta">{run.meta}</span>
-                {!run.done && (
-                  <button className="s" id="do-stop" type="button"
-                          onClick={() => { if (job) void stop(job) }}>
-                    Stop &amp; keep checkpoints
+          {screen === 'sets' ? (
+            /* Navigation, top-left of the thing it leaves — and inside the
+               editor's own sticky bar, because a set is a long scroll and a way
+               back that scrolls away is one you have to scroll up to find. The
+               set is a place you clicked into from a card, so getting back is
+               one word rather than a mode to un-toggle. */
+            <Editor ds={ds} onLightbox={onLightbox}
+                    lead={
+                      <button className="s" id="ds-back" type="button"
+                              onClick={() => setScreen('board')}>
+                        ‹ Sessions
+                      </button>
+                    } />
+          ) : (
+            <div id="sess-board">
+              <div className="opts board-head" style={{ marginTop: 0 }}>
+                <b style={{ fontSize: 14 }}>Training</b>
+                <span className="muted">
+                  {active ? `${active} running`
+                    : `${sess.rows.length} session${sess.rows.length === 1 ? '' : 's'}`}
+                  {/* The cap, said out loud when it bites. A bounded listing
+                      that does not mention the bound is a board that looks
+                      like the whole board and is not. */}
+                  {sess.total > sess.rows.length ? ` · showing ${sess.rows.length} of ${sess.total}` : ''}
+                </span>
+                <span className="actions">
+                  <button className="b" id="new-session" type="button"
+                          onClick={() => setForm(blank())}>
+                    + Create session
                   </button>
-                )}
+                </span>
               </div>
-              {run.done && (
-                <div id="run-done" style={{ marginTop: 11 }}>
-                  <b>{run.done}</b>
-                  <p className="muted" style={{ marginTop: 7 }}>{run.note}</p>
-                  <p className="muted" style={{ marginTop: 7 }}><code>{run.dir}</code></p>
-                  <p className="muted" style={{ marginTop: 5 }}>
-                    {run.files} checkpoint(s) · {run.minutes} min
-                  </p>
+
+              {sess.error && <div className="err-box">{sess.error}</div>}
+
+              {!sess.rows.length && sess.loaded && (
+                <div className="blank" id="sess-empty">
+                  <div>
+                    <b>No sessions yet.</b>
+                    <p className="muted" style={{ marginTop: 8 }}>
+                      A session is a LoRA, a set and its dials. Start as many as you
+                      like — each run gets its own GPU.
+                    </p>
+                  </div>
                 </div>
               )}
+
+              <div id="sess-list">
+                {sess.rows.map((s) => (
+                  <SessionCard key={s.id} s={s}
+                               ds={ds.rows.find((r) => r.name === s.dataset)}
+                               onEdit={() => setForm(edit(s))}
+                               onStart={() => void sess.start(s.id)}
+                               onStop={() => void sess.stop(s.id)}
+                               onDelete={() => void sess.remove(s.id)}
+                               onOpenDataset={() => openSet(s.dataset)} />
+                ))}
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Every set you already have, always open. The second way in. */}
+      {/* Every set you already have, always open — the second way into the one
+          screen that edits them. */}
       <aside className="drawer" id="ds-drawer">
         <div className="drawer-in">
           <div className="drawer-head">
             <span className="grow" />
-            {/* Back to the drop target. Nothing is destroyed — the set stays in the rail. */}
-            <button className="s" id="ds-fresh" type="button" onClick={() => void ds.choose(null)}>
+            <button className="s" id="ds-fresh" type="button"
+                    onClick={() => { setScreen('sets'); void ds.choose(null) }}>
               + New set
             </button>
           </div>
           {ds.error && <div className="err-box">{ds.error}</div>}
           <div id="ds-list" className="grid">
-            <Rail ds={ds} />
+            <Rail ds={ds} onOpen={openSet} />
           </div>
         </div>
       </aside>
+
+      {form && (
+        <SessionForm initial={form} state={state} datasets={ds.rows}
+                     saving={saving} error={sess.error}
+                     onSave={(d, start) => void save(d, start)}
+                     onClose={() => setForm(null)}
+                     onNewDataset={(d) => {
+                       // Saved first, then out of the way: the card is what you
+                       // come back to, and a form abandoned mid-way is a form
+                       // you retype.
+                       void sess.save(d).then(() => {
+                         setForm(null)
+                         setScreen('sets')
+                         void ds.choose(null)
+                       })
+                     }} />
+      )}
     </div>
   )
 }
 
 /** Drafts first: they are the set you are working on, and the reason they are labelled at
  *  all is that the label is a promise about what happens to them. */
-function Rail({ ds }: { ds: ReturnType<typeof useDatasets> }) {
+function Rail({ ds, onOpen }: { ds: ReturnType<typeof useDatasets>; onOpen: (n: string) => void }) {
   const drafts = ds.rows.filter((d) => !d.saved)
   const saved = ds.rows.filter((d) => d.saved)
 
@@ -262,7 +188,7 @@ function Rail({ ds }: { ds: ReturnType<typeof useDatasets> }) {
     <div className="ds-row" key={d.name}>
       <button className={['ds-card', d.name === ds.open ? 'sel' : '', d.saved ? '' : 'draft']
                 .filter(Boolean).join(' ')}
-              type="button" onClick={() => void ds.choose(d.name)}>
+              type="button" onClick={() => onOpen(d.name)}>
         {d.cover
           ? <img className="ds-cover" loading="lazy" src={thumbUrl(d.name, d.cover)} alt="" />
           : <div className="ds-cover empty">▤</div>}
@@ -270,6 +196,9 @@ function Rail({ ds }: { ds: ReturnType<typeof useDatasets> }) {
           <b>{d.name}</b>
           <div className="muted" style={{ marginTop: 3, fontSize: 12 }}>
             {d.count} image{d.count === 1 ? '' : 's'}
+            {/* Counted apart, because only one of the two can be trained on
+                today — see the TODO at `train_job`. */}
+            {d.videos ? ` · ${d.videos} clip${d.videos === 1 ? '' : 's'}` : ''}
             {d.uncaptioned ? ` · ${d.uncaptioned} uncaptioned` : ''}
           </div>
         </div>

@@ -113,6 +113,32 @@ export type VideoModel = {
 
 export type GpuChoice = { options: string[]; default: string }
 
+/** One entry of a trainer menu: optimizer, LR schedule, timestep sampling. The
+ *  three tables have the same shape because they are the same decision — a key
+ *  the job will accept, a word for it, and what choosing it costs. */
+export type TrainChoice = { key: string; label: string; note: string }
+
+/** Every dial a run is described by, in the spelling `train_job` takes. The
+ *  form holds these as strings because they come out of inputs; the server
+ *  casts and clamps, so this is what a session record carries back. */
+export type TrainParams = {
+  resolution: number
+  batch_size: number
+  num_repeats: number
+  network_dim: number
+  network_alpha: number
+  learning_rate: number
+  max_train_epochs: number
+  save_every_n_epochs: number
+  seed: number
+  optimizer_type: string
+  lr_scheduler: string
+  timestep_sampling: string
+  discrete_flow_shift: number
+  blocks_to_swap: number
+  fp8: boolean
+}
+
 export type AppState = {
   hf_token_set: boolean
   models: ModelEntry[]
@@ -135,6 +161,56 @@ export type AppState = {
   caption_presets: { key: string; label: string; note: string }[]
   caption_models: { key: string; label: string; note: string }[]
   caption_defaults: { preset: string; model: string }
+  train_optimizers: TrainChoice[]
+  lr_schedulers: TrainChoice[]
+  timestep_samplings: TrainChoice[]
+  train_defaults: TrainParams
+}
+
+/**
+ * One card on the training board.
+ *
+ * **`status` is derived on the server and stored nowhere**, which is why it is
+ * not optional here and the progress fields are: a card with no job behind it
+ * is a `draft` and has nothing else to say, and one whose container stopped
+ * reporting is `failed` with a note, never a bar frozen at 43% forever.
+ *
+ * `draft` and `unknown` are the two inactive states that never ran; `stopped`,
+ * `completed` and `failed` are the three that did and can be run again.
+ */
+export type Session = {
+  id: string
+  lora_name: string
+  trigger_word: string
+  dataset: string
+  params: TrainParams
+  job_id?: string
+  created: number
+  updated?: number
+  runs?: number
+  status: 'draft' | 'queued' | 'running' | 'completed' | 'stopped' | 'failed' | 'unknown'
+  /** True between pressing Stop and the trainer unwinding — the run is still
+   *  going, so the card must not offer Start, and must not claim it stopped. */
+  stopping?: boolean
+  phase?: string
+  percent?: number
+  step?: number
+  total_steps?: number
+  epoch?: number
+  total_epochs?: number
+  /** "1.83it/s" or "2.4s/it" — whichever tqdm printed, verbatim. Which way up
+   *  it is is information: under a second a step, and over one, are different
+   *  kinds of run. */
+  rate?: string
+  eta?: string
+  elapsed?: string
+  loss?: number
+  note?: string
+  error?: string
+  output_dir?: string
+  files?: string[]
+  duration_s?: number
+  started?: number
 }
 
 /** What a poll of `/api/status/{job}` can say. `beat` is why a status is

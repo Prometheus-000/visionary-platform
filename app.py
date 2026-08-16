@@ -84,6 +84,23 @@ HF_CACHE = Path("/hf")
 jobs = modal.Dict.from_name("visionary-jobs", create_if_missing=True)
 config = modal.Dict.from_name("visionary-config", create_if_missing=True)
 
+# Training sessions — the cards. A session outlives the run it started and the
+# window that started it: it is the *setup* (which set, which name, which dials)
+# plus a pointer at the last job spawned from it, so a finished run can be
+# re-run with one dial changed instead of retyped.
+#
+# The whole index lives under one key rather than one key per session, and that
+# is the `DL_ACTIVE` lesson rather than tidiness: this is a *network* Dict, and
+# `_active_download()` scanning twenty-odd keys across it made a route take
+# seven seconds to answer. The board polls, so a listing is one round trip.
+#
+# What is deliberately **not** in a session record is its status. A stored
+# "running" is a claim about a container that may not exist — the Dict outlives
+# every container, app and deploy that writes to it — so status is derived from
+# the job record and its `beat` on every read. See `_session_view`.
+sessions = modal.Dict.from_name("visionary-sessions", create_if_missing=True)
+SESSION_INDEX = "index"
+
 # Mount point is an internal detail; the layout under it is the contract.
 # Weights are addressed by exact path, never scanned, so models/ is flat with
 # descriptive filenames rather than the per-architecture directories a webui
@@ -980,6 +997,14 @@ CAPTION_MODELS: dict[str, dict[str, str]] = {
 DEFAULT_CAPTION_MODEL = "qwen3vl"
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"}
+# A dataset holds clips too. Nothing trains on them yet — see the TODO at
+# `train_job` — but a set you are building for Wan is a set you build before the
+# trainer exists, and a file the volume already accepts should not be invisible
+# to the page that lists what is in the folder. Counting them and telling them
+# apart is the whole of it: the sidecar layout is identical, `{clip}.txt` beside
+# `{clip}.mp4`, so nothing about the storage contract changes when the trainer
+# arrives.
+VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_CAPTION_CHARS = 1024
 THUMB_PX = 320
@@ -1263,6 +1288,13 @@ def _run(cmd: list[str], label: str, job_id: str, log: deque[str]) -> None:
             if m.group("eta"):
                 fields["eta"] = m.group("eta")
                 fields["rate"] = f"{m.group('rate')}{m.group('unit')}"
+                # tqdm's left-hand clock, which was captured by the regex and
+                # then thrown away. Elapsed beside ETA is the pair the terminal
+                # shows and the pair that answers "is this worth waiting for" —
+                # an ETA alone cannot say whether it has been three minutes or
+                # three hours, and a card whose run started before you opened
+                # the window has no other way to know.
+                fields["elapsed"] = m.group("el")
             if (lm := LOSS_RE.search(line)):
                 fields["loss"] = float(lm.group("loss"))
             if (em := EPOCH_RE.search(line)):
@@ -2370,6 +2402,59 @@ def caption_job(
 # --------------------------------------------------------------------------
 
 
+# What the trainer will accept, as tables rather than free strings.
+#
+# Same argument as CAPTION_PRESETS: the page builds its menus out of what
+# /api/state serves, so a value that is not in one of these is the two sides
+# having drifted — and the cost of guessing is not a form error, it is a GPU
+# container that cold-starts, caches a dataset and then dies on argparse.
+#
+# The membership is chosen by what is *in the image*, which is the line that
+# keeps this honest. CAME and Prodigy are the two optimizers anyone asks for
+# next and neither is installed: `pip install -e .` on musubi brings
+# bitsandbytes for adamw8bit and nothing else, so offering them would be
+# offering a run that dies at import forty minutes in. They are one pip line
+# away when someone wants them, and the table is where that decision goes.
+TRAIN_OPTIMIZERS = {
+    "adamw8bit": {"label": "AdamW 8-bit", "note": "bitsandbytes — the default, and the cheapest in VRAM"},
+    "adamw": {"label": "AdamW", "note": "torch's own, a little steadier and a little heavier"},
+    "adafactor": {"label": "Adafactor", "note": "lowest VRAM of the three; wants a lower learning rate"},
+}
+# transformers' schedulers, which is what musubi resolves these through. A
+# constant rate is what a LoRA run has always used here; cosine is the one
+# worth reaching for on a long run, because the last epochs stop overshooting.
+LR_SCHEDULERS = {
+    "constant": {"label": "Constant", "note": "the same rate throughout"},
+    "constant_with_warmup": {"label": "Constant + warmup", "note": "eases in, then holds"},
+    "cosine": {"label": "Cosine", "note": "decays to zero — steadier last epochs"},
+    "cosine_with_restarts": {"label": "Cosine restarts", "note": "decays and jumps back up"},
+    "linear": {"label": "Linear", "note": "straight line down to zero"},
+    "polynomial": {"label": "Polynomial", "note": "a slower curve down"},
+}
+# Where in the noise schedule the training steps are drawn from. Krea 2 is
+# flow-matching, so this and `discrete_flow_shift` are one decision in two
+# fields: `shift` is the only sampling that reads the shift value, which is why
+# the field is disabled beside every other one rather than quietly ignored.
+TIMESTEP_SAMPLINGS = {
+    "shift": {"label": "Shift", "note": "flow-matching, weighted by the shift value"},
+    "sigmoid": {"label": "Sigmoid", "note": "concentrates on the middle of the schedule"},
+    "uniform": {"label": "Uniform", "note": "every timestep equally likely"},
+    "sigma": {"label": "Sigma", "note": "sampled on the sigma curve"},
+}
+
+# One place the dials' defaults are written. The page opens on these and the
+# job applies them, so the menu cannot open on a value the backend would not
+# have picked — two places spelling the same default is how they drift.
+TRAIN_DEFAULTS = {
+    "resolution": 1024, "batch_size": 1, "num_repeats": 1,
+    "network_dim": 32, "network_alpha": 32, "learning_rate": 1e-4,
+    "max_train_epochs": 30, "save_every_n_epochs": 1, "seed": 42,
+    "optimizer_type": "adamw8bit", "lr_scheduler": "constant",
+    "timestep_sampling": "shift", "discrete_flow_shift": 2.5,
+    "fp8": False, "blocks_to_swap": 0,
+}
+
+
 @app.function(
     image=trainer_image, gpu=GPU, cpu=4.0, timeout=6 * 60 * 60,
     volumes={"/workspace": volume},
@@ -2380,14 +2465,48 @@ def train_job(
     network_dim: int = 32, network_alpha: int = 32, learning_rate: float = 1e-4,
     max_train_epochs: int = 30, save_every_n_epochs: int = 1,
     discrete_flow_shift: float = 2.5, seed: int = 42,
+    optimizer_type: str = "adamw8bit", lr_scheduler: str = "constant",
+    timestep_sampling: str = "shift",
     fp8: bool = False, blocks_to_swap: int = 0,
+    session: str = "",
 ) -> dict[str, Any]:
+    """
+    One LoRA, one container.
+
+    **Nothing here is shared between runs, which is what makes two of them at
+    once free.** There is no `max_containers` on this function, unlike the GPU
+    classes below: those pin a replica because a loaded checkpoint is the thing
+    worth keeping warm, and a training run loads its own weights, writes its own
+    scratch under `work/{job_id}` and its own output folder, then goes away.
+    Spawning it twice is two cards on the board and two bills, and no state to
+    coordinate.
+
+    TODO: video. `train_job` is the exact three-step shape Wan wants — only the
+    script names change — but musubi cannot train the fp8_scaled weights this
+    platform downloads, so it needs a second copy of the 14B pair at bf16 and
+    the bf16 T5. About 64 GB. See "Phase 5" in CLAUDE.md: a dataset already
+    counts its clips, and this is the only piece missing.
+    """
     if not NAME_RE.match(job_id) or not NAME_RE.match(lora_name):
         raise ValueError("job_id and lora_name must be 1-64 chars of [A-Za-z0-9_-].")
 
     started = time.time()
     log: deque[str] = deque(maxlen=400)
-    jobs[job_id] = {"status": "running", "phase": "starting", "stop": False}
+    # `started` on the record, not just in this frame: the card is polled by a
+    # window that may have been opened hours after the run began, so elapsed has
+    # to be answerable from the record alone. `session` rides along for the same
+    # reason the captioner carries its model label — the board maps job records
+    # back to cards, and a run whose card was deleted mid-flight should still be
+    # able to say which one it belonged to.
+    # Merged, never assigned. The route writes a `queued` record *before* the
+    # spawn — a trainer cold start is minutes, and a card with no job record
+    # cannot say anything at all — so the flag a Stop pressed during that wait
+    # set is already sitting in this record, and `jobs[job_id] = {...}` would
+    # overwrite it with `stop: False`. The run would then ignore a stop the page
+    # had already confirmed, which is the worst shape a stop can take: the
+    # button reports success and the GPU keeps billing.
+    _publish(job_id, status="running", phase="starting",
+             started=started, session=session)
     _reload_volume()
 
     _require_models("raw", "vae", "text_encoder")
@@ -2490,9 +2609,16 @@ num_repeats = {num_repeats}
                 "--vae", str(VAE_PATH),
                 "--dataset_config", str(toml_path),
                 "--sdpa", "--mixed_precision", "bf16",
-                "--timestep_sampling", "shift", "--weighting_scheme", "none",
+                # Four dials that were hardcoded here and are now the card's,
+                # because they are the four a second run changes. The shift
+                # value is only read when the sampling is `shift` — the page
+                # says so by disabling the field rather than by taking a number
+                # it will not use.
+                "--timestep_sampling", timestep_sampling,
+                "--weighting_scheme", "none",
                 "--discrete_flow_shift", str(discrete_flow_shift),
-                "--optimizer_type", "adamw8bit",
+                "--optimizer_type", optimizer_type,
+                "--lr_scheduler", lr_scheduler,
                 "--learning_rate", str(learning_rate),
                 "--gradient_checkpointing",
                 "--max_data_loader_n_workers", "2", "--persistent_data_loader_workers",
@@ -2523,6 +2649,10 @@ num_repeats = {num_repeats}
                  "resolution": resolution, "network_dim": network_dim,
                  "network_alpha": network_alpha, "learning_rate": learning_rate,
                  "max_train_epochs": max_train_epochs, "seed": seed,
+                 "batch_size": batch_size, "num_repeats": num_repeats,
+                 "optimizer_type": optimizer_type, "lr_scheduler": lr_scheduler,
+                 "timestep_sampling": timestep_sampling,
+                 "discrete_flow_shift": discrete_flow_shift,
              }},
             indent=2,
         )
@@ -2544,6 +2674,184 @@ num_repeats = {num_repeats}
         )
     _publish(job_id, **res)
     return res
+
+
+
+# --------------------------------------------------------------------------
+# Sessions — a training run, as a thing that outlives the run
+#
+# A session is the setup: which set, which name, which dials, and a pointer at
+# the last job spawned from it. Runs are concurrent because `train_job` shares
+# nothing between them, so what the page needs is not a "current run" but a
+# board — and a board needs records that survive the window that made them.
+#
+# Everything here reads and writes exactly one Dict key. See `sessions` at the
+# top of the file for why that is not a shortcut.
+# --------------------------------------------------------------------------
+
+
+# How long a record may go without a beat before its claim to be running is not
+# believed. Deliberately generous: `_run` beats on every tqdm line, but the
+# gaps between them are the phases that print nothing — a cold container pulling
+# the trainer image, the latent cache committing a large set — and calling one
+# of those dead would show a failed card for a run that is fine. Twenty minutes
+# of silence is a container that is gone.
+SESSION_STALE_S = 20 * 60
+
+# How many cards one listing carries. See `list_sessions` for why there is a
+# bound at all and why it is reported rather than silent.
+SESSION_LIST_MAX = 100
+
+
+def _sessions_all() -> list[dict[str, Any]]:
+    """Every session, newest first. One round trip."""
+    try:
+        index = sessions.get(SESSION_INDEX) or {}
+    except Exception as exc:
+        print(f"[sessions] read failed: {exc}")
+        return []
+    rows = [r for r in index.values() if isinstance(r, dict)]
+    rows.sort(key=lambda r: -float(r.get("created") or 0))
+    return rows
+
+
+def _session_put(rec: dict[str, Any]) -> dict[str, Any]:
+    """
+    Merge one session into the index.
+
+    Get-update-put against a network Dict, so it takes the same lock `_publish`
+    takes and for the same reason — except that here the second writer is
+    another *window* rather than another thread, which the lock cannot reach.
+    That is the accepted trade: two windows creating a session in the same
+    round trip is a lost card, not a lost run, and the alternative is a key per
+    session and the seven-second listing that came with it.
+    """
+    with _SESSION_LOCK:
+        index = sessions.get(SESSION_INDEX) or {}
+        cur = index.get(rec["id"]) or {}
+        cur.update(rec)
+        cur["updated"] = time.time()
+        index[rec["id"]] = cur
+        sessions[SESSION_INDEX] = index
+        return cur
+
+
+def _session_get(sid: str) -> dict[str, Any] | None:
+    index = sessions.get(SESSION_INDEX) or {}
+    rec = index.get(sid)
+    return rec if isinstance(rec, dict) else None
+
+
+def _session_drop(sid: str) -> bool:
+    with _SESSION_LOCK:
+        index = sessions.get(SESSION_INDEX) or {}
+        gone = index.pop(sid, None) is not None
+        if gone:
+            sessions[SESSION_INDEX] = index
+        return gone
+
+
+_SESSION_LOCK = threading.Lock()
+
+# What a card reads off the live job record. Named rather than merged wholesale
+# because the job record also carries `stop`, `session` and the log tail, and a
+# dict polled every few seconds must not grow with what the job happens to
+# publish next.
+_SESSION_LIVE = (
+    "phase", "percent", "step", "total_steps", "epoch", "total_epochs",
+    "rate", "eta", "elapsed", "loss", "note", "output_dir", "files",
+    "duration_s", "error", "started",
+)
+
+
+def _session_view(rec: dict[str, Any]) -> dict[str, Any]:
+    """
+    One card: the setup, plus whatever the run it points at is doing.
+
+    **Status is derived here and stored nowhere.** A status written into the
+    session record would be a claim about a container that outlives it — the
+    Dict survives the container, the app, the deploy and the image rebuild — and
+    the first version of this trusted such a field, which turned three
+    interrupted runs into three cards that said "training" for good. The job
+    record's `beat` is the only thing that can answer whether anything is
+    actually running, so a stale one is rewritten to failed on the way past:
+    the card, the Stop button and the Start button clear together rather than
+    the page having three opinions.
+    """
+    out = {k: rec.get(k) for k in
+           ("id", "lora_name", "trigger_word", "dataset", "params", "job_id",
+            "created", "updated", "runs")}
+    job_id = rec.get("job_id")
+    if not job_id:
+        return {**out, "status": "draft"}
+
+    job = jobs.get(job_id) or {}
+    status = str(job.get("status") or "")
+    if not status:
+        # The record is gone — the Dict is never swept, so in practice this is a
+        # job spawned against an older deployment. Inactive and honest about it
+        # beats a card stuck on "starting".
+        return {**out, "status": "unknown",
+                "note": "The record for this run has expired. Start it again to re-run it."}
+
+    if status in ("running", "queued"):
+        beat = float(job.get("beat") or job.get("started") or 0)
+        if beat and time.time() - beat > SESSION_STALE_S:
+            status = "failed"
+            job = {**job, "status": status,
+                   "error": "The container running this stopped reporting. "
+                            "Checkpoints written before it did are still in loras/."}
+            _publish(job_id, status=status, error=job["error"])
+
+    live = {k: job[k] for k in _SESSION_LIVE if k in job}
+    # The stop flag is never cleared — the job checks it between steps and
+    # unwinds, and nothing goes back to unset it — so a card that read it alone
+    # said "Stopping — finishing the step it is on" over a run that finished
+    # unwinding an hour ago. It is a fact about a *live* run, so it is only
+    # reported while there is one.
+    stopping = bool(job.get("stop")) and status in ("running", "queued")
+    return {**out, **live, "status": status, "stopping": stopping}
+
+
+def _num(payload: dict, key: str, cast, default):
+    try:
+        v = payload.get(key)
+        return cast(v) if v not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _train_params(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    The dials, normalised against `TRAIN_DEFAULTS` and the three tables.
+
+    Raises ValueError with the offending value named, because this is reached
+    from the form: a menu that has drifted from the server's table should say
+    which value it sent, not fall back to a default and train something else.
+    """
+    d = TRAIN_DEFAULTS
+    out = {
+        "resolution": max(256, min(2048, _num(payload, "resolution", int, d["resolution"]))),
+        "batch_size": max(1, min(64, _num(payload, "batch_size", int, d["batch_size"]))),
+        "num_repeats": max(1, min(100, _num(payload, "num_repeats", int, d["num_repeats"]))),
+        "network_dim": max(1, min(512, _num(payload, "network_dim", int, d["network_dim"]))),
+        "network_alpha": max(1, min(512, _num(payload, "network_alpha", int, d["network_alpha"]))),
+        "learning_rate": _num(payload, "learning_rate", float, d["learning_rate"]),
+        "max_train_epochs": max(1, min(1000, _num(payload, "max_train_epochs", int, d["max_train_epochs"]))),
+        "save_every_n_epochs": max(1, _num(payload, "save_every_n_epochs", int, d["save_every_n_epochs"])),
+        "seed": _num(payload, "seed", int, d["seed"]),
+        "discrete_flow_shift": _num(payload, "discrete_flow_shift", float, d["discrete_flow_shift"]),
+        "blocks_to_swap": max(0, min(60, _num(payload, "blocks_to_swap", int, d["blocks_to_swap"]))),
+        "fp8": bool(payload.get("fp8")),
+    }
+    for key, table in (("optimizer_type", TRAIN_OPTIMIZERS),
+                       ("lr_scheduler", LR_SCHEDULERS),
+                       ("timestep_sampling", TIMESTEP_SAMPLINGS)):
+        v = str(payload.get(key) or d[key])
+        if v not in table:
+            raise ValueError(f"No {key.replace('_', ' ')} {v!r}. One of: {', '.join(table)}")
+        out[key] = v
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -3340,6 +3648,16 @@ def _dataset_images(d: Path) -> list[Path]:
     return sorted(p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS) if d.is_dir() else []
 
 
+def _dataset_videos(d: Path) -> list[Path]:
+    """
+    The clips in a set. Separate from the images rather than a `kind` filter on
+    one walk, because every caller so far wants one or the other: the trainer
+    trains images, the contact sheet counts both, and a caller that meant images
+    and silently got clips is the failure this split makes impossible.
+    """
+    return sorted(p for p in d.iterdir() if p.suffix.lower() in VIDEO_EXTS) if d.is_dir() else []
+
+
 def _caption_of(img: Path) -> str:
     txt = img.with_suffix(".txt")
     try:
@@ -3350,7 +3668,12 @@ def _caption_of(img: Path) -> str:
 
 def _dataset_stats(d: Path) -> dict[str, Any]:
     images = _dataset_images(d)
-    captioned = sum(1 for p in images if _caption_of(p))
+    videos = _dataset_videos(d)
+    # Both kinds carry sidecars, so both count toward "captioned" — a clip with
+    # no caption is as uncaptioned as a photograph with none, and a set that
+    # reported 24 of 24 while holding six uncaptioned clips would be reporting
+    # the answer to a question nobody asked.
+    captioned = sum(1 for p in images + videos if _caption_of(p))
     meta = d / "dataset.json"
     info: dict[str, Any] = {}
     if meta.is_file():
@@ -3360,11 +3683,21 @@ def _dataset_stats(d: Path) -> dict[str, Any]:
             info = {}
     return {
         "name": d.name,
+        # `count` stays the image count, because that is what every existing
+        # reader means by it — the trainer's gate, the rail's line, the button
+        # that refuses an empty set. The clips are a second number beside it
+        # rather than folded into the first: a set of 24 images and 6 clips is
+        # not a set of 30 of anything, and today only one of those two numbers
+        # can be trained on.
         "count": len(images),
+        "videos": len(videos),
         "captioned": captioned,
-        "uncaptioned": len(images) - captioned,
+        "uncaptioned": len(images) + len(videos) - captioned,
         "trigger_word": str(info.get("trigger_word") or ""),
-        "modified": max((p.stat().st_mtime for p in images), default=0.0),
+        "modified": max((p.stat().st_mtime for p in images + videos), default=0.0),
+        # A clip has no cover — web_image has no ffmpeg — so a video-only set
+        # shows the empty glyph rather than a broken thumbnail, which is what
+        # /api/thumb would answer for one.
         "cover": images[0].name if images else None,
         # Which parent it sits under, not a field in dataset.json: the flag and
         # the folder cannot then disagree about whether the set is kept.
@@ -3517,7 +3850,14 @@ def _on_gpu(cls: Any, requested: Any, allowed: tuple[str, ...], default: str) ->
 
 OUTPUT_META = "visionary.json"
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
-               ".mp4": "video/mp4"}
+               # The dataset clip route serves whatever a set holds, and a set
+               # is whatever was dropped on it — so the containers a browser
+               # will actually play are spelled out rather than left to fall
+               # back on video/mp4, which is a `<video>` that silently paints
+               # nothing for a .mov it could otherwise decode.
+               ".mp4": "video/mp4", ".mov": "video/quicktime",
+               ".webm": "video/webm", ".mkv": "video/x-matroska",
+               ".m4v": "video/x-m4v"}
 OUTPUT_FILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpg|webp|mp4)$")
 
 
@@ -6833,6 +7173,14 @@ def web():
             ],
             "caption_defaults": {"preset": DEFAULT_CAPTION_PRESET,
                                  "model": DEFAULT_CAPTION_MODEL},
+            # The trainer's vocabulary, served for the reason every other table
+            # here is: the form builds its menus out of this, so a value it can
+            # send is a value the job will accept. A hardcoded list in the page
+            # is a run that cold-starts a GPU to die on argparse.
+            "train_optimizers": [dict(v, key=k) for k, v in TRAIN_OPTIMIZERS.items()],
+            "lr_schedulers": [dict(v, key=k) for k, v in LR_SCHEDULERS.items()],
+            "timestep_samplings": [dict(v, key=k) for k, v in TIMESTEP_SAMPLINGS.items()],
+            "train_defaults": TRAIN_DEFAULTS,
         }
 
     @api.post("/api/loras/delete")
@@ -7081,7 +7429,8 @@ def web():
                 continue
             basename = Path(filename).name
             suffix = Path(basename).suffix.lower()
-            if suffix not in IMAGE_EXTS and suffix not in {".zip", ".txt"}:
+            if suffix not in IMAGE_EXTS and suffix not in VIDEO_EXTS \
+                    and suffix not in {".zip", ".txt"}:
                 continue
             target = raw / basename
             with open(target, "wb") as out:
@@ -7091,6 +7440,12 @@ def web():
                 zips.append(target)
             elif suffix in IMAGE_EXTS:
                 _upright_inplace(target)
+                count += 1
+            elif suffix in VIDEO_EXTS:
+                # No upright pass: rotation in a clip is a container-level
+                # matrix that PIL cannot see and re-encoding to bake it in is a
+                # transcode this container has no ffmpeg for. Noted rather than
+                # half-done — see the TODO at `train_job`.
                 count += 1
 
         for z in zips:
@@ -7106,7 +7461,7 @@ def web():
             # happens to contain no images must leave the dataset alone.
             if not appending:
                 shutil.rmtree(raw, ignore_errors=True)
-            return JSONResponse({"error": "No images found in the upload."}, 400)
+            return JSONResponse({"error": "No images or clips found in the upload."}, 400)
 
         # `.aio()` rather than the blocking call every other route uses: this
         # is the one handler that has to stay `async def`, because it awaits
@@ -7230,10 +7585,21 @@ def web():
         from PIL import Image
 
         items = []
-        for img in _dataset_images(d):
+        # Images first, then clips: a mixed set is browsed by kind far more
+        # often than by name, and the filter above the grid is the same split.
+        for img in _dataset_images(d) + _dataset_videos(d):
             try:
                 st = img.stat()
             except OSError:
+                continue
+            if img.suffix.lower() in VIDEO_EXTS:
+                # No dimensions and no duration: both need a demuxer, and this
+                # container has none. The tile paints its own first frame out of
+                # bytes the browser fetches anyway — the same trade the gallery
+                # card makes for a clip.
+                items.append({"name": img.name, "kind": "video",
+                              "caption": _caption_of(img),
+                              "bytes": st.st_size, "mtime": st.st_mtime})
                 continue
             # Pixel dimensions alongside filesize: together they are what
             # actually informs a keep/cut call. PIL parses the header only, so
@@ -7249,6 +7615,7 @@ def web():
                 pass
             items.append({
                 "name": img.name,
+                "kind": "image",
                 "caption": _caption_of(img),
                 "bytes": st.st_size,
                 "width": w, "height": h,
@@ -7337,6 +7704,36 @@ def web():
         return Response(content=img.read_bytes(), media_type=mime,
                         headers={"Cache-Control": "public, max-age=86400"})
 
+    @api.get("/api/clip/{name}/{filename}")
+    def dataset_clip(name: str, filename: str):
+        """
+        One clip off a dataset, streamed.
+
+        `FileResponse` rather than the `Response(read_bytes())` its image
+        sibling uses, and the difference is the whole reason this is a second
+        route: a clip is tens of megabytes, so reading it into the container to
+        avoid holding a descriptor would trade the thing that refuses
+        `volume.reload()` for the thing that fills the container's memory. It
+        also has to answer a Range request — a `<video>` seeking to `#t=` asks
+        for the first few hundred kilobytes and nothing else, which is what
+        makes a grid of clips affordable at all.
+
+        The tiles gate this behind an IntersectionObserver for the same reason
+        the gallery does: forty clips mounting at once is forty descriptors, and
+        that is what froze the listing they were being shown in.
+        """
+        d, err = _dataset_or_error(name)
+        if err:
+            return JSONResponse(err, status_code=404)
+        clip = d / Path(filename).name  # basename only — no directory escape
+        if clip.suffix.lower() not in VIDEO_EXTS or not clip.is_file():
+            return JSONResponse({"error": "Clip not found."}, status_code=404)
+        return FileResponse(
+            str(clip),
+            media_type=MEDIA_TYPES.get(clip.suffix.lower(), "video/mp4"),
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
     @api.post("/api/datasets/{name}/caption")
     def save_caption(name: str, payload: dict) -> dict[str, Any]:
         """One caption, saved on blur. Bulk save was how edits went missing."""
@@ -7345,7 +7742,10 @@ def web():
         if err:
             return err
         img = d / Path(str(payload.get("image") or "")).name
-        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
+        # A clip's caption is a `.txt` beside it, same as an image's — the
+        # sidecar layout is the contract, and a route that refused one would be
+        # a caption box on the tile that silently saved nothing.
+        if img.suffix.lower() not in IMAGE_EXTS | VIDEO_EXTS or not img.is_file():
             return {"error": "Image not found."}
         img.with_suffix(".txt").write_text(
             str(payload.get("caption") or "").strip()[:MAX_CAPTION_CHARS])
@@ -7360,7 +7760,7 @@ def web():
         if err:
             return err
         img = d / Path(str(payload.get("image") or "")).name
-        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
+        if img.suffix.lower() not in IMAGE_EXTS | VIDEO_EXTS or not img.is_file():
             return {"error": "Image not found."}
 
         for part in (img, img.with_suffix(".txt")):
@@ -7453,44 +7853,187 @@ def web():
         )
         return {"ok": True, "job_id": job_id}
 
-    @api.post("/api/train")
-    def train(payload: dict) -> dict[str, Any]:
-        dataset = str(payload.get("dataset") or "")
-        lora_name = str(payload.get("lora_name") or "").strip()
-        trigger = str(payload.get("trigger_word") or "").strip()
-        d, err = _dataset_or_error(dataset)
+    # ---- training sessions ------------------------------------------------
+    #
+    # A card, not a page. The run used to be a console under the contact sheet,
+    # which made "one at a time" a property of the UI rather than of the
+    # backend — `train_job` shares nothing between runs and never did. What
+    # these five routes add is the record that outlives the run: the setup you
+    # can re-run, edit or delete, whether or not anything is training now.
+
+    def _session_new() -> dict[str, Any]:
+        return {
+            "id": f"s{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}",
+            "created": time.time(), "runs": 0, "job_id": "",
+        }
+
+    def _session_fields(payload: dict) -> dict[str, Any]:
+        """
+        The half of a session the form owns.
+
+        Deliberately not validated the way starting one is: a session exists to
+        be filled in over more than one sitting — picking "a new set" from the
+        dataset menu saves the card and walks away to go make the set — so a
+        half-written record is the normal state rather than an error. The
+        refusals live on `start`, which is the moment the answers have to be
+        real.
+        """
+        return {
+            "lora_name": str(payload.get("lora_name") or "").strip()[:64],
+            "trigger_word": str(payload.get("trigger_word") or "").strip()[:64],
+            "dataset": str(payload.get("dataset") or "").strip()[:64],
+            "params": _train_params(payload.get("params") or {}),
+        }
+
+    @api.get("/api/sessions")
+    def list_sessions() -> dict[str, Any]:
+        """
+        Every card, with whatever its run is doing. One Dict read plus one per
+        live job, and no volume touch at all — this is polled while a run is on,
+        so the image and video counts a card shows are joined on the page out of
+        the dataset listing it already holds rather than re-walked here.
+
+        Bounded, and the bound is stated. Nothing sweeps a session — a card is
+        the setup you re-run from, so it is deleted by hand or not at all — and
+        this is polled every couple of seconds, which is exactly the shape the
+        "keep the polled thing small" rule is about. The gallery's answer is the
+        one taken here: serve the newest, say how many there are, and let the
+        page say "showing 100 of 140" rather than quietly stopping at a hundred.
+        """
+        rows = _sessions_all()
+        return {"sessions": [_session_view(r) for r in rows[:SESSION_LIST_MAX]],
+                "total": len(rows)}
+
+    @api.post("/api/sessions")
+    def put_session(payload: dict) -> dict[str, Any]:
+        """Create a card, or save an edit to one. `id` decides which."""
+        sid = str(payload.get("id") or "").strip()
+        rec = _session_get(sid) if sid else None
+        if sid and not rec:
+            return {"error": "That session is gone — it was deleted in another window."}
+        if rec and _session_view(rec).get("status") in ("running", "queued"):
+            # Editing the dials under a run would put the card and the process
+            # out of step with no way to tell which one is the truth.
+            return {"error": "That run is going. Stop it before editing the setup."}
+        try:
+            fields = _session_fields(payload)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        base = rec or _session_new()
+        return {"ok": True, "session": _session_view(_session_put({**base, **fields}))}
+
+    @api.post("/api/sessions/{sid}/start")
+    def start_session(sid: str) -> dict[str, Any]:
+        """
+        Spawn the run this card describes.
+
+        Idempotent against a double press the way `/api/download` is: a card
+        already running answers with the job it is already running rather than
+        starting a second one against the same output folder.
+        """
+        rec = _session_get(sid)
+        if not rec:
+            return {"error": "That session is gone — it was deleted in another window."}
+        view = _session_view(rec)
+        if view.get("status") in ("running", "queued"):
+            return {"ok": True, "job_id": rec.get("job_id"), "already": True,
+                    "session": view}
+
+        _reload_volume()
+        dataset = str(rec.get("dataset") or "")
+        d, err = _dataset_or_error(dataset) if dataset else (None, {
+            "error": "Pick a set to train on."})
         if err:
             return err
         if not _dataset_images(d):
             return {"error": f"{dataset!r} has no images."}
+        lora_name = str(rec.get("lora_name") or "").strip()
         if not NAME_RE.match(lora_name):
             return {"error": "LoRA name: letters, digits, - and _ only."}
+        trigger = str(rec.get("trigger_word") or "").strip()
         if not trigger:
             return {"error": "A trigger word is required."}
+        try:
+            params = _train_params(rec.get("params") or {})
+        except ValueError as exc:
+            return {"error": str(exc)}
+
         job_id = f"tr{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-
-        def num(k, d, cast):
-            try:
-                v = payload.get(k)
-                return cast(v) if v not in (None, "") else d
-            except (TypeError, ValueError):
-                return d
-
+        # Written before the spawn, not by the container. A trainer image cold
+        # start is minutes, and a card whose job record does not exist yet is a
+        # card that cannot say anything at all — which reads as a press that did
+        # nothing, which is how you get two runs.
+        jobs[job_id] = {"status": "queued", "phase": "queued", "stop": False,
+                        "percent": 0, "session": sid,
+                        "started": time.time(), "beat": time.time()}
         train_job.spawn(
-            job_id=job_id, dataset=dataset, lora_name=lora_name, trigger_word=trigger,
-            resolution=num("resolution", 1024, int),
-            batch_size=num("batch_size", 1, int),
-            num_repeats=num("num_repeats", 1, int),
-            network_dim=num("network_dim", 32, int),
-            network_alpha=num("network_alpha", 32, int),
-            learning_rate=num("learning_rate", 1e-4, float),
-            max_train_epochs=num("max_train_epochs", 30, int),
-            save_every_n_epochs=num("save_every_n_epochs", 1, int),
-            seed=num("seed", 42, int),
-            fp8=bool(payload.get("fp8")),
-            blocks_to_swap=num("blocks_to_swap", 0, int),
+            job_id=job_id, dataset=dataset, lora_name=lora_name,
+            trigger_word=trigger, session=sid, **params,
         )
-        return {"ok": True, "job_id": job_id}
+        rec = _session_put({**rec, "job_id": job_id,
+                            "runs": int(rec.get("runs") or 0) + 1})
+        return {"ok": True, "job_id": job_id, "session": _session_view(rec)}
+
+    @api.post("/api/sessions/{sid}/stop")
+    def stop_session(sid: str) -> dict[str, Any]:
+        """
+        Cooperative, and the card stays. Checkpoints already written survive,
+        which is what makes stopping a choice rather than a loss — and the run
+        it stops is left on the card with the progress it reached, because that
+        is what you re-run from.
+        """
+        rec = _session_get(sid)
+        if not rec:
+            return {"error": "That session is gone — it was deleted in another window."}
+        job_id = str(rec.get("job_id") or "")
+        if job_id:
+            cur = jobs.get(job_id) or {}
+            cur["stop"] = True
+            jobs[job_id] = cur
+        return {"ok": True, "session": _session_view(rec)}
+
+    @api.post("/api/sessions/{sid}/delete")
+    def delete_session(sid: str) -> dict[str, Any]:
+        """
+        The card goes. Anything it started is asked to stop on the way out —
+        a deleted card that leaves a GPU container running is the one outcome
+        nobody would predict from the word delete.
+
+        Nothing on the volume is touched: the checkpoints under loras/ are the
+        run's output, not the card's, and they are deleted where every other
+        LoRA is deleted.
+        """
+        rec = _session_get(sid)
+        if not rec:
+            return {"ok": True, "gone": True}
+        job_id = str(rec.get("job_id") or "")
+        if job_id and _session_view(rec).get("status") in ("running", "queued"):
+            cur = jobs.get(job_id) or {}
+            cur["stop"] = True
+            jobs[job_id] = cur
+        _session_drop(sid)
+        return {"ok": True}
+
+    @api.post("/api/train")
+    def train(payload: dict) -> dict[str, Any]:
+        """
+        Start a run in one call: make the card, then start it.
+
+        Kept because a training run is startable without a page, and folded onto
+        the session routes rather than kept beside them — the rule against a
+        second way to do the first thing, applied to the one route that would
+        otherwise have its own spawn, its own validation and its own idea of
+        what a run is.
+        """
+        try:
+            fields = _session_fields({**payload, "params": payload.get("params") or payload})
+        except ValueError as exc:
+            return {"error": str(exc)}
+        rec = _session_put({**_session_new(), **fields})
+        started = start_session(rec["id"])
+        if started.get("error"):
+            _session_drop(rec["id"])
+        return started
 
     @api.post("/api/compile")
     def compile_prompt(payload: dict) -> dict[str, Any]:
