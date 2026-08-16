@@ -12,7 +12,9 @@
  * both ordinary, and the routes take them as path parameters.
  */
 import { api, post, type Res } from './client'
-import type { AppState, CompileResult, Insight, JobStatus, ShotPill } from './types'
+import type {
+  AppState, CompileResult, DupeReport, Insight, JobStatus, ShotPill,
+} from './types'
 
 const seg = encodeURIComponent
 
@@ -110,6 +112,16 @@ export const datasetInsight = (name: string, trigger = '') =>
   api<Insight>(`/api/datasets/${seg(name)}/insight?trigger=${seg(trigger)}`)
 export const prependTrigger = (name: string, body: unknown) =>
   post<Record<string, unknown>>(`/api/datasets/${seg(name)}/prepend-trigger`, body)
+
+/**
+ * Duplicate groups at one of three named similarity levels.
+ *
+ * Its own route rather than a field on `/insight`, because the two are priced
+ * differently: insight reads the `.txt` files and is refreshed on every caption
+ * edit, while this decodes every image in the folder the first time it runs.
+ */
+export const datasetDuplicates = (name: string) =>
+  api<DupeReport>(`/api/datasets/${seg(name)}/duplicates`)
 
 /** Bytes off the volume, by their own route — never inlined into a polled
  *  record. A dict polled every two seconds must not grow with its result. */

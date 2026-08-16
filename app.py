@@ -47,8 +47,10 @@ Nothing downloads on its own — pick what you want under the gear.
 # All images run Python 3.10+, so `X | Y` and `list[...]` work natively without it.
 
 import base64
+import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -3496,6 +3498,581 @@ def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any
         "duplicates": duplicates,
         "tag_style": tag_style,
         "phrases": repeated_clauses,
+    }
+
+
+# --------------------------------------------------------------------------
+# Duplicates
+# --------------------------------------------------------------------------
+# A set arrives with duplicates in it far more often than not: the same shoot
+# exported twice, a JPEG saved beside the PNG it came from, a crop kept next to
+# its original, a phone album pulled in through two different apps. They are
+# not neutral. The trainer repeats every image the same number of times, so a
+# picture that is present three times is trained three times as hard as the
+# rest of the set — and the symptom of that ("everything comes out in that
+# room") never points back at the folder it came from.
+#
+# Byte equality is the cheap half of the problem and the useless one. A
+# duplicate that survived a re-encode, a resize or a colour-profile conversion
+# has different bytes and is the same picture, which is exactly the case a
+# `sha256` map reports as clean. So the grouping is perceptual — dHash, below —
+# and the sha rides along beside it anyway, because "these are the same file"
+# and "these are the same picture" are different facts and only the first one
+# makes the choice for you.
+#
+# Nothing here decides anything. It groups, it ranks, and every ranking says
+# which number decided it, because the keep/cut call is the one thing on this
+# page that cannot be derived: "which of these two nearly identical frames is
+# the better photograph" is not a measurement.
+
+# Two classes, and the second one is not a softer first.
+#
+# A **duplicate** is one picture stored more than once — a re-encode, a resize,
+# a reformat, a re-grade. Deleting all but one loses nothing, so a duplicate
+# group arrives with a keeper already chosen.
+#
+# A **similar** pair is two photographs that look alike. On a training set that
+# is usually a burst: four consecutive frames of one subject, all of them
+# legitimately useful, and there is no deterministic way to prove the second is
+# a re-save rather than the next shutter release. So a similar group is shown
+# and nothing in it is preselected. Collapsing these two into one scale of
+# confidence is the mistake this replaces — five tiers between them meant the
+# common case (an export at the same size and format as its original) landed in
+# the middle, where nothing is preselected and the keeper flow never runs.
+#
+# **Both hashes must agree, and the two are not doing the same job.** dHash
+# reads edge gradients, pHash reads low-frequency DCT energy, and they fail
+# independently — so an AND is far tighter than either alone and much tighter
+# than accepting on whichever happens to be closer.
+#
+# Measured on a 731-image editorial set, 266,815 pairs. dHash is the
+# discriminator: `dhash <= 6` on its own isolates exactly the three real
+# duplicates in that folder, and the next-closest pair anywhere is 7 — but that
+# pair is `d7 p32`, two entirely unrelated photographs, which is precisely what
+# the pHash half is there to refuse. So the AND stays and the pHash bound is
+# set by the *other* thing it has to survive.
+#
+# That thing is a re-grade. dHash barely moves under one — a quarter-stop
+# brighter measures 3 bits, 1.4x measures 4 — while pHash climbs to 16, because
+# a global exposure change with any clipping in it moves the coarse structure
+# the DCT reads. A bound of 10 filed those as merely similar, which is wrong:
+# the same picture, exported brighter, is a copy. Swept from 10 to 24 against
+# the real folder the duplicate count never moves off 3, so the loosening is
+# free there and is what makes the re-grade land.
+#
+# The gap between the two classes is therefore carried by dHash — 6 against 12
+# — and that is the split the real data draws. Every burst-shaped pair in that
+# folder (two frames of one runway look) measures dHash 8 to 11: outside
+# `duplicate`, inside `similar`, which is exactly where a photograph that is
+# merely alike belongs.
+DUPLICATE_MATCH = {"dhash": 6, "phash": 16}
+SIMILAR_MATCH = {"dhash": 12, "phash": 18}
+
+# Crop detection, and the leash that is the whole reason it is safe.
+#
+# A reframed copy moves every edge, so its direct distance sits outside both
+# thresholds while a centre crop of one lines up exactly with the other. Two
+# crops per image, compared every way but original-to-original — that comparison
+# is the direct one, already made.
+#
+# **The variants are not the hazard; the threshold they were read at was.**
+# Taking the best of nine variant pairs is nine chances to draw a low number
+# against an unrelated image, so at a loose threshold it is ruinous: measured on
+# a 731-image editorial set, accepting variant matches at dhash<=20/phash<=24
+# flags 813 pairs against the 9 the direct comparison finds. Read at
+# DUPLICATE_MATCH instead, the same nine pairs add **zero** pairs to that set,
+# and land an 80% centre crop of a real photograph at distance 0 on both hashes.
+# Strictly stronger evidence, and it may only ever claim **similar** — never a
+# duplicate, so a crop match cannot preselect anything for deletion. That is
+# also right on its own terms: a deliberate crop of a training image is a
+# variation somebody made on purpose.
+#
+# What it does not reach is a crop it has no variant for. Measured on the same
+# photograph: 90% and 80% land, 70% and 60% are missed. Catching those needs
+# scale-invariant keypoints rather than a fixed grid of centre crops, which is a
+# different technique and a much heavier one. The shares below are the cheap
+# half of the problem and they are honest about being that.
+CROP_SHARES = (0.9, 0.8)
+# The crop gate, deliberately its own number even though it agrees with
+# DUPLICATE_MATCH today. They were the same constant for an afternoon, and
+# loosening the duplicate rule's pHash bound from 10 to 16 — a change argued
+# entirely about *re-grades* — silently changed which crops the pass finds. That
+# is a coupling with no reason behind it: a crop of a file has not been
+# re-exposed, so the pHash headroom a re-grade needs is headroom a crop match
+# gets for free, and it gets it nine times over because this is a minimum across
+# nine variant pairs. Two names, so the next threshold argument moves only the
+# thing it is about.
+CROP_MATCH = {"dhash": 6, "phash": 16}
+FINGERPRINT_FILE = "fingerprints.json"
+# How long one scan request will spend measuring before it answers with what it
+# has and asks to be called again.
+#
+# There is deliberately no job record, no spawn and no second route behind this.
+# The measurement is already cached per file, so the cache *is* the progress
+# state: a request measures what it can, writes what it measured, and reports
+# how many are left. The next request picks up exactly where it stopped, and a
+# container that dies mid-scan costs the images it had in hand rather than the
+# folder. A job id would be a parallel contract for something the existing
+# route can already resume.
+#
+# Ten seconds because a scan measures ~31 images a second on this image, so the
+# common case — a training set of twenty to eighty — finishes in the first
+# request and never sees the polling path at all. A 731-image source folder
+# takes three.
+SCAN_BUDGET_S = 10.0
+# The cache is rewritten whole when this moves, rather than being migrated: it
+# is a decode cache, and a rescan is the only thing a wrong one costs.
+FINGERPRINT_VERSION = 4
+# Which encoding to prefer when two files are the same picture at the same size
+# and the same weight. Lossless first: a PNG re-saved as JPEG can be recovered
+# from neither direction, and the tie only ever arises between an original and
+# a re-export of it.
+_FORMAT_RANK = {"PNG": 0, "WEBP": 1, "AVIF": 2, "BMP": 3, "JPEG": 4}
+
+
+def _dhash(im) -> int:
+    """
+    64 bits of horizontal gradient: is this pixel brighter than the one to its
+    right, over a 9x8 grayscale.
+
+    A gradient rather than a mean (aHash) because a re-export that shifts
+    exposure, gamma or a colour profile moves every pixel the same way and
+    leaves every *comparison between neighbours* alone. That is the whole
+    reason two exports of one frame at different JPEG qualities land on the
+    same hash while two different photographs of the same room do not.
+
+    Takes an already-upright image: orientation is resolved on arrival, and a
+    hash computed off the stored pixels would file a phone photo and its
+    rotated copy as two different pictures.
+    """
+    from PIL import Image
+
+    small = im.convert("L").resize((9, 8), Image.LANCZOS)
+    px = small.load()
+    bits = 0
+    for y in range(8):
+        for x in range(8):
+            bits = (bits << 1) | int(px[x, y] > px[x + 1, y])
+    return bits
+
+
+def _phash(im) -> int:
+    """
+    64 bits of low-frequency DCT energy, thresholded at its own median.
+
+    Here to disagree with dHash rather than to outvote it. The two read
+    different things — edges against coarse structure — so a pair that satisfies
+    both is a pair two independent measurements agree about, and that agreement
+    is what lets the thresholds sit far enough out to catch a re-grade without
+    reaching a different photograph.
+
+    The DC term is dropped before the median, because it is the average
+    brightness of the whole frame: leaving it in makes the hash of a picture
+    depend on how the picture was exposed, which is exactly the transform this
+    is supposed to survive.
+    """
+    from PIL import Image
+
+    small = im.convert("L").resize((32, 32), Image.LANCZOS)
+    px = list(small.getdata())
+    # Separable DCT-II: the row transform is computed once per (v, y) rather
+    # than once per (v, u, y), which is the difference between ~2k and ~67k
+    # cosine calls per hash.
+    cos = [[math.cos((2 * i + 1) * k * math.pi / 64) for i in range(32)] for k in range(8)]
+    rows = [[sum(px[y * 32 + x] * cos[u][x] for x in range(32)) for u in range(8)]
+            for y in range(32)]
+    coeffs = [sum(rows[y][u] * cos[v][y] for y in range(32))
+              for v in range(8) for u in range(8)]
+    median = sorted(coeffs[1:])[31]
+    bits = 0
+    for value in coeffs[1:]:
+        bits = (bits << 1) | int(value > median)
+    return bits
+
+
+def _sharpness(im) -> float:
+    """
+    Mean absolute neighbour difference at a fixed 64x64.
+
+    A tie-breaker between two copies of one picture and nothing more. At a fixed
+    analysis size it answers "which of these two survived less blur and less
+    smoothing", which is the question a re-encode raises; it is not a judgement
+    about the photograph, and it is never compared across different pictures.
+    """
+    from PIL import Image
+
+    small = im.convert("L").resize((64, 64), Image.LANCZOS)
+    px = small.load()
+    total = 0
+    for y in range(63):
+        for x in range(63):
+            total += abs(px[x, y] - px[x + 1, y]) + abs(px[x, y] - px[x, y + 1])
+    return round(total / (63 * 63 * 2), 2)
+
+
+def _crop_variants(im) -> list:
+    """The full frame first, then one centre crop per CROP_SHARES entry."""
+    out = [im]
+    w, h = im.size
+    for share in CROP_SHARES:
+        cw, ch = int(w * share), int(h * share)
+        if cw >= 16 and ch >= 16:
+            left, top = (w - cw) // 2, (h - ch) // 2
+            out.append(im.crop((left, top, left + cw, top + ch)))
+    return out
+
+
+def _fingerprint(img: Path) -> dict[str, Any] | None:
+    """One image measured: its hashes, its bytes, its pixels, its encoding."""
+    from PIL import Image
+
+    try:
+        st = img.stat()
+        digest = hashlib.sha256()
+        with img.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        with Image.open(img) as raw:
+            fmt = (raw.format or img.suffix.lstrip(".")).upper()
+            up = _upright(raw)
+            w, h = up.size
+            # Index 0 is the full frame, which is what every direct comparison
+            # and every distance the page shows is measured from.
+            variants = [[_dhash(v), _phash(v)] for v in _crop_variants(up)]
+            rec = {"dhash": variants[0][0], "phash": variants[0][1],
+                   "variants": variants, "sharpness": _sharpness(up)}
+    except Exception:
+        # A file PIL cannot open is not a reason to fail the scan. It simply
+        # has no fingerprint, so it groups with nothing and stays where it is.
+        return None
+    return {**rec, "sha": digest.hexdigest(), "bytes": st.st_size,
+            "width": w, "height": h, "format": fmt, "mtime": st.st_mtime,
+            "v": FINGERPRINT_VERSION, "stamp": [st.st_mtime_ns, st.st_size]}
+
+
+def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, int]:
+    """
+    Every image in the set, measured once and cached beside the thumbnails.
+
+    Cached for the reason thumbnails are: a scan decodes every image in the
+    folder, and a two-hundred-image set of 12 MP phone photos is minutes of CPU
+    that must not be paid again for looking at the second group. Keyed on
+    `(mtime_ns, size)` rather than mtime alone, because replacing an image with
+    another of the same age is exactly what an overwriting re-upload does, and
+    on a version, because an entry measured by an older classifier is not a
+    cheaper answer to today's question — it is a wrong one.
+
+    Returns the map, whether anything was written, and how many images it did
+    not reach — so the caller commits the volume once for a scan rather than
+    once per file, and can answer "still measuring" instead of holding a request
+    open for a minute.
+
+    `budget_s` bounds the measuring, not the reading: everything already cached
+    is collected however long the folder is, because that costs a dict lookup.
+    Only the decodes are on the clock.
+    """
+    images = _dataset_images(d)
+    cache_path = d / THUMB_DIR / FINGERPRINT_FILE
+    cached: dict[str, Any] = {}
+    if cache_path.is_file():
+        try:
+            cached = json.loads(cache_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            cached = {}
+
+    out: dict[str, dict[str, Any]] = {}
+    changed = False
+    pending = 0
+    measured = 0
+    deadline = None if budget_s is None else time.monotonic() + budget_s
+    for img in images:
+        try:
+            st = img.stat()
+        except OSError:
+            continue
+        was = cached.get(img.name)
+        if (was and was.get("stamp") == [st.st_mtime_ns, st.st_size]
+                and was.get("v") == FINGERPRINT_VERSION):
+            out[img.name] = was
+            continue
+        # Out of time: leave it out of `out` entirely rather than half-measured.
+        # It is absent from the cache too, which is exactly what makes the next
+        # request pick it up — there is no separate cursor to keep in step.
+        #
+        # `measured` is what makes the loop terminate rather than merely slow
+        # down. A budget check on its own is a check that can be true before the
+        # first decode — at a zero budget it is true immediately, and then every
+        # request skips every image, writes nothing and asks to be called again
+        # forever. `smoke_dupes.py` drives exactly that case. In production the
+        # same stall arrives as one image slower than the whole budget, which is
+        # a 200 MP scan or a volume having a bad minute, and it would have hung
+        # the panel on one file with no way to tell which.
+        if measured and deadline is not None and time.monotonic() > deadline:
+            pending += 1
+            continue
+        fp = _fingerprint(img)
+        measured += 1
+        changed = True
+        if fp:
+            out[img.name] = fp
+    # A deleted image leaves its entry behind, which is why the rewrite is of
+    # `out` rather than of `cached | out`: the cache must not grow forever on a
+    # folder that is edited all day.
+    if changed or len(cached) != len(out):
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(out))
+            changed = True
+        except OSError:
+            pass
+    return out, changed, pending
+
+
+def _keep_rank(fp: dict[str, Any], name: str, captioned: bool) -> tuple:
+    """
+    Which of two copies of one picture is the one to keep.
+
+    Pixels first, because resolution is the only axis on this list the trainer
+    reads directly — a 2048px original and its 512px re-post are one picture and
+    only one of them is worth bucketing. Then the lossless encoding, then
+    sharpness, then weight: three ways of asking the same question, which is how
+    much of the original survived. A caption last, because it is the only entry
+    here that is about your work rather than the file, and it is cheap to move.
+
+    Never applied across different pictures — see `_sharpness`.
+    """
+    return (
+        -(fp["width"] * fp["height"]),
+        _FORMAT_RANK.get(fp["format"], 9),
+        -fp.get("sharpness", 0),
+        -fp["bytes"],
+        0 if captioned else 1,
+        name,
+    )
+
+
+def _keep_reason(best: dict[str, Any], runner: dict[str, Any]) -> str:
+    """
+    The axis that decided, named — and named against the runner-up rather than
+    against the whole group, because "nothing separates the top two" is the one
+    statement that tells you your choice does not matter.
+
+    Derived, so it is visible: a suggestion you have to re-derive by hand before
+    you can trust it costs more than making the choice yourself.
+    """
+    if best["width"] * best["height"] != runner["width"] * runner["height"]:
+        return f"most pixels · {best['megapixels']} MP"
+    if best["format"] != runner["format"]:
+        return f"{best['format']} over {runner['format']}"
+    if best.get("sharpness", 0) != runner.get("sharpness", 0):
+        return "sharpest copy at this resolution"
+    if best["bytes"] != runner["bytes"]:
+        return "same size, least compressed"
+    if bool(best["caption"]) != bool(runner["caption"]):
+        return "the only one captioned"
+    return "identical in every respect — first by name"
+
+
+def _link(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """
+    What relates two images, if anything.
+
+    Returns `kind` of "duplicate", "similar" or "", plus the evidence the page
+    shows: both distances, and the transforms that would explain them. Every
+    accept is an AND over the two hashes — see DUPLICATE_MATCH.
+    """
+    if a["sha"] == b["sha"]:
+        return {"kind": "duplicate", "dhash": 0, "phash": 0, "same_file": True,
+                "transforms": ["byte-for-byte identical"]}
+
+    dd = (a["dhash"] ^ b["dhash"]).bit_count()
+    dp = (a["phash"] ^ b["phash"]).bit_count()
+    transforms = []
+    if (a["width"], a["height"]) != (b["width"], b["height"]):
+        transforms.append("resized")
+    if a["format"] != b["format"]:
+        transforms.append("reformatted")
+    elif a["bytes"] != b["bytes"]:
+        transforms.append("recompressed")
+
+    if dd <= DUPLICATE_MATCH["dhash"] and dp <= DUPLICATE_MATCH["phash"]:
+        kind = "duplicate"
+    elif dd <= SIMILAR_MATCH["dhash"] and dp <= SIMILAR_MATCH["phash"]:
+        kind = "similar"
+    else:
+        # The crop pass, on its leash. Every variant against every variant
+        # except full-frame-to-full-frame, which is the comparison just made.
+        hit = min(((x[0] ^ y[0]).bit_count(), (x[1] ^ y[1]).bit_count())
+                  for i, x in enumerate(a["variants"])
+                  for j, y in enumerate(b["variants"]) if i or j)
+        if hit[0] <= CROP_MATCH["dhash"] and hit[1] <= CROP_MATCH["phash"]:
+            return {"kind": "similar", "dhash": dd, "phash": dp, "same_file": False,
+                    "transforms": [*transforms, "cropped"],
+                    "crop_dhash": hit[0], "crop_phash": hit[1]}
+        return {"kind": "", "dhash": dd, "phash": dp, "same_file": False,
+                "transforms": transforms}
+    return {"kind": kind, "dhash": dd, "phash": dp, "same_file": False,
+            "transforms": transforms}
+
+
+def _components(names: list[str], edges: list[tuple[str, str]]) -> list[list[str]]:
+    """Connected components, so an image is decided about once rather than once
+    per pair it happens to resemble."""
+    parent = {n: n for n in names}
+
+    def find(n: str) -> str:
+        while parent[n] != n:
+            parent[n] = parent[parent[n]]
+            n = parent[n]
+        return n
+
+    for a, b in edges:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    out: dict[str, list[str]] = {}
+    for n in names:
+        out.setdefault(find(n), []).append(n)
+    return [sorted(m) for m in out.values() if len(m) > 1]
+
+
+def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
+    """
+    The set's duplicate groups, then its similar ones.
+
+    **Pairwise, over distinct fingerprints.** A BK-tree was here and was
+    measured: at the radius this classifier uses it visits 96% of the tree per
+    lookup, so it is the same sweep with a tree walk's overhead on top. What
+    inverts the cost is deduplicating the hashes first — the pathological input
+    for a pairwise scan, one picture present four hundred times, collapses to a
+    single fingerprint and one comparison — and what makes a *rescan* free is
+    the fingerprint cache. Neither of those is an index.
+
+    **An image is in at most one group, and duplicates win.** Similar links are
+    computed only between images no duplicate group already holds. A similar
+    relationship between a copy and an outsider is therefore not shown until the
+    copies are dealt with — which is the order the work happens in anyway: clear
+    the duplicates, rescan, review what is merely alike. The invariant it buys
+    is worth more than the edge it drops, because a name in two groups is a name
+    you are asked about twice and can mark for deletion twice.
+    """
+    prints, wrote, pending = _fingerprints(d, budget_s)
+    if pending:
+        # Half a folder groups into half the truth, and half the truth here is a
+        # keeper suggested against copies that have not been looked at yet. So
+        # nothing is grouped until everything is measured; what comes back is
+        # the count, which is the only honest thing to draw.
+        return {"scanning": True, "measured": len(prints),
+                "total": len(prints) + pending, "groups": [], "images": len(prints),
+                "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
+                               "crop": CROP_MATCH},
+                "summary": {"duplicate_groups": 0, "duplicate_images": 0,
+                            "similar_groups": 0, "similar_images": 0},
+                "reclaim": 0, "_wrote": wrote}
+
+    # Distinct fingerprints, so identical files are compared once. The sha is in
+    # the key because two different pictures cannot share both hashes but two
+    # copies of one file must stay distinguishable as *the same file*.
+    by_print: dict[tuple, list[str]] = {}
+    for name, fp in prints.items():
+        by_print.setdefault(
+            (tuple(tuple(v) for v in fp["variants"]), fp["sha"]), []).append(name)
+    keys = list(by_print)
+
+    dup_edges: list[tuple[str, str]] = []
+    sim_edges: list[tuple[str, str]] = []
+    evidence: dict[tuple[str, str], dict[str, Any]] = {}
+    for i in range(len(keys)):
+        # Files sharing a fingerprint are the same picture by definition.
+        same = by_print[keys[i]]
+        for other in same[1:]:
+            dup_edges.append((same[0], other))
+        for j in range(i + 1, len(keys)):
+            a, b = by_print[keys[i]][0], by_print[keys[j]][0]
+            link = _link(prints[a], prints[b])
+            if not link["kind"]:
+                continue
+            evidence[(a, b)] = link
+            (dup_edges if link["kind"] == "duplicate" else sim_edges).append((a, b))
+
+    names = list(prints)
+    dup_groups = _components(names, dup_edges)
+    held = {n for g in dup_groups for n in g}
+    # Similar is computed over what is left, which is what keeps every image in
+    # at most one group.
+    sim_groups = _components([n for n in names if n not in held],
+                             [(a, b) for a, b in sim_edges
+                              if a not in held and b not in held])
+
+    def build(members: list[str], kind: str) -> dict[str, Any]:
+        rows = []
+        for name in members:
+            fp = prints[name]
+            rows.append({
+                "name": name, "caption": _caption_of(d / name), "bytes": fp["bytes"],
+                "width": fp["width"], "height": fp["height"],
+                # Rounded here rather than on the page: it is the one figure in
+                # this row that is computed rather than read, and two consumers
+                # rounding it differently is two answers to "which is bigger".
+                "megapixels": round(fp["width"] * fp["height"] / 1e6, 1),
+                "format": fp["format"], "sharpness": fp.get("sharpness", 0),
+                "mtime": fp["mtime"],
+            })
+        rows.sort(key=lambda r: _keep_rank(prints[r["name"]], r["name"], bool(r["caption"])))
+        keeper = rows[0]
+        for r in rows:
+            link = (_link(prints[keeper["name"]], prints[r["name"]])
+                    if r["name"] != keeper["name"] else None)
+            r.update(
+                dhash_distance=link["dhash"] if link else 0,
+                phash_distance=link["phash"] if link else 0,
+                same_file=bool(link and link["same_file"]),
+                transforms=link["transforms"] if link else [],
+                # Only a crop match has these, and it is the one case where the
+                # direct distance shown beside it is *outside* the threshold
+                # that accepted the pair — because what accepted it was the
+                # crop comparison. Reporting the first number without the
+                # second is reporting a contradiction.
+                crop_dhash=link.get("crop_dhash") if link else None,
+                crop_phash=link.get("crop_phash") if link else None,
+            )
+        return {
+            # Stable across a rescan so the page's per-group state survives one:
+            # the alphabetically first member, which only moves when that member
+            # is deleted and the group is therefore a different group.
+            "key": members[0],
+            "kind": kind,
+            # Only a duplicate group preselects. A similar group is evidence, so
+            # it arrives with everything kept and nothing to undo.
+            "suggest": keeper["name"] if kind == "duplicate" else "",
+            "why": _keep_reason(keeper, rows[1]) if kind == "duplicate" else "",
+            "images": rows,
+        }
+
+    groups = ([build(g, "duplicate") for g in dup_groups]
+              + [build(g, "similar") for g in sim_groups])
+    # Duplicates first and the biggest first inside each class: a group of six
+    # copies is the one press worth the most, and a pair of burst frames is a
+    # judgement you should reach after the decided work is done.
+    groups.sort(key=lambda g: (g["kind"] != "duplicate", -len(g["images"]), g["key"]))
+    dupes = [g for g in groups if g["kind"] == "duplicate"]
+    return {
+        "scanning": False,
+        "images": len(prints),
+        "groups": groups,
+        "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
+                       "crop": CROP_MATCH},
+        "summary": {
+            "duplicate_groups": len(dupes),
+            "duplicate_images": sum(len(g["images"]) for g in dupes),
+            "similar_groups": len(groups) - len(dupes),
+            "similar_images": sum(len(g["images"]) for g in groups if g["kind"] != "duplicate"),
+        },
+        # What accepting every suggestion would reclaim. Duplicates only —
+        # nothing in a similar group is marked, so nothing in one is counted.
+        "reclaim": sum(r["bytes"] for g in dupes for r in g["images"]
+                       if r["name"] != g["suggest"]),
+        "_wrote": wrote,
     }
 
 
@@ -7354,22 +7931,52 @@ def web():
 
     @api.post("/api/datasets/{name}/remove")
     def remove_image(name: str, payload: dict) -> dict[str, Any]:
-        """Delete an image, its caption and its thumbnail. Not recoverable."""
+        """
+        Delete an image, its caption and its thumbnail. Not recoverable.
+
+        Takes `image` or `images`, and the plural is the same route rather than
+        a second one: a duplicate review resolves fourteen files in one press,
+        and fourteen requests against a network volume is fourteen reloads,
+        fourteen commits and a listing that is briefly right about a folder
+        nobody is looking at any more. What the plural must not become is a
+        looser guard — every name still goes through the same basename and
+        extension check, and one bad name fails only itself.
+        """
         _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
-        img = d / Path(str(payload.get("image") or "")).name
-        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
-            return {"error": "Image not found."}
+        asked = payload.get("images")
+        if not isinstance(asked, list):
+            asked = [payload.get("image")]
+        wanted = [str(x or "") for x in asked if str(x or "").strip()]
+        if not wanted:
+            return {"error": "No image named."}
 
-        for part in (img, img.with_suffix(".txt")):
-            part.unlink(missing_ok=True)
-        (d / THUMB_DIR / (img.stem + ".jpg")).unlink(missing_ok=True)
+        removed, missing = [], []
+        for raw in wanted:
+            img = d / Path(raw).name
+            if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
+                missing.append(Path(raw).name)
+                continue
+            for part in (img, img.with_suffix(".txt")):
+                part.unlink(missing_ok=True)
+            (d / THUMB_DIR / (img.stem + ".jpg")).unlink(missing_ok=True)
+            removed.append(img.name)
         _drop_legacy_trash(d)
 
+        if not removed:
+            # Singular and plural answer the same way they always did: one name
+            # that resolves to nothing is an error, not a no-op reported as ok.
+            return {"error": "Image not found." if len(wanted) == 1
+                    else f"None of the {len(wanted)} images named are in this set."}
+        # Nothing prunes the fingerprint cache here on purpose: the next scan
+        # builds its map from the folder listing, so an entry for a file that is
+        # gone is never read, and one that comes back under the same name is
+        # caught by the (mtime, size) stamp.
         volume.commit()
-        return {"ok": True, **_dataset_stats(d)}
+        return {"ok": True, "removed": removed, "missing": missing,
+                **_dataset_stats(d)}
 
     @api.get("/api/datasets/{name}/insight")
     def dataset_insight(name: str, trigger: str = "") -> dict[str, Any]:
@@ -7378,6 +7985,29 @@ def web():
         if err:
             return err
         return _caption_insight(d, trigger)
+
+    @api.get("/api/datasets/{name}/duplicates")
+    def dataset_duplicates(name: str) -> dict[str, Any]:
+        """
+        The set's classified duplicate and review groups.
+
+        Its own route rather than a field on `/insight`, because the two are
+        priced differently: insight reads a few hundred `.txt` files and is
+        refreshed on every caption edit, while this decodes every image in the
+        folder the first time it runs. Folding it in would make saving one
+        caption cost a full rescan.
+        """
+        _reload_volume()
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+        report = _duplicate_groups(d, SCAN_BUDGET_S)
+        # Fingerprints are derived data, like thumbnails — but unlike a
+        # thumbnail a rescan costs a decode of the whole folder, so the one
+        # commit per scan is worth paying and the per-file one is not.
+        if report.pop("_wrote", False):
+            volume.commit()
+        return report
 
     @api.post("/api/datasets/{name}/prepend-trigger")
     def prepend_trigger(name: str, payload: dict) -> dict[str, Any]:

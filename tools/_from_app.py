@@ -17,6 +17,10 @@ loudly rather than quietly hand back one function fewer.
 """
 
 import ast
+import hashlib
+import json
+import math
+import time
 import typing
 from pathlib import Path
 
@@ -24,7 +28,7 @@ APP = Path(__file__).resolve().parent.parent / "app.py"
 
 
 def _named(node: ast.stmt) -> str:
-    if isinstance(node, ast.FunctionDef):
+    if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
         return node.name
     if isinstance(node, ast.AnnAssign):
         return getattr(node.target, "id", "")
@@ -42,7 +46,14 @@ def pull(names: set[str]) -> dict:
         raise SystemExit(f"not in app.py any more: {', '.join(sorted(missing))}")
     # `Any` because the annotations are evaluated: app.py deliberately does not
     # use `from __future__ import annotations` — see the note at the top of it.
-    ns: dict = {"Any": typing.Any}
+    # The rest are app.py's own module-level imports, seeded rather than pulled:
+    # an `import` statement is not a named definition, and a subset that had to
+    # list them would be a subset that breaks when a function starts using one
+    # it did not before. PIL is deliberately absent — the pulled code imports it
+    # inside the functions that need it, so a caller with no Pillow can still
+    # pull them and only pays when it calls one.
+    ns: dict = {"Any": typing.Any, "Path": Path, "json": json,
+                "hashlib": hashlib, "math": math, "time": time}
     exec(compile(ast.Module(body=body, type_ignores=[]), str(APP), "exec"), ns)
     return ns
 
@@ -65,4 +76,19 @@ SHOT = {
 CAPTION = {
     "CAPTION_MODELS", "CAPTION_PRESETS",
     "DEFAULT_CAPTION_MODEL", "DEFAULT_CAPTION_PRESET",
+}
+
+# Duplicate grouping, whole. `smoke_dupes.py` checks the real hash against real
+# re-encodes, and `preview_ui.py` groups the preview's own fixtures with it —
+# a stub that hand-wrote its groups would be a preview of an arrangement the
+# server never produces, which is the one thing this file exists to prevent.
+DUPES = {
+    "IMAGE_EXTS", "THUMB_DIR", "FINGERPRINT_FILE", "FINGERPRINT_VERSION",
+    "SCAN_BUDGET_S",
+    "DUPLICATE_MATCH", "SIMILAR_MATCH", "CROP_SHARES", "CROP_MATCH",
+    "_FORMAT_RANK",
+    "_upright", "_dataset_images", "_caption_of",
+    "_dhash", "_phash", "_sharpness", "_crop_variants",
+    "_fingerprint", "_fingerprints", "_link", "_components",
+    "_keep_rank", "_keep_reason", "_duplicate_groups",
 }

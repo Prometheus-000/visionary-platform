@@ -182,6 +182,8 @@ DATASETS = [
      "trigger_word": "", "saved": False},
     {"name": "beach_walk", "count": 12, "uncaptioned": 3, "cover": "0.png",
      "trigger_word": "", "saved": False},
+    # 24 = 18 numbered + the six files DUPE_FILES puts in the folder. The
+    # duplicate review is about this set, so its count has to include them.
     {"name": "studio_portraits", "count": 24, "uncaptioned": 0, "cover": "0.png",
      "trigger_word": "ohwx_style", "saved": True},
     {"name": "street_night", "count": 41, "uncaptioned": 7, "cover": "0.png",
@@ -401,13 +403,132 @@ def shape_of(name: str) -> tuple:
     return SHAPES[int(stem) % len(SHAPES)]
 
 
+# The files the duplicate fixture is about, and they are *in* the listing.
+#
+# They were not, for a while: the report named `3 copy.png` and `8.jpg` while
+# `images()` emitted `0.png … 23.png`, so deleting from the review removed four
+# files the set had never contained. Everything still answered 200 and the image
+# count never moved — which is precisely the shape of a broken batch delete, and
+# the stub was generating it on its own. Same rule as `shape_of`: a stub that
+# reports one thing and serves another is its own bug.
+DUPE_FILES = [
+    ("3 copy.png", 1536, 640, 1_820_000),
+    ("8.jpg", 768, 320, 184_000),
+    ("13.webp", 1536, 640, 1_210_000),
+    ("17.jpg", 1216, 832, 612_000),
+    ("20.jpg", 1216, 832, 902_000),
+    ("21.jpg", 1638, 819, 1_020_000),
+]
+
+
 def images(n: int = 24) -> list:
+    """`n` numbered images, then the duplicate fixture's own files, so the two
+    surfaces are talking about one folder."""
     out = []
     for i in range(n):
         w, h = shape_of(str(i))
         out.append({"name": f"{i}.png", "caption": CAPTIONS[i % len(CAPTIONS)],
                     "bytes": 780_000 + i * 4_100, "width": w, "height": h})
+    for name, w, h, b in DUPE_FILES:
+        out.append({"name": name, "caption": "", "bytes": b, "width": w, "height": h})
     return out
+
+
+def duplicate_report(gone: set | None = None) -> dict:
+    """
+    The duplicate-review fixture, shaped like the real scan.
+
+    The preview does not pull the scanner itself: that needs Pillow and a real
+    folder of files, while this server deliberately remains stdlib-only. It
+    does keep the *response* faithful, so the group-by-group surface is
+    developed against pictures with genuinely different dimensions, weights and
+    encodings rather than against a hand-drawn empty state.
+
+    Both classes are here, because the whole safety model is the difference
+    between them: a `duplicate` group carries a `suggest` and the page marks
+    everything else, a `similar` group carries none and the page marks nothing.
+    A fixture with only the first kind would let the second ship untested — and
+    the second is the one that must never preselect a deletion.
+    """
+    def row(name: str, width: int, height: int, bytes_: int, fmt: str, *,
+            dhash: int, phash: int, same_file: bool = False, caption: str = "",
+            sharpness: float = 12.4, transforms: list | None = None,
+            crop: tuple | None = None) -> dict:
+        return {"name": name, "caption": caption, "width": width, "height": height,
+                "bytes": bytes_, "format": fmt, "megapixels": round(width * height / 1e6, 1),
+                "mtime": 0, "sharpness": sharpness,
+                "dhash_distance": dhash, "phash_distance": phash,
+                "same_file": same_file,
+                "transforms": [] if transforms is None else transforms,
+                "crop_dhash": crop[0] if crop else None,
+                "crop_phash": crop[1] if crop else None}
+
+    groups = [
+        # One picture, three encodings, three sizes — and a byte-identical copy,
+        # because "the same file" is the row where there is nothing to weigh.
+        {"key": "3.png", "kind": "duplicate", "suggest": "3.png",
+         "why": "most pixels · 1.0 MP", "images": [
+             row("3.png", 1536, 640, 1_820_000, "PNG", dhash=0, phash=0, sharpness=14.1,
+                 caption="ohwx_style a close portrait in soft daylight."),
+             row("3 copy.png", 1536, 640, 1_820_000, "PNG", dhash=0, phash=0, same_file=True,
+                 sharpness=14.1, transforms=["byte-for-byte identical"]),
+             row("8.jpg", 768, 320, 184_000, "JPEG", dhash=1, phash=4, sharpness=9.8,
+                 transforms=["resized", "reformatted"]),
+             row("13.webp", 1536, 640, 1_210_000, "WEBP", dhash=0, phash=2, sharpness=13.6,
+                 transforms=["reformatted"]),
+         ]},
+        # The tie the reason line exists for: same picture, same size, one of
+        # them re-exported brighter.
+        {"key": "2.png", "kind": "duplicate", "suggest": "2.png",
+         "why": "PNG over JPEG", "images": [
+             row("2.png", 1216, 832, 1_140_000, "PNG", dhash=0, phash=0, sharpness=11.2,
+                 caption="ohwx_style standing in a field, soft daylight."),
+             row("17.jpg", 1216, 832, 612_000, "JPEG", dhash=3, phash=12, sharpness=10.9,
+                 transforms=["reformatted"]),
+         ]},
+        # Two frames off one burst. Nothing preselected, and the empty `suggest`
+        # is what the page reads to know that.
+        {"key": "4.png", "kind": "similar", "suggest": "", "why": "", "images": [
+             row("4.png", 1216, 832, 940_000, "PNG", dhash=0, phash=0, sharpness=12.0),
+             row("20.jpg", 1216, 832, 902_000, "JPEG", dhash=10, phash=14, sharpness=11.7,
+                 transforms=["reformatted"]),
+         ]},
+        # A crop, which is always similar and never a duplicate — a deliberate
+        # reframe of a training image is a variation somebody made on purpose.
+        {"key": "6.png", "kind": "similar", "suggest": "", "why": "", "images": [
+             row("6.png", 2048, 1024, 2_310_000, "PNG", dhash=0, phash=0, sharpness=15.3),
+             row("21.jpg", 1638, 819, 1_020_000, "JPEG", dhash=18, phash=20, sharpness=15.1,
+                 transforms=["resized", "reformatted", "cropped"], crop=(2, 4)),
+         ]},
+    ]
+    # A deleted image leaves its group, and a group with one image left is not
+    # a group any more. This is the half that makes the delete visible: without
+    # it the panel deletes four files and redraws the same four cards.
+    gone = gone or set()
+    for g in groups:
+        g["images"] = [i for i in g["images"] if i["name"] not in gone]
+    groups = [g for g in groups if len(g["images"]) > 1]
+    for g in groups:
+        if g["kind"] == "duplicate" and g["suggest"] not in {i["name"] for i in g["images"]}:
+            g["suggest"] = g["images"][0]["name"]
+
+    dupes = [g for g in groups if g["kind"] == "duplicate"]
+    return {
+        "images": 24,
+        "groups": groups,
+        "thresholds": {"duplicate": {"dhash": 6, "phash": 16},
+                       "similar": {"dhash": 12, "phash": 18},
+                       "crop": {"dhash": 6, "phash": 16}},
+        "summary": {
+            "duplicate_groups": len(dupes),
+            "duplicate_images": sum(len(g["images"]) for g in dupes),
+            "similar_groups": len(groups) - len(dupes),
+            "similar_images": sum(len(g["images"]) for g in groups
+                                  if g["kind"] != "duplicate"),
+        },
+        "reclaim": sum(i["bytes"] for g in dupes for i in g["images"]
+                       if i["name"] != g["suggest"]),
+    }
 
 
 INSIGHT = {
@@ -421,6 +542,18 @@ INSIGHT = {
         {"phrase": "seated by a window", "count": 4, "share": 0.21},
     ],
 }
+
+
+# How far the fake scan has got, so the progress readout is reachable at all.
+SCAN: dict = {}
+
+# What the duplicate review has deleted, per dataset. In memory and mutated,
+# for the reason the save and cull routes are: the delete is judged by what
+# happens *next* — cards leaving the group, the group leaving the rail when it
+# drops to one image, the count and the reclaim figure going down with them.
+# A flat {"ok": true} leaves the page redrawing the folder it just emptied,
+# which is the one outcome that would hide a broken batch delete.
+REMOVED: dict = {}
 
 
 # In-flight fake runs, keyed by job id: {polls, stopped}. Module state rather
@@ -474,6 +607,32 @@ class Handler(BaseHTTPRequestHandler):
         # judged by what the rail does next — a set moving out of Unsaved, a
         # card leaving and the heading going with it when it was the last one.
         # A flat {"ok": true} leaves the page redrawing the state it started in.
+        m = re.match(r"/api/datasets/([^/]+)/remove$", path)
+        if m:
+            name = m.group(1)
+            try:
+                payload = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+            # Singular or plural, matching the route: the duplicate review
+            # resolves a whole group in one press, and fourteen requests against
+            # a network volume is fourteen reloads and fourteen commits.
+            asked = payload.get("images")
+            if not isinstance(asked, list):
+                asked = [payload.get("image")]
+            asked = [str(x) for x in asked if x]
+            if not asked:
+                return self.reply({"error": "No image named."})
+            gone = REMOVED.setdefault(name, set())
+            fresh = [n for n in asked if n not in gone]
+            gone.update(fresh)
+            row = next((d for d in DATASETS if d["name"] == name), None)
+            if row:
+                row["count"] = max(0, row["count"] - len(fresh))
+            return self.reply({"ok": True, "removed": fresh,
+                               "missing": [n for n in asked if n not in fresh],
+                               **(row or {})})
+
         m = re.match(r"/api/datasets/([^/]+)/(save|delete)$", path)
         if m:
             name, verb = m.group(1), m.group(2)
@@ -719,16 +878,37 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/datasets":
             return self.reply({"datasets": DATASETS})
 
+        if path.endswith("/duplicates"):
+            # The scan answers `scanning` for its first few calls before it
+            # answers groups, because that path is otherwise unexercised
+            # anywhere: a real scan only shows it on a folder big enough to
+            # blow a ten-second budget, which is not a folder anyone keeps
+            # beside a preview server. Module state rather than per-request,
+            # for the reason RUNS is — progress only reads as progress if
+            # consecutive polls disagree with each other.
+            SCAN["calls"] = SCAN.get("calls", 0) + 1
+            if SCAN["calls"] <= 4:
+                measured = SCAN["calls"] * 5
+                return self.reply({"scanning": True, "measured": measured, "total": 24,
+                                   "images": measured, "groups": [], "reclaim": 0,
+                                   "thresholds": {}, "summary": {
+                                       "duplicate_groups": 0, "duplicate_images": 0,
+                                       "similar_groups": 0, "similar_images": 0}})
+            m = re.match(r"/api/datasets/([^/]+)/duplicates$", path)
+            return self.reply(duplicate_report(REMOVED.get(m.group(1), set()) if m else set()))
+
         if path.endswith("/insight"):
             return self.reply(INSIGHT)
         m = re.match(r"/api/datasets/([^/]+)$", path)
         if m:
             name = m.group(1)
             row = next((d for d in DATASETS if d["name"] == name), None)
+            gone = REMOVED.get(name, set())
+            base = max(0, (row or {}).get("count", 0) - len(DUPE_FILES) + len(gone))
             return self.reply({
                 "trigger_word": (row or {}).get("trigger_word", ""),
                 "saved": (row or {}).get("saved", True),
-                "images": images((row or {}).get("count", 0)),
+                "images": [i for i in images(base) if i["name"] not in gone],
             })
 
         m = re.match(r"/api/(?:thumb|image)/[^/]+/(.+)$", path)
