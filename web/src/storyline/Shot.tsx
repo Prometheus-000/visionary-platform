@@ -17,10 +17,13 @@ import { shares, type Module } from './model'
  * - **Consequence** — "C is in the background" is a *spatial* result of a
  *   *textual* cause, and no percentage says it. A picture does.
  *
- * **Deliberately a weighting diagram and not a floor plan.** It knows order,
- * extent and grouping, and it knows nothing about where anybody is standing —
- * so it must not look like it does, or people will read geometry out of an
- * estimate. Shapes, not figures. No ground line, no perspective.
+ * **Deliberately a weighting diagram and not a floor plan.** It knows extent and
+ * grouping, and it knows nothing about where anybody is standing — so it must
+ * not look like it does, or people will read geometry out of an estimate.
+ * Shapes, not figures. No ground line, no perspective. That rule is what decides
+ * the axes: size and opacity carry extent, horizontal distance carries grouping
+ * and nothing else, and order is spent buying the second of those rather than
+ * drawn as a fact of its own.
  *
  * **Read-only, and it stays that way.** The moment a shape can be dragged there
  * are two places to compose and they will disagree. It is diagnostic, which is
@@ -57,7 +60,6 @@ export function Shot({ mods }: { mods: Module[] }) {
 
   const W = 300
   const H = 110
-  const gap = 9
   const shapes = bodies.map((m, i) => {
     const share = top[i] ?? 0
     const rel = share / max                      // 1 for the biggest thing present
@@ -68,26 +70,29 @@ export function Shot({ mods }: { mods: Module[] }) {
     return { m, i, rel, h, w, group: groupOf.get(m.id) ?? i }
   })
 
-  const totalW = shapes.reduce((n, s) => n + s.w, 0) + gap * (shapes.length - 1)
+  // Horizontal position says grouping and nothing else. It used to be a constant
+  // gap, which left x carrying sequence plus the residue of centring a row of
+  // uneven widths — the first is not a fact about the shot, the second is not a
+  // fact at all, and together they read as the floor plan this must never claim.
+  // Group members therefore sit adjacent and groups in order of first mention, so
+  // proximity is the whole signal and the bracket that used to carry it is gone.
+  const TIGHT = 4
+  const OPEN = 22
+  const order = [...new Set(shapes.map((s) => s.group))]
+    .flatMap((g) => shapes.filter((s) => s.group === g))
+  const gaps: number[] = order.map((s, i) =>
+    i === 0 ? 0 : order[i - 1]!.group === s.group ? TIGHT : OPEN)
+
+  const totalW = order.reduce((n, s) => n + s.w, 0) + gaps.reduce((a, b) => a + b, 0)
   const scale = totalW > W - 16 ? (W - 16) / totalW : 1
   let x = (W - totalW * scale) / 2
 
-  const placed = shapes.map((s) => {
+  const placed = order.map((s, i) => {
+    x += gaps[i]! * scale
     const at = x
-    x += (s.w + gap) * scale
+    x += s.w * scale
     return { ...s, x: at, w: s.w * scale }
   })
-
-  // A bracket under everything standing together — drawn once per group, which
-  // is what makes "these two, and not that one" legible at a glance.
-  const brackets = [...new Set(placed.map((s) => s.group))]
-    .map((g) => placed.filter((s) => s.group === g))
-    .filter((members) => members.length > 1)
-    .map((members) => {
-      const first = members[0]!
-      const last = members[members.length - 1]!
-      return { g: first.group, x0: first.x, x1: last.x + last.w }
-    })
 
   // Nothing said, nothing drawn. An element with no words still has a shape
   // otherwise — a sliver in an empty frame, which reads as a glitch and is the
@@ -108,13 +113,6 @@ export function Shot({ mods }: { mods: Module[] }) {
           // Opacity carries recession a second time, so the signal survives at
           // small sizes and without colour.
           fill="var(--fg)" opacity={0.18 + s.rel * 0.72}
-        />
-      ))}
-      {brackets.map((b) => (
-        <path
-          key={b.g}
-          d={`M${b.x0} ${H - 11} L${b.x0} ${H - 7} L${b.x1} ${H - 7} L${b.x1} ${H - 11}`}
-          fill="none" stroke="var(--mut)" strokeWidth="1.5"
         />
       ))}
     </svg>
