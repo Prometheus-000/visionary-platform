@@ -13,12 +13,6 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "web"],
       "port": 5173
-    },
-    {
-      "name": "storyline",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "web", "--", "--port", "5199", "--strictPort"],
-      "port": 5199
     }
   ]
 }
