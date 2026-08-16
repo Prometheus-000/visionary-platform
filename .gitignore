@@ -49,3 +49,12 @@ Jack-Torrance-*.png
 master plan/
 chip-based-prompt-mockup/
 session-export-*/
+
+# The duplicate scanner's tuning corpus — 731 fashion-week photographs, ~520MB,
+# plus the .thumbs/fingerprints.json a scan leaves behind in it. Every number in
+# the duplicates commit was measured against this folder, which is why it is a
+# folder on disk rather than a fixture. The pictures are other people's, for the
+# same reason the styling screenshots are; and 520MB is not something to put in a
+# history whose only way back out is a rewrite. A `git add -A` staged all of it
+# once already, and the only thing that caught it was reading the file list.
+test img set/
