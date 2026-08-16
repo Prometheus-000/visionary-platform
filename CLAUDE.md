@@ -106,6 +106,7 @@ in for free.
     comfy_nodes/        our own ComfyUI nodes — one shim, see visionary_boxes
     ai-toolkit/         training reference
     tools/              smoke tests, the local UI preview
+    tools/tune_dupes.py where the duplicate thresholds come from — takes a folder
     tools/ui-checks/    parity checks — each takes a URL, runs on either page
     tools/_from_app.py  pulls plain-Python pieces out of app.py by AST
 
@@ -219,6 +220,130 @@ Sweeping and deleting both **unlink**. The sweep is the one deletion nobody asks
 for by name, so the grace period is what protects it: fifteen minutes of silence
 from the session, and the folder's own mtime counted as a heartbeat so an upload
 still writing cannot be swept out from under itself.
+
+### A duplicate is a copy; a similar image is a photograph
+
+A set arrives with duplicates in it far more often than not — the same shoot
+exported twice, a JPEG beside the PNG it came from, a phone album pulled in
+through two apps. They are not neutral: the trainer repeats every image the same
+number of times, so a picture present three times is trained three times as hard
+as the rest of the set, and the symptom ("everything comes out in that room")
+never points back at the folder it came from.
+
+**Two classes, and the second is not a softer first.** A *duplicate* is one
+picture stored more than once, so deleting all but one loses nothing and the
+group arrives with a keeper chosen. A *similar* pair is two photographs that look
+alike — on a training set that is usually a burst, all of it legitimately useful,
+and there is no deterministic way to prove the second is a re-save rather than
+the next shutter release. So a similar group is shown and **nothing in it is ever
+preselected**.
+
+A five-tier confidence scale between those two was built first and is the thing
+to not rebuild. Measured on a 731-image editorial set, 266,815 pairs: the tiered
+version flags **813 pairs**, the two classes flag **9**. Worse than the noise was
+where the tiers put the common case — a rule demoting same-size, same-format
+pairs to "possible" sent *most real duplicates* (exports at one size from one
+tool) into a review list where nothing is preselected, so the keeper flow never
+ran on the case it exists for.
+
+**Both hashes must agree, and they are not doing the same job.** dHash reads edge
+gradients, pHash reads low-frequency DCT energy, and they fail independently, so
+an AND is far tighter than either alone and much tighter than accepting on
+whichever is closer. On that same folder `dhash <= 6` *alone* isolates exactly
+the three real duplicates with a 7-bit gap to anything else — but the pair at
+that gap is `d7 p32`, two entirely unrelated photographs, which is precisely what
+the pHash half refuses. The pHash bound is then set by the other thing it has to
+survive: a re-grade barely moves dHash (a quarter-stop is 3 bits, 1.4x is 4)
+while pHash climbs to 16. Swept from 10 to 24 the duplicate count never leaves 3,
+so the loosening is free and is what makes "the same picture, exported brighter"
+read as a copy. The gap between the classes is therefore carried by dHash, 6
+against 12 — and every burst-shaped pair in that folder measures 8 to 11, which
+is the split the data drew rather than one chosen for it.
+
+**Crop matching is the spec's own scheme on a leash, and the leash is the whole
+reason it is safe.** Two centre crops per image, compared every way but
+full-frame-to-full-frame. Taking the best of nine variant pairs is nine chances
+to draw a low number against an unrelated image, so read at a loose threshold it
+is ruinous — that is where most of the 813 came from. Read at `CROP_MATCH` it
+adds **zero** pairs across 266,815, and lands an exact 80% crop of a real
+photograph at distance 0 on both hashes. It may only ever claim *similar*, never
+a duplicate, so a crop match cannot preselect a deletion — which is also right on
+its own terms, because a deliberate reframe of a training image is a variation
+somebody made on purpose. `CROP_MATCH` is deliberately its own constant even
+though it agrees with `DUPLICATE_MATCH` today: they were one constant for an
+afternoon, and loosening the duplicate bound for re-grades silently changed which
+crops were found.
+
+**There is no index, and the measurement is why.** A BK-tree was built for this
+and profiled: at the radius the classifier uses it visits **96% of the tree per
+lookup**, so it is the same sweep with a tree walk's overhead on top. What
+actually inverts the cost is deduplicating fingerprints before comparing — the
+pathological input, one picture four hundred times, collapses to one comparison —
+and 266,815 pairs then take **0.6s**. The binding cost was never the comparison;
+it is the decode, at ~31ms an image.
+
+**So the scan is resumable, and the cache is its only state.** A request measures
+for `SCAN_BUDGET_S`, writes what it measured, and reports how many are left; the
+page calls again. No job record, no spawn, no second route — the fingerprint
+cache already holds the progress, so a container dying mid-scan costs the images
+it had in hand rather than the folder. Nothing is grouped until everything is
+measured, because half a folder groups into half the truth and half the truth
+here is a keeper suggested against copies nobody has looked at.
+
+One line in that loop is load-bearing: **at least one image is measured per
+request whatever the budget.** A budget check alone can be true before the first
+decode, and then every request skips every image, writes nothing, and asks to be
+called again forever. `smoke_dupes.py` drives exactly that at a zero budget; in
+production the same stall arrives as one image slower than the whole budget. The
+page carries the other half of the same invariant, refusing to loop when a round
+reports no progress.
+
+**An image is in at most one group, and duplicates win.** Similar links are
+computed only between images no duplicate group already holds. That drops a real
+edge — a copy's relationship to an outsider is not shown until the copies are
+dealt with — and it buys the invariant the whole review rests on: a name in two
+groups is a name you are asked about twice and can mark for deletion twice. The
+order it imposes is the order the work happens in anyway: clear the duplicates,
+rescan, review what is merely alike.
+
+**The selection is inverted, and that is the feature.** Every other delete
+surface here asks you to name what goes, which is the wrong half of the question
+for six near-identical frames of which you want one: naming the five is five
+decisions to express one. So a duplicate group arrives with everything but the
+keeper marked, and the gesture is *promotion* — touch a marked image and it
+becomes a keeper too, touch it back to demote. **The last keeper cannot be
+demoted**, and that single refusal is what makes the screen safe to move quickly
+through, because no sequence of clicks deletes a group entirely.
+
+The suggestion says which number decided it — "most pixels · 12.2 MP", "same
+size, least compressed" — against the *runner-up* rather than the group, because
+"nothing separates the top two" is the one statement that tells you your choice
+does not matter. `Derived or invented, always visible`, on the one surface where
+the derivation is a deletion.
+
+**The facts are one grid with the pictures as its columns.** The question a group
+asks is never "how big is this one", it is "which of these four", and that is
+read across: resolution, megapixels, weight, encoding and detail are rows, the
+label sits once in the gutter, the best cell in each row is marked and every
+other one carries its distance from that best. A per-card stack of the same
+numbers was the first version and it made you hold four values in your head to
+compare them. Two things that grid taught, both found by driving it rather than
+reading it: `min-width:max-content` sizes a column to its widest cell, which is
+the nowrap caption, so one long sentence blew a 150px column to 430px and the
+square thumbnail above it to 430px tall; and `.actions` only gets its flex rules
+inside `.opts`, so Keep all and Reset wrapped and doubled the header's height.
+
+The delete count is computed over **every** group, never the filtered view. A
+number that changes when you touch a dropdown you did not think was a decision is
+the specific way a confirm dialog stops being believed — and that dialog is the
+whole safety net, so it states the count, the weight, and how many of the groups
+involved are still carrying a suggestion nobody has opened.
+
+`tune_dupes.py` is where every number above came from and is the tool to re-run
+before moving one: point it at a real folder and it prints the distance
+distributions, the margin from the nearest *rejected* pair, and the pairs closest
+to each line by name. A threshold argued from first principles is a threshold
+nobody has looked at.
 
 ## Conventions
 

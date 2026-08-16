@@ -4,9 +4,11 @@ import { everyMs, failed } from '../api/client'
 import {
   caption, captionDataset, clipUrl, imageUrl, prependTrigger, removeImage, status, thumbUrl,
 } from '../api/routes'
+import { fmtFileSize } from '../format'
 import { IconSliders, IconTag, IconUpload } from '../icons'
 import { useNearViewport } from '../media/inview'
 import { useStore } from '../store'
+import { Duplicates } from './Duplicates'
 import { Insight } from './Insight'
 import type { DatasetImage, useDatasets } from './useDatasets'
 import { SESSION } from './session'
@@ -37,6 +39,11 @@ export function Editor({ ds, onLightbox, lead }: {
   const [hot, setHot] = useState(false)
   const [uploading, setUploading] = useState(0)
   const [filter, setFilter] = useState<'all' | 'uncap' | 'notrig' | 'img' | 'vid'>('all')
+  /* A view of this set rather than a place: the filter row is where you look to
+     change what is on the sheet, so the door to the duplicate review is in it.
+     What it swaps in is not a filtered grid — a duplicate is a statement about
+     a *pair*, so the arrangement has to be groups. */
+  const [dupes, setDupes] = useState(false)
   const [density, setDensity] = useState(2)
   const [isolated, setIsolated] = useState<{ names: string[]; label: string } | null>(null)
   const [insightOpen, setInsightOpen] = useState(false)
@@ -234,11 +241,21 @@ export function Editor({ ds, onLightbox, lead }: {
             // marked: three buttons that all look identical while one of them is
             // filtering the grid is a view you cannot account for.
             <button key={k} id={`f-${k}`} className="s" title={title} type="button"
-                    style={{ borderColor: filter === k && !isolated ? 'rgba(255,255,255,.45)' : '' }}
-                    onClick={() => { setIsolated(null); setFilter(k) }}>
+                    style={{ borderColor: filter === k && !isolated && !dupes ? 'rgba(255,255,255,.45)' : '' }}
+                    onClick={() => { setIsolated(null); setDupes(false); setFilter(k) }}>
               {label}
             </button>
           ))}
+        {/* A word rather than a glyph, for the reason the strip's two icons each
+            took one: this is a destination, and an icon can carry a control
+            whose home you are already in but cannot announce a room you have
+            never been in. */}
+        <button id="f-dupes" className="s" type="button"
+                title="Group images that are the same picture, and choose which copy to keep"
+                style={{ borderColor: dupes ? 'rgba(255,255,255,.45)' : '' }}
+                onClick={() => { setIsolated(null); setFilter('all'); setDupes((v) => !v) }}>
+          Duplicates
+        </button>
         <button className="s" id="dens-down" title="Smaller tiles" type="button"
                 onClick={() => setDensity((d) => Math.max(0, d - 1))}>−</button>
         <button className="s" id="dens-up" title="Larger tiles" type="button"
@@ -299,15 +316,24 @@ export function Editor({ ds, onLightbox, lead }: {
         </div>
       )}
 
+      {dupes ? (
+        <Duplicates ds={ds} onLightbox={onLightbox} onExit={() => setDupes(false)} />
+      ) : (
       <div className="tiles" id="tiles"
            style={{ gridTemplateColumns: `repeat(${cols},minmax(0,1fr))` }}>
         {visible.map((i) => {
           const f = flags(i)
-          const sz = i.bytes >= 1048576
-            ? `${(i.bytes / 1048576).toFixed(1)} MB`
-            : `${Math.round(i.bytes / 1024)} KB`
+          const sz = fmtFileSize(i.bytes)
+          // The badge is clipped by the tile at high density, so what it can
+          // always show stays first and the rest is on the tile itself. Kept in
+          // one string so the two never disagree about the same file.
+          const facts = [i.width && i.height ? `${i.width}×${i.height}` : '',
+                         i.width && i.height ? `${(i.width * i.height / 1e6).toFixed(1)} MP` : '',
+                         sz,
+                         (i.name.split('.').pop() || '').toUpperCase()].filter(Boolean).join(' · ')
           return (
             <div key={i.name}
+                 title={facts}
                  className={['tile', i.kind === 'video' ? 'vid' : '',
                              f.thin ? 'thin' : '', f.noTrig ? 'notrig' : '',
                              isolated ? 'sel' : ''].filter(Boolean).join(' ')}>
@@ -327,6 +353,7 @@ export function Editor({ ds, onLightbox, lead }: {
           )
         })}
       </div>
+      )}
     </div>
   )
 }

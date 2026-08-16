@@ -17,3 +17,18 @@ export const fmtBytes = (b: number): string => {
   const n = Number(b) || 0
   return n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`
 }
+
+/**
+ * One file on the volume, at the precision a decision needs.
+ *
+ * Deliberately not `fmtBytes`. That one spells the *catalogue*: decimal GB to
+ * two places, floored at 1 MB, because what it labels is a 17 GB checkpoint. A
+ * dataset image is 300 KB to 12 MB, and floored-MB renders an 800 KB JPEG and a
+ * 1.4 MB PNG as "1 MB" each — which is exactly the comparison the duplicate
+ * review exists to make. The tile badge and the review share this one so that
+ * the same file is never two sizes on one screen.
+ */
+export const fmtFileSize = (b: number): string => {
+  const n = Number(b) || 0
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`
+}

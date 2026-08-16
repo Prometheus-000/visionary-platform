@@ -253,3 +253,77 @@ export type Insight = {
   tag_style: string[]
   phrases: { phrase: string; count: number; share: number; words: number }[]
 }
+
+/**
+ * One candidate inside a group.
+ *
+ * Every field here is a column of the same comparison, which is why they
+ * arrive together rather than being fetched per tile: the question is never
+ * "how big is this one", it is "which of these four is the one to keep", and
+ * that is answered by reading across.
+ */
+export type DupeImage = {
+  name: string
+  caption: string
+  bytes: number
+  width: number
+  height: number
+  megapixels: number
+  format: string
+  /** Mean neighbour difference at a fixed 64x64. A tie-breaker between copies
+   *  of one picture, never a comparison between different ones. */
+  sharpness: number
+  mtime: number
+  /** Distance from the group's keeper, per hash. Both must be under their
+   *  threshold for a link — see DupeReport.thresholds. */
+  dhash_distance: number
+  phash_distance: number
+  /** Byte-identical to the keeper — the one fact that makes the call for you. */
+  same_file: boolean
+  /** What would explain the difference: resized, reformatted, recompressed,
+   *  cropped. Named rather than scored, because "0.93 similar" is not a reason. */
+  transforms: string[]
+  /** Set only on a crop match, where the *direct* distances above sit outside
+   *  the threshold that accepted the pair — these are what accepted it. */
+  crop_dhash: number | null
+  crop_phash: number | null
+}
+
+/**
+ * A group, and its kind is the whole safety model.
+ *
+ * `duplicate` is one picture stored more than once — deleting all but one loses
+ * nothing, so it arrives with `suggest` set and everything else marked.
+ * `similar` is two photographs that look alike, which on a training set is
+ * usually a burst and is usually all worth keeping. A similar group carries an
+ * empty `suggest` and nothing in it is ever preselected.
+ */
+export type DupeGroup = {
+  key: string
+  kind: 'duplicate' | 'similar'
+  /** The server's pick, or '' for a similar group. Derived, so it is shown as
+   *  derived — see `why`. */
+  suggest: string
+  why: string
+  images: DupeImage[]
+}
+
+export type DupeReport = {
+  /** The scan ran out of its per-request budget. `groups` is empty — half a
+   *  folder groups into half the truth — and the page polls until it clears. */
+  scanning?: boolean
+  measured?: number
+  total?: number
+  images: number
+  groups: DupeGroup[]
+  thresholds: Record<string, { dhash: number; phash: number }>
+  summary: {
+    duplicate_groups: number
+    duplicate_images: number
+    similar_groups: number
+    similar_images: number
+  }
+  /** Bytes accepting every suggestion would return. Duplicates only — nothing
+   *  in a similar group is marked, so nothing in one is counted. */
+  reclaim: number
+}
