@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { field, heat } from './heat'
+import { Shot } from './Shot'
 import {
   compile, dependsOnPrior, indent, insertAfter, move, outdent, remove, rows,
   setText, shares, tie, untie, type Module,
@@ -123,10 +124,14 @@ export function Storyline({
 
   return (
     <div className="sl">
-      {/* A map of the prompt: each element holds a span of the bar in order,
-          and the span is its share. Continuous because the encoder is — one
-          composition, not N independent weights. */}
-      <div className="sl-heat" style={{ background: gradient }} />
+      <div className="sl-top">
+        {/* A map of the prompt: each element holds a span of the bar in order,
+            and the span is its share. Continuous because the encoder is — one
+            composition, not N independent weights. */}
+        <div className="sl-heat" style={{ background: gradient }} />
+        {/* The same facts as a picture, plus the two the bar cannot say. */}
+        <Shot mods={mods} />
+      </div>
 
       <div className="sl-rows">
         {list.map(({ m, depth, path }) => (

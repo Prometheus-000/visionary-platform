@@ -22,6 +22,17 @@ const PRESETS: Record<string, () => Module[]> = {
     mod('All three face the camera directly, expressionless', 'invented'),
     mod('Even shadowless light with no visible source'),
   ] },
+  // The scenario the schematic was built for, in the shape it was described:
+  // a great deal on A and B with a relation between them, almost nothing on C.
+  'too much on A and B, nothing on C': () => {
+    const a = mod('A stands near the window, hard light raking across one side '
+      + 'of her face and catching the edge of her jaw')
+    const b = mod('B leans against the counter beside her, dark hair pushed back, '
+      + 'a heavy green canvas jacket open over a pale shirt')
+    b.ties = [a.id]
+    return [mod('Three people in a bar at night'), a, b,
+            mod('C is at the far end of the room')]
+  },
   'the detached third subject': () => [
     mod('Three people in a bar at night'),
     mod('Person A is sitting with person B, she is happy'),

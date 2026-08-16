@@ -87,3 +87,9 @@
 }
 .sl-picker button:hover { background: rgba(255,255,255,.08); }
 .sl-row { position: relative; }
+
+/* The bar and the schematic read the same storyline, so they sit together. The
+   bar is the prompt end to end; the schematic is what it adds up to. */
+.sl-top { display: flex; align-items: flex-end; gap: 14px; }
+.sl-top .sl-heat { flex: 1; min-width: 0; }
+.sl-shot { flex: none; width: 190px; height: 70px; overflow: visible; }
