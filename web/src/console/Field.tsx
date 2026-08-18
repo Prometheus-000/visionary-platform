@@ -148,8 +148,22 @@ export function Field({
                   .filter(Boolean).join(' ') || undefined}>{r.text}</span>
         ))}
       </div>
+      {/* Read-only while a rewrite is in flight, which is the whole of the
+          staleness fix. The answer is written into this box when it lands, and
+          it is the rewrite of the sentence that was here when the button was
+          pressed — so typing during the wait means a stale answer arrives on
+          top of newer words. A guard comparing the two was the other way to fix
+          it and it is more machinery for a worse outcome: it would throw the
+          answer away *after* paying for it. The rewrite is seconds, and a field
+          that cannot drift is a field nothing has to be reconciled with.
+
+          `readOnly` rather than `disabled`: disabled takes the caret and the
+          selection with it, so the box loses your place for the length of a
+          request you are about to get an answer to. */}
       <textarea id="prompt" ref={prompt} rows={1} placeholder={hint}
                 className={s.negOn && ok ? 'hide' : ''}
+                readOnly={!!s.rewriting}
+                aria-busy={!!s.rewriting}
                 value={s.prompt}
                 onScroll={(e) => {
                   // The mirror has no scrollbar of its own — it is shorter than
