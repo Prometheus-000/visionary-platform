@@ -7055,108 +7055,58 @@ Follow these rules strictly:
 9. **Preserve User Medium:** When the user explicitly requests a medium (e.g. "photo of", "photograph of", "illustration of", "painting of", "sketch of", "3D render of"), honor it. Do not pivot to a different medium to avoid difficulty — match the user's stated intent.
 """
 
+# One job, not three. Expand, Balance and Enhance were three buttons because
+# the person choosing the operation is one thing the model cannot then get
+# wrong — but measured, only one of them was ever scored: the blind A/B that
+# beat the bare fragment 3-1 ran `op: expand` on every pair, which is
+# `KREA_EXPANSION` and nothing else. The other two shipped unmeasured.
+#
+# **The task is structure, and the other two fall out of it.** Krea's rule 7
+# already makes expansion conditional — "if the user's prompt is already
+# detailed, lightly polish and finalize rather than heavily expanding" — so a
+# separate Enhance was asking for behaviour the instruction had. And balance is
+# emergent rather than instructed: given three friends where the third had three
+# words, this returned "Dev stands beside her... Sam is positioned nearby...",
+# grouping each subject with their own attributes under rule 2, with no rule
+# about prominence anywhere in the text. A dedicated Balance was a second way to
+# ask for the first thing.
+#
+# So the row is one button. That costs the expectation-setting the three bought
+# — somebody who pressed Expand was not surprised the sentence grew, and one
+# generic press can still return 20x on a fragment — and `docUndo` is what pays
+# for it now instead: ⌘Z, or the Undo beside the button, restoring byte for byte.
 REWRITE_OPS: dict[str, dict[str, str]] = {
-    "expand": {
-        "label": "Expand",
-        "note": "A fragment becomes a full prompt. Most useful on a few words.",
-        # ~100 words. The instruction asks for a length and the model does not
-        # count: our own wording produced 95, 122 and 617 words on three
-        # fragments. So the bound is the decoder's, and `_clean_rewrite` drops
-        # the partial sentence the cap leaves behind. It buys coherence as well
-        # as length — the 617-word version drifted into "early morning mist"
-        # against a 3am brief, and the capped one keeps the clock at 3:02.
-        "max_tokens": 200,
-        "instruction": KREA_EXPANSION,
-        # What this replaced, kept because `tools/prompt_ab.py` is what decides
-        # between them and a deleted alternative is a measurement nobody can
-        # re-run. Ours is tuned to the failures measured on this corpus —
-        # self-corrections resolved, implied states rendered, feeling staged;
-        # upstream's is general and is what the encoder's authors wrote.
-        "alt_instruction": (
-            "Turn this into a complete image prompt. It is a fragment or a "
-            "half-formed idea and your job is to write the picture it is "
-            "reaching for, as one paragraph of flowing prose, "
-            "**between 60 and 100 words**.\n"
-            "That is a length, not a suggestion. Past it the picture drifts and "
-            "starts contradicting itself, and the encoder reads none of it.\n"
-            "Every fact they gave is fixed and survives exactly. Everything else "
-            "you supply: the light and where it comes from, the lens and where it "
-            "stands, what fills the rest of the frame, the surfaces and their "
-            "condition, the time of day.\n"
-            "Resolve what they left unresolved. If they corrected themselves, "
-            "the correction wins and the abandoned half is gone. If they hedged, "
-            "choose. If a state is implied rather than stated, render the state: "
-            "\"the kitchen after the party\" is an empty room the morning after, "
-            "not a party.\n"
-            "Stage feeling rather than naming it. Nothing a camera could not "
-            "record. No narrator, no backstory, no words about how it feels."
-        ),
-    },
-    "balance": {
-        "label": "Balance",
-        "note": "Gives every named subject equal weight, and relates them.",
-        # Longer, because it rewrites a whole prompt rather than a fragment and
-        # has to give the thin subjects room to come up to the others.
-        "max_tokens": 420,
-        "instruction": (
-            "Rewrite this prompt so the people in it share the frame.\n"
-            "If it names several subjects and describes one richly and another "
-            "in three words, that renders as a portrait with bystanders. Give "
-            "each of them comparable weight — similar length, similar "
-            "specificity — inventing what you need for the thin ones.\n"
-            "Then relate them physically, and put the relation at the end of "
-            "each subject's clause. A relation is contact, orientation, a shared "
-            "surface, a shared light, attention pointed at the same thing "
-            "off-frame. Write it as geometry and never by naming the other "
-            "person inside this one's clause, which makes the encoder merge "
-            "them.\n"
-            "Keep every fact they stated. Change nothing else."
-        ),
-    },
     "enhance": {
         "label": "Enhance",
-        "note": "Keeps your prompt and fixes only what would render wrong.",
-        # It returns something close to what it was given, so the ceiling only
-        # has to clear the input.
-        "max_tokens": 420,
-        # **Ours, and `KREA_EXPANSION` is the one that lost here** — recorded
-        # rather than argued, because upstream's prompt winning Expand made it
-        # the obvious choice for this too. It is an *expansion* prompt, and its
-        # rule 7 ("lightly polish rather than heavily expanding") is not strong
-        # enough to convert it, even with a line above it saying to treat that
-        # rule as unconditional. Measured on the resident encoder:
-        #
-        #   already-good diner prompt   104 -> 322 chars under KREA_EXPANSION
-        #                               104 -> 104 unchanged under this
-        #   fisherman                   fixed the two faults under both, and
-        #                               under KREA_EXPANSION also invented a
-        #                               dock, a lantern and a horizon
-        #
-        # Leaving a good prompt alone is the harder half of this operation and
-        # the half a general expansion prompt cannot do.
-        "alt_instruction": "KREA_EXPANSION + an unconditional rule 7 — expands anyway",
-        "instruction": (
-            "Improve this image prompt with the lightest possible touch.\n"
-            "It already works, so keep its wording, its order and its length.\n"
-            "Four things always render wrong and you must fix every one you "
-            "find. A quality standing in for a geometry: \"dramatic "
-            "perspective\" has one setting and it is maximum, so say what the "
-            "angle does. A feeling named instead of staged: \"it feels lonely\" "
-            "renders as nothing, so spend it on negative space, a single light, "
-            "a turned back. A clause of narration rather than something "
-            "visible. An adjective floating free of its noun.\n"
-            "If you find none of the four, return it unchanged.\n"
-            "Add nothing that is merely nice, and invent no objects or places "
-            "the prompt does not have — no docks, no lanterns, no horizons.\n"
-            "**Staging a feeling is not inventing.** Negative space, where a "
-            "light falls, and which way a subject faces are how the second rule "
-            "is obeyed, so spend them freely. Written the other way round this "
-            "forbade the very thing it asks for, and the model did the safe "
-            "thing: it fixed the geometry and left \"it feels lonely\" standing "
-            "as a word."
-        ),
+        "note": "Restructures your prompt the way Krea 2 reads best, and "
+                "fills it out only where it is thin.",
+        "instruction": KREA_EXPANSION,
     },
 }
+
+
+# The cap scales with the input, which the three fixed numbers could not.
+#
+# A length is a token cap and never an instruction — a model does not count, and
+# our own wording asking for one produced 95, 122 and 617 words on three
+# fragments. 200 was the measured bound for a *fragment*, where the answer is
+# several times the input and coherence is what the cap buys: the 617-word diner
+# drifted into "early morning mist" against a 3am brief and the capped one kept
+# the clock at 3:02.
+#
+# One job means one cap serving both ends of the range, and a flat 200 truncates
+# the case rule 7 exists for — a long prompt lightly polished comes back about as
+# long as it went in, and `_clean_rewrite` would drop the partial sentence at the
+# cut, losing content the person wrote. So it floors at the fragment's measured
+# bound and grows with the input, at roughly a token per four characters plus
+# room to restructure.
+REWRITE_TOKEN_FLOOR = 200
+REWRITE_TOKEN_CEILING = 1024
+
+
+def _rewrite_tokens(prose: str) -> int:
+    return max(REWRITE_TOKEN_FLOOR,
+               min(REWRITE_TOKEN_CEILING, len(prose) // 2))
 
 # Appended to every instruction rather than written into each, and it earns the
 # line: without it `enhance` returned its analysis — the prompt, then an arrow,
@@ -9221,7 +9171,7 @@ def web():
         try:
             text = _rewrite_backend(
                 prose, REWRITE_OPS[op]["instruction"] + _REWRITE_TAIL,
-                int(REWRITE_OPS[op].get("max_tokens") or 420))
+                _rewrite_tokens(prose))
         except Exception as exc:
             print(f"[rewrite] {op} failed on {REWRITE_BACKEND}: {exc}", flush=True)
             return {"ok": False, "error": str(exc), "text": prose}

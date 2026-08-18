@@ -360,28 +360,52 @@ sees it — and `smoke_parse.py` only ever compiles through
 `_compile_image_prompt`. **The change that opens the gates is the change that
 starts feeding H3 badly, and the compile coverage has to arrive with it.**
 
-### Three jobs, asked for by name
+### One job, and the structure is the job
 
 The feature the semantic layer was reaching for, arrived at by deleting most of
-it. `REWRITE_OPS` holds three instructions — **Expand**, **Balance**,
-**Enhance** — and `/api/rewrite` returns **prose**, not a document.
+it. `REWRITE_OPS` holds **one** instruction and `/api/rewrite` returns **prose**,
+not a document. The instruction is Krea's own `docs/expansion.txt`, vendored
+verbatim: the people who trained the encoder wrote the prompt for talking to it.
 
-**The person chooses the operation, so the model never classifies.** That was the
-largest thing left for it to get wrong, and the earlier design's "one job, and
-enhancement falls out for free" put the decision back on the model. It also
-answers the trust question the underlines were built for: somebody who pressed
-Expand is not surprised the sentence got longer. **That is what paid for dropping
-the marks** — not a judgement that provenance does not matter, but a cheaper
-answer to the same question. `docUndo` is reused rather than duplicated, so ⌘Z
-takes the write back exactly as it did.
+**It was three — Expand, Balance, Enhance — and the collapse is a measurement
+rather than a tidy-up.** The blind A/B that beat the bare fragment 3-1 ran
+`op: expand` on every pair, which is `KREA_EXPANSION` and nothing else. The other
+two shipped **unscored**, and both turned out to be asking for behaviour that
+instruction already has:
+
+- **Expansion is already conditional.** Rule 7 — *"if the user's prompt is
+  already detailed, lightly polish and finalize rather than heavily expanding"* —
+  is Enhance, written by upstream. Measured across one instruction: a
+  16-character fragment grows **40.4x**, a finished prompt **2.6x**. Nobody had
+  to say which job it was.
+- **Balance is emergent, not instructed.** `KREA_EXPANSION` contains no
+  "balance", no "equal", no "prominence", no "weight". Given three friends where
+  the third had three words, it returned each subject grouped with their own
+  attributes and the thin one placed and described — because rule 2 asks for
+  subjects grouped with their attributes, and that is what balance *is*. A
+  dedicated Balance was a second way to ask for the first thing.
+
+What the collapse costs is the expectation the three bought. **The person
+choosing the operation was the one thing the model could not then get wrong**,
+and it answered the trust question the underlines were built for: somebody who
+pressed Expand is not surprised the sentence got longer. One generic press can
+still return 40x on a fragment, and that surprise is now paid for by `docUndo`
+alone — ⌘Z, or the Undo beside the button, restoring byte for byte. That is a
+thinner guarantee than a named button and it is the thing to watch if this ever
+reads as the app rewriting people's words at them.
 
 Three things the measurements decided, each of which reads as a detail and is
 not:
 
 - **A length is a token cap, not an instruction.** "Between 60 and 100 words"
   produced 95, 122 and **617** on three fragments — a model does not count. The
-  bound is `max_tokens` per operation and `_clean_rewrite` drops the partial
-  sentence the cap leaves behind. It bought coherence as well as length: the
+  bound is the decoder's and `_clean_rewrite` drops the partial sentence the cap
+  leaves behind. **It scales with the input now, because one job has to serve
+  both ends of the range**: 200 was measured against a fragment, where the answer
+  is several times what was typed, and a flat 200 truncates the case rule 7
+  exists for — a long prompt lightly polished comes back about as long as it went
+  in, and the cut would drop a sentence the *person* wrote. `_rewrite_tokens`
+  floors at the measured bound and grows from there, ceilinged at 1024. It bought coherence as well as length: the
   617-word diner drifted into "early morning mist" and "the night has passed"
   against a 3am brief, and the capped one keeps the clock at 3:02.
 - **A multiple is the wrong unit for a fragment.** Four to six times "empty
@@ -570,8 +594,8 @@ measure **0.73x median, not 1.4x**, and keep the feeling word **3 of 10, not 0 o
 and never re-run.
 
 **So the document path is off.** `Field.tsx` no longer calls `useDocument`, and
-what replaced it is `REWRITE_OPS` — Expand, Balance, Enhance, chosen by the
-person rather than inferred. See "Three jobs, asked for by name" below.
+what replaced it is `REWRITE_OPS` — one instruction, Krea's own, returning
+prose. See "One job, and the structure is the job" below.
 
 ### The system prompt has a size budget: 500–2000 characters
 

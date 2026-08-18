@@ -27,16 +27,26 @@ from _from_app import pull  # noqa: E402
 
 G = pull({
     "REWRITE_OPS", "KREA_EXPANSION", "_REWRITE_TAIL", "REWRITE_BACKEND",
+    "_rewrite_tokens", "REWRITE_TOKEN_FLOOR", "REWRITE_TOKEN_CEILING",
     "_clean_rewrite", "_PREAMBLE", "_META", "_THINK", "_oneline",
     "_looks_like_refusal", "REFUSAL_RE", "MODULE_TEXT_MAX",
 })
 
 
 def ops() -> int:
-    """The three operations, and the two facts each one has to carry."""
+    """
+    One operation, and the facts it has to carry.
+
+    It was three, and only one of them was ever measured — the blind A/B that
+    beat the bare fragment 3-1 ran `expand` on every pair, which is
+    `KREA_EXPANSION`. Balance and Enhance shipped unscored, and both turned out
+    to be asking for behaviour that instruction already has: rule 7 makes
+    expansion conditional, and grouping each subject with their own attributes
+    under rule 2 balances a thin third subject without a word about prominence.
+    """
     print("operations")
     bad = 0
-    for key in ("expand", "balance", "enhance"):
+    for key in ("enhance",):
         spec = G["REWRITE_OPS"].get(key)
         if not spec:
             print(f"  FAIL  {key} is missing"); bad += 1; continue
@@ -47,14 +57,29 @@ def ops() -> int:
             why.append("no note")
         if not spec.get("instruction", "").strip():
             why.append("no instruction")
-        # The cap is what actually holds the length — the instruction asking for
-        # one produced 95, 122 and 617 words on three fragments.
-        if not isinstance(spec.get("max_tokens"), int):
-            why.append("no max_tokens")
         bad += bool(why)
         print(f"  {'FAIL' if why else 'ok  '}  {key:8} {spec.get('label','?'):8} "
               f"{len(spec.get('instruction','')):5} chars"
               + (f"   [{', '.join(why)}]" if why else ""))
+    if len(G["REWRITE_OPS"]) != 1:
+        print(f"  FAIL  {len(G['REWRITE_OPS'])} operations — the row is one button")
+        bad += 1
+
+    # The cap is what holds the length — an instruction asking for one produced
+    # 95, 122 and 617 words on three fragments. It scales now, because one job
+    # serves both a fifteen-character fragment and a prompt rule 7 will only
+    # polish, and a flat 200 truncates the second into a dropped sentence.
+    tok = G["_rewrite_tokens"]
+    floor, ceil = G["REWRITE_TOKEN_FLOOR"], G["REWRITE_TOKEN_CEILING"]
+    for label, prose, want in (
+            ("a fragment floors at the measured bound", "empty diner, 3am", floor),
+            ("an empty prompt still floors", "", floor),
+            ("a long prompt is not truncated", "x" * 1200, 600),
+            ("and is bounded at the ceiling", "x" * 99999, ceil)):
+        got = tok(prose)
+        ok = got == want
+        bad += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  {label:44} {got:5} tokens")
     # Upstream's prompt is vendored verbatim; rule 7 is the line that makes it
     # cover Enhance as well as Expand, so its absence means the file drifted.
     krea = G["KREA_EXPANSION"]
