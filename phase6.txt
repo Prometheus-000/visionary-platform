@@ -1,0 +1,716 @@
+I would not try to build the entire future-state vision yet. I would build a semantic layer between your existing UI and your generators.
+
+That is the missing piece.
+
+Your current stack is roughly:
+
+User → prompt → Qwen/VLM → Krea 2 / MiniMax → result
+
+What I think Visionary wants to become is:
+
+User's fragments → structured interpretation → editable assumptions → creative state → generator
+
+That middle layer is the product.
+
+1. The architecture I'd build
+
+I'd think of Visionary as five systems:
+
+                    VISIONARY
+                        │
+                 ┌──────▼──────┐
+                 │  CREATIVE    │
+                 │    STATE     │
+                 └──────┬──────┘
+                        │
+        ┌───────────────┼────────────────┐
+        ▼               ▼                ▼
+   INTERPRETER      GROUNDING        ORCHESTRATOR
+    Qwen3-VL       image/video       generation
+        │               │                │
+        └───────────────┼────────────────┘
+                        ▼
+                 Krea 2 / Video
+                        │
+                        ▼
+                     RESULT
+
+The important addition is Creative State.
+
+Right now the prompt probably effectively is the state.
+
+I would make it a real data structure.
+
+2. Creative State is the foundation
+
+For example, the user types:
+
+two steel battleships trade cannon fire at sea
+
+Visionary might internally represent:
+
+{
+  "subjects": [
+    {
+      "type": "battleship",
+      "count": 2,
+      "relationship": "engaged in combat"
+    }
+  ],
+  "environment": {
+    "location": "sea"
+  },
+  "action": {
+    "type": "cannon_fire"
+  },
+  "style": null,
+  "camera": null,
+  "lighting": null
+}
+
+Then Qwen fills gaps:
+
+camera:
+    wide
+
+
+lighting:
+    hard sunlight
+
+
+composition:
+    one ship foreground,
+    second ship background
+
+
+action:
+    cannon firing,
+    smoke plume
+
+Those inferred values are the underlined words.
+
+That's the key.
+
+The underline isn't merely a UI treatment.
+
+It corresponds to actual metadata in your creative state:
+
+value: "hard sunlight"
+source: "inferred"
+confidence: 0.82
+editable: true
+
+That is very achievable today.
+
+3. You need provenance at the token/span level
+
+This is probably the single most important backend feature you're missing.
+
+Your system needs to know:
+
+Who said this?
+
+For every semantic fragment:
+
+"two steel battleships"
+     ↑ human
+
+
+"at sea"
+     ↑ human
+
+
+"amidships"
+     ↑ inferred
+
+
+"erupts in flame and smoke"
+     ↑ inferred
+
+You don't necessarily need literal token-level provenance internally. Spans/entities are probably better.
+
+Something like:
+
+{
+  "text": "Two steel battleships trade cannon fire at sea, amidships erupts in flame and smoke.",
+  "spans": [
+    {
+      "text": "Two steel battleships",
+      "source": "user"
+    },
+    {
+      "text": "at sea",
+      "source": "user"
+    },
+    {
+      "text": "amidships",
+      "source": "model"
+    },
+    {
+      "text": "erupts in flame and smoke",
+      "source": "model"
+    }
+  ]
+}
+
+Then the frontend simply renders:
+
+.inferred {
+    text-decoration: underline;
+}
+
+That's the entire magic of your underline.
+
+No complicated AI UI required.
+
+4. Don't have the LLM directly generate the final prompt
+
+This is an architectural decision I'd make early.
+
+Avoid:
+
+fragment
+ ↓
+LLM
+ ↓
+huge prompt
+ ↓
+Krea
+
+Instead:
+
+fragment
+ ↓
+LLM
+ ↓
+semantic scene representation
+ ↓
+renderer-specific prompt
+ ↓
+Krea / MiniMax
+
+Because otherwise you lose control.
+
+Your semantic representation becomes the source of truth.
+
+Then you can have:
+
+Visionary Scene
+       │
+       ├── Krea adapter
+       │
+       ├── MiniMax adapter
+       │
+       ├── future video model
+       │
+       └── future image model
+
+This becomes extremely valuable as models change.
+
+Krea 2 already exposes things like aspect ratio, creativity, style references, moodboards and seed through its API, while MiniMax's current video API supports text-to-video, image-to-video, first/last frames and camera commands.
+
+So your semantic layer can translate human intent → model-specific controls without exposing those controls to the user.
+
+5. The second big missing piece: visual grounding
+
+This is what makes:
+
+“Touch her.”
+
+actually work.
+
+You need a scene representation that connects language to pixels.
+
+For an image:
+
+IMAGE
+ │
+ ├── Person A
+ │     ├── face
+ │     ├── body
+ │     └── clothing
+ │
+ ├── Person B
+ │
+ ├── ship A
+ │
+ ├── ship B
+ │
+ └── ocean
+
+Each object needs:
+
+bounding box
+segmentation/mask if possible
+semantic label
+persistent ID
+
+For example:
+
+{
+  "id": "subject_01",
+  "label": "battleship",
+  "bbox": [0.61, 0.08, 0.38, 0.72]
+}
+
+Then when the user touches the ship, Visionary doesn't ask:
+
+“What did they mean?”
+
+It already knows:
+
+subject_01
+
+Now Qwen can reason about that object and generate the contextual controls.
+
+6. The beautiful part: you don't need to build Photoshop
+
+You need semantic operations.
+
+For example:
+
+subject_01
+    → change appearance
+    → change position
+    → change action
+
+
+camera
+    → framing
+    → angle
+    → movement
+
+
+environment
+    → weather
+    → location
+    → time
+
+
+lighting
+    → direction
+    → quality
+    → color
+
+Your current Framing / Angle / Light panel is already basically this.
+
+The engineering change is:
+
+don't make those controls globally available.
+
+Make them generated from the selected semantic object.
+
+7. This gives you the bridge UI
+
+Your current interface:
+
+everything visible
+
+↓
+
+contextual layer
+
+↓
+
+Future Visionary:
+
+almost nothing visible
+
+The transition could literally be:
+
+Normal state
+[canvas]
+
+
+Two steel battleships trade cannon fire at sea,
+amidships erupts in flame and smoke.
+                         _________
+                        underlined
+Touch the ship
+                 [ Edit ] [ Camera ] [ Light ]
+Tap Camera
+Framing
+wide · medium · close
+
+
+Angle
+eye · low · high
+
+
+Movement
+static · push · track
+Exit
+
+Everything disappears.
+
+That is extremely feasible.
+
+8. Your video/image merger is also feasible
+
+I wouldn't treat image and video as separate projects.
+
+Make your fundamental object a:
+
+Shot
+
+A shot contains:
+
+visual state
++
+temporal state
++
+camera state
++
+action
+
+An image is:
+
+shot.duration = 0
+
+Video:
+
+shot.duration = 5s
+
+Then your generator chooses the appropriate backend.
+
+For example:
+
+SHOT
+ │
+ ├── image → Krea
+ │
+ └── video → MiniMax
+
+And MiniMax already supports first-frame image → video, which maps beautifully onto this architecture.
+
+First/last-frame generation also gives you a natural path toward transitions between two creative states.
+
+9. The next really important thing: persistent identities
+
+This is where Visionary becomes a creative environment rather than a generator.
+
+Suppose you create:
+
+Mara
+
+Then you make 40 images with Mara.
+
+Visionary needs:
+
+Entity: Mara
+ID: character_019
+References:
+   image_001
+   image_007
+   image_014
+   image_029
+
+Then:
+
+“Mara in the hotel.”
+
+can retrieve the appropriate visual references.
+
+Same for:
+
+locations
+vehicles
+clothing
+props
+visual styles
+camera language
+
+That's essentially your Arsenal.
+
+And Modal Volumes are actually a reasonable foundation for storing model weights and persistent ML assets; Modal specifically supports using Volumes for model serving and distributed storage.
+
+But I would separate creative metadata/database from the actual media storage.
+
+10. You need a real creative-state database
+
+I'd use something like:
+
+Project
+ └── World
+      ├── Entities
+      ├── Scenes
+      ├── Shots
+      ├── References
+      ├── Interpretations
+      └── Generations
+
+And every generation gets a relationship to its parent state.
+
+So:
+
+SHOT 12
+   │
+   ├── Generation A
+   │
+   ├── Generation B
+   │
+   └── Generation C
+          │
+          └── selected
+                │
+                ▼
+             SHOT 12'
+
+This gives you creative history without a traditional timeline.
+
+That is important.
+
+11. The generation system should become asynchronous
+
+Your frontend shouldn't care whether generation takes 4 seconds or 90.
+
+It should submit:
+
+generation_job
+
+and receive:
+
+job_id
+
+Then:
+
+queued
+→ loading
+→ interpreting
+→ generating
+→ post-processing
+→ ready
+
+Modal is well suited to this architecture because its Functions can run GPU inference serverlessly, including H200s, and Modal explicitly supports scaling inference workloads and large-model serving.
+
+Your UI then becomes event-driven rather than waiting synchronously for a generation request.
+
+12. What I'd build next — in order
+
+If I were sitting next to you and had your current codebase, I would not add 20 features.
+
+I'd build these six.
+
+Phase 1 — Semantic intent
+
+Fragments → completed interpretation
+
+Qwen produces:
+
+user text
+inferred text
+semantic entities
+relationships
+assumptions
+
+And you render the assumptions underlined.
+
+This is the heart of Visionary.
+
+Phase 2 — Edit the assumptions
+
+User changes:
+
+amidships erupts in flame and smoke
+
+to:
+
+a huge explosion tears through the rear deck
+
+Your system updates the semantic scene and regenerates.
+
+No prompt rewriting.
+
+Phase 3 — Touch anything
+
+Visionary automatically detects/selects:
+
+people
+objects
+environment
+regions
+
+Touching something creates a contextual semantic interaction.
+
+This is where your “Touch her” mockup becomes real.
+
+Phase 4 — Contextual controls
+
+Only after selection:
+
+Edit
+Camera
+Light
+Motion
+
+Then your existing controls appear.
+
+This lets you preserve the excellent machinery you've already built while making it disappear from the default experience.
+
+Phase 5 — Shot object
+
+Unify:
+
+image + video
+
+into one creative object.
+
+Then:
+
+Generate still
+Generate motion
+Extend
+Continue
+Change first frame
+Change last frame
+
+become operations on the same shot.
+
+Phase 6 — Arsenal
+
+Only after the above works:
+
+Keep this
+
+→ entity gets persistent ID
+
+→ stored reference
+
+→ available in future scenes.
+
+That's when:
+
+Everything you've kept. Nothing you haven't.
+
+actually becomes functional rather than conceptual.
+
+What you're not missing
+
+This is important.
+
+You don't need:
+
+❌ your own foundation image model
+❌ your own video model
+❌ a massive GPU cluster
+❌ a chatbot
+❌ a sophisticated editor
+❌ a giant asset management system
+❌ perfect AGI-level reasoning
+
+Krea 2 is already available as an inference model/API and its open release includes inference code; Modal gives you the GPU infrastructure to run this sort of stack.
+
+Your advantage isn't the underlying model.
+
+It's the layer that makes the model behave like a creative instrument.
+
+What I think is actually hard
+
+There are three genuinely difficult engineering problems.
+
+1. Maintaining semantic state
+
+Making Qwen correctly understand:
+
+what the user said
+what it inferred
+what the user subsequently changed
+what remains ambiguous
+
+without gradually accumulating contradictions.
+
+This needs a proper state/merge system rather than repeatedly throwing the whole conversation at an LLM.
+
+2. Maintaining visual continuity
+
+Getting:
+
+this person
+
+to remain this person
+
+across images, shots and videos.
+
+That becomes progressively harder once you move beyond simple image generation.
+
+3. Making inference feel instantaneous
+
+Your UX is minimalist because the interaction is fast.
+
+If:
+
+type fragment → wait 40 seconds → interpret → wait 60 seconds → generate
+
+the magic disappears.
+
+You need the semantic interpretation to happen almost immediately, while generation happens asynchronously.
+
+And there's a potentially killer feature hiding in your architecture
+
+Because Qwen3-VL is already part of your inference environment, don't use it only to turn text into prompts.
+
+Use it to maintain a continuously updated understanding of the visual state.
+
+Something like:
+
+USER
+  ↓
+fragment
+  ↓
+QWEN
+  ↓
+semantic state
+  ↓
+KREA/MINIMAX
+  ↓
+image/video
+  ↓
+QWEN
+  ↓
+visual state
+  ↓
+USER
+
+So the model can effectively say:
+
+“I understand what you asked for, and I understand what I actually produced.”
+
+That enables the user to say:
+
+“No. The ship should be farther away.”
+
+without needing to explain how to accomplish it.
+
+The system knows what ship, farther, and away mean in the current scene.
+
+If I were prioritizing the next engineering sprint
+
+I'd actually make the goal incredibly narrow:
+
+Build the first version of “underlined intent.”
+
+Not the Arsenal.
+Not the full editor.
+Not sophisticated video continuity.
+
+Just:
+
+Fragment → interpretation → underline inferred spans → edit spans → regenerate.
+
+If you can make that feel magical with your existing Krea/MiniMax pipeline, you have something that is genuinely differentiated.
+
+Then add:
+
+Touch → semantic selection → contextual controls.
+
+Then:
+
+Shot → image/video continuum.
+
+Then:
+
+Keep → persistent creative world.
+
+That sequence takes what you already have working and gradually transforms it into the future-state interface we just mocked up—without requiring you to throw away your current backend.
+
+And that's why I think the mockup is actually a realistic target rather than science fiction. The models and GPU infrastructure are already capable of the underlying operations; the missing engineering is primarily the semantic state, provenance, visual grounding, orchestration, and persistence layer that turns those capabilities into one coherent creative system.

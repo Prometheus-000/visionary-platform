@@ -7,6 +7,24 @@ exercise.** `forge/` was the last thing that earned this and it is gone. This is
 the next one, written at the moment the dependency is taken rather than the
 moment it is regretted.
 
+## It is wired, and there is no fallback behind it
+
+As of this sprint the parse runs on these weights and only these weights. The
+hosted path is **removed rather than deprecated**: `PARSE_MODEL`,
+`_anthropic_key()`, the `anthropic_key` branches on `/api/token` and
+`/api/state`, the `anthropic==0.42.0` dependency in `web_image`, and
+`smoke_parse.py --backend hosted` are all gone. One interpreter, not two.
+
+That is what pays for the semantic layer's "no new controls": a hosted model
+needed an API-key field in Settings, and local weights need nothing at all,
+because they are served off the existing `hf_cache` volume the captioner already
+uses. `modal deploy app.py` stays the entire install.
+
+It also means **this file is now on the critical path.** A fork that is merely
+referenced can go stale quietly; a fork the parse cannot run without goes stale
+loudly, and the replacement procedure below is the thing that makes that
+survivable rather than alarming.
+
 ## What is forked
 
 | | Repo | Revision | License |
@@ -32,7 +50,32 @@ magnitude to expect here.
 Neither card reports a capability benchmark. `tools/smoke_parse.py` is the
 substitute and it is the reason it exists.
 
-## Why the fork is justified here, when it usually is not
+## The justification below was tested and did not hold
+
+**Measured 2026-08-17 on live weights, ten charged fragments** — violence, real
+people, an execution, intimacy, minors in jeopardy — **the unmodified base
+refused none of them** (9/10 on-subject; the one miss is a dropped word, not
+evasion) and beat this fork on preservation, relations, idempotency and
+compliance at identical VRAM. The abliterated fork scored 10/10 on the same
+corpus, so the fork is not *worse* at the thing it was cut for; there is simply
+no gap for it to close.
+
+That does not automatically retire the file — one corpus is one corpus, and a
+refusal that appears on the eleventh scene is still the failure described below.
+But the claim in this section is now a hypothesis with evidence against it
+rather than a settled reason to carry an unmaintained fork of a maintained
+upstream, which this file itself calls the worst of the three available
+positions. **`Qwen/Qwen3-4B-Instruct-2507` at a pinned revision is the thing to
+try first**, and `smoke_parse.py --refusal` is the corpus that would have to
+find a failure for this file to keep its subject.
+
+One thing that is *not* an argument for either model: on the enrichment runs the
+base authored 12 of 18 fragments against the fork's 9, but it also mislabelled
+provenance more often. Both are properties of `PARSE_RULES` and of asking the
+model for `origin` rather than computing it — see CLAUDE.md — so neither belongs
+in this comparison.
+
+## The original justification, kept for the record
 
 **The alternative is not "use the unforked model." It is "ship a tool that
 refuses the user's material."**
@@ -75,6 +118,15 @@ fork is an afternoon rather than a rewrite:
    stream.
 5. Score with `tools/smoke_parse.py` — **fidelity and compliance both**, against
    the same corpus, so the new artifact has a number comparable to the old one.
+   `tools/stress_parse.py` drives it in a throwaway Sandbox, so a candidate that
+   scores badly costs a few minutes of L4 and leaves no trace.
+6. ~~Re-run `smoke_parse.py --sweep` against the served endpoint.~~ **Do not.**
+   That was done, and both bounds turned out to be unrepairable in kind rather
+   than merely mis-set: a share of characters is dominated by how much the
+   person typed, so on a fragment a good enrichment scores 94% invention and an
+   evasive document 93%. Run `--enrich --scenes` instead and read the four
+   criteria — core subject, emotional tone, spatial logic, literal fidelity.
+   See CLAUDE.md, "Prompt replacement, and what it cost to get there".
 
 Step 5 is the part that is not optional. Abliteration can damage a model in ways
 that never surface as a refusal and do surface as worse judgment, and judgment

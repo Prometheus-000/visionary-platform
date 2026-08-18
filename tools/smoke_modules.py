@@ -28,11 +28,14 @@ from _from_app import pull  # noqa: E402
 
 G = pull({
     "SHOT_VOCAB", "MODULE_ROLES", "MAX_MODULES", "MODULE_TEXT_MAX",
-    "MAX_MODULE_DEPTH", "_module_clause", "_module_words",
+    "MAX_MODULE_DEPTH", "_module_clause", "_CONTINUES", "_module_words",
     "_shot_phrases", "_shot_text", "_shot_sentence", "_shot_join", "_shot_body",
     "_close", "_oneline", "_flat", "_compile_image_prompt", "_validate_modules",
     "_spans_to_text", "MAX_SPANS",
     "_module_texts", "_prominence",
+    "_document_trust", "_trusted_modules", "_derived_from", "_ORIGIN_JOINS", "_preserved",
+    "_derived_runs", "_walk_document",
+    "_shot_meta",
 })
 
 fails: list[tuple[str, str, str]] = []
@@ -438,6 +441,239 @@ check("a child can be marked too",
                                              "origin": "invented"}]}])[0]["children"][0]
       .get("invented"),
       [[0, 17]])
+
+# ── the trust checks: a case per rejection, each rejecting the *whole* thing ──
+#
+# Shape and trust are two different answers and the caller acts on them
+# differently, which is why they are two functions and why these are their own
+# section. A malformed document is refused by name; an untrustworthy one is
+# dropped and the run proceeds plain. What must never happen is the third thing
+# — a partially-trusted document — so every case here asserts the document came
+# back empty rather than trimmed.
+
+print("\ntrust — an interpretation that is well-formed and not to be believed",
+      flush=True)
+
+PROSE = "a woman in a red dress walks toward two guards"
+
+
+def refuses(name: str, raw, why: str, prose: str = PROSE) -> None:
+    """The document is dropped whole, and the reason names which check fired."""
+    mods, reason = G["_trusted_modules"](raw, prose)
+    check(name, (mods, (reason or "").split()[0]), ([], why))
+
+
+def trusts(name: str, raw, prose: str = PROSE) -> None:
+    mods, reason = G["_trusted_modules"](raw, prose)
+    check(name, reason, None)
+    check(f"{name} — and survives whole", len(mods), len(raw))
+
+
+trusts("an honest document, every word the person's", [
+    {"role": "text", "text": "a woman in a red dress"},
+    {"role": "text", "text": "walks toward two guards"},
+])
+
+# **Four cases here used to be refusals and are now accepted. That is the
+# design change, not a regression in the tests, and writing them as `accepts`
+# is the only honest way to keep them.** `_document_trust` had four checks;
+# two were shares of characters and are deleted (see app.py), and the third —
+# preservation — is now scoped to the subject rule, because a mislabel is a
+# wrong underline over a prompt the person can edit. What is left refuses a
+# document
+# that claims words the person never wrote, which after that computation is
+# a guard on paths where it did not run.
+#
+# The evasive storyline is still refused, and by a *better* check than before:
+# derivation, asked as a zero. Preservation only ever caught an evasion that
+# mislabelled itself; a document that honestly marked its own landscape as
+# invented passed every one of the four. What is genuinely no longer caught is
+# the case in the middle — a document that reads the sentence and then quietly
+# contradicts one fact of it, "empty diner, 3am" coming back with even daylight.
+# No arithmetic sees that, which is measured rather than assumed: on a fragment
+# a written picture scores 94% invention and an evasion 93%. What stands in for
+# it is that the replacement must be **visible** — a sentence the person can
+# read and delete. If it is ever hidden behind a disclosure nobody opens, that
+# trade stops being sound and this comment is where to start.
+
+
+def accepts(name: str, raw, prose: str = PROSE) -> None:
+    """Trusted now, and the note says what used to refuse it."""
+    check(name, G["_trusted_modules"](raw, prose)[1], None)
+
+
+# Still refused, and by a better check than the one that used to catch it.
+# Preservation caught this only when the model *mislabelled* — it called its own
+# landscape derived — so a storyline that marked itself honestly walked through.
+# Derivation asks the question directly and has no number in it.
+refuses("an evasive storyline, fluent and about nothing they typed", [
+    {"role": "text", "text": "a serene landscape at dawn"},
+    {"role": "text", "text": "mist over still water"},
+], "not")
+
+accepts("a substitution the model marked as theirs — was: preservation. Now a "
+        "wrong underline over an editable prompt, which is one edit, not a drop", [
+    {"role": "text", "text": "a woman in a red dress"},
+    {"role": "text", "text": "walks toward two heavily armed male bodyguards"},
+])
+
+accepts("half the sentence dropped — was: the coverage floor, which refused a "
+        "correct reading of 'night. no, late afternoon' at 59%", [
+    {"role": "text", "text": "a woman in a red dress"},
+])
+
+accepts("an interpretation that is mostly invention — was: the ceiling, and "
+        "under replacement mostly-invention is the product working", [
+    {"role": "text", "text": "a woman in a red dress walks toward two guards"},
+    {"role": "text", "origin": "invented", "text":
+     "in a vast rain-slicked neon atrium at blue hour, shot on anamorphic glass "
+     "with heavy halation and volumetric haze, the whole frame graded cold"},
+])
+
+accepts("one phrase of the prose claimed by two elements — was: the consuming "
+        "walk. The second copy is now marked as the model's, which it is", [
+    {"role": "text", "text": "a woman in a red dress"},
+    {"role": "text", "text": "a woman in a red dress"},
+])
+
+# What still refuses, and it is the one that never depended on arithmetic.
+refuses("a subject nobody asked for", [
+    {"role": "text", "text": "a woman in a red dress walks toward two guards"},
+    {"role": "subject", "text": "a dog at her heel", "origin": "invented"},
+], "invented")
+
+# **Reordering is legal, and this is the case that proves the check does not
+# quietly forbid what the rules require.** `PARSE_RULES` says light, grade and
+# camera go last, so the model is *instructed* to move a leading clause behind
+# the subject — a preservation walk that insisted on the original order would
+# reject a document in which every single word is the person's own.
+trusts("a document the rules told the model to reorder", [
+    {"role": "subject", "text": "k3nan sits reading"},
+    {"role": "light", "text": "lit by a small window"},
+], prose="Lit by a small window, k3nan sits reading.")
+
+# The consuming walk survives inside `_derived_from`, where it decides whether
+# a phrase counts as evidence — but it no longer refuses a document for saying
+# something twice, which is a thing to edit rather than a thing to drop.
+accepts("a phrase repeated rather than refused", [
+    {"role": "text", "text": "a woman in a red dress"},
+    {"role": "text", "text": "a woman in a red dress"},
+    {"role": "text", "text": "walks toward two guards"},
+])
+
+# **Enrichment beside the person's words is legal and nothing here fires.** Not
+# an oversight: the addition is grey, addressable and one touch from a reroll,
+# which is the only terms invention was ever allowed on. The failure this cannot
+# see — the same words arriving as a *replacement* — is contradiction, and it is
+# measured in `smoke_parse.py` rather than enforced anywhere. Read the coverage
+# number as a proxy for it and you will believe a document is faithful when what
+# was measured is that nothing went missing.
+trusts("an addition beside the prose, which survives intact", [
+    {"role": "text", "text": "a woman in a red dress walks toward two guards"},
+    {"role": "text", "text": "heavily armed", "origin": "invented"},
+])
+
+# ── invariant 1, asked again by someone with no reason to trust the client ────
+
+print("\na document is valid only for the prose it describes", flush=True)
+
+DOC = G["_validate_modules"]([
+    {"role": "text", "text": "a woman in a red dress"},
+    {"role": "light", "text": "lit from a low window", "origin": "invented"},
+])
+JOINED = G["_compile_image_prompt"]("", [], DOC)
+
+# **This block used to assert the opposite, and the assertion was the bug.**
+# `_document_matches` compiled the document and required it to equal the box, so
+# the case below — "does not match the prose it was derived from, once it has
+# grown" — was checked in as *correct*. It is coherent only while a document is
+# the person's sentence with clauses added. Under replacement the compiled
+# prompt is meant to differ from what they typed, and an identity test then
+# drops every document there is, which is how the feature reached 0% of renders
+# with every gate behaving exactly as written.
+#
+# What survives is derivation: every run the document claims as the person's has
+# to be in this prose. A document derived from a different sentence still fails.
+check("a document is trusted for the prose it was derived from, however far "
+      "it rewrote it",
+      G["_trusted_modules"](DOC, "a woman in a red dress")[1], None)
+check("...and for the text it compiles to, which is what a second pass sees",
+      G["_trusted_modules"](DOC, JOINED)[1], None)
+check("a document derived from a different sentence is dropped, by name",
+      bool(G["_trusted_modules"](DOC, "a horse in a field at dawn")[1]), True)
+check("and dropping it returns no document rather than half of one",
+      G["_trusted_modules"](DOC, "a horse in a field at dawn")[0], [])
+
+# ── the two questions, kept apart ────────────────────────────────────────────
+#
+# **A mark and a derivation are not the same claim and were one function for an
+# afternoon.** `origin` says "this is a fact I added" and is the model's
+# judgement, left exactly as given, because only it can tell "a red winter coat"
+# reworded as "an oxblood down jacket" (same fact, no mark) from "and she looks
+# visibly cold" (a state nobody mentioned, marked). `_derived_from` says "this
+# document contains phrases the person actually typed" and is arithmetic.
+#
+# Reading one for the other is how a correctly-marked replacement gets dropped
+# for being well written — which the overwriting version would have done to
+# every reworded noun in the corpus.
+
+print("\nwhat is marked and what is derived are different questions", flush=True)
+
+REWORDED = G["_validate_modules"]([
+    {"role": "text", "text": "a woman in an oxblood down jacket",
+     "origin": "derived"},
+])
+check("a reworded fact carries no mark, and the model's answer stands",
+      (REWORDED[0]["origin"], REWORDED[0].get("invented")), ("derived", None))
+check("...and it is still derived from the prose, on the words that survived",
+      G["_derived_from"](REWORDED, "a woman in a red winter coat"), True)
+
+ADDED = G["_validate_modules"]([
+    {"role": "text", "text": "a woman in a red winter coat"},
+    {"role": "text", "text": "she looks visibly cold", "origin": "invented"},
+])
+check("a fact nobody mentioned is marked, and survives the validator",
+      ADDED[1].get("invented"), [[0, 22]])
+check("a document that is mostly the model's is still derived from the prose",
+      G["_derived_from"](ADDED, "a woman in a red winter coat"), True)
+
+check("a document about a different scene is not, whatever it claims",
+      G["_derived_from"](G["_validate_modules"]([
+          {"role": "text", "text": "a serene landscape at dawn",
+           "origin": "derived"}]), "a woman in a red winter coat"), False)
+
+check("a shared function word is not evidence — 'in a' inside their sentence "
+      "does not make a meadow derived from it",
+      G["_derived_from"](G["_validate_modules"]([
+          {"role": "text", "text": "mist in a meadow"}]),
+          "a woman in a red winter coat"), False)
+
+# ── the sidecar: emitted when a document ran, omitted when it changed nothing ─
+
+print("\nthe sidecar records the document only when it did something", flush=True)
+
+check("a document that moved the prompt is recorded",
+      G["_shot_meta"]({"prompt": JOINED, "prompt_typed": "a woman in a red dress",
+                       "shot": [], "modules": DOC}).get("modules"),
+      DOC)
+# The existing guard covers the document too, and gets it right for free: a
+# one-element document whose compile equals the typed text writes nothing,
+# because the run is reproducible from the typed prompt alone.
+check("a document that compiled to exactly what was typed is not",
+      G["_shot_meta"]({"prompt": "a woman in a red dress",
+                       "prompt_typed": "a woman in a red dress",
+                       "shot": [], "modules": DOC}),
+      {})
+
+check("the sentence they wrote before the replacement is kept",
+      G["_shot_meta"]({"prompt": JOINED, "prompt_typed": JOINED,
+                       "prompt_original": "a woman in a red winter coat",
+                       "shot": [], "modules": DOC}).get("prompt_original"),
+      "a woman in a red winter coat")
+check("...and a run nobody asked for help on writes nothing",
+      "prompt_original" in G["_shot_meta"](
+          {"prompt": JOINED, "prompt_typed": "a woman in a red dress",
+           "shot": [], "modules": DOC}), False)
 
 # ── report ──────────────────────────────────────────────────────────────────
 print()

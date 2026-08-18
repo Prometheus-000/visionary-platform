@@ -146,6 +146,19 @@ export function parseLoras(index: LoraFile[], text: string): Token[] {
 
 /** What the text encoders see. The tokens are markup for this page, not language
  *  — leaving them in would have the model rendering the word "lora". */
+/**
+ * The `<lora:…>` tokens themselves, in the order they appear.
+ *
+ * The counterpart of `stripLoras`, and here rather than at its caller because
+ * this is where the pattern lives — a second regex for the same syntax is a
+ * second thing to keep in step with the first. Used when the interpreter's
+ * prose replaces what is in the box: the tokens are notation the model never
+ * saw and must not lose, so they are lifted off, and re-appended after.
+ */
+export function loraSyntax(text: string): string[] {
+  return text.match(LORA_RE) ?? []
+}
+
 export function stripLoras(text: string): string {
   return text.replace(LORA_RE, ' ').replace(/\s+/g, ' ').replace(/\s+([,.;:!?])/g, '$1').trim()
 }

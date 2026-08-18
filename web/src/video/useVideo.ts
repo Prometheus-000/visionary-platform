@@ -5,7 +5,7 @@ import { status, stop, video } from '../api/routes'
 import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { loraIndex, readVidLoras, stripLoras } from '../lora/tokens'
-import { negAllowed, readShot, useStore, type Store } from '../store'
+import { docFor, docFrom, negAllowed, readShot, useStore, type Store } from '../store'
 import { resolveVid } from '../console/resolve'
 
 /**
@@ -46,9 +46,14 @@ const IDLE: VideoRun = {
 export function videoBody(s: Store): Record<string, unknown> {
   const r = resolveVid(s)
   const index = loraIndex(s.state)
+  // See `imageBody`: one string, keying both halves of the same request.
+  const prompt = stripLoras(s.prompt)
   return {
     model: s.vid.model,
-    prompt: stripLoras(s.prompt),
+    prompt,
+    modules: docFor(s, prompt),
+    // See `imageBody` — what they wrote before the replacement was written.
+    prompt_original: docFrom(s, prompt),
     negative_prompt: negAllowed(s) ? s.negative : '',
     aspect: s.vid.aspect,
     tier: r.tier,
@@ -85,6 +90,15 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
       st.steps ? `${String(st.steps)} steps` : '',
       st.duration_s ? `${String(st.duration_s)}s` : '',
     ].filter(Boolean)
+    // The pin — see `useGenerate.finish` for why `doc &&` is the whole condition.
+    // `s.img.seed` and `s.vid.seed` are separate fields written by their own
+    // `finish`, so switching image ↔ video carries no pin across and there is
+    // nothing to clear for it.
+    const store = useStore.getState()
+    if (store.doc && !store.vid.seed && st.seed != null) {
+      store.setVid({ seed: String(st.seed) })
+    }
+
     // Atomically, so there is never a frame pairing the old jobId with the new file.
     setRun((p) => ({
       ...p, running: false, jobId, file, runId: null, percent: 100, phase: '',

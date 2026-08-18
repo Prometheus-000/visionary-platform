@@ -122,7 +122,6 @@ svg{width:100%;height:100%;display:block}
 /* Collapsed by flex-basis rather than display:none so the canvas reflows
    smoothly; the inner column keeps its width so nothing re-wraps on the way. */
 .studio.nodrawer .drawer{flex-basis:0;border-left:0;overflow:hidden}
-#v-train .drawer{flex-basis:var(--drawer)}
 /* The sheet's own toolbar sticks for the same reason the console is pinned:
    the filters are how you find the six bad captions in eighty images, and
    scrolling to look for them is exactly when they must not scroll away. */
@@ -131,10 +130,12 @@ svg{width:100%;height:100%;display:block}
 #ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:8px;border-radius:16px}
 #ds-sheet .sheet-bar{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
   padding:22px 28px 10px;background:var(--bg)}
-#ds-list{gap:8px}
-#ds-list .ds-card{flex-direction:row;align-items:center;gap:11px;padding:8px}
-#ds-list .ds-cover{width:56px;height:56px;flex:none;aspect-ratio:auto;border-radius:9px;object-fit:cover}
-#ds-list .ds-meta{padding:0;min-width:0}
+/* The set index. It was a 56px-thumbnail row because it lived in a 320px rail
+   beside the board; with the rail gone it is a screen of its own, so a set is
+   shown the way every other collection here is — cover first, at the width the
+   canvas actually has. Only the name still needs clamping, because a set is
+   named by whoever dropped the folder. */
+#ds-list .ds-meta{min-width:0}
 #ds-list .ds-meta b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .drawer{transition:flex-basis .18s ease}
 .drawer-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-height:28px}
@@ -151,7 +152,14 @@ svg{width:100%;height:100%;display:block}
    named, and the tooltip is promoted from repeating the name to saying what
    the number does. */
 .opts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
-.opt{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0;font-size:14px;
+/* The box has padding because it is a box. It had none for as long as the only
+   ones being looked at were the console's, where the border is transparent at
+   rest and the 8px gap between controls does the spacing — so nothing was
+   touching anything visible. Draw the edge, as the session form does, and every
+   label and every value sits hard against it; hovering an unbounded one lights
+   a background with the text flush to its corner, which is the same fault a
+   step earlier. One number, applied where the padding belongs. */
+.opt{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 9px;font-size:14px;
   background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
 .opt:focus-within{border-color:rgba(255,255,255,.28)}
 
@@ -206,15 +214,17 @@ svg{width:100%;height:100%;display:block}
    markup and total on the page. */
 .opt>.lead,.drop.mini>.lead{font-size:14px;line-height:1;color:var(--dim);flex:none;
   white-space:nowrap;cursor:default;-webkit-user-select:none;user-select:none}
-.opt select,.opt input{width:auto;border:0;background:none;padding:0 2px;height:30px;
+/* No padding of their own now that the container carries it — two paddings in a
+   row is how a 52px numeric box ends up fitting two digits. */
+.opt select,.opt input{width:auto;border:0;background:none;padding:0;height:30px;
   border-radius:8px;font-size:14px}
 /* The native select chrome was never switched off. On a desktop the macOS arrows
    pass for a chevron; at 42px on a phone they render as a stepper — a control
    that looks like it increments something, next to controls that do. One
    chevron, drawn once, so every select on the page says the same thing. */
-.opt select{appearance:none;-webkit-appearance:none;padding-right:17px;
+.opt select{appearance:none;-webkit-appearance:none;padding-right:16px;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238a8a8a' stroke-width='1.4' stroke-linecap='round'><path d='M3 4.5 6 7.5 9 4.5'/></svg>");
-  background-repeat:no-repeat;background-position:right 1px center;background-size:12px}
+  background-repeat:no-repeat;background-position:right center;background-size:12px}
 /* Phone. Ten controls wrapping into four ragged rows is what the strip does
    here, and three of the ten are the ones nobody touches twice: the GPU is set
    once and confirms a cold start when it changes, the seed is a thing you reuse
@@ -281,7 +291,70 @@ svg{width:100%;height:100%;display:block}
    autoGrow() driving the height a drag would be overwritten by the next
    keystroke — a grip that silently undoes itself is worse than no grip. */
 .field textarea{border:0;background:none;border-radius:0;padding:9px 10px 2px;
-  resize:none;overflow-y:auto}
+  resize:none;overflow-y:auto;position:relative;z-index:1}
+/* Which words the model wrote, painted on a copy of the prompt sitting exactly
+   behind it. A textarea cannot style a range of its own value, and the usual
+   answer — contenteditable — would take the caret, the undo stack and every
+   chord in `keys()` with it. So the box you type into is completely unchanged
+   and the marking happens underneath.
+
+   Every metric here has to match `.field textarea` or the underline drifts off
+   the word it belongs to: same padding, same inherited font, same wrapping.
+
+   **The layers are the other way round now, and that is what buys the grey.**
+   The mirror used to paint decoration onto transparent glyphs while the
+   textarea supplied the visible text; a colour treatment is impossible that way
+   round, because the half that can be styled is the half nobody can see. So the
+   glyphs on screen are the mirror's and the textarea's are transparent — it
+   keeps the caret, the selection, the undo stack and every chord in `keys()`,
+   which is the whole reason this is still a textarea and not a contenteditable.
+   Nothing about the box you type into changed except that its ink moved one
+   layer down. */
+.mk-mirror{position:absolute;inset:2px 2px 0;z-index:0;padding:9px 10px 2px;font:inherit;
+  white-space:pre-wrap;overflow-wrap:break-word;color:var(--fg);
+  pointer-events:none;overflow:hidden}
+.field.has-neg .mk-mirror{padding-right:62px}
+/* Transparent ink, visible caret. `caret-color` is the one part of a textarea's
+   own text rendering that survives `color:transparent`, so the thing you are
+   aiming with stays exactly where it was. */
+#prompt{color:transparent;caret-color:var(--fg)}
+/* Translucent, so the mirror's glyphs read *through* a selection band rather
+   than vanishing into it — with the text itself transparent, an opaque
+   selection is a highlighted rectangle with nothing written in it. */
+#prompt::selection{background:rgba(255,255,255,.22)}
+
+/* Two channels, and they answer different questions: the underline is reach,
+   the colour is authorship.
+
+   Dotted under every *element*, because an element is a thing the document can
+   act on — one is one reroll away from being something else. The earlier note
+   here said derived text carries no mark at all, on the grounds that
+   underlining what somebody wrote would mark nearly every word; that was right
+   about a rule which underlined all derived text and wrong about this one. An
+   element is an anchor and what hangs off it, not a word, so the marks land on
+   the handful of things in the sentence there is anything to *do* to, and the
+   connective tissue between them carries nothing.
+
+   Grey is the separate claim laid over the top: these particular words are the
+   model's. So a clause you wrote and a clause it supplied are both underlined
+   and only one of them is grey, which keeps provenance binary instead of
+   inventing a third state for it. */
+.mk-el{text-decoration:underline dotted;text-decoration-color:var(--dim);
+  text-underline-offset:3px}
+.mk-i{color:var(--mut);text-decoration:underline dotted;
+  text-decoration-color:var(--mut);text-underline-offset:3px}
+/* Rooted at the run's own end and gone the moment the caret leaves it. It is
+   the one affordance a span has, so it carries no chrome until it is under the
+   pointer — the console's unbounded-button rule, on the one control that is not
+   in the console. `pointer-events` because the mirror above it has none. */
+.mk-reroll{position:absolute;z-index:2;transform:translate(3px,-1px);
+  display:flex;align-items:center;justify-content:center;
+  width:16px;height:16px;padding:0;border:0;border-radius:4px;
+  background:none;color:var(--mut);cursor:pointer;pointer-events:auto}
+.mk-reroll:hover{background:var(--panel);color:var(--fg)}
+/* In flight, and it settles the same way for all three outcomes — a new
+   reading, an identical one, and a refusal look alike on purpose. */
+.mk-reroll:disabled{opacity:.45;cursor:default}
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —
    while a separate strip below carried every control. They are one row now:
    the chip says what you are making and the rest of the line says how. */
@@ -351,15 +424,54 @@ input,textarea,select{width:100%;background:rgba(255,255,255,.05);border:1px sol
 input:focus,textarea:focus,select:focus{border-color:rgba(255,255,255,.28)}
 input:disabled,select:disabled{opacity:.45}
 textarea{resize:vertical}
-button.b{background:#fff;color:#000;border:0;border-radius:12px;padding:0 12px;font-weight:600;font-size:14px;line-height:1;cursor:pointer}
+/* `line-height:1` with no height and no vertical padding is a button the height
+   of its own text — 14px for `.b`, with the glyphs touching both edges. It read
+   as correct for as long as every one of these lived inside `.opts`, which sets
+   `height:32px` on `.b` and lends `.opt`'s own height to the rest. The moment a
+   button appeared anywhere else — a card, a sheet, the stop dialog — it came out
+   squashed. So the size belongs to the button rather than to the one row that
+   happened to be measuring it: `inline-flex` to centre the label, `min-height`
+   rather than `height` so a wrapped label grows the box instead of spilling. */
+button.b,button.s,button.t{display:inline-flex;align-items:center;justify-content:center;
+  gap:6px;white-space:nowrap}
+button.b,button.s{min-height:32px}
+button.b{background:#fff;color:#000;border:0;border-radius:12px;padding:0 14px;font-weight:600;font-size:14px;line-height:1;cursor:pointer}
 button.b:disabled{background:rgba(255,255,255,.2);color:rgba(0,0,0,.4);cursor:not-allowed}
 button.s{background:rgba(255,255,255,.07);color:var(--fg);border:1px solid var(--line);
-  font-size:14px;
-  border-radius:11px;padding:0 10px;font-weight:500;font-size:14px;line-height:1;cursor:pointer}
+  border-radius:11px;padding:0 12px;font-weight:500;font-size:14px;line-height:1;cursor:pointer}
 button.s:hover{background:rgba(255,255,255,.12)}
 button.s:disabled{opacity:.4;cursor:not-allowed}
-button.t{background:none;border:0;color:var(--mut);font-weight:500;font-size:12px;line-height:1;cursor:pointer;padding:6px 2px}
-button.t:hover{color:var(--fg)}
+/* The text button. Everything that is not the one filled action on a screen is
+   one of these — a board where Edit, Delete and Run again all carried the same
+   chrome as Create session was a board with four equal-weight calls to action
+   and no way to tell which was the point. */
+button.t{background:none;border:0;color:var(--mut);font-weight:500;font-size:13px;
+  line-height:1;cursor:pointer;padding:7px 8px;border-radius:9px;min-height:30px}
+button.t:hover{color:var(--fg);background:rgba(255,255,255,.07)}
+button.t:disabled{opacity:.4;cursor:not-allowed}
+button.t:disabled:hover{background:none;color:var(--mut)}
+button.t.danger{color:#f87171}
+button.t.danger:hover{color:#fca5a5;background:rgba(248,113,113,.12)}
+button.t.on{color:var(--fg);background:rgba(255,255,255,.12)}
+/* A text button can carry a glyph, and the glyph needs a size from somewhere.
+   `.opt>svg` was giving it one for as long as these lived in `.opt` boxes; the
+   moment one became a `.t` its icon rendered at the SVG's own intrinsic size,
+   which is a 300px pair of sliders across the top of the dataset editor. */
+button.t>svg{width:16px;height:16px;flex:none;color:inherit}
+button.t>.lead{font-size:13px;line-height:1;color:inherit;flex:none;white-space:nowrap}
+/* The segmented control. A set of choices where exactly one is taken, drawn as
+   one object so it cannot be mistaken for the buttons next to it that *do*
+   things — which is what a row of identical pills, half of them filters and
+   half of them actions, had made unreadable. The chosen one is filled rather
+   than outlined: an outline is what every neighbour already has. */
+.seg{display:inline-flex;align-items:center;gap:2px;flex:none;padding:2px;
+  background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:11px}
+.seg button.s{border:0;background:none;min-height:26px;padding:0 10px;border-radius:9px;
+  color:var(--mut);font-size:13px;font-weight:500}
+.seg button.s:hover{background:rgba(255,255,255,.09);color:var(--fg)}
+.seg button.s.on{background:rgba(255,255,255,.17);color:var(--fg)}
+.seg button.s:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:-2px}
+#ds-density button.s{min-width:26px;padding:0 6px}
 .pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:0;
   border-radius:999px;padding:8px;color:#ddd;font-size:13px;cursor:pointer}
 .pill.on{background:#fff;color:#000}
@@ -1021,28 +1133,73 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #sess-board{display:flex;flex-direction:column;min-height:0}
 .board-head{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
   padding:14px 28px 11px;background:var(--bg);border-bottom:1px solid var(--line)}
-#sess-list{display:flex;flex-direction:column;gap:10px}
-.sess{border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:14px;
-  padding:13px 15px 12px}
+/* A second head under the first one is not sticky and owns no gutter: it labels
+   a section of a screen rather than the screen. */
+.board-head.sub-head{position:static;margin:18px 0 10px;padding:0 0 9px}
+/* **Portrait, in a grid.** A full-width row put every fact on its own band
+   across 1180px, so telling two runs apart was a scan along and then a scan
+   back one row down. 3:4 is the aspect that holds a name, a set, tqdm's numbers
+   and six dials in one fixation, and `auto-fill` is what makes the board answer
+   the width it is given rather than a column count someone picked. */
+#sess-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));
+  gap:14px;align-items:start}
+.sess{position:relative;aspect-ratio:3/4;display:flex;flex-direction:column;overflow:hidden;
+  border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:16px;
+  padding:13px 14px 11px;transition:border-color .14s,background .14s}
 /* Only what is going gets a lit edge. Four finished cards all glowing is four
    cards saying nothing, which is the state a board spends most of its life in. */
-.sess.running,.sess.queued{border-color:rgba(255,255,255,.28)}
+.sess.running,.sess.queued{border-color:rgba(74,222,128,.34)}
 .sess.failed{border-color:rgba(248,113,113,.32)}
-.sess-head{display:flex;align-items:center;gap:10px}
-.sess-name{font-size:14px;font-weight:600;min-width:0;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap;flex:1}
-.sess-sub{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;margin-top:4px}
-.sess-row{display:flex;align-items:baseline;gap:12px;margin-top:7px}
-/* The dials, as one line of label-and-value pairs. Small, because they are what
-   you read when comparing two cards and never what you read first. */
-.sess-dials{display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:9px;
-  font-size:11.5px;color:var(--dim)}
-.sess-dials span{white-space:nowrap}
-.sess-dials i{font-style:normal;opacity:.62;margin-right:5px}
-.sess-note{margin:9px 0 0;font-size:12px}
+.sess:hover{border-color:rgba(255,255,255,.26);background:rgba(255,255,255,.04)}
+/* The whole face opens the run's settings, so the target is a real button that
+   fills the card and sits under everything. The content is click-through and
+   the few things that are genuinely their own targets — the set link, the
+   delete, Cancel run — take their pointer events back. A wrapping <button> is
+   what this replaces and cannot be used: it would contain those buttons, which
+   no browser allows. */
+.sess-hit{position:absolute;inset:0;z-index:0;border:0;background:none;padding:0;
+  cursor:pointer;border-radius:inherit;-webkit-appearance:none;appearance:none}
+.sess-hit:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:-3px}
+.sess>*:not(.sess-hit){position:relative;z-index:1;pointer-events:none}
+.sess .link,.sess-x,.sess-acts button{pointer-events:auto}
+.sess-head{display:flex;align-items:center;gap:8px;min-height:20px}
+.sess-name{font-size:15px;font-weight:600;margin-top:9px;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.sess-sub{display:flex;flex-direction:column;align-items:flex-start;gap:2px;margin-top:4px;
+  font-size:12px;min-width:0}
+.sess-sub>*{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Delete, in the corner and on hover only — the one thing on a resting card
+   that is not "open this", so the one thing that gets its own target. */
+.sess-x{width:22px;height:22px;flex:none;border:0;border-radius:50%;
+  background:rgba(255,255,255,.06);color:var(--mut);cursor:pointer;font-size:14px;
+  line-height:1;padding:0;opacity:0;transition:opacity .12s,color .12s,background .12s}
+.sess:hover .sess-x,.sess-x:focus-visible{opacity:1}
+.sess-x:hover{background:rgba(248,113,113,.18);color:#f87171}
+.sess-prog{margin-top:10px}
+.sess-pct{display:flex;align-items:baseline;gap:8px;margin-top:6px;font-size:11.5px;
+  color:var(--dim)}
+/* The dials, as label-and-value pairs in two columns. A wrapping row was right
+   when the card was 1180px wide and ragged the moment it became 280px — and
+   these exist to be compared between cards, which needs them to land in the
+   same place on each. */
+.sess-dials,.sess-live{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;margin-top:9px;
+  font-size:11.5px;color:var(--dim);min-width:0}
+.sess-dials span,.sess-live span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess-dials i,.sess-live i{font-style:normal;opacity:.62;margin-right:5px}
+/* tqdm's numbers and the dials are the same grid and deliberately not the same
+   class. They were `.sess-dials` and `.sess-dials.live`, which made "the dials"
+   unaddressable — every selector for them matched the live block first, and a
+   check reading a card's rank read its loss instead. Two blocks that mean
+   different things get two names even when they are styled alike; the live one
+   is brighter, because it is what you came to the board to read. */
+.sess-live{color:var(--mut);margin-top:8px}
+.sess-note{margin:8px 0 0;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .sess-note.err{color:#fca5a5}
-.sess-acts{display:flex;align-items:center;gap:8px;margin-top:12px}
+.sess-acts{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:10px}
 .sess-acts .b{margin-left:auto}
+.sess-acts button[data-act=stop]{margin-left:-8px}
+.sess-todo{font-size:12px}
 /* `margin-left:auto` on .b puts the primary action at the right end; inside the
    stop dialog there is a .grow doing that job, so the auto margin would push
    the two buttons apart from each other rather than away from the text. */
@@ -1050,19 +1207,51 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 button.s.danger{color:#f87171;border-color:rgba(248,113,113,.3)}
 button.s.danger:hover{background:rgba(248,113,113,.14)}
 /* A status is a word, not a colour — a colour alone cannot say "Queued". The
-   colour is what makes the word findable in a column of cards. */
-.chip{flex:none;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
+   colour is what makes the word findable across a grid of cards, so every state
+   gets its own rather than three of them sharing the default grey. Green is
+   reserved for the one that is actually consuming a GPU right now. */
+.chip{flex:none;font-size:10px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;
   padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.08);color:var(--dim)}
-.chip.running,.chip.queued{background:rgba(74,222,128,.16);color:#4ade80}
-.chip.completed{background:rgba(255,255,255,.14);color:#fff}
-.chip.failed{background:rgba(248,113,113,.16);color:#f87171}
-.chip.stopped{background:rgba(251,191,36,.14);color:#fbbf24}
+.chip.running{background:rgba(74,222,128,.16);color:#4ade80}
+.chip.queued{background:rgba(125,211,252,.15);color:#7dd3fc}
+.chip.completed{background:rgba(167,139,250,.16);color:#c4b5fd}
+.chip.failed{background:rgba(248,113,113,.17);color:#f87171}
+.chip.stopped{background:rgba(251,146,60,.16);color:#fb923c}
+.chip.draft,.chip.unknown{background:rgba(255,255,255,.07);color:var(--mut)}
+/* **The bar is coloured by what it is reporting.** White at 100% across the
+   full width of a card is indistinguishable from a rule, and on a board where
+   most cards are finished that is what it was: a divider between the name and
+   the numbers. Green while a GPU is on it, red where a run was stopped or died
+   part-way — which is the case the fraction matters most in, because it is
+   where the run got to. A completed run draws no bar at all; see `showBar`. */
+.sess .bar{height:5px;margin-top:0}
+.sess.running .bar>i,.sess.queued .bar>i{background:#4ade80}
+.sess.stopped .bar>i{background:#f87171}
+.sess.failed .bar>i{background:#ef4444}
+/* One column, so nothing to compare against — and the 3:4 is *for* comparing:
+   it exists so two cards side by side put the same fact at the same height. In
+   a single column it buys none of that and costs 425px of mostly empty card, so
+   a phone shows one and a half runs. The card goes back to its content height
+   where the grid stops being a grid. Split on the width the columns collapse at
+   (238px twice plus the gap), not on a device guess. */
+@media (max-width:560px){
+  .sess{aspect-ratio:auto}
+  .sess-acts{margin-top:12px}
+}
 /* The dataset name is a place, so it is written as one. Underlined on hover
    only: a card with two permanently underlined words in it reads as a form. */
 .sess .link{border:0;background:none;padding:0;color:var(--fg);font:inherit;font-size:12px;
   cursor:pointer}
 .sess .link:hover{text-decoration:underline}
 #sess-empty{text-align:center;max-width:420px;margin:0 auto}
+/* The sets screen: the drop target and the index of what you already have, on
+   one page. They were the empty editor and the board's rail respectively, which
+   meant the answer to "what sets do I have" and the answer to "make me another"
+   were on two different screens and neither said so. The hero is capped here
+   because it is no longer the whole screen — with an index under it, a drop
+   target sized to the viewport pushes every set you own below the fold. */
+#sets-screen #drop.hero{min-height:0;height:min(38dvh,300px)}
+#ds-index{margin-top:4px}
 
 /* Datasets -------------------------------------------------------------- */
 /* flex-column, not the default: a <button> centres its content vertically, so
@@ -1086,7 +1275,10 @@ button.s.danger:hover{background:rgba(248,113,113,.14)}
    end at wherever each name happens to stop and the rail loses its edge. */
 .ds-row{position:relative;min-width:0}
 .ds-row .ds-card{width:100%}
-.ds-row .ds-x{position:absolute;top:50%;right:9px;transform:translateY(-50%);
+/* Top-right, over the cover. It was pinned to the vertical middle for the row
+   form the drawer used, which on a cover-first card lands it in the centre of
+   the picture. */
+.ds-row .ds-x{position:absolute;top:9px;right:9px;
   width:24px;height:24px;border:0;border-radius:50%;background:rgba(0,0,0,.62);
   color:#eee;cursor:pointer;font-size:13px;line-height:1;padding:0;opacity:0;
   transition:opacity .12s}
@@ -1757,3 +1949,31 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   .drawer .grid>.gal .foot .more{width:20px;height:20px}
   .grid2{grid-template-columns:1fr}
 }
+
+/* ── the rewrite rail ─────────────────────────────────────────────────────
+   Three jobs on the sentence, under the field. It follows `#shot-rail`'s rule
+   rather than the strip's: the row is affordable because it carries content,
+   and the component returns null with an empty prompt so there is no empty row
+   to hide. */
+#rewrite-rail {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 0 0;
+}
+#rewrite-rail .rw {
+  font-size: 12px;
+  height: 24px;
+  padding: 0 9px;
+  cursor: pointer;
+  /* Set, not inherited. `.opt` never declares a colour — every other user of it
+     is an icon button that sets its own — so a bare <button> fell through to the
+     UA default and rendered black text on a black bar. Invisible rather than
+     ugly, and only a computed-style read caught it. */
+  color: var(--mut);
+}
+#rewrite-rail .rw:hover:not(:disabled) { color: var(--fg); background: rgba(255,255,255,.1); }
+#rewrite-rail .rw:disabled { opacity: 0.34; cursor: default; }
+#rewrite-rail .rw[aria-busy='true'] { color: var(--fg); opacity: 1; }
+/* Pushed to the far end: it undoes the other three rather than joining them. */
+#rewrite-rail .rw.undo { margin-left: auto; }

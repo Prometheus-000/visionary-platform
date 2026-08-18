@@ -184,7 +184,9 @@ export function SessionForm({
       </div>
 
       <div className="opts">
-        <button className={`s${adv ? ' on' : ''}`} id="t-toggle-adv" type="button"
+        {/* A disclosure, not an action — so it carries no chrome. There is one
+            filled button on this sheet and it is the one that spends a GPU. */}
+        <button className={`t${adv ? ' on' : ''}`} id="t-toggle-adv" type="button"
                 onClick={() => setAdv((v) => !v)}>
           {adv ? 'Fewer dials' : 'More dials'}
         </button>
@@ -206,7 +208,7 @@ export function SessionForm({
 
       <div className="sess-acts" style={{ marginTop: 20 }}>
         <span className="muted grow" id="train-hint">{hint}</span>
-        <button className="s" id="sess-save" type="button" disabled={saving}
+        <button className="t" id="sess-save" type="button" disabled={saving}
                 onClick={() => onSave(draft(), false)}>
           Save for later
         </button>

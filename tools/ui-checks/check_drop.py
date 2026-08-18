@@ -145,13 +145,14 @@ with sync_playwright() as pw:
 
     print("\nELSEWHERE (known good, as a control)")
     # Two clicks now, and the second one is the change rather than a workaround:
-    # Train opens on the board of training sessions, and the drop target lives
-    # on the sets screen behind "+ New set". Making a set stopped being the
-    # first thing Train asks you to do when a run became a card you create.
+    # Train opens on the board of training sessions, and the sets — the drop
+    # target and the index of what you already have — are behind their own door.
+    # Making a set stopped being the first thing Train asks you to do when a run
+    # became a card you create.
     pg.click("#door")
     pg.wait_for_timeout(800)
-    pg.click("#ds-fresh")
-    pg.wait_for_timeout(500)
+    pg.click("#ds-door")
+    pg.wait_for_timeout(700)
     report("dataset hero drop", "#drop")
     b.close()
 

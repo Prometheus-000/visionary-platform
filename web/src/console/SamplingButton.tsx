@@ -34,7 +34,14 @@ function Row({ label, hint, children }: {
   )
 }
 
-const SEED_HINT = 'Blank draws a new one. A seed worth keeping is on the render that used it.'
+// The carve-out to the copy-is-a-last-resort rule, and the same one the
+// dimension boxes get: a field that silently stopped being random is a value
+// that cannot show itself. There is no lock glyph, no dice and no chip —
+// the number is visible in its own field and one gesture from gone, which is
+// what makes saying so enough.
+const SEED_HINT = 'Blank draws a new one. A seed worth keeping is on the render '
+  + 'that used it — and once the prompt has been read, the first one is kept here '
+  + 'so an edit changes only what it implied. Clear it to roll again.'
 const SHIFT_HINT = 'Bends the noise schedule — higher spends more steps on composition and motion.'
 
 export function ImageSampling() {

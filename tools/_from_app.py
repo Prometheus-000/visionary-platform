@@ -87,6 +87,35 @@ TRAINER = {
     "TRAIN_OPTIMIZERS", "LR_SCHEDULERS", "TIMESTEP_SAMPLINGS", "TRAIN_DEFAULTS",
 }
 
+# The storyline validator, for `preview_ui.py`'s `/api/parse` stub. The stub
+# invents which words are the model's — it has no model — but it must not invent
+# the *offsets*, because those are the thing the mirror is aimed by and a
+# hand-written pair would let the preview underline correctly while the shipped
+# code underlined three characters left.
+MODULES = {
+    "MODULE_ROLES", "MAX_MODULES", "MODULE_TEXT_MAX", "MAX_MODULE_DEPTH",
+    "MAX_SPANS", "_flat", "_oneline", "_spans_to_text", "_validate_modules",
+    "_prominence", "_module_words",
+    # The join, because `/api/parse` answers with the prose its elements add up
+    # to and the page puts *that* in the box. Without these the stub raises a
+    # NameError from inside the real compiler — which reads as a broken preview
+    # rather than an incomplete pull, and is the whole failure mode this
+    # AST-based lift has: a function arrives without what it calls.
+    #
+    # **Twice in one session, so it is worth the rule rather than the anecdote:
+    # a module-level constant added beside a pulled function has to be added
+    # here in the same edit.** `_CONTINUES` and `_ORIGIN_JOINS` were both born
+    # that way, and the second one cost a GPU run — ten Sandbox parses that all
+    # died on `name '_CONTINUES' is not defined`, minutes after the model had
+    # loaded and answered. The name in the traceback is the fix; what makes it
+    # expensive is that nothing fails until something rents a card.
+    "_module_texts", "_module_clause", "_CONTINUES",
+    # The trust checks, so the preview refuses what the deployment refuses.
+    "_document_trust", "_trusted_modules", "_derived_from", "_ORIGIN_JOINS",
+    "_derived_runs", "_walk_document", "_preserved",
+    "_merge_document", "_swap_element",
+}
+
 # Duplicate grouping, whole. `smoke_dupes.py` checks the real hash against real
 # re-encodes, and `preview_ui.py` groups the preview's own fixtures with it —
 # a stub that hand-wrote its groups would be a preview of an arrangement the

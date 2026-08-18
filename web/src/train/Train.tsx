@@ -10,7 +10,7 @@ import { type Draft, isActive, paramsToForm, type useSessions } from './useSessi
 import type { Session, TrainParams } from '../api/types'
 
 /**
- * Train: a board of sessions, and the sets they train on.
+ * Train: a board of sessions, and — behind one door — the sets they train on.
  *
  * **A run is a card, and there is no page for one.** The console under the
  * contact sheet is gone — it held a single `job` in component state, which made
@@ -24,6 +24,14 @@ import type { Session, TrainParams } from '../api/types'
  * with "+ New set" as its last option — so the set you are building and the run
  * you are setting up stop being the same act, and the half-finished card is
  * what carries you between them.
+ *
+ * **And the sets moved out of the board's margin.** They were a permanent 320px
+ * rail beside the cards, which was the last thing left over from the screen
+ * where a run needed a set in front of it. Nothing on the board reads them: the
+ * form picks a set from a menu, and a card names its own and links to it. A rail
+ * that no decision on the screen consults is 320px spent on a list you are not
+ * using, so the sets got a screen of their own — index and drop target together,
+ * which is what the rail and the empty editor each had half of.
  */
 export function Train({ sess, onLightbox }: {
   sess: ReturnType<typeof useSessions>
@@ -31,10 +39,9 @@ export function Train({ sess, onLightbox }: {
 }) {
   const state = useStore((s) => s.state)
   const ds = useDatasets()
-  // Two screens on one stage: the board, and the set you clicked through to.
-  // Explicit rather than keyed on `ds.open` being null, because "+ New set"
-  // lands on the sets screen with nothing open — which is the drop target, and
-  // is the whole point of that path.
+  // Two screens on one stage: the board, and the sets. Explicit rather than
+  // keyed on `ds.open` being null, because the sets screen with nothing open is
+  // the index *and* the drop target, and is where "+ New set" lands.
   const [screen, setScreen] = useState<'board' | 'sets'>('board')
   const [form, setForm] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
@@ -74,22 +81,52 @@ export function Train({ sess, onLightbox }: {
   const active = sess.rows.filter(isActive).length
 
   return (
-    <div className="view studio" id="v-train">
+    <div className="view studio nodrawer" id="v-train">
       <div className="stage">
         <div className="canvas" id="t-canvas">
           {screen === 'sets' ? (
-            /* Navigation, top-left of the thing it leaves — and inside the
-               editor's own sticky bar, because a set is a long scroll and a way
-               back that scrolls away is one you have to scroll up to find. The
-               set is a place you clicked into from a card, so getting back is
-               one word rather than a mode to un-toggle. */
-            <Editor ds={ds} onLightbox={onLightbox}
-                    lead={
-                      <button className="s" id="ds-back" type="button"
-                              onClick={() => setScreen('board')}>
-                        ‹ Sessions
-                      </button>
-                    } />
+            <div id="sets-screen">
+              {/* The screen's own head, carrying the way out. With a set open
+                  this is not rendered: the Editor puts the back button inside
+                  its own sticky bar instead, because a set is a long scroll and
+                  a way back that scrolls away is one you scroll up to find. */}
+              {!ds.open && (
+                <div className="opts board-head" style={{ marginTop: 0 }}>
+                  <button className="t" id="ds-back" type="button"
+                          onClick={() => setScreen('board')}>
+                    ‹ Sessions
+                  </button>
+                  <b style={{ fontSize: 14 }}>Sets</b>
+                  <span className="muted">
+                    {ds.rows.length} set{ds.rows.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+              )}
+
+              {/* No "+ New set" anywhere on this screen: the drop target is
+                  directly below and making a set *is* dropping on it. A button
+                  whose whole effect is to reveal the thing already on screen is
+                  the kind this pass exists to remove. */}
+              <Editor ds={ds} onLightbox={onLightbox}
+                      lead={ds.open ? (
+                        <button className="t" id="ds-back" type="button"
+                                onClick={() => void ds.choose(null)}>
+                          ‹ Sets
+                        </button>
+                      ) : undefined} />
+
+              {/* The index, under the drop target and only when nothing is
+                  open: with a set on screen this is the set you are looking at,
+                  and a list of the others beneath it is a rail again. */}
+              {!ds.open && (
+                <div id="ds-index">
+                  {ds.error && <div className="err-box">{ds.error}</div>}
+                  <div id="ds-list" className="grid">
+                    <Rail ds={ds} onOpen={openSet} />
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             <div id="sess-board">
               <div className="opts board-head" style={{ marginTop: 0 }}>
@@ -103,6 +140,13 @@ export function Train({ sess, onLightbox }: {
                   {sess.total > sess.rows.length ? ` · showing ${sess.rows.length} of ${sess.total}` : ''}
                 </span>
                 <span className="actions">
+                  {/* A door, so it takes a word rather than a glyph — and a text
+                      button, because there is exactly one action on this screen
+                      worth a filled one and it is the next thing along. */}
+                  <button className="t" id="ds-door" type="button"
+                          onClick={() => { setScreen('sets'); void ds.choose(null) }}>
+                    Sets
+                  </button>
                   <button className="b" id="new-session" type="button"
                           onClick={() => setForm(blank())}>
                     + Create session
@@ -129,7 +173,6 @@ export function Train({ sess, onLightbox }: {
                   <SessionCard key={s.id} s={s}
                                ds={ds.rows.find((r) => r.name === s.dataset)}
                                onEdit={() => setForm(edit(s))}
-                               onStart={() => void sess.start(s.id)}
                                onStop={() => void sess.stop(s.id)}
                                onDelete={() => void sess.remove(s.id)}
                                onOpenDataset={() => openSet(s.dataset)} />
@@ -139,24 +182,6 @@ export function Train({ sess, onLightbox }: {
           )}
         </div>
       </div>
-
-      {/* Every set you already have, always open — the second way into the one
-          screen that edits them. */}
-      <aside className="drawer" id="ds-drawer">
-        <div className="drawer-in">
-          <div className="drawer-head">
-            <span className="grow" />
-            <button className="s" id="ds-fresh" type="button"
-                    onClick={() => { setScreen('sets'); void ds.choose(null) }}>
-              + New set
-            </button>
-          </div>
-          {ds.error && <div className="err-box">{ds.error}</div>}
-          <div id="ds-list" className="grid">
-            <Rail ds={ds} onOpen={openSet} />
-          </div>
-        </div>
-      </aside>
 
       {form && (
         <SessionForm initial={form} state={state} datasets={ds.rows}

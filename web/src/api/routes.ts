@@ -13,8 +13,7 @@
  */
 import { api, post, type Res } from './client'
 import type {
-  AppState, CompileResult, DupeReport, Insight, JobStatus, Session, ShotPill,
-} from './types'
+  RewriteResult, AppState, CompileResult, DupeReport, Insight, JobStatus, ParseElement, ParseResult, Session, ShotPill } from './types'
 
 const seg = encodeURIComponent
 
@@ -199,6 +198,51 @@ export const compile = (body: {
   first_frame?: boolean
   last_frame?: boolean
 }) => post<CompileResult>('/api/compile', body)
+
+/**
+ * Prose in, structure out — the one route where a model reads the *user's* words.
+ *
+ * The counterpart of `compile`: that one asks what the encoder will be told,
+ * this one asks what was understood. Both are answered by the server rather than
+ * reimplemented here, for the reason `compile` records — a second implementation
+ * is a second opinion, and the one on screen would be the wrong one.
+ */
+export const parse = (body: { prose: string }) =>
+  post<ParseResult>('/api/parse', body)
+
+/**
+ * One of three jobs on the sentence in the box, and prose back.
+ *
+ * The operation is the person's choice rather than the model's inference, which
+ * is what lets the answer arrive unmarked: somebody who pressed Expand is not
+ * surprised that the sentence got longer, so the question the underlines were
+ * built to answer is answered by the gesture instead.
+ */
+export const rewrite = (body: { prose: string; op: string }) =>
+  post<RewriteResult>('/api/rewrite', body)
+
+/**
+ * One element read again — the same route, not a second one.
+ *
+ * A reroll is the same question at a smaller scope, so it extends `/api/parse`
+ * rather than inventing a parallel contract. The whole document goes with it
+ * because the merge is a transaction on the server: it comes back whole or the
+ * old one stands, and there is no partial result for the page to reason about.
+ */
+export const reroll = (body: { prose: string; document: ParseElement[]; only: string }) =>
+  post<ParseResult>('/api/parse', body)
+
+/**
+ * Start the interpreter's container while the user is still reading the page.
+ *
+ * The first parse fires on the first 500ms pause in the prompt box, which on a
+ * fresh page is fifteen-odd seconds after load — and a cold L4 is a model load
+ * plus a torch.compile. Spending that window is what buys scale-to-zero: the
+ * card is warm exactly when it is wanted and rented no earlier. Fire and
+ * forget, because nothing on screen depends on it and a slow first parse is the
+ * only cost of it failing.
+ */
+export const warm = () => post<{ ok: boolean }>('/api/warm', {})
 
 /* ---- outputs and the gallery ----------------------------------------- */
 

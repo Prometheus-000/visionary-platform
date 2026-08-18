@@ -14,6 +14,13 @@ import { isActive } from './useSessions'
  * `job` in a variable. A board of cards is what the backend was always able to
  * do.
  *
+ * **The card is portrait, because a run is read down rather than along.** It
+ * was a full-width row first, and the fault was not density — it was that every
+ * fact sat on its own horizontal band, so telling two runs apart meant scanning
+ * 1180px and then scanning it again one row down. A 3:4 card puts the whole run
+ * inside one fixation, and four of them side by side are compared by looking
+ * rather than by tracking.
+ *
  * **What a card says is what the terminal says.** A bar alone cannot tell
  * training from stuck, and the numbers that tell them apart are the ones tqdm
  * prints: step over total, epoch over total, the rate — `it/s` or `s/it`,
@@ -21,12 +28,15 @@ import { isActive } from './useSessions'
  * against ETA, and the loss, which is the one that says whether the hours are
  * buying anything.
  *
- * The dials are under them for a different reason: two cards training the same
- * set differ only in their dials, and a board where you cannot see which is
- * which is a board of identical rectangles.
+ * **The whole card is the way in.** Edit, and Start/Run again, were two buttons
+ * saying one thing: open this run's settings. Nobody re-runs a finished LoRA
+ * unchanged — you come back to it to move a dial — so the press that mattered
+ * was always the one that opens the form, and the form already carries Start.
+ * A click anywhere on the card is that press, which is why the resting card has
+ * no button on it at all.
  */
 export function SessionCard({
-  s, ds, onEdit, onStart, onStop, onDelete, onOpenDataset,
+  s, ds, onEdit, onStop, onDelete, onOpenDataset,
 }: {
   s: Session
   /** The row from the dataset listing, joined on the page rather than served
@@ -35,7 +45,6 @@ export function SessionCard({
    *  out from under the card, which the card says rather than hides. */
   ds?: DatasetRow
   onEdit: () => void
-  onStart: () => void
   onStop: () => void
   onDelete: () => void
   onOpenDataset: () => void
@@ -49,18 +58,33 @@ export function SessionCard({
   // waiting on you.
   const unfinished = !s.dataset || !s.lora_name || !s.trigger_word
 
-  const meta = [
-    s.epoch ? `epoch ${s.epoch}/${s.total_epochs ?? '?'}` : '',
-    s.step ? `step ${s.step}/${s.total_steps ?? '?'}` : '',
-    s.rate ?? '',
-    s.elapsed ? `${s.elapsed}${s.eta ? ` / ${s.eta}` : ''}` : s.eta ? `ETA ${s.eta}` : '',
-    typeof s.loss === 'number' ? `loss ${s.loss.toFixed(4)}` : '',
-  ].filter(Boolean).join(' · ')
+  // **A finished run draws no bar.** A bar answers "how far along", and a
+  // completed run has already answered it — so what was left was a full-width
+  // solid rule sitting between the name and the numbers, which is a divider,
+  // and it read as one. Stopped and failed keep theirs, because there the
+  // fraction is the whole point: it is where the run got to.
+  const showBar = active || (pct > 0 && s.status !== 'completed')
+
+  // tqdm's line, as pairs rather than a `·`-joined sentence. In a portrait card
+  // a single line wraps to three ragged ones and the numbers stop lining up
+  // between cards, which is the only reason to show them on a board.
+  const stats: [string, string][] = [
+    ['epoch', s.epoch ? `${s.epoch}/${s.total_epochs ?? '?'}` : ''],
+    ['step', s.step ? `${s.step}/${s.total_steps ?? '?'}` : ''],
+    ['rate', s.rate ?? ''],
+    ['time', s.elapsed ? `${s.elapsed}${s.eta ? ` / ${s.eta}` : ''}` : s.eta ? `ETA ${s.eta}` : ''],
+    ['loss', typeof s.loss === 'number' ? s.loss.toFixed(4) : ''],
+  ].filter(([, v]) => v) as [string, string][]
 
   const p = s.params
   // Rank beside alpha, because the effective strength is alpha ÷ rank — the two
-  // numbers only mean anything as a pair, and they used to sit four fields
-  // apart with the epoch count between them.
+  // numbers only mean anything as a pair.
+  //
+  // The optimizer, the scheduler, the timestep sampling and the flow shift used
+  // to be here and are not: they are the four dials nobody varies between two
+  // runs of the same set, so on a board they were four columns of the same word
+  // repeated down every card. They are all still in the form, one click away,
+  // which is where a value you set once belongs.
   const dials: [string, string][] = p ? [
     ['rank', String(p.network_dim)],
     ['alpha', String(p.network_alpha)],
@@ -68,96 +92,101 @@ export function SessionCard({
     ['lr', String(p.learning_rate)],
     ['epochs', String(p.max_train_epochs)],
     ['res', String(p.resolution)],
-    ['optimizer', String(p.optimizer_type)],
-    ['schedule', String(p.lr_scheduler)],
-    ['timesteps', String(p.timestep_sampling)],
-    // Only the `shift` sampling reads it. Shown beside a sampling that ignores
-    // it, it would be a number on the card that had nothing to do with the run.
-    ...(p.timestep_sampling === 'shift'
-      ? [['flow shift', String(p.discrete_flow_shift)] as [string, string]] : []),
   ] : []
 
   return (
     <div className={`sess ${s.status}`} data-session={s.id}>
+      {/* A real button rather than an onClick on the card, so it is focusable,
+          answers Enter and Space, and names itself to a screen reader. It sits
+          under the content and the content is click-through — see `.sess-hit`
+          in the stylesheet for why that is the arrangement rather than a
+          wrapper, which cannot contain the buttons that are still on the card. */}
+      <button className="sess-hit" type="button" onClick={onEdit}
+              aria-label={`Open the settings for ${s.lora_name || 'this session'}`} />
+
       <div className="sess-head">
-        <b className="sess-name">{s.lora_name || 'Untitled session'}</b>
         <span className={`chip ${s.status}`}>{LABEL[s.status] ?? s.status}</span>
+        <span className="grow" />
+        {!active && (
+          // The same corner and the same gesture as a set card's delete. It is
+          // the one thing on a resting card that is not "open this", so it is
+          // the one thing that gets its own target — and it appears on hover,
+          // because a board at rest should carry no destructive control.
+          <button className="sess-x" type="button" title="Delete this session"
+                  onClick={() => {
+                    if (confirm(`Delete the session “${s.lora_name || 'Untitled'}”?\n\n`
+                      + 'The card and its setup go. Any checkpoints it already wrote '
+                      + 'stay in loras/ and are deleted from Settings.')) onDelete()
+                  }}>×</button>
+        )}
       </div>
+
+      <b className="sess-name">{s.lora_name || 'Untitled session'}</b>
 
       <div className="sess-sub">
         {s.dataset ? (
           // The set is a place, so it is a link to that place rather than a
           // label repeating a name you chose in a menu.
-          <button className="link" type="button" onClick={onOpenDataset}
+          <button className="link" type="button"
+                  onClick={onOpenDataset}
                   title="Open this set in the editor">
             {s.dataset}
           </button>
         ) : <span className="muted">no set yet</span>}
-        {s.dataset && (
-          <span className="muted">
-            {ds ? countLine(ds) : 'set missing'}
-          </span>
-        )}
+        {s.dataset && <span className="muted">{ds ? countLine(ds) : 'set missing'}</span>}
         {s.trigger_word && <span className="muted">trigger “{s.trigger_word}”</span>}
       </div>
 
-      {(active || pct > 0) && (
-        <>
+      <span className="grow" />
+
+      {showBar && (
+        <div className="sess-prog">
           <div className="bar"><i style={{ width: `${pct}%` }} /></div>
-          <div className="sess-row">
+          <div className="sess-pct">
             <span className="muted grow">
               {s.stopping ? 'Stopping — finishing the step it is on'
-                : s.phase ? `${s.phase} · ${pct}%` : `${pct}%`}
+                : s.phase ? s.phase : LABEL[s.status] ?? ''}
             </span>
-            <span className="muted">{meta}</span>
+            <span>{pct}%</span>
           </div>
-        </>
+        </div>
+      )}
+
+      {!!stats.length && (
+        <div className="sess-live">
+          {stats.map(([k, v]) => <span key={k}><i>{k}</i>{v}</span>)}
+        </div>
+      )}
+
+      {s.status === 'completed' && !!s.files?.length && (
+        <p className="sess-note muted">
+          {s.files.length} checkpoint{s.files.length === 1 ? '' : 's'}
+          {s.duration_s ? ` · ${Math.round(s.duration_s / 60)} min` : ''}
+        </p>
       )}
 
       {!!dials.length && (
         <div className="sess-dials">
-          {dials.map(([k, v]) => (
-            <span key={k}><i>{k}</i>{v}</span>
-          ))}
+          {dials.map(([k, v]) => <span key={k}><i>{k}</i>{v}</span>)}
         </div>
       )}
 
       {(s.note || s.error) && (
         <p className={s.error ? 'sess-note err' : 'sess-note muted'}>{s.error || s.note}</p>
       )}
-      {s.status === 'completed' && !!s.files?.length && (
-        <p className="sess-note muted">
-          {s.files.length} checkpoint{s.files.length === 1 ? '' : 's'}
-          {s.duration_s ? ` · ${Math.round(s.duration_s / 60)} min` : ''}
-          {s.output_dir ? ` · ${s.output_dir}` : ''}
-        </p>
-      )}
 
       <div className="sess-acts">
         {active ? (
-          <button className="s" data-act="stop" type="button" disabled={!!s.stopping}
+          <button className="t danger" data-act="stop" type="button" disabled={!!s.stopping}
                   onClick={() => setAsking(true)}>
             {s.stopping ? 'Stopping…' : 'Cancel run'}
           </button>
-        ) : (
-          <>
-            <button className="s" data-act="edit" type="button" onClick={onEdit}>
-              {unfinished ? 'Continue setup' : 'Edit'}
-            </button>
-            <button className="s" data-act="delete" type="button"
-                    onClick={() => {
-                      if (confirm(`Delete the session “${s.lora_name || 'Untitled'}”?\n\n`
-                        + 'The card and its setup go. Any checkpoints it already wrote '
-                        + 'stay in loras/ and are deleted from Settings.')) onDelete()
-                    }}>
-              Delete
-            </button>
-            <button className="b" data-act="start" type="button" disabled={unfinished}
-                    onClick={onStart}>
-              {s.runs ? 'Run again' : 'Start training'}
-            </button>
-          </>
-        )}
+        ) : unfinished ? (
+          // Not a button: the card already is one, and a card whose whole face
+          // opens the form does not need a second thing to press inside it.
+          // What is missing is a sentence, so it is written as one.
+          <span className="muted sess-todo">Finish setup →</span>
+        ) : null}
       </div>
 
       {asking && (
@@ -221,11 +250,11 @@ function StopDialog({ name, onStop, onDelete, onClose }: {
         </div>
       </div>
       <div className="sess-acts" style={{ marginTop: 18 }}>
-        <button className="s" id="ask-cancel" type="button" onClick={onClose}>
+        <button className="t" id="ask-cancel" type="button" onClick={onClose}>
           Keep training
         </button>
         <span className="grow" />
-        <button className="s danger" id="ask-delete" type="button" onClick={onDelete}>
+        <button className="t danger" id="ask-delete" type="button" onClick={onDelete}>
           Stop and delete the session
         </button>
         <button className="b" id="ask-stop" type="button" onClick={onStop}>

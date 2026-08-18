@@ -45,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from _from_app import CAPTION, SHOT, TRAINER, pull
+from _from_app import CAPTION, MODULES, SHOT, TRAINER, pull
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
 # Argument first, then $PORT, then a default. The env var is what lets a launcher
@@ -74,7 +74,7 @@ _APP_CACHE: dict = {}
 def app_api() -> dict:
     stamp = APP.stat().st_mtime_ns
     if _APP_CACHE.get("stamp") != stamp:
-        _APP_CACHE.update(stamp=stamp, api=pull(SHOT | CAPTION | TRAINER))
+        _APP_CACHE.update(stamp=stamp, api=pull(SHOT | CAPTION | TRAINER | MODULES))
     return _APP_CACHE["api"]
 
 
@@ -695,6 +695,13 @@ def swatch(w: int, h: int, label: str, seed: int) -> bytes:
     ).encode()
 
 
+# What a reroll comes back with here. Cycled rather than random, because a
+# preview that answered differently on every press could not be driven by a
+# check — and `check_document.py` has to be able to press this twice.
+PREVIEW_REROLLS = ("lit from a low window", "backlit through a doorway",
+                   "under a bare overhead bulb")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -869,6 +876,98 @@ class Handler(BaseHTTPRequestHandler):
             GDRIVE["polls"] = 0
             return self.reply({"ok": True, "job_id": "dl_gdrive"})
 
+        # Half stubbed, and the halves are chosen rather than convenient.
+        #
+        # **Which** words the model wrote is faked, because there is no model
+        # here — anything in [square brackets] is treated as its suggestion, so
+        # the person testing decides what gets marked and nothing pretends to be
+        # a parse. **Where** those words are is not faked: the real
+        # `_spans_to_text` computes the offsets, because those are what aims the
+        # mirror, and a hand-written pair would let this preview underline the
+        # right words while the shipped code underlined three characters left.
+        # Answered, not stubbed away: the page pings this on load and a 404 in
+        # the console during every preview session is noise that trains you to
+        # ignore the console. There is no interpreter here and there is nothing
+        # to warm, which is exactly what `{"ok": true}` means to the caller —
+        # nothing on screen depends on it having happened.
+        if path == "/api/warm":
+            return self.reply({"ok": True})
+
+        if path == "/api/parse":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            api = app_api()
+            prose = api["_oneline"](str(p.get("prose") or ""))
+            # A reroll, answered by the real transaction. The stub proposes a
+            # different clause for the element asked about and hands the pair to
+            # `_merge_document`, so what the preview shows is what the server
+            # would commit — including a refusal, which is the outcome hardest to
+            # believe you have implemented correctly without seeing it.
+            only = str(p.get("only") or "")
+            if only and p.get("document"):
+                try:
+                    old_doc = api["_validate_modules"](p.get("document"))
+                except ValueError as exc:
+                    return self.reply({"ok": False, "error": str(exc), "elements": []})
+                # `invented` is dropped rather than carried: it indexes the
+                # *old* clause, and marks that outlive the text they measured
+                # are the one thing `_validate_modules` cannot repair. Left on,
+                # they make every reroll here fail preservation — which reads as
+                # a broken transaction rather than a stub handing it nonsense.
+                spun = [{k: v for k, v in m.items() if k != "invented"}
+                        | {"text": next(c for c in PREVIEW_REROLLS
+                                        if c != m.get("text"))}
+                        if m.get("id") == only and m.get("origin") == "invented" else m
+                        for m in old_doc]
+                # Through the validator first, exactly as `_reroll_storyline`
+                # does: that is what turns `origin: invented` into the marks the
+                # transaction reads. Handing `_merge_document` raw dicts makes
+                # every replacement look like unmarked text the person never
+                # typed, so every reroll is refused and the refusal is the
+                # stub's fault rather than the rule's.
+                merged = api["_merge_document"](
+                    old_doc, api["_validate_modules"](spun), only, prose)
+                return self.reply({"ok": True, "elements": merged,
+                                   "prominence": api["_prominence"](merged),
+                                   "text": api["_compile_image_prompt"]("", [], merged)})
+            if not prose.strip():
+                return self.reply({"ok": True, "elements": []})
+            spans = []
+            for i, run in enumerate(re.split(r"\[([^\]]*)\]", prose)):
+                if run:
+                    spans.append({"text": run,
+                                  "origin": "invented" if i % 2 else "derived"})
+            # The second shape, and the reason this stub is worth having: **an
+            # element the prose does not contain.** Everything above marks words
+            # the person typed, so the box never changes and the write-back path
+            # — insertion-only, the caret remap, the document landing in the
+            # box — is never exercised. A trailing `+` appends a clause nobody
+            # typed, which is exactly what a real parse does when it fills
+            # something in.
+            body = prose.replace("[", "").replace("]", "")
+            extra = []
+            if body.rstrip().endswith("+"):
+                body = body.rstrip()[:-1].rstrip()
+                spans = [sp for sp in spans if sp["text"].strip(" +")]
+                extra = [{"id": "e2", "role": "light",
+                          "text": "lit from a low window", "origin": "invented"}]
+            try:
+                # Ids, because a reroll addresses one element by name and the
+                # real schema requires them. Without these the affordance never
+                # arms here, which would make the one gesture this preview
+                # exists to let you build undevelopable on it.
+                mods = api["_validate_modules"]([{
+                    "id": "e1", "role": "text", "text": body,
+                    "origin": "derived", "spans": spans,
+                }, *extra])
+            except ValueError as exc:
+                return self.reply({"ok": False, "error": str(exc), "elements": []})
+            return self.reply({"ok": True, "elements": mods,
+                               "prominence": api["_prominence"](mods),
+                               "text": api["_compile_image_prompt"]("", [], mods)})
+
         # Not stubbed: this route is pure and cheap, and what it answers is the
         # only question the preview server cannot fake usefully. A hand-written
         # reply here would let the rail look right while compiling to something
@@ -883,21 +982,26 @@ class Handler(BaseHTTPRequestHandler):
                 pills = api["_validate_shot"](p.get("shot"))
                 n_refs = max(0, min(9, int(p.get("references") or 0)))
                 roles = api["_validate_ref_roles"](p.get("ref_roles"), n_refs)
+                # The document too, or this preview cannot answer the one
+                # question the semantic layer makes people ask — what does my
+                # storyline actually compile to. Same validator the route uses.
+                mods = api["_validate_modules"](p.get("modules"))
             except (TypeError, ValueError) as exc:
                 return self.reply({"error": str(exc)})
             typed = str(p.get("prompt") or "").strip()
             if p.get("kind") == "image":
                 return self.reply(
-                    {"prompt": api["_compile_image_prompt"](typed, pills)})
+                    {"prompt": api["_compile_image_prompt"](typed, pills, mods)})
             if str(p.get("model") or "h3") != "h3":
                 return self.reply(
-                    {"prompt": api["_compile_wan_prompt"](typed, pills)})
+                    {"prompt": api["_compile_wan_prompt"](typed, pills, mods)})
             try:
                 seconds = float(p.get("seconds") or 5)
             except (TypeError, ValueError):
                 seconds = 5.0
             return self.reply({"prompt": api["_compile_h3_prompt"](
                 typed=typed, pills=pills, seconds=seconds, roles=roles,
+                modules=mods,
                 task=api["_h3_task"](p.get("first_frame"), p.get("last_frame"),
                                      n_refs, int(p.get("ref_videos") or 0)),
             )})

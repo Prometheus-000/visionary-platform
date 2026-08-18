@@ -159,6 +159,10 @@ export type AppState = {
   shot_langs: string[]
   shot_roles: ShotRole[]
   caption_presets: { key: string; label: string; note: string }[]
+  /** The three jobs the interpreter will do on your sentence. The instruction
+   *  stays on the server and the page sends a key, so a run is reproducible
+   *  from the job record rather than from whatever text was in a field. */
+  rewrite_ops: { key: string; label: string; note: string }[]
   caption_models: { key: string; label: string; note: string }[]
   caption_defaults: { preset: string; model: string }
   train_optimizers: TrainChoice[]
@@ -230,6 +234,35 @@ export type JobStatus = {
 }
 
 export type CompileResult = { prompt: string }
+
+/**
+ * One element of the storyline, as `/api/parse` answers it.
+ *
+ * `invented` is **offsets into this element's own `text`**, never into the whole
+ * prompt — the server builds both in one pass (`_spans_to_text`) so the string
+ * and the indices into it cannot drift. It is absent when every word is the
+ * person's, and covers the whole clause when none of them are, which is why the
+ * page reads this field alone and never has to consult `origin` as well.
+ */
+export type ParseElement = {
+  id?: string
+  role: string
+  text: string
+  origin: 'derived' | 'invented'
+  invented?: [number, number][]
+  ties?: string[]
+  children?: ParseElement[]
+}
+
+/** A failure answers with a reason and no storyline rather than a 500. */
+export type ParseResult = {
+  ok: boolean
+  error?: string
+  elements: ParseElement[]
+  prominence?: { share: number }[]
+  /** The prose the elements add up to. The page puts this in the box. */
+  text?: string
+}
 
 /**
  * What `/api/datasets/{name}/insight` answers: the prose answer to "what is this dataset
@@ -327,3 +360,7 @@ export type DupeReport = {
    *  in a similar group is marked, so nothing in one is counted. */
   reclaim: number
 }
+
+/** Prose in, prose out. `text` is the original on any failure, so a model that
+ *  fell over can never blank the box. */
+export type RewriteResult = { ok: boolean; op?: string; text: string; error?: string }

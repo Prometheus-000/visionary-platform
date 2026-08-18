@@ -12,11 +12,36 @@
  * clears the rail rather than keeping whatever happened to be on it.
  */
 import { BUCKETS, commitBoxes } from '../console/size'
-import { loraIndex, loraTokens } from '../lora/tokens'
+import { loraIndex, loraTokens, stripLoras } from '../lora/tokens'
 import { newRegion, shotItem, useStore } from '../store'
 import type { GalleryItem } from './types'
 
 const set = (v: unknown): string => (v == null || v === '' ? '' : String(v))
+
+/**
+ * Put the prompt back, and the document with it — keyed to that exact string.
+ *
+ * **The one place this feature could quietly corrupt a run**, which is why the
+ * key is *computed from what was just written* rather than from the field the
+ * document came out of. Those are the same string today, and a document keyed
+ * to a plausible-looking near-miss is a document `docFor` refuses forever: the
+ * marks never appear, the run silently goes plain, and nothing on screen says
+ * why. Deriving both from one value is what makes that unreachable instead of
+ * merely unlikely.
+ *
+ * `stripLoras`, because that is the form the interpreter was given and the form
+ * `/api/generate` receives — the tokens ride in the box and never in the prose.
+ */
+function restore(s: ReturnType<typeof useStore.getState>,
+                 typed: string, tokens: string, modules: GalleryItem['modules'],
+                 original = ''): void {
+  const written = [typed, tokens].filter(Boolean).join(' ')
+  s.setPrompt(written)
+  const prose = stripLoras(written)
+  s.setDoc(modules?.length
+    ? { for: prose, from: original || prose, elements: modules, text: prose }
+    : null)
+}
 
 export function reuse(it: GalleryItem): void {
   const s = useStore.getState()
@@ -32,8 +57,8 @@ export function reuse(it: GalleryItem): void {
     // Prompt and stack are one field now, so they are restored as one string. A LoRA
     // deleted since the run simply does not come back — the same thing the old
     // row-matching did, minus a row left behind to explain it.
-    s.setPrompt([it.prompt_typed || it.prompt, loraTokens(index, it.loras, false)]
-      .filter(Boolean).join(' '))
+    restore(s, it.prompt_typed || it.prompt || '',
+            loraTokens(index, it.loras, false), it.modules)
     s.setNegative(it.negative_prompt ?? '')
 
     const size = `${it.width}x${it.height}`
@@ -118,8 +143,9 @@ export function reuse(it: GalleryItem): void {
   // Matched on the full filename under loras/, not the stem: `high.safetensors` is the
   // filename of both speed pairs, so a stem match would restore the t2v LoRA into an
   // i2v run without a word about it.
-  s.setPrompt([it.prompt_typed || it.prompt, loraTokens(index, it.loras, true,
-    s.state?.wan_experts ?? ['both', 'high', 'low'])].filter(Boolean).join(' '))
+  restore(s, it.prompt_typed || it.prompt || '',
+          loraTokens(index, it.loras, true,
+                     s.state?.wan_experts ?? ['both', 'high', 'low']), it.modules)
   s.setNegative(it.negative_prompt ?? '')
 }
 

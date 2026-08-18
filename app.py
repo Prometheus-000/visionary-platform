@@ -256,10 +256,6 @@ web_image = (
         # would mean a second build for a 200 kB pure-python package. The rule
         # is to split images when pins fight, not when responsibilities differ.
         "gdown==5.2.0",
-        # The parse. Small dependency, CPU container, and it is the one place a
-        # language model reads the user's words rather than the encoder's — see
-        # `PARSE_RULES`.
-        "anthropic==0.42.0",
     )
     # The single biggest number in this file.
     #
@@ -534,10 +530,51 @@ comfy_image = (
     # image layer, so pointing it one level up would overlay the directory the
     # clone above writes into and the pack would vanish at runtime while the
     # build log still showed it being cloned.
+    # `visionary_rewrite` loads the text encoder's *weights* from the local
+    # safetensors but still wants the tokenizer and config by repo id. Baked for
+    # the reason `trainer_image` bakes the same one: an H100 that is already
+    # warm should never wait on HuggingFace, and an outage there should not be
+    # able to take renders with it.
+    .run_commands(
+        "python -c \"from transformers import AutoConfig, AutoTokenizer; "
+        "r='Qwen/Qwen3-VL-4B-Instruct'; "
+        "AutoConfig.from_pretrained(r); AutoTokenizer.from_pretrained(r)\""
+    )
     .add_local_dir(
         f"{COMFY_NODES_DIR}/visionary_boxes",
         remote_path=f"{COMFY}/custom_nodes/visionary_boxes",
     )
+    .add_local_dir(
+        f"{COMFY_NODES_DIR}/visionary_rewrite",
+        remote_path=f"{COMFY}/custom_nodes/visionary_rewrite",
+    )
+)
+
+
+# The interpreter — the one model in this file that reads the *user's* words.
+#
+# Every recipe line below was settled by `tools/stress_parse.py` against a real
+# Sandbox rather than reasoned about, and each one cost a run to find:
+#
+#   * A `devel` CUDA base, not debian_slim. vLLM's inductor shells out to
+#     `nvcc` to build kernels, so a slim image dies with "Could not find nvcc
+#     and default cuda_home='/usr/local/cuda' doesn't exist" — several minutes
+#     *after* a successful model load, which is what made it read as a timeout.
+#     Same base family `caption_image` and `comfy_image` already use.
+#   * vLLM deliberately **unpinned**, where everything else here is pinned to a
+#     SHA. 0.11.0 fails on `Qwen2Tokenizer has no attribute
+#     all_special_tokens_extended` — its `get_cached_tokenizer` reaches for
+#     something a newer transformers dropped. Worth recording that this is not
+#     a defect in the fork: the base model declares the same `tokenizer_class`,
+#     so the fork was the first suspect and the wrong one. The pin that matters
+#     is the model revision, and that one is exact.
+parse_image = (
+    modal.Image.from_registry(
+        "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04", add_python="3.12"
+    )
+    .pip_install("vllm", "huggingface_hub")
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1",
+          "HF_HOME": "/cache"})
 )
 
 
@@ -1226,18 +1263,15 @@ def _hf_token() -> str | None:
     return _pasted_key("hf_token")
 
 
-def _anthropic_key() -> str | None:
-    """The parse's key, stored the same way for the same reason."""
-    return _pasted_key("anthropic_key")
-
-
 def _pasted_key(name: str) -> str | None:
     """
     A credential typed into the gear and kept in a Modal Dict.
 
-    Two of these now, which is what turns a habit into a convention worth
-    naming: `modal deploy app.py` stays the entire install, and neither key
-    needs a CLI step, a Secret, or a redeploy to change.
+    One of these now. There were two for a while — the parse took a hosted
+    model and an API key to reach it — and choosing local weights is what paid
+    for the semantic layer's "no new controls": a hosted interpreter needed a
+    key field in Settings, and weights need nothing, because the gear renders a
+    catalogue family for free. `modal deploy app.py` stays the entire install.
     """
     try:
         return (config.get(name) or "").strip() or None
@@ -3315,6 +3349,51 @@ class _Comfy:
         finally:
             self.job_id = None
 
+    def run_text(self, graph: dict[str, Any], timeout: float = 180.0) -> str:
+        """
+        Queue a graph whose output is words, and return them.
+
+        **A sibling of `run`/`_await` rather than a branch inside them.** That
+        pair extracts *filenames* — it walks `images`/`videos`/`gifs` and raises
+        "saved nothing" when it finds none, which is exactly what a text output
+        looks like to it. Teaching it a second output shape would put a rewrite's
+        failure modes inside the path every render takes, and the render path is
+        the one thing here that must not get more ways to go wrong.
+
+        What it deliberately does *not* inherit is the forty-minute clip's
+        tolerances: no stop check, because nothing offers to cancel a rewrite,
+        and a short poll ceiling, because this answers in seconds and a rewrite
+        that has hung for three minutes is a rewrite worth failing rather than
+        waiting on.
+        """
+        self._revive()
+        prompt_id = self.post("/prompt", {"prompt": graph})["prompt_id"]
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                entry = (self.get(f"/history/{prompt_id}") or {}).get(prompt_id)
+            except OSError:
+                # `get` has already established the process is alive, so this is
+                # one dropped socket on a server that is still serving.
+                time.sleep(0.5)
+                continue
+            if not entry:
+                time.sleep(0.4)
+                continue
+            status = entry.get("status", {})
+            if status.get("status_str") == "error" or not status.get("completed", True):
+                raise RuntimeError(self._why_failed(status))
+            for out in entry.get("outputs", {}).values():
+                said = out.get("text")
+                if said:
+                    # The node returns a one-item list; ComfyUI passes `ui`
+                    # through untouched.
+                    return said[0] if isinstance(said, list) else str(said)
+            raise RuntimeError(
+                "the rewrite graph completed and returned no text.\n"
+                + "\n".join(list(self._log)[-20:]))
+        raise RuntimeError(f"the rewrite did not answer within {timeout:.0f}s.")
+
     def _await(self, job_id: str, prompt_id: str, what: str) -> list[str]:
         assert self._proc is not None
         drops = 0
@@ -5346,7 +5425,32 @@ class ImageGenerator:
         # unknown class_type — which reads as our graph builder naming a node
         # wrong, minutes into a warm GPU, when the traceback that explains it
         # scrolled past during startup.
-        self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes")
+        self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
+                                  "VisionaryRewrite")
+
+    @modal.method()
+    def rewrite(self, prose: str, instruction: str,
+                max_tokens: int = 420) -> dict[str, Any]:
+        """
+        The rewrite, on the encoder this container already holds.
+
+        Same shape as `Interpreter.rewrite` so `_rewrite_backend` can swap the
+        two by name, and the whole reason for it: this container is warm for the
+        length of a session because every render goes through it, so there is no
+        cold start to hide. The interpreter's own L4 pays three to five minutes
+        on the first press.
+
+        **It queues behind a render, and that is correct.** `max_inputs=1` means
+        one sampling loop at a time, which is the invariant `_publish`'s
+        process-local lock depends on. Pressing Expand during a take waits for
+        the take rather than competing with it — and in the ordinary flow the
+        two are sequential anyway, because you rewrite the prompt and then press
+        Generate.
+        """
+        graph = {"rw": {"class_type": "VisionaryRewrite",
+                        "inputs": {"prose": prose, "instruction": instruction,
+                                   "max_tokens": int(max_tokens)}}}
+        return {"text": self._comfy.run_text(graph)}
 
     @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -6408,74 +6512,99 @@ MAX_MODULE_DEPTH = 4
 # They live here rather than in the page for the reason `CAPTION_PRESETS` does:
 # a run has to be reproducible from the job record rather than from whatever
 # text was in a field at the time.
-PARSE_MODEL = "claude-sonnet-5"
+# Weights, following the `CAPTION_MODELS` precedent rather than
+# `MODEL_CATALOGUE`: a pinned repo id served off the existing HF cache volume,
+# with no gear UI at all. The catalogue is built for single files with a
+# `dest: Path` and vLLM wants a repo directory, so an entry there would be a
+# shape that fits nothing plus a download button for a weight the parse pulls
+# on its own anyway. This trades against "nothing downloads on its own" exactly
+# as the captioner already does, and for the same reason: the alternative is a
+# catalogue entry whose only function is friction.
+#
+# **The revision is pinned, not the branch.** A fork with a few thousand
+# downloads against its base's millions is one person's upload and can be
+# amended or withdrawn without anyone noticing. See docs/vendor-parse-model.md
+# for what is forked, the one local change, and how to replace it.
+PARSE_REPO = "huihui-ai/Huihui-Qwen3-4B-Instruct-2507-abliterated"
+PARSE_REVISION = "c9bd464550d4078c72af0dd22aa18d0437868ce3"
 
+# An L4, measured. A 4B at bf16 is ~8 GB of weights, so this is the smallest
+# card that holds it with room to serve, and it is a fraction of an idle H100 —
+# which is the alternative this rejects. The brief said to raise concurrency on
+# a generation container instead; both carry `@modal.concurrent(max_inputs=1)`
+# because one GPU runs one sampling loop, and `_publish`'s lock is
+# process-local *because* `max_containers=1` means there is no second writer.
+# Putting a second model in either process would undo both.
+PARSE_GPU = "L4"
+PARSE_PORT = 8000
+# torch.compile is left on. It costs ~3 min on a cold L4 and is the one
+# configuration engine init is known to survive here — `--enforce-eager` was
+# tried and engine init failed, so the compile is not what to economise on.
+# Caching it to a Volume is far worse: thousands of small artifacts over 9P
+# never finished inside ten minutes.
+PARSE_START_S = 15 * 60
+
+# **Kept between 500 and 2000 characters, deliberately, and the reasoning lives
+# here rather than in the string.** Over one session this grew from 2.9k to
+# 10.2k and the output got worse in two ways that are only visible by reading.
+# It went lossy on a well-formed prompt — "a lone fisherman in yellow oilskins"
+# came back without the oilskins — and worse, it began **parroting the rules'
+# own examples**: given three friends on a fire escape it wrote "their shoulders
+# overlap, both lit by the same window, all three turned three-quarters toward
+# the same thing off-frame", every phrase lifted from the instruction rather
+# than composed for the scene. Every keyword check in `smoke_parse.py` scores
+# that as a pass.
+#
+# So the concrete examples went out with the wordcount, and that is not a
+# coincidence — they *were* the parroting. What is left is the smallest set of
+# things the model cannot work out for itself. Everything cut was teaching a
+# prompt-writing model what a prompt is: subject first, geometry over
+# adjectives, stage the feeling rather than name it, drop the narrator, nothing
+# a camera could not record. It knows all of that, and each line spent saying so
+# is a line competing with the five that matter.
+#
+# `tools/rules-long.txt` keeps the 10.2k version so this stays a measurement
+# rather than a maxim — `smoke_parse.py --enrich long` runs it against the
+# shipped one on the same corpus, judged the same way.
 PARSE_RULES = """\
-You turn a person's description of a picture into its structure. You never
-rewrite their intent and you never ask them anything.
+You write prompts for a text-to-image model. Somebody gives you what they want —
+sometimes already a prompt, more often a paragraph about a picture they can
+already see — and you give back the prompt that renders it. You know what a good
+prompt for this encoder looks like; that part is not written out here.
 
-Return elements in the order they should reach the image encoder. Order is
-placement: subjects described first render further left. Extent is prominence:
-the more words spent on something, the more the picture is about it.
+Five things you cannot know:
 
-AN ELEMENT IS AN ANCHOR PLUS WHAT HANGS OFF IT.
-Anything described as standing alone becomes a thing in its own right — that is
-how a light with its own sentence turns into a character instead of falling on
-somebody. So:
-- Put a property inside the thing it belongs to, as a child. Light on skin,
-  a garment on a person, a texture on a wall.
-- Leave something at the top level only when it really is its own subject.
-- Never state inherent relations. Hands belong to people and leaves to trees
-  already; saying so spends attention on nothing.
-- **Write a child as a phrase that continues its parent**, because it will be
-  joined straight onto it: "in a purple beret", "with pale blue floral
-  wallpaper", "lit hard across her face". A child written to stand alone
-  collides with its anchor — "a hotel corridor pale blue floral wallpaper" —
-  and nothing downstream can repair that, because the compiler is forbidden
-  from adding words to anyone's sentence.
+THEIR FACTS ARE FIXED. Reword anything, change nothing. A bright yellow sweater
+stays bright yellow, 3am stays 3am, and nothing you add may disagree with what
+they said.
 
-RELATIONS BETWEEN SUBJECTS ARE PHYSICAL OR THEY ARE NOT STATED.
-Contact, proximity and orientation render, and they tie people into one scene.
-Perception and opinion do not: "C notices her, he dislikes that she is talking
-to B" makes people merge or vanish, because naming another subject inside this
-one's clause opens a second attention site for someone who already has one.
-When you meet one, keep the feeling and drop the reference — it becomes that
-subject's own visible state ("C watches from across the room, jaw set").
-Record real relations as `ties` between elements, not as prose that points
-backwards.
+KEEP WHAT ALREADY WORKS. A phrase that would render what they meant, you leave
+alone. Narration comes back rewritten because almost none of it was a prompt;
+something already prompt-shaped comes back nearly untouched. The input decides
+that, not you.
 
-NAME FEELINGS. An emotional word is a compressed physical description this
-encoder decodes well — "resigned" carries dropped shoulders, lowered gaze and
-settled weight at once, and more reliably than a list would. Never write that
-someone is expressionless unless the person asked for that; a default that
-negates interiority is an instruction, not a neutral.
+MARK WHAT YOU ADDED, NOT WHAT YOU REWORDED. `origin: "invented"`, or `spans` on
+a mixed clause, for any fact they did not state — so they can delete it in one
+gesture. "a red winter coat" as "an oxblood down jacket" is the same fact and
+carries no mark; "and she looks visibly cold" is a state nobody mentioned and
+does.
 
-STATE GEOMETRY, NOT QUALITIES. "The corridor runs away to the right and the far
-door is half her height" carries an amount. "Dramatic perspective" has one
-setting and it is maximum.
+SUPPLY THE RELATIONS, AND PUT THE LINK LAST IN ITS CLAUSE. Subjects described
+one at a time render one at a time, squared to the lens and party to nothing.
+Say how they stand to each other as physical fact, never as one subject
+regarding another — that opens a second attention site inside the clause and
+they merge.
 
-NOTHING LEADS THE SUBJECT. Whatever is in the first element is what the picture
-is about, so a property must not be there unless the person means it to be the
-subject. Light, grade and camera go last.
+BALANCE IS WHAT THEY DECLARED. "A photo of three friends" says three people
+matter equally, so give the thin one words.
 
-MARK EVERY ELEMENT.
-- "derived" — you got it from their words.
-- "invented" — you supplied it. Be honest; invented text is shown differently
-  and is one touch from being changed, which is the only reason you are allowed
-  to invent at all.
-Invent sparingly and never invent a subject.
-
-MARK INSIDE THE ELEMENT WHEN THE ELEMENT IS MIXED. Most clauses are part theirs
-and part yours — "a ruined city" is theirs, "no colour left in it" is yours, and
-one flag on the pair says the wrong thing about whichever half it is wrong about.
-So when a clause is mixed, give `spans`: consecutive runs, each marked, that
-**join back to exactly the clause with no character added or dropped**, spaces
-and punctuation included. Keep the run boundaries where the authorship changes,
-not where a phrase feels like it ends — a span is a claim about who wrote it.
-Leave `spans` out when the whole clause has one origin; `origin` already said it.
-
-Keep the person's own words wherever you can. Their phrasing is the record.
+Return elements in the order they should reach the encoder — a thing plus what
+hangs off it as children, and extent is prominence. `ties` is a record the page
+reads and no compiler emits, so whatever has to render belongs in the text.
 """
+
+
+
 
 
 # Sixteen runs is far more than any clause has needed. The bound exists so a
@@ -6523,7 +6652,14 @@ _ELEMENT = {
                      "maxItems": 8,
                      "description": "Properties of this element, same shape."},
     },
-    "required": ["id", "text", "origin"],
+    # `origin` is no longer required, because it is no longer asked for: the
+    # rules ask for marks as a claim about facts, and `_derived_from` answers
+    # from the two strings. Left in `properties` rather than deleted so a model
+    # that volunteers it is not a schema error — the value is overwritten either
+    # way. Constrained decoding otherwise spends a token per element on a field
+    # whose answer is discarded, and, worse, invites the one mislabel nothing
+    # downstream could see.
+    "required": ["id", "text"],
     "additionalProperties": False,
 }
 
@@ -6543,32 +6679,711 @@ PARSE_SCHEMA = {
 }
 
 
+def _structured_call(base_url: str, model: str, system: str, user: str,
+                     schema: dict[str, Any], chosen: list[str],
+                     *, timeout: float = 300.0, max_tokens: int = 2048) -> str:
+    """
+    One chat completion with the schema **actually bound**, on any vLLM server.
+
+    `guided_json` rather than a politely-worded request for JSON: with the
+    grammar bound, malformed output is not unlikely, it is unreachable. That is
+    the difference between a 4B that works and one that works most of the time.
+
+    Three dialects because servers disagree about the spelling, and one trap
+    that cost a whole run to find: **a dialect is recorded only once a response
+    actually parses.** vLLM 0.27 accepts `guided_json` without binding it and
+    returns empty content, so appending on a 200 was enough to lock every later
+    call onto a dialect the server takes and then ignores — and the run scored
+    0% on a model that works.
+
+    Spelled at the top level of the request, never under `extra_body`: that is
+    an OpenAI *client library* concept which flattens into the body, and sent as
+    a literal key the server ignores it silently. The schema would never bind
+    and a constrained run would be reported for an unconstrained one.
+
+    `chosen` is the caller's one-slot memo of which dialect worked, so the
+    negotiation happens once per process rather than per request.
+    """
+    import urllib.request
+
+    dialects = [
+        ("guided_json", {"guided_json": schema,
+                         "guided_decoding_backend": "xgrammar"}),
+        ("structured_outputs", {"structured_outputs": {"json": schema}}),
+        ("response_format", {"response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "storyline", "schema": schema,
+                            "strict": True}}}),
+    ]
+
+    def call(extra: dict[str, Any]) -> str:
+        body = json.dumps({
+            "model": model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            # Temperature 0. A parse is a reading of somebody's sentence, and
+            # the same sentence read twice should not come back two different
+            # shapes — idempotency is a scored row precisely because a document
+            # has to survive a round trip through the box.
+            "max_tokens": max_tokens, "temperature": 0, **extra,
+        }).encode()
+        req = urllib.request.Request(f"{base_url}/chat/completions", body,
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())["choices"][0]["message"]["content"]
+
+    if chosen:
+        return call(dict(dict(dialects)[chosen[0]]))
+
+    errs = []
+    for name, extra in dialects:
+        said = None
+        try:
+            said = call(extra)
+            json.loads(said)          # parses, so the grammar really bound
+            chosen.append(name)
+            return said
+        except Exception as exc:
+            errs.append(f"{name}: {exc}"
+                        + (f" (returned {len(said)} chars)" if isinstance(said, str) else ""))
+    raise ValueError("No structured-output dialect bound the schema:\n  "
+                     + "\n  ".join(errs))
+
+
+@app.cls(
+    image=parse_image, gpu=PARSE_GPU, cpu=2.0, timeout=30 * 60,
+    volumes={"/cache": hf_cache},
+    # One container for the same reason the generators have one: a second
+    # replica pays a full cold load rather than sharing the warm one, and this
+    # one's cold load is a model download plus a torch.compile.
+    max_containers=1,
+    # Scale to zero, and no `keep_warm`. The page pings this when it loads and
+    # the user then spends ~15s typing before the first pause fires, which is
+    # the window — paying for an idle L4 to save a window you already have is
+    # the wrong trade on a single-user platform.
+    scaledown_window=10 * 60,
+)
+@modal.concurrent(max_inputs=1)
+class Interpreter:
+    """
+    A warm vLLM, serving the one model that reads the user's words.
+
+    Shaped like `_Comfy` and for the same reasons, which is why it is a local
+    server spoken to over 127.0.0.1 rather than an in-process `LLM(...)`:
+    `@modal.enter` runs once per container, so a process that dies is otherwise
+    every parse refused until the scaledown window expires. `_revive` at the top
+    of the call is what makes a dead one cost one request instead of ten
+    minutes.
+    """
+
+    @modal.enter()
+    def setup(self):
+        self._log: deque[str] = deque(maxlen=200)
+        self._dialect: list[str] = []
+        self._proc = None
+        self._start()
+
+    def _start(self) -> None:
+        import threading
+
+        self._proc = subprocess.Popen(
+            ["vllm", "serve", PARSE_REPO,
+             "--revision", PARSE_REVISION,
+             "--port", str(PARSE_PORT),
+             # **Sized by the answer, not by the question.** 8192 was chosen
+             # for the *prose* — the prompt box is capped at MODULE_TEXT_MAX,
+             # so the input was never close — and that reasoning stopped
+             # holding the moment the rules asked for a replacement rather than
+             # a structure. A written picture is several times the length of
+             # what was typed, and the document carrying it is longer again:
+             # the first recollection through the new rules died at 7,647
+             # characters with `Unterminated string`, which reads as a broken
+             # model and is a token cap. The failure mode is worth knowing
+             # because it is not an error the model reports — it stops
+             # mid-string and the JSON simply does not close.
+             #
+             # 16384 still fits an L4 comfortably: the measured KV cache at
+             # 0.90 utilisation is 76,416 tokens, and this serves one request
+             # at a time.
+             "--max-model-len", "16384",
+             "--gpu-memory-utilization", "0.90"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        threading.Thread(target=self._drain, daemon=True).start()
+        self._wait_ready()
+
+    def _drain(self) -> None:
+        """Mirror vLLM's output into Modal's logs, and keep a tail for errors."""
+        assert self._proc is not None and self._proc.stdout is not None
+        for line in self._proc.stdout:
+            line = line.rstrip()
+            if line:
+                self._log.append(line)
+                print(f"[parse] {line}", flush=True)
+
+    def _wait_ready(self) -> None:
+        """
+        Poll /health with urllib, never curl.
+
+        The CUDA base has no `curl`, so `curl -sf` fails with "command not
+        found" on every iteration while the server sits there serving — and the
+        symptom is indistinguishable from a slow start. That cost two runs.
+        """
+        import urllib.error
+        import urllib.request
+
+        assert self._proc is not None
+        deadline = time.time() + PARSE_START_S
+        while time.time() < deadline:
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    f"vLLM exited during startup (code {self._proc.poll()}).\n"
+                    + "\n".join(list(self._log)[-25:]))
+            try:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{PARSE_PORT}/health", timeout=3).read()
+                print("[parse] vLLM ready", flush=True)
+                return
+            except (urllib.error.URLError, OSError):
+                time.sleep(1.0)
+        raise RuntimeError("vLLM did not become ready.\n"
+                           + "\n".join(list(self._log)[-25:]))
+
+    def _revive(self) -> None:
+        """A dead server replaced before this call, not after the next ten fail."""
+        if self._proc is None or self._proc.poll() is None:
+            return
+        print(f"[parse] vLLM died (exit code {self._proc.poll()}); "
+              "starting a fresh one", flush=True)
+        self._log.clear()
+        self._dialect.clear()
+        self._start()
+
+    @modal.method()
+    def warm(self) -> dict[str, Any]:
+        """
+        Nothing, done on a live container — which is the entire point.
+
+        The page calls this on load and the user then spends around fifteen
+        seconds typing before the first pause fires. That window is what pays
+        for scale-to-zero: the container is cold exactly once per session and
+        never at the moment somebody is waiting on a reply.
+        """
+        self._revive()
+        return {"ok": True}
+
+    @modal.method()
+    def parse(self, prose: str, rules: str) -> dict[str, Any]:
+        """
+        Prose in, the model's raw element list out. Never the last word on it.
+
+        Returns what the model said and nothing more — no validation, no trust
+        judgement. Those happen on the web container, where the user's prose is
+        also in hand, because a model is one more untrusted caller and a caller
+        does not get to mark its own homework.
+        """
+        self._revive()
+        said = _structured_call(
+            f"http://127.0.0.1:{PARSE_PORT}/v1", PARSE_REPO,
+            rules, prose, PARSE_SCHEMA["input_schema"], self._dialect)
+        return {"elements": json.loads(said).get("elements") or []}
+
+    @modal.method()
+    def rewrite(self, prose: str, instruction: str,
+                max_tokens: int = 420) -> dict[str, Any]:
+        """
+        Prose in, prose out. The same warm server, without the schema.
+
+        A separate method rather than a flag on `parse`, because the two return
+        different kinds of thing and folding them would mean a caller checking
+        which shape came back. `_revive` for the same reason `parse` calls it:
+        `@modal.enter` runs once, so a dead process is otherwise every request
+        refused until the scaledown window expires.
+        """
+        self._revive()
+        said = _plain_call(f"http://127.0.0.1:{PARSE_PORT}/v1", PARSE_REPO,
+                           instruction, prose, max_tokens=max_tokens)
+        return {"text": _clean_rewrite(said)}
+
+
 def _parse_storyline(prose: str) -> list[dict[str, Any]]:
     """
     A person's description, as structure. Raises with something actionable.
 
-    A tool call rather than free text, so a malformed answer is the SDK's
-    problem rather than a regex's — the same reason `_validate_modules` refuses
-    an unknown role instead of dropping it. Everything it returns still goes
-    through that validator, because a model is one more untrusted caller.
+    Constrained decoding rather than free text, so a malformed answer is the
+    grammar's problem rather than a regex's — the same reason
+    `_validate_modules` refuses an unknown role instead of dropping it.
+    Everything it returns still goes through that validator, **because a model
+    is one more untrusted caller.**
+
+    And through `_document_trust`, which is the half that has teeth. With a
+    schema bound a refusal cannot arrive as recognisable prose; it arrives as an
+    evasive storyline that satisfies the schema, and shape validation passes it
+    intact. An untrustworthy interpretation is dropped here and the run proceeds
+    plain — no error, no toast, no partial document — which is byte-for-byte the
+    app as it was before any of this existed. The reason is printed because a
+    degrade nobody can see in the logs is a degrade that gets diagnosed as a bad
+    model.
     """
-    key = _anthropic_key()
-    if not key:
-        raise ValueError("No Anthropic key. Paste one under the gear — it is "
-                         "stored the same way the HuggingFace token is.")
-    import anthropic
-    reply = anthropic.Anthropic(api_key=key).messages.create(
-        model=PARSE_MODEL,
-        max_tokens=2048,
-        system=PARSE_RULES,
-        tools=[PARSE_SCHEMA],
-        tool_choice={"type": "tool", "name": "storyline"},
-        messages=[{"role": "user", "content": prose}],
-    )
-    for block in reply.content:
-        if getattr(block, "type", None) == "tool_use":
-            return _validate_modules(block.input.get("elements") or [])
-    raise ValueError("The parse returned no storyline.")
+    said = Interpreter().parse.remote(prose, PARSE_RULES)
+    modules, dropped = _trusted_modules(said.get("elements") or [], prose)
+    if dropped:
+        print(f"[parse] document dropped: {dropped}", flush=True)
+    return modules
+
+
+def _reroll_storyline(prose: str, document: Any, only: str) -> list[dict[str, Any]]:
+    """
+    One element read again, or the document exactly as it was.
+
+    Extends `/api/parse` rather than adding a route, because this is the same
+    question asked about a smaller scope — and `PARSE_REROLL` is appended to the
+    rules rather than replacing them, so everything restraint says still governs
+    the one element being replaced.
+
+    The document arriving from the client is validated like any other input: it
+    was ours a moment ago and it has been out of our hands since, which is the
+    same reason `_document_matches` re-asks a question the page has already
+    answered.
+    """
+    old = _validate_modules(document)
+    if not old or not only:
+        return old
+    user = (f"{prose}\n\nThe document you produced:\n"
+            + json.dumps({"elements": old}, ensure_ascii=False)
+            + f"\n\nReroll the element with id {only!r}.")
+    said = Interpreter().parse.remote(user, PARSE_RULES + PARSE_REROLL)
+    return _merge_document(old, _validate_modules(said.get("elements") or []),
+                           only, prose)
+
+
+# Rerolling one span. Appended to `PARSE_RULES` rather than replacing them, and
+# on the server for the reason `CAPTION_PRESETS` gives: a run has to be
+# reproducible from the job record rather than from whatever text was in a field
+# at the time.
+
+# --------------------------------------------------------------------------
+# Rewriting the prompt, which is the feature the semantic layer was trying to
+# be. Measured, thirty blind render comparisons said the document approach
+# never beat the sentence it came from — see tools/parse-eval-2026-08-17 —
+# because a schema whose unit is a tagged fragment makes a model decompose
+# where it needed to write. So this asks for **prose and nothing else**, and
+# asks the person which of three jobs to do rather than inferring it.
+#
+# **The person chooses the operation, so the model never classifies.** That was
+# the largest remaining thing the interpreter could get wrong and it is now not
+# its decision. It also sets the expectation: somebody who pressed Expand is not
+# surprised to get more words back, which is most of the trust problem solved
+# without marking a single character.
+#
+# Server-side for the reason `CAPTION_PRESETS` gives: a run has to be
+# reproducible from the job record rather than from whatever text was in a
+# field at the time. The page sends a key.
+# Krea's own expansion prompt, verbatim.
+#
+#   https://github.com/krea-ai/krea-2/blob/main/docs/expansion.txt
+#   retrieved 2026-08-18, 2,115 characters
+#
+# Vendored rather than paraphrased, and recorded the way
+# `docs/vendor-parse-model.md` records the parse fork: the source, the date, and
+# the fact that nothing local was changed. `docs/prompting.md` publishes it "as a
+# system prompt for LLM of your choice", so this is the instruction the people
+# who trained the encoder wrote for the job — which beats one we tuned against
+# our own corpus, if it measures better. `tools/prompt_ab.py` is what decides;
+# the loser stays in this file as a comment so it stays a measurement.
+#
+# **Its rule 7 is our Enhance.** "If the user's prompt is already detailed,
+# lightly polish and finalize rather than heavily expanding" means one
+# instruction covers both operations by reading the input's length. The three
+# buttons stay anyway — the person choosing is what pays for the answer arriving
+# unmarked — but Enhance is now this plus a line holding it to the light touch,
+# rather than a separate philosophy.
+#
+# It asks for a thinking step before the paragraph. Rule 3 tells the model to
+# keep that internal; `_META` in `_clean_rewrite` is what makes it true when the
+# model obliges anyway.
+KREA_EXPANSION = """\
+You are an expert prompt engineer for text-to-image models. Your task is to expand the user's prompt into a highly effective image-generation prompt.
+
+Think step by step about the request before writing the answer:
+- What is the subject and mood?
+- What visual styles, mediums, and lighting options would fit? Consider two or three alternatives and pick the one that best serves the caption.
+- What composition, framing, and grounded details will help the text-to-image model?
+
+Then output a single expanded prompt paragraph.
+
+Follow these rules strictly:
+1. **Faithfulness First:** Preserve all original subjects, actions, colors, and spatial relationships. Do not add new objects, props, characters, or animals unless the user clearly implies them.
+2. **Practical T2I Structure:** Write a prompt that a text-to-image model can parse cleanly. Group subjects with their own attributes and actions. Use grounded phrasing for poses, interactions, and spatial layout.
+3. **Style Planning Stays Internal:** Use your internal reasoning to choose style, medium, framing, and lighting. Do not emit planning tags or wrappers in the visible answer body.
+4. **Text Rendering:** If the user requests visible text, quotes, labels, or typography, specify the exact text clearly and wrap requested words in quotes.
+5. **Avoid Over-Specification:** Do not invent highly specific clothing, colors, materials, or scene details unless the input supports them.
+6. **Structure:** Write one cohesive paragraph after the thinking block. No bullets, JSON, or markdown.
+7. **Respect Existing Detail:** If the user's prompt is already detailed, lightly polish and finalize rather than heavily expanding — preserve their phrasing and direction.
+8. **Respect the Human Form:** Treat depictions of people with dignity. Assume clothing covers genitals and intimate anatomy.
+9. **Preserve User Medium:** When the user explicitly requests a medium (e.g. "photo of", "photograph of", "illustration of", "painting of", "sketch of", "3D render of"), honor it. Do not pivot to a different medium to avoid difficulty — match the user's stated intent.
+"""
+
+REWRITE_OPS: dict[str, dict[str, str]] = {
+    "expand": {
+        "label": "Expand",
+        "note": "A fragment becomes a full prompt. Most useful on a few words.",
+        # ~100 words. The instruction asks for a length and the model does not
+        # count: our own wording produced 95, 122 and 617 words on three
+        # fragments. So the bound is the decoder's, and `_clean_rewrite` drops
+        # the partial sentence the cap leaves behind. It buys coherence as well
+        # as length — the 617-word version drifted into "early morning mist"
+        # against a 3am brief, and the capped one keeps the clock at 3:02.
+        "max_tokens": 200,
+        "instruction": KREA_EXPANSION,
+        # What this replaced, kept because `tools/prompt_ab.py` is what decides
+        # between them and a deleted alternative is a measurement nobody can
+        # re-run. Ours is tuned to the failures measured on this corpus —
+        # self-corrections resolved, implied states rendered, feeling staged;
+        # upstream's is general and is what the encoder's authors wrote.
+        "alt_instruction": (
+            "Turn this into a complete image prompt. It is a fragment or a "
+            "half-formed idea and your job is to write the picture it is "
+            "reaching for, as one paragraph of flowing prose, "
+            "**between 60 and 100 words**.\n"
+            "That is a length, not a suggestion. Past it the picture drifts and "
+            "starts contradicting itself, and the encoder reads none of it.\n"
+            "Every fact they gave is fixed and survives exactly. Everything else "
+            "you supply: the light and where it comes from, the lens and where it "
+            "stands, what fills the rest of the frame, the surfaces and their "
+            "condition, the time of day.\n"
+            "Resolve what they left unresolved. If they corrected themselves, "
+            "the correction wins and the abandoned half is gone. If they hedged, "
+            "choose. If a state is implied rather than stated, render the state: "
+            "\"the kitchen after the party\" is an empty room the morning after, "
+            "not a party.\n"
+            "Stage feeling rather than naming it. Nothing a camera could not "
+            "record. No narrator, no backstory, no words about how it feels."
+        ),
+    },
+    "balance": {
+        "label": "Balance",
+        "note": "Gives every named subject equal weight, and relates them.",
+        # Longer, because it rewrites a whole prompt rather than a fragment and
+        # has to give the thin subjects room to come up to the others.
+        "max_tokens": 420,
+        "instruction": (
+            "Rewrite this prompt so the people in it share the frame.\n"
+            "If it names several subjects and describes one richly and another "
+            "in three words, that renders as a portrait with bystanders. Give "
+            "each of them comparable weight — similar length, similar "
+            "specificity — inventing what you need for the thin ones.\n"
+            "Then relate them physically, and put the relation at the end of "
+            "each subject's clause. A relation is contact, orientation, a shared "
+            "surface, a shared light, attention pointed at the same thing "
+            "off-frame. Write it as geometry and never by naming the other "
+            "person inside this one's clause, which makes the encoder merge "
+            "them.\n"
+            "Keep every fact they stated. Change nothing else."
+        ),
+    },
+    "enhance": {
+        "label": "Enhance",
+        "note": "Keeps your prompt and fixes only what would render wrong.",
+        # It returns something close to what it was given, so the ceiling only
+        # has to clear the input.
+        "max_tokens": 420,
+        # **Ours, and `KREA_EXPANSION` is the one that lost here** — recorded
+        # rather than argued, because upstream's prompt winning Expand made it
+        # the obvious choice for this too. It is an *expansion* prompt, and its
+        # rule 7 ("lightly polish rather than heavily expanding") is not strong
+        # enough to convert it, even with a line above it saying to treat that
+        # rule as unconditional. Measured on the resident encoder:
+        #
+        #   already-good diner prompt   104 -> 322 chars under KREA_EXPANSION
+        #                               104 -> 104 unchanged under this
+        #   fisherman                   fixed the two faults under both, and
+        #                               under KREA_EXPANSION also invented a
+        #                               dock, a lantern and a horizon
+        #
+        # Leaving a good prompt alone is the harder half of this operation and
+        # the half a general expansion prompt cannot do.
+        "alt_instruction": "KREA_EXPANSION + an unconditional rule 7 — expands anyway",
+        "instruction": (
+            "Improve this image prompt with the lightest possible touch.\n"
+            "It already works, so keep its wording, its order and its length.\n"
+            "Four things always render wrong and you must fix every one you "
+            "find. A quality standing in for a geometry: \"dramatic "
+            "perspective\" has one setting and it is maximum, so say what the "
+            "angle does. A feeling named instead of staged: \"it feels lonely\" "
+            "renders as nothing, so spend it on negative space, a single light, "
+            "a turned back. A clause of narration rather than something "
+            "visible. An adjective floating free of its noun.\n"
+            "If you find none of the four, return it unchanged.\n"
+            "Add nothing that is merely nice, and invent no objects or places "
+            "the prompt does not have — no docks, no lanterns, no horizons.\n"
+            "**Staging a feeling is not inventing.** Negative space, where a "
+            "light falls, and which way a subject faces are how the second rule "
+            "is obeyed, so spend them freely. Written the other way round this "
+            "forbade the very thing it asks for, and the model did the safe "
+            "thing: it fixed the geometry and left \"it feels lonely\" standing "
+            "as a word."
+        ),
+    },
+}
+
+# Appended to every instruction rather than written into each, and it earns the
+# line: without it `enhance` returned its analysis — the prompt, then an arrow,
+# then "**Change explained:**" and three bullets about what it did. That is a
+# model being helpful in the one place helpfulness is indistinguishable from
+# failure, because the answer goes straight into the box.
+_REWRITE_TAIL = (
+    "\n\nReturn only the prompt itself, as prose. No preamble, no quotes, no "
+    "explanation, no notes on what you changed or why."
+)
+
+# Which process does the rewriting. One constant, because the choice is a
+# deployment fact rather than a per-request one and every caller should be
+# unable to care.
+#
+# `"interpreter"` is the separate 4B on its own L4 — correct, and it costs a
+# 3-5 minute cold start on the first press, where the old automatic parse had
+# fifteen seconds of typing to hide the same wait behind. `"comfy"` runs the
+# rewrite on the Qwen3-VL-4B that Krea 2 already has resident, which is warm
+# for the whole session because it is the encoder the renders go through.
+#
+# **The seam is the point.** Swapping backends should be one line and reverting
+# should be the same line, because the thing being changed is where a model
+# runs and that is exactly the kind of change worth being able to undo without
+# a diff.
+REWRITE_BACKEND = "comfy"
+
+
+def _rewrite_backend(prose: str, instruction: str, max_tokens: int) -> str:
+    """Prose in, prose out, wherever the model happens to live."""
+    if REWRITE_BACKEND == "comfy":
+        said = ImageGenerator().rewrite.remote(prose, instruction, max_tokens)
+    else:
+        said = Interpreter().rewrite.remote(prose, instruction, max_tokens)
+    return said.get("text") or ""
+
+
+# Prose back, not a document — so no schema, no grammar, no dialect
+# negotiation. `_structured_call`'s whole apparatus exists to bind JSON and
+# there is no JSON here.
+def _plain_call(base_url: str, model: str, system: str, user: str,
+                *, timeout: float = 300.0, max_tokens: int = 1024) -> str:
+    # Imported in the function, which is this file's convention for stdlib that
+    # only some code paths need — and load-bearing rather than stylistic: there
+    # is no module-level `import urllib`, so hoisting this would be the one
+    # difference between a route that answers and a NameError at request time.
+    import urllib.request
+
+    body = json.dumps({
+        "model": model,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user}],
+        # Temperature 0 for the reason the parse uses it: the same sentence
+        # rewritten twice should not come back two different pictures. Pressing
+        # the same button again is not how you ask for a variation.
+        "max_tokens": max_tokens, "temperature": 0,
+    }).encode()
+    req = urllib.request.Request(f"{base_url}/chat/completions", body,
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+
+# Models like to introduce their own output. Stripped here rather than
+# instructed away, because an instruction not to preamble is one more line of
+# system prompt competing with the five that matter — and this is deterministic
+# where the instruction is not.
+_PREAMBLE = re.compile(
+    r"^\s*(?:here(?:'s| is)[^:\n]*:|sure[^:\n]*:|prompt:|rewritten[^:\n]*:)\s*",
+    re.I)
+
+
+# Where a model stops answering and starts narrating its answer. Deterministic
+# rather than left to the instruction, because the instruction is a request and
+# this is the box the text lands in — `enhance` produced the prompt followed by
+# an arrow, "Revised version:", and three bullets explaining itself, and every
+# character after that arrow is the model talking about the work instead of
+# doing it.
+_META = re.compile(
+    r"(?:\s*(?:→|->|\n)\s*)?(?:\*\*)?(?:revised(?:\s+version)?|change[sd]?\s+"
+    r"explained|explanation|note[s]?|what\s+(?:i|was)\s+changed|why)\b\s*:?",
+    re.I)
+
+# The other half of the same problem, and it arrives at the *front* rather than
+# the back. Krea's expansion prompt asks the model to think before it writes —
+# "What is the subject and mood?", "Consider two or three alternatives" — and
+# tells it to keep that internal. Rule 3 is a request; models answer the
+# questions out loud often enough that the visible prompt begins with the
+# planning. So the last fenced or labelled block wins: everything up to and
+# including a `</think>` or a "Expanded prompt:" heading is the working, and the
+# paragraph after it is the answer.
+_THINK = re.compile(
+    r"^.*?(?:</think>|<\/thinking>|"
+    r"(?:final|expanded|output)\s+prompt\s*:|"
+    r"^\s*(?:answer|prompt)\s*:)\s*",
+    re.I | re.S | re.M)
+
+
+def _clean_rewrite(said: str) -> str:
+    text = (said or "").strip()
+    # Planning first, because it sits in front of the answer and every later
+    # rule is about the answer. Only when something follows it — a model that
+    # emitted nothing but its thinking has failed, and returning the empty
+    # string lets the caller fall back to the original rather than writing
+    # somebody's reasoning into the prompt box.
+    if (hit := _THINK.match(text)) and text[hit.end():].strip():
+        text = text[hit.end():]
+    text = _PREAMBLE.sub("", text.strip())
+    # Cut at the first meta marker, and keep the cut only when something
+    # survives it — a prompt that legitimately opens with "Notes" is not what
+    # this is for, and truncating to nothing would blank the box.
+    #
+    # **Stated as "is there an answer left" rather than as a character floor**,
+    # which is what this was and which got it wrong: the floor was 40, and
+    # "A lone fisherman hauling a net." is 31, so the one shape this exists to
+    # catch went uncut on any prompt short enough to need it least. A threshold
+    # standing in for a question is the same error the token cap fixed one
+    # function up.
+    if (hit := _META.search(text)) and (head := text[:hit.start()].strip()):
+        text = head
+    # A model that wrapped its answer in quotes did not mean them as characters.
+    text = text.strip()
+    if len(text) > 1 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1]
+    text = _oneline(text).strip()
+    # The token cap is what actually holds the length, so it lands mid-sentence
+    # roughly whenever it binds. Drop the fragment it left — a prompt ending
+    # "and the counter runs" is worse than one sentence shorter, and the encoder
+    # has no way to know the tail was an accident.
+    if text and text[-1] not in ".!?":
+        cut = max(text.rfind(". "), text.rfind("! "), text.rfind("? "))
+        if cut > 40:
+            text = text[:cut + 1]
+    return text.strip()
+
+
+PARSE_REROLL = """
+
+REROLL ONE ELEMENT.
+You are given a document you produced and the id of one element in it. Return
+the whole document again with **only that element changed**, and change it only
+where it was yours: supply a different reading of the same slot.
+
+Everything else is immutable. Every other element comes back byte for byte,
+including its id, its text and its marks. Inside the element you are rerolling,
+any run marked derived is the person's and comes back untouched — you are
+replacing what you invented, not what they wrote.
+
+A document that touches anything else is discarded whole and the old one stands,
+so there is nothing to gain by improving a second element while you are here.
+"""
+
+
+def _merge_document(old: list[dict[str, Any]], new: list[dict[str, Any]],
+                    only: str, prose: str) -> list[dict[str, Any]]:
+    """
+    The old document with one element replaced — or the old document, unchanged.
+
+    **A transaction, and that is the whole design.** User-authored content is
+    immutable to the interpreter, enforced all-or-nothing: anything suspicious
+    discards the *entire* replacement rather than keeping the part of it that
+    looked fine. No partial salvage, ever — the good half of an ambiguous reroll
+    is a document nobody authored and nobody can reason about, and it is the
+    state that makes a bug here undebuggable.
+
+    **The budget is applied to the replacement itself, not only to the merged
+    document.** A whole-document check is a fraction, and a fraction dilutes: one
+    lavishly invented element in a document of eight passes a ceiling that same
+    element could never pass alone. Reroll would then become the way to buy
+    invention the first parse refused — press the button until the answer is
+    generous — and restraint that can be routed around by pressing a button
+    twice is not a policy. Same ceiling, scoped to `only`: no second threshold to
+    sweep and no second concept.
+
+    **An identical replacement is a commit, not a rejection.** Every check here
+    is about what *moved*, so a reroll that comes back the same passes all of
+    them and commits a document byte-identical to the one it replaced. Worth
+    stating outright, because "anything suspicious rejects the whole thing" reads
+    as an invitation to add an `unchanged?` guard — and a no-op reported as a
+    failure is a bug that would look exactly like a broken interpreter.
+    """
+    if not only:
+        return old
+    index = {m.get("id"): m for m in _walk_document(old)}
+    target = index.get(only)
+    if target is None:
+        return old
+
+    fresh = {m.get("id"): m for m in _walk_document(new)}
+    replacement = fresh.get(only)
+    if replacement is None:
+        return old
+
+    # Every *other* element, byte for byte. Compared by id across both walks so
+    # a reordering is caught too: moving an element is changing the document,
+    # and order is placement here — it decides where a subject lands in frame.
+    if [m.get("id") for m in _walk_document(old)] != [m.get("id") for m in _walk_document(new)]:
+        return old
+    for mid, was in index.items():
+        if mid != only and fresh.get(mid) != was:
+            return old
+
+    # A derived element is not a slot the interpreter may fill, whichever
+    # element it is. Rerolling one that has nothing invented in it would be the
+    # model rewriting the person's clause on request.
+    if target.get("origin") == "derived" and not target.get("invented"):
+        return old
+
+    # The replacement on its own terms, and **only the question an element can
+    # be asked**: are its derived runs genuinely the person's. Not coverage —
+    # one clause covers one clause, so asking a replacement to account for the
+    # whole prose rejects every reroll ever proposed.
+    #
+    # **And not the invention budget either, which is the correction worth
+    # recording because the argument for putting it here is a good one.** The
+    # worry is real: if the ceiling were only ever checked against the merged
+    # whole, a fraction dilutes — one lavish element in a document of eight
+    # passes a bound it could never pass alone — and reroll becomes the way to
+    # buy invention the first parse refused, by pressing the button until the
+    # answer is generous. What that argument misses is that a share is not the
+    # same measurement at element scope. An element the model supplied is 100%
+    # invented *by construction*, so the ceiling rejects it whatever it says,
+    # and the elements it rejects are precisely the ones anybody would ever
+    # reroll. There is no threshold that both admits "lit from a low window" and
+    # refuses a lavish rewrite of it, short of a second constant scoped to
+    # elements — which is the second threshold to sweep and the second concept
+    # this was written to avoid.
+    #
+    # The re-validation below is what actually holds the line, and it holds it
+    # where the line belongs. The ceiling is over the whole document, so
+    # invention accumulated across many rerolls hits it exactly as invention
+    # produced in one parse would; a reroll can never leave the document
+    # somewhere a first parse could not have put it. `smoke_parse.py` keeps the
+    # case that proves it — a replacement valid on its own terms and lavish
+    # enough to put the merged document over — as a rejection.
+    if _preserved([replacement], _oneline(prose))[0]:
+        return old
+
+    merged = _swap_element(old, only, replacement)
+    # And the merged whole re-validated, because an element that is fine alone
+    # can still put the document over a bound that is about all of them.
+    if _document_trust(merged, prose):
+        return old
+    return merged
+
+
+def _swap_element(modules: list[dict[str, Any]], only: str,
+                  replacement: dict[str, Any]) -> list[dict[str, Any]]:
+    """The document with one element substituted, at whatever depth it sits."""
+    out = []
+    for m in modules:
+        if m.get("id") == only:
+            out.append(replacement)
+            continue
+        if m.get("children"):
+            m = {**m, "children": _swap_element(m["children"], only, replacement)}
+        out.append(m)
+    return out
 
 
 def _spans_to_text(raw: Any) -> tuple[str, list[list[int]]]:
@@ -6703,6 +7518,329 @@ def _validate_modules(raw: Any, _depth: int = 0) -> list[dict[str, Any]]:
     return out
 
 
+# ── is this interpretation trustworthy, not merely well-formed ───────────────
+#
+# `_validate_modules` above answers *shape*: roles it knows, depth it allows,
+# spans that join back to their clause. It has never been able to answer the
+# question that matters more, because it has never seen the user's prose — and
+# with a schema bound, the failure that arrives is not malformed JSON. It is an
+# **evasive storyline that satisfies the schema**: fluent, well-shaped, about
+# something other than what was typed, and indistinguishable downstream from a
+# real one. That is docs/vendor-parse-model.md's own finding, and it is the
+# reason these four checks exist.
+#
+# **Two failures, two behaviours, and keeping them apart is the whole design.**
+# A *malformed* document is refused by name — `_validate_modules` raises, the
+# route answers with the reason, the same posture `_validate_shot` takes toward
+# an unknown pill. An *untrustworthy* one is dropped and the run proceeds plain:
+# no error, no toast, no banner, no partial document, byte-for-byte the app as
+# it was before any of this existed. A malformed semantic scene is never an
+# acceptable output; the absence of one always is.
+#
+# So these return a reason rather than raising, and every one of them **rejects
+# the whole document rather than repairing it.** A partially-trusted
+# interpretation is the one output the untrusted-input rule forbids: it is a
+# document nobody authored, and it is the state that makes a bug here
+# undebuggable.
+
+# **There were two thresholds here and they are gone.** An invention ceiling at
+# 64% and a coverage floor at 65%, both swept over a hand-written corpus, both
+# retired 2026-08-18 by measuring them against what the interpreter actually
+# produces. The finding is not that they were set wrong — it is that a share of
+# characters is dominated by how much the person typed rather than by what the
+# document did with it, so on a fragment a written picture scores 94% invention
+# and an evasive one 93%, the good one higher. The floor inverted on the input
+# CLAUDE.md calls normal: reading "night. no, late afternoon" correctly means
+# dropping characters, so a correct reading scored 59% and was refused.
+#
+# What replaces them is not another number. `_derived_from` answers whether the
+# document is about this prose at all, the replacement is written into the box
+# where it can be edited, and an evasive storyline is caught by
+# being **visible** — the compiled document goes into the prompt box in front of
+# the person, in grey, so a meadow returned for a recruit is a box full of grey
+# text one undo away rather than a silent substitution. See CLAUDE.md, "Prompt
+# replacement, and what it cost to get there".
+
+
+def _derived_runs(module: dict[str, Any]) -> list[str]:
+    """
+    The runs of a clause the person wrote, as the complement of `invented`.
+
+    Read off `invented` rather than `origin` for the reason the page reads it:
+    one field answers "which of these words are mine" at both granularities,
+    because `_validate_modules` has already widened a whole-clause `invented`
+    into a single run covering the text.
+    """
+    text = module["text"]
+    out: list[str] = []
+    at = 0
+    for a, b in module.get("invented") or []:
+        if a > at:
+            out.append(text[at:a])
+        at = max(at, b)
+    if at < len(text):
+        out.append(text[at:])
+    return [r for r in (s.strip() for s in out) if r]
+
+
+def _derived_from(modules: list[dict[str, Any]], prose: str) -> bool:
+    """
+    Was this document written about this prose at all?
+
+    **Two questions were one function for an afternoon, and separating them is
+    the design.** This one is lexical and deterministic: does the document
+    contain phrases the person actually typed. It answers staleness — a
+    document derived from a different sentence — and the evasive storyline,
+    which contains none of their words by construction. Neither is a judgement,
+    so neither is asked of the model.
+
+    The *other* question is what to underline, and it is not this. A mark says
+    "I added this fact", not "these characters are new": `red winter coat`
+    becoming `oxblood down jacket` is the same fact in better words and needs no
+    mark, while `and she looks visibly cold` is a state nobody mentioned and
+    does. Only the model can tell those apart, so `origin` and `spans` are its
+    answer and are left exactly as given — see `PARSE_RULES`. A version of this
+    function overwrote them with character provenance and would have underlined
+    every reworded noun in a replacement, which is the whole prompt in grey.
+
+    **Provenance is derivable, and the model gets it wrong in one direction
+    consistently.** It marks its own text `derived`: measured over the enrichment
+    runs, every one of the 4B's `invented` marks was verbatim in the prose, and
+    9 of 18 documents from the base model were refused for *"derived text not in
+    the prose"* when nothing had been rewritten at all. That refusal was reading
+    a mislabel, and `insertionOnly` has the same hole from the other side — it
+    checks the derived gaps and waves through whatever is marked invented, so a
+    document that lies in the other direction takes the person's words off the
+    page. Both close here, because a run is theirs exactly when it appears in
+    what they typed, and that is a question about two strings.
+
+    Three rules, each worth a measured number and none of them obvious:
+
+    - **Whole words on both sides.** `in` inside `diner` is not a word anybody
+      wrote. Claiming it splits the model's own clause into runs the client then
+      has to find in a sentence that never contained them.
+    - **A phrase is theirs once.** They wrote it once, so a second appearance is
+      the model repeating them. This is `insertionOnly`'s non-overlap rule said
+      at the other end, and marking the repeat derived is what makes it refuse.
+    - **The separator is not theirs.** Leaving a punctuation-only run unmarked
+      merges the two derived spans either side of it, so the client goes looking
+      for `empty diner. 3am` inside `empty diner, 3am` and fails on a comma
+      nobody typed. That alone was 7 of 21 refused writes.
+    """
+    hay = [(m.group(0).lower(), m.start()) for m in re.finditer(r"[^\W_]+", prose)]
+    spent = [False] * len(hay)
+
+    def take(seq: list[str]) -> bool:
+        """The earliest unspent run of the prose matching this word sequence."""
+        n = len(seq)
+        for i in range(len(hay) - n + 1):
+            if not any(spent[i:i + n]) and [w for w, _ in hay[i:i + n]] == seq:
+                spent[i:i + n] = [True] * n
+                return True
+        return False
+
+    for module in _walk_document(modules):
+        text = module["text"]
+        words = [(m.group(0).lower(), m.start(), m.end())
+                 for m in re.finditer(r"[^\W_]+", text)]
+        theirs: list[list[int]] = []
+        i = 0
+        while i < len(words):
+            for n in range(min(MAX_SPANS, len(words) - i), 0, -1):
+                seq = [w for w, _, _ in words[i:i + n]]
+                # A run of pure function words is not evidence of authorship;
+                # it is the join between two clauses, and claiming it is how a
+                # document ends up asking the prose for the same "a" four
+                # times. Worse, it is how a document about something else
+                # borrows a "in a" and looks derived — which is what made the
+                # staleness check below toothless until this said *run* rather
+                # than *word*.
+                if not any(len(w) > 2 and w not in _ORIGIN_JOINS for w in seq):
+                    continue
+                if take(seq):
+                    theirs.append([words[i][1], words[i + n - 1][2]])
+                    i += n
+                    break
+            else:
+                i += 1
+        if theirs:
+            return True
+    return False
+
+
+# Words that carry no authorship on their own. Deliberately not a stopword list
+# for meaning — every one of these is a join, and the only thing being decided
+# is whether finding it alone in the prose proves the person wrote *this* one.
+_ORIGIN_JOINS = frozenset(
+    "the a an of in on at to and or with is are it its for from by as".split())
+
+
+def _walk_document(modules: list[dict[str, Any]]):
+    """
+    Every element, depth-first pre-order — the order the page walks them in.
+
+    It has to be *that* order rather than any order, because the preservation
+    check below advances a cursor through the prose and never moves it back.
+    `promptMarks` walks an element then its children, so a check that walked
+    breadth-first would ask for the user's words in an order they were never
+    written in and reject a document the page would happily mark up.
+    """
+    for m in modules:
+        yield m
+        yield from _walk_document(m.get("children") or [])
+
+
+def _preserved(modules: list[dict[str, Any]],
+               prose: str) -> tuple[str | None, list[tuple[int, int]]]:
+    """
+    Are the words this claims as the user's actually theirs? And which are spent?
+
+    Its own function because two callers ask it at two scopes and only one of
+    them may ask the rest. A whole document is also checked for coverage — did
+    any of the prose go missing — but a *single element* can never pass that: one
+    clause of a sentence covers one clause of a sentence, and judging a reroll
+    by it would reject every replacement ever proposed. Preservation is the part
+    that means the same thing at both scopes, so it is the part that is shared.
+
+    Returns the reason it failed, and the prose spans the runs consumed.
+    """
+    hay = prose.lower()
+    if len(hay) != len(prose):
+        hay = prose
+    covered: list[tuple[int, int]] = []
+
+    def claim(run: str) -> bool:
+        """
+        Find this run in the prose at a stretch nothing else has claimed.
+
+        **Not a forward-only cursor, and that is a correction rather than a
+        loosening.** `documentMarks` walks forward because it is placing marks
+        and two elements must not underline the same words — a rendering
+        concern. Authorship is not ordered: `PARSE_RULES` *instructs* a reorder
+        ("light, grade and camera go last"), so "Lit by a small window, k3nan
+        sits reading" legitimately comes back with the light last, and a
+        forward-only check rejects a document in which every word is the user's
+        own. That is the feature refusing exactly the documents it exists to
+        produce.
+
+        Consuming the span is what the cursor was really buying, and it is kept:
+        a document cannot satisfy this by quoting one phrase of the prose over
+        and over, because each match spends the characters it matched.
+        """
+        start = 0
+        while True:
+            i = hay.find(run, start)
+            if i < 0:
+                return False
+            end = i + len(run)
+            if not any(a < end and i < b for a, b in covered):
+                covered.append((i, end))
+                return True
+            start = i + 1
+
+    for module in _walk_document(modules):
+        # `role` is the one the rules already forbid and the schema does not yet
+        # offer, so this fires today only on a document a client sent us or a
+        # reroll merged. Checkable rather than hoped for is the point; it costs
+        # two lines and becomes live the moment `role` enters `_ELEMENT`.
+        if module.get("role") == "subject" and module.get("origin") == "invented":
+            return "invented a subject", covered
+        # The highest-value check here, and the one aimed squarely at the
+        # evasive refusal. A storyline the model wrote about something other
+        # than what was typed has derived text the user never typed, and nothing
+        # else downstream can tell it from a real one.
+        for run in _derived_runs(module):
+            if not claim(run.lower()):
+                return f"derived text not in the prose: {run[:60]!r}", covered
+    return None, covered
+
+
+def _document_trust(modules: list[dict[str, Any]], prose: str) -> str | None:
+    """
+    Why this interpretation should be dropped, or None if it may be trusted.
+
+    Never raises and never repairs: the caller degrades to the plain path with
+    the reason in hand, because a degrade nobody can see in the logs is a
+    degrade that gets diagnosed as a bad model.
+
+    **One check now, and it is structural.** There were four: preservation, a
+    coverage floor, an invention ceiling and the subject rule. The two
+    arithmetic ones are gone — see the note above the deleted constants, and
+    CLAUDE.md for the measurements — and what is left asks the only question a
+    string comparison can honestly answer: *does this document claim as the
+    person's any words they did not write?* — asked as `_derived_from`, which
+    is arithmetic over two strings rather than anything the model was asked.
+
+    **Contradiction is still enforced by nothing, and that is now the whole of
+    what is unprotected.** "empty diner, 3am" came back with even, pale light —
+    rendering a daylit diner — and no check here sees it, because every word
+    was legitimately somebody's. The rule that forbids it (*may not contradict,
+    replace or reinterpret an explicit fact*) is in `PARSE_RULES` and is
+    honoured by the model or it is not. What stands in for enforcement is that
+    the document is **visible**: it is written into the prompt box in grey, so a
+    contradiction is a sentence the person can read and delete, not a silent
+    substitution. That is a weaker guarantee than a check and a stronger one
+    than the checks that were here, which refused good documents and — measured
+    on the ten-scene corpus — trusted the two that stapled the sentence back
+    onto itself.
+    """
+    if not modules:
+        return None
+    prose = _oneline(prose)
+    if not prose:
+        return None
+
+    # The subject rule, and only that, out of `_preserved`'s two checks. Its
+    # other one — a derived run the prose never had — was the evasion catcher
+    # and has been replaced by `_derived_from` below, for a reason the new
+    # marking rule forces: a mark is now a claim about a *fact* the model
+    # added, so a replacement that rewords "a red winter coat" as "an oxblood
+    # down jacket" legitimately carries no mark over words the prose never had.
+    # Reading that as a false claim of authorship drops the document for being
+    # well written. A mislabel is a wrong underline, which is one edit away;
+    # it is not a reason to throw the whole interpretation out.
+    for module in _walk_document(modules):
+        if module.get("role") == "subject" and module.get("origin") == "invented":
+            return "invented a subject"
+
+    # **Was this document written about this prose at all?** A zero, not a
+    # threshold — there is nothing here to tune and that is the point. A
+    # document about a different scene contains none of the person's phrases,
+    # because none of them are in it; a replacement, however far it rewrote the
+    # sentence, always keeps some. Measured over 75 real documents the lowest
+    # retention was 31% and zero never occurred, while an evasive storyline is
+    # zero by construction. That is the one separation a string comparison can
+    # honestly claim, and it is what the deleted coverage floor was reaching for
+    # when it asked *how much* instead of *any*.
+    #
+    # Deliberately not read off the model's marks. Those say which *facts* it
+    # added and are a judgement; this says which *characters* are the person's
+    # and is arithmetic, and reading one for the other is how a correctly-marked
+    # replacement gets dropped for being well written.
+    if _derived_from(modules, prose):
+        return None
+    return "not derived from this prose: it shares none of its words"
+
+
+def _trusted_modules(raw: Any, prose: str) -> tuple[list[dict[str, Any]], str | None]:
+    """
+    Shape, then trust — the one call every route that takes a document makes.
+
+    One function rather than a `prose=` argument on `_validate_modules`, because
+    the two answers are not the same kind of answer and the caller has to act on
+    them differently: a malformed document raises out of here and becomes a
+    named form error, while an untrustworthy one comes back as no document and a
+    reason, and the run proceeds plain. Folding the second into the first would
+    return `[]` with nothing to log, and a degrade nobody can see in the logs is
+    a degrade that gets diagnosed as a bad model.
+    """
+    modules = _validate_modules(raw)
+    if not modules:
+        return [], None
+    reason = _document_trust(modules, prose)
+    return ([], reason) if reason else (modules, None)
+
+
 def _module_texts(modules: list[dict[str, Any]]) -> list[str]:
     """
     One clause per top-level module, in the order they were given.
@@ -6722,12 +7860,41 @@ def _module_texts(modules: list[dict[str, Any]]) -> list[str]:
     return [_module_clause(m) for m in modules]
 
 
+# A child that reads as a continuation of its anchor — the shape `PARSE_RULES`
+# asks for, and the one a bare space joins correctly. Anything else is a clause
+# in its own right and needs the comma its siblings already get.
+_CONTINUES = re.compile(
+    r"^(in|on|at|with|without|under|over|behind|beside|against|through|across|"
+    r"from|to|by|into|onto|around|beneath|between|holding|wearing|carrying|"
+    r"lit|facing|turned|set|seen|shot|leaning|standing|sitting|resting|"
+    r"reaching|wrapped|covered|framed|and)\b", re.I)
+
+
 def _module_clause(module: dict[str, Any]) -> str:
-    """An anchor, then its dependents as one comma list, as one clause."""
+    """
+    An anchor, then its dependents as one comma list, as one clause.
+
+    **The first child is joined with a space only when it continues the anchor.**
+    That was unconditional, and it was right for the documents the restraint
+    rules produced: a child was "in a purple beret" or "lit hard across her
+    face", and `PARSE_RULES` asks for exactly that. Once the rules ask for a
+    written picture the children are clauses of their own, and a bare space
+    then emits "empty diner the counter is slightly worn" and "nobody at the
+    desk the front desk counter was clean" — measured at **76% of
+    anchor-to-first-child joins** across the enrichment runs, in 9 documents of
+    36. Broken prose, reaching the encoder, invisible in the document.
+
+    A comma rather than a rewrite, because the compiler chooses separators and
+    never words: this is the same licence `_shot_join` already takes between
+    top-level clauses, applied one level down where the same thing became true.
+    """
     kids = module.get("children") or []
     if not kids:
         return module["text"]
-    return f'{module["text"].rstrip(".")} {", ".join(_module_clause(k) for k in kids)}'
+    body = ", ".join(_module_clause(k) for k in kids)
+    anchor = module["text"].rstrip(".")
+    joint = " " if _CONTINUES.match(body) else ", "
+    return f"{anchor}{joint}{body}"
 
 
 def _prominence(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -7185,15 +8352,53 @@ def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
     """
     What to put in the sidecar beside `prompt`, which is only ever what ran.
 
-    Only when the compiler did something, which is exactly when the typed text
-    and the compiled prompt differ. A sidecar that gains `prompt_typed` equal to
-    `prompt` and `shot: []` on every plain run is two fields of noise on the
-    file that has to still make sense in a year.
+    Only when the compiler did something. A sidecar that gains `prompt_typed`
+    equal to `prompt` and `shot: []` on every plain run is two fields of noise
+    on the file that has to still make sense in a year.
+
+    **"Did something" was `typed != prompt` and that test inverted under
+    replacement.** It was exact while a document was the person's sentence with
+    clauses added: the compiler moved the text, so the two differed whenever
+    there was anything to record. Once the replacement is written into the box,
+    the box *is* the compiled text — they are equal on precisely the runs with
+    the most to record, and the sidecar came back empty on every one of them,
+    losing the document and the original sentence together. So the question is
+    asked directly now: is there anything here that the prompt alone does not
+    already say.
     """
     typed = str(params.get("prompt_typed") or "")
-    if not typed or typed == params.get("prompt"):
+    if not typed:
+        return {}
+    original = str(params.get("prompt_original") or "")
+    # A one-element document whose compile equals the typed text still writes
+    # nothing — correctly, because the run is then reproducible from the prompt
+    # alone and a `modules` list that adds no information is one more field on a
+    # file that has to still make sense in a year.
+    # `modules` is deliberately not in this list. A document whose compile
+    # equals the typed text adds nothing the prompt does not already say, which
+    # is the case this guard was written for and is still true. What makes a
+    # replacement worth recording is not that a document exists — it is that
+    # `prompt_original` does.
+    moved = typed != params.get("prompt")
+    if not moved and not (params.get("shot") or original):
         return {}
     out: dict[str, Any] = {"prompt_typed": typed, "shot": params.get("shot") or []}
+    # **What they wrote before the interpreter replaced it.** Under enhancement
+    # `prompt_typed` was the record and the compiled prompt was the receipt;
+    # under replacement the box itself holds a prompt a model wrote, so
+    # `prompt_typed` is a receipt too and the record has moved one layer up.
+    # Recorded only when there is one — a run nobody asked for help on writes
+    # nothing here, which keeps the rule this whole function exists for.
+    if original and original != typed:
+        out["prompt_original"] = original
+    # A receipt beside the compiled string, never the record. `prompt_typed`
+    # stays the record: what is worth keeping is the intent, and a document is
+    # one interpretation of it that a different interpreter would draw
+    # differently. It is here so a reuse restores what ran rather than
+    # re-reading the sentence and getting a second opinion.
+    modules = params.get("modules") or []
+    if modules:
+        out["modules"] = modules
     roles = params.get("ref_roles") or []
     if any(roles):
         # The whole positional list, blanks included: a role's index is the
@@ -7822,7 +9027,6 @@ def web():
             "models": _model_status(),
             "loras": loras,
             "hf_token_set": bool(_hf_token()),
-            "anthropic_key_set": bool(_anthropic_key()),
             "samplers": SAMPLERS,
             "schedulers": SCHEDULERS,
             # Which of those two menus opens selected. The video side already
@@ -7870,6 +9074,13 @@ def web():
             "caption_presets": [
                 {"key": k, "label": p["label"], "note": p["note"]}
                 for k, p in CAPTION_PRESETS.items()
+            ],
+            # The instruction stays here and the page sends a key, for the
+            # reason the captioner does the same: a run has to be reproducible
+            # from the job record rather than from whatever text was in a field.
+            "rewrite_ops": [
+                {"key": k, "label": o["label"], "note": o["note"]}
+                for k, o in REWRITE_OPS.items()
             ],
             "caption_models": [
                 {"key": k, "label": m["label"], "note": m["note"]}
@@ -7930,10 +9141,74 @@ def web():
     def set_token(payload: dict) -> dict[str, Any]:
         if "hf_token" in payload:
             config["hf_token"] = str(payload.get("hf_token") or "").strip()
-        if "anthropic_key" in payload:
-            config["anthropic_key"] = str(payload.get("anthropic_key") or "").strip()
-        return {"ok": True, "hf_token_set": bool(_hf_token()),
-                "anthropic_key_set": bool(_anthropic_key())}
+        return {"ok": True, "hf_token_set": bool(_hf_token())}
+
+    @api.post("/api/warm")
+    def warm_interpreter(payload: dict) -> dict[str, Any]:
+        """
+        Start the interpreter's container while the user is still typing.
+
+        A cold L4 is a model load and a torch.compile, and the first parse fires
+        on the first 500ms pause in the prompt box — which on a fresh page is
+        around fifteen seconds after load. Spending that window on the cold
+        start is what lets this scale to zero instead of holding a card warm for
+        a single user who is not looking at it yet.
+
+        `spawn`, so the page is never waiting on it, and errors are swallowed:
+        a warm-up that fails is a slower first parse, not something to put on
+        screen. Nothing downstream depends on this having happened.
+        """
+        try:
+            Interpreter().warm.spawn()
+        except Exception as exc:
+            print(f"[parse] warm-up failed: {exc}", flush=True)
+        return {"ok": True}
+
+    @api.post("/api/rewrite")
+    def rewrite_prose(payload: dict) -> dict[str, Any]:
+        """
+        One of three jobs on the person's own sentence, and prose back.
+
+        **The operation is theirs, not inferred.** That removes the largest
+        thing the interpreter could get wrong — deciding what kind of help was
+        wanted — and it is what lets the answer arrive with no marks on it: a
+        person who pressed Expand knows why the sentence got longer, so the
+        trust question is answered by the gesture rather than by underlining
+        every word the model supplied.
+
+        Refused by name on a bad key, the posture `_validate_shot` takes toward
+        an unknown pill; a failure downstream of that returns the reason and the
+        original text, so the box is never left empty by a model that fell over.
+        """
+        prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
+        op = str(payload.get("op") or "")
+        if op not in REWRITE_OPS:
+            return {"ok": False, "error": f"no such rewrite: {op!r}",
+                    "text": prose}
+        if not prose:
+            return {"ok": True, "text": "", "op": op}
+        try:
+            text = _rewrite_backend(
+                prose, REWRITE_OPS[op]["instruction"] + _REWRITE_TAIL,
+                int(REWRITE_OPS[op].get("max_tokens") or 420))
+        except Exception as exc:
+            print(f"[rewrite] {op} failed on {REWRITE_BACKEND}: {exc}", flush=True)
+            return {"ok": False, "error": str(exc), "text": prose}
+        # **A refusal is caught here rather than designed against upstream.**
+        # `docs/vendor-parse-model.md` took an abliterated fork because a
+        # schema-bound refusal arrives as an evasive storyline nothing
+        # downstream can tell from a real one. That argument does not transfer
+        # to this path: prose comes back as prose, so a decline is *visible*,
+        # and the prefix-anchored test the captioner already owns catches it.
+        # Anchored, because "I cannot" inside a prompt is a sentence about the
+        # picture rather than a model talking about itself.
+        if text and _looks_like_refusal(text):
+            print(f"[rewrite] {op} declined on {REWRITE_BACKEND}: {text[:80]!r}",
+                  flush=True)
+            text = ""
+        # An empty answer is a failure wearing a success's clothes: it would
+        # blank the box. The original standing is always the safe degrade.
+        return {"ok": True, "op": op, "text": text or prose}
 
     @api.post("/api/parse")
     def parse_prose(payload: dict) -> dict[str, Any]:
@@ -7952,11 +9227,25 @@ def web():
         prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
         if not prose:
             return {"ok": True, "elements": []}
+        only = str(payload.get("only") or "")
+        document = payload.get("document")
         try:
-            mods = _parse_storyline(prose)
+            mods = (_reroll_storyline(prose, document, only)
+                    if only and document else _parse_storyline(prose))
         except Exception as exc:
             return {"ok": False, "error": str(exc), "elements": []}
-        return {"ok": True, "elements": mods, "prominence": _prominence(mods)}
+        # The prose the elements add up to, joined here rather than on the page.
+        #
+        # The page has to put this text in the box — marks cannot be placed
+        # otherwise, because what came back is not what was typed the moment the
+        # model filled anything in. Joining it client-side would be a second
+        # implementation of the one thing this compiler is the authority on, and
+        # the copy on screen would be the wrong one. Element texts survive the
+        # join verbatim — the compiler only closes a sentence and chooses the
+        # separator in front of it — so a mark found by searching this string is
+        # found where it belongs.
+        return {"ok": True, "elements": mods, "prominence": _prominence(mods),
+                "text": _compile_image_prompt("", [], mods)}
 
     @api.post("/api/download")
     def download(payload: dict) -> dict[str, Any]:
@@ -8846,7 +10135,13 @@ def web():
     def generate(payload: dict) -> dict[str, Any]:
         prompt = str(payload.get("prompt") or "").strip()
         regions = payload.get("regions") or []
-        if not prompt and not regions:
+        # A document is prose too, so it satisfies this the way a box does. The
+        # guard is about having *something* to render, and "the prompt box is
+        # empty but the model read a sentence out of it" is not a state this can
+        # reach — but a client that sends only a document is not malformed, and
+        # refusing it here would be the route disagreeing with the compiler
+        # about what counts as a prompt.
+        if not prompt and not regions and not payload.get("modules"):
             return {"error": "A prompt is required."}
 
         def num(k, d, cast):
@@ -8872,8 +10167,28 @@ def web():
             stack = _validate_loras(stack)
             regions = _validate_regions(regions)
             shot = _validate_shot(payload.get("shot"))
+            # Beside the pill rail, and rejected the same way: an unknown role
+            # or a document nested past the bound is a named form error on a CPU
+            # container, not something a cold H100 discovers after 42 GB of
+            # weights are resident.
+            modules = _validate_modules(payload.get("modules"))
         except ValueError as exc:
             return {"error": str(exc)}
+
+        # The other half of the same question, and it has the other answer.
+        # Malformed is refused by name above; **stale is dropped in silence** —
+        # the document no longer describes what is in the box, so it is not the
+        # user's reading of this prompt and the run proceeds plain. The page
+        # already keys the document to the prose, but the route receives the two
+        # independently and a client is one more untrusted caller.
+        #
+        # Printed rather than swallowed: a degrade nobody can see in the logs is
+        # a degrade that gets diagnosed as a bad model.
+        if modules:
+            modules, stale = _trusted_modules(modules, prompt)
+            if stale:
+                print(f"[parse] document dropped for {prompt[:60]!r}: {stale}",
+                      flush=True)
 
         # The plates are inputs to the regional node, so they mean nothing
         # without boxes. Caught here rather than in the job because the answer
@@ -8891,9 +10206,11 @@ def web():
             # same pills append their clauses to the sentence in the same order.
             # The rail is shared with the video side and the vocabulary decides
             # what crosses — camera, action, foley and score never reach here.
-            "prompt": _compile_image_prompt(prompt, shot),
+            "prompt": _compile_image_prompt(prompt, shot, modules),
             "prompt_typed": prompt,
+            "prompt_original": str(payload.get("prompt_original") or ""),
             "shot": shot,
+            "modules": modules,
             "negative_prompt": str(payload.get("negative_prompt") or ""),
             "model": str(payload.get("model") or "turbo"),
             "loras": stack,
@@ -8967,8 +10284,21 @@ def web():
         try:
             shot = _validate_shot(payload.get("shot"))
             roles = _validate_ref_roles(payload.get("ref_roles"), len(refs))
+            modules = _validate_modules(payload.get("modules"))
         except ValueError as exc:
             return {"error": str(exc)}
+
+        # See /api/generate: malformed is refused by name, stale is dropped in
+        # silence and the clip is made from the prose exactly as it was typed.
+        # Asked as derivation rather than as identity — see the note at
+        # `/api/generate`. Under replacement the compiled prompt is meant to
+        # differ from what was typed, so the old equality test dropped every
+        # document there was.
+        if modules:
+            modules, stale = _trusted_modules(modules, prompt)
+            if stale:
+                print(f"[parse] document dropped for {prompt[:60]!r}: {stale}",
+                      flush=True)
 
         _reload_volume()
         try:
@@ -9025,10 +10355,11 @@ def web():
         if model == "h3":
             compiled = _compile_h3_prompt(
                 typed=prompt, pills=shot, seconds=seconds, roles=roles,
+                modules=modules,
                 task=_h3_task(first, last, refs, vids),
             )
         else:
-            compiled = _compile_wan_prompt(prompt, shot)
+            compiled = _compile_wan_prompt(prompt, shot, modules)
 
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
@@ -9040,7 +10371,9 @@ def web():
             # and so Reuse puts the pills back rather than the output of them.
             "prompt": compiled,
             "prompt_typed": prompt,
+            "prompt_original": str(payload.get("prompt_original") or ""),
             "shot": shot,
+            "modules": modules,
             "ref_roles": roles,
             # Dropped rather than passed through for a model that cannot read
             # it: a negative prompt that reaches a guidance-distilled checkpoint

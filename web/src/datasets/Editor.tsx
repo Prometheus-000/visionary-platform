@@ -229,37 +229,49 @@ export function Editor({ ds, onLightbox, lead }: {
             "Clips" button on a set of photographs is a control that can only
             ever empty the grid, and the count line above already says there
             are none. */}
-        {([['all', 'All', 'Show everything'],
-           ...(clips && stills
-             ? [['img', 'Images', 'Only the still images — what the trainer reads today'] as const,
-                ['vid', 'Clips', 'Only the video files'] as const]
-             : []),
-           ['uncap', 'Uncaptioned', 'Only files with no caption'],
-           ['notrig', 'No trigger', 'Only captions missing the trigger word']] as const)
-          .map(([k, label, title]) => (
-            // `f-{key}`, matching app.py. Unlike the page, the active one is
-            // marked: three buttons that all look identical while one of them is
-            // filtering the grid is a view you cannot account for.
-            <button key={k} id={`f-${k}`} className="s" title={title} type="button"
-                    style={{ borderColor: filter === k && !isolated && !dupes ? 'rgba(255,255,255,.45)' : '' }}
-                    onClick={() => { setIsolated(null); setDupes(false); setFilter(k) }}>
-              {label}
-            </button>
-          ))}
-        {/* A word rather than a glyph, for the reason the strip's two icons each
-            took one: this is a destination, and an icon can carry a control
-            whose home you are already in but cannot announce a room you have
-            never been in. */}
-        <button id="f-dupes" className="s" type="button"
-                title="Group images that are the same picture, and choose which copy to keep"
-                style={{ borderColor: dupes ? 'rgba(255,255,255,.45)' : '' }}
-                onClick={() => { setIsolated(null); setFilter('all'); setDupes((v) => !v) }}>
-          Duplicates
-        </button>
-        <button className="s" id="dens-down" title="Smaller tiles" type="button"
-                onClick={() => setDensity((d) => Math.max(0, d - 1))}>−</button>
-        <button className="s" id="dens-up" title="Larger tiles" type="button"
-                onClick={() => setDensity((d) => Math.min(4, d + 1))}>+</button>
+        {/* **One control, not five buttons.** Which subset of the grid you are
+            looking at is a single choice, and it was drawn as a row of pills
+            identical to the row of pills beside it that *does* things — so a
+            filter and an action were the same object, and the only thing
+            separating the chosen filter from the rest was an inline border
+            colour. A segmented group says "pick one of these" by its shape,
+            which is what leaves the buttons outside it free to mean "do this". */}
+        <span className="seg" id="ds-filters">
+          {([['all', 'All', 'Show everything'],
+             ...(clips && stills
+               ? [['img', 'Images', 'Only the still images — what the trainer reads today'] as const,
+                  ['vid', 'Clips', 'Only the video files'] as const]
+               : []),
+             ['uncap', 'Uncaptioned', 'Only files with no caption'],
+             ['notrig', 'No trigger', 'Only captions missing the trigger word']] as const)
+            .map(([k, label, title]) => (
+              // `f-{key}`, matching app.py. Unlike the page, the active one is
+              // marked: three buttons that all look identical while one of them
+              // is filtering the grid is a view you cannot account for.
+              <button key={k} id={`f-${k}`} title={title} type="button"
+                      className={`s${filter === k && !isolated && !dupes ? ' on' : ''}`}
+                      onClick={() => { setIsolated(null); setDupes(false); setFilter(k) }}>
+                {label}
+              </button>
+            ))}
+          {/* A word rather than a glyph, for the reason the strip's two icons
+              each took one: this is a destination, and an icon can carry a
+              control whose home you are already in but cannot announce a room
+              you have never been in. */}
+          <button id="f-dupes" className={`s${dupes ? ' on' : ''}`} type="button"
+                  title="Group images that are the same picture, and choose which copy to keep"
+                  onClick={() => { setIsolated(null); setFilter('all'); setDupes((v) => !v) }}>
+            Duplicates
+          </button>
+        </span>
+        {/* Its own group, because it is its own control: two ends of one
+            stepper rather than two more filters. */}
+        <span className="seg" id="ds-density">
+          <button className="s" id="dens-down" title="Smaller tiles" type="button"
+                  onClick={() => setDensity((d) => Math.max(0, d - 1))}>−</button>
+          <button className="s" id="dens-up" title="Larger tiles" type="button"
+                  onClick={() => setDensity((d) => Math.min(4, d + 1))}>+</button>
+        </span>
         <span className="actions">
           <span className="muted" id="ins-summary">
             {ds.insight && (
@@ -271,7 +283,7 @@ export function Editor({ ds, onLightbox, lead }: {
           {/* Named, not just iconed. The sliders glyph is already spoken for — the two
               Advanced toggles wear it — so one glyph standing for three unrelated panels
               is naming none of them. */}
-          <button className={`opt ib${insightOpen ? ' on' : ''}`} id="ins-toggle"
+          <button className={`t${insightOpen ? ' on' : ''}`} id="ins-toggle"
                   data-lb="Captions" type="button"
                   title="Write captions with a vision model, and see what this set is actually teaching."
                   onClick={() => setInsightOpen((v) => !v)}>

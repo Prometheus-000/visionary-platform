@@ -1,21 +1,84 @@
 {
+ "doc/image/doc-wins": {
+  "prompt": "a woman in a red dress, lit from a low window."
+ },
+ "doc/image/flat": {
+  "prompt": "a woman in a red dress, lit from a low window."
+ },
+ "doc/image/flat+pills": {
+  "prompt": "a woman in a red dress, lit from a low window. Lit by soft daylight from a window. In a medium close-up."
+ },
+ "doc/image/nested": {
+  "prompt": "A hotel corridor with pale blue floral wallpaper, and honey-coloured door frames. Three figures stand at the far end."
+ },
+ "doc/image/nested+pills": {
+  "prompt": "A hotel corridor with pale blue floral wallpaper, and honey-coloured door frames. Three figures stand at the far end. Lit by soft daylight from a window. In a medium close-up."
+ },
+ "doc/image/one:doc": {
+  "prompt": "a portrait of k3nan."
+ },
+ "doc/image/one:plain": {
+  "prompt": "a portrait of k3nan"
+ },
+ "doc/video-h3/doc-wins": {
+  "prompt": "integrated_multimodal_description: a woman in a red dress, lit from a low window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+ },
+ "doc/video-h3/flat": {
+  "prompt": "integrated_multimodal_description: a woman in a red dress, lit from a low window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+ },
+ "doc/video-h3/flat+pills": {
+  "prompt": "integrated_multimodal_description: a woman in a red dress, lit from a low window. Lit by soft daylight from a window. In a medium close-up.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+ },
+ "doc/video-h3/nested": {
+  "prompt": "integrated_multimodal_description: A hotel corridor with pale blue floral wallpaper, and honey-coloured door frames. Three figures stand at the far end.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+ },
+ "doc/video-h3/nested+pills": {
+  "prompt": "integrated_multimodal_description: A hotel corridor with pale blue floral wallpaper, and honey-coloured door frames. Three figures stand at the far end. Lit by soft daylight from a window. In a medium close-up.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+ },
+ "doc/video-h3/one:doc": {
+  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+ },
+ "doc/video-h3/one:plain": {
+  "prompt": "a portrait of k3nan"
+ },
+ "doc/video-wan22/doc-wins": {
+  "prompt": "a woman in a red dress, lit from a low window."
+ },
+ "doc/video-wan22/flat": {
+  "prompt": "a woman in a red dress, lit from a low window."
+ },
+ "doc/video-wan22/flat+pills": {
+  "prompt": "a woman in a red dress, lit from a low window. Lit by soft daylight from a window. In a medium close-up."
+ },
+ "doc/video-wan22/nested": {
+  "prompt": "A hotel corridor with pale blue floral wallpaper, and honey-coloured door frames. Three figures stand at the far end."
+ },
+ "doc/video-wan22/nested+pills": {
+  "prompt": "A hotel corridor with pale blue floral wallpaper, and honey-coloured door frames. Three figures stand at the far end. Lit by soft daylight from a window. In a medium close-up."
+ },
+ "doc/video-wan22/one:doc": {
+  "prompt": "a portrait of k3nan."
+ },
+ "doc/video-wan22/one:plain": {
+  "prompt": "a portrait of k3nan"
+ },
  "h3/closed/all:87": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/closed/all:action": {
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:angle": {
-  "prompt": "integrated_multimodal_description: Shot on a canted Dutch angle. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot on a canted Dutch angle.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:camera": {
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:framing": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:say": {
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -27,7 +90,7 @@
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/audio:dialogue-only": {
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -48,16 +111,16 @@
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:angle": {
-  "prompt": "integrated_multimodal_description: Shot at eye level. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot at eye level.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:camera": {
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:framing": {
-  "prompt": "integrated_multimodal_description: An extreme wide shot. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:say": {
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -69,10 +132,10 @@
   "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism. A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:87": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/empty/all:action": {
   "prompt": "integrated_multimodal_description: They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -84,7 +147,7 @@
   "prompt": "integrated_multimodal_description: The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:framing": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:light": {
   "prompt": "integrated_multimodal_description: Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -126,7 +189,7 @@
   "prompt": "integrated_multimodal_description: The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:framing": {
-  "prompt": "integrated_multimodal_description: An extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:light": {
   "prompt": "integrated_multimodal_description: Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -144,22 +207,22 @@
   "prompt": "integrated_multimodal_description: Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:87": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/fragment/all:action": {
   "prompt": "integrated_multimodal_description: a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:angle": {
-  "prompt": "integrated_multimodal_description: Shot on a canted Dutch angle, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot on a canted Dutch angle.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:camera": {
   "prompt": "integrated_multimodal_description: a portrait of k3nan. The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:framing": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:say": {
   "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -171,7 +234,7 @@
   "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/audio:dialogue-only": {
   "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -192,16 +255,16 @@
   "prompt": "integrated_multimodal_description: a portrait of k3nan. They fight, trading fast, tightly choreographed blows.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:angle": {
-  "prompt": "integrated_multimodal_description: Shot at eye level, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot at eye level.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:camera": {
   "prompt": "integrated_multimodal_description: a portrait of k3nan. The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:framing": {
-  "prompt": "integrated_multimodal_description: An extreme wide shot, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:say": {
   "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -213,7 +276,7 @@
   "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism, a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/roles/action": {
   "prompt": "subject_definitions: <Subject 1> is the action in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its the motion and its timing.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -270,22 +333,22 @@
   "prompt": "a portrait of k3nan"
  },
  "h3/twoline/all:87": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/twoline/all:action": {
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:angle": {
-  "prompt": "integrated_multimodal_description: Shot on a canted Dutch angle. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot on a canted Dutch angle.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:camera": {
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:framing": {
-  "prompt": "integrated_multimodal_description: A first-person point-of-view shot. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:say": {
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -297,7 +360,7 @@
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/audio:dialogue-only": {
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -318,16 +381,16 @@
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:angle": {
-  "prompt": "integrated_multimodal_description: Shot at eye level. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot at eye level.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:camera": {
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:framing": {
-  "prompt": "integrated_multimodal_description: An extreme wide shot. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:say": {
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
@@ -339,25 +402,25 @@
   "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism. A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
  },
  "image/closed/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle."
  },
  "image/closed/all:action": {
   "prompt": "A dancer turns under a streetlight."
  },
  "image/closed/all:angle": {
-  "prompt": "Shot on a canted Dutch angle. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot on a canted Dutch angle."
  },
  "image/closed/all:camera": {
   "prompt": "A dancer turns under a streetlight."
  },
  "image/closed/all:framing": {
-  "prompt": "A first-person point-of-view shot. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. In a first-person point-of-view shot."
  },
  "image/closed/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "image/closed/all:say": {
   "prompt": "A dancer turns under a streetlight."
@@ -369,7 +432,7 @@
   "prompt": "A dancer turns under a streetlight."
  },
  "image/closed/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "image/closed/audio:dialogue-only": {
   "prompt": "A dancer turns under a streetlight."
@@ -390,16 +453,16 @@
   "prompt": "A dancer turns under a streetlight."
  },
  "image/closed/one:angle": {
-  "prompt": "Shot at eye level. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot at eye level."
  },
  "image/closed/one:camera": {
   "prompt": "A dancer turns under a streetlight."
  },
  "image/closed/one:framing": {
-  "prompt": "An extreme wide shot. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. In an extreme wide shot."
  },
  "image/closed/one:light": {
-  "prompt": "Lit by soft daylight from a window. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window."
  },
  "image/closed/one:say": {
   "prompt": "A dancer turns under a streetlight."
@@ -411,10 +474,10 @@
   "prompt": "A dancer turns under a streetlight."
  },
  "image/closed/one:tone": {
-  "prompt": "Shot with documentary realism. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot with documentary realism."
  },
  "image/empty/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
+  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle."
  },
  "image/empty/all:action": {
   "prompt": ""
@@ -426,7 +489,7 @@
   "prompt": ""
  },
  "image/empty/all:framing": {
-  "prompt": "A first-person point-of-view shot."
+  "prompt": "In a first-person point-of-view shot."
  },
  "image/empty/all:light": {
   "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
@@ -468,7 +531,7 @@
   "prompt": ""
  },
  "image/empty/one:framing": {
-  "prompt": "An extreme wide shot."
+  "prompt": "In an extreme wide shot."
  },
  "image/empty/one:light": {
   "prompt": "Lit by soft daylight from a window."
@@ -486,22 +549,22 @@
   "prompt": "Shot with documentary realism."
  },
  "image/fragment/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle."
  },
  "image/fragment/all:action": {
   "prompt": "a portrait of k3nan."
  },
  "image/fragment/all:angle": {
-  "prompt": "Shot on a canted Dutch angle, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot on a canted Dutch angle."
  },
  "image/fragment/all:camera": {
   "prompt": "a portrait of k3nan."
  },
  "image/fragment/all:framing": {
-  "prompt": "A first-person point-of-view shot, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. In a first-person point-of-view shot."
  },
  "image/fragment/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "image/fragment/all:say": {
   "prompt": "a portrait of k3nan."
@@ -513,7 +576,7 @@
   "prompt": "a portrait of k3nan."
  },
  "image/fragment/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "image/fragment/audio:dialogue-only": {
   "prompt": "a portrait of k3nan."
@@ -534,16 +597,16 @@
   "prompt": "a portrait of k3nan."
  },
  "image/fragment/one:angle": {
-  "prompt": "Shot at eye level, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot at eye level."
  },
  "image/fragment/one:camera": {
   "prompt": "a portrait of k3nan."
  },
  "image/fragment/one:framing": {
-  "prompt": "An extreme wide shot, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. In an extreme wide shot."
  },
  "image/fragment/one:light": {
-  "prompt": "Lit by soft daylight from a window, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Lit by soft daylight from a window."
  },
  "image/fragment/one:say": {
   "prompt": "a portrait of k3nan."
@@ -555,25 +618,25 @@
   "prompt": "a portrait of k3nan."
  },
  "image/fragment/one:tone": {
-  "prompt": "Shot with documentary realism, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot with documentary realism."
  },
  "image/twoline/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle."
  },
  "image/twoline/all:action": {
   "prompt": "A dancer turns. The street is wet."
  },
  "image/twoline/all:angle": {
-  "prompt": "Shot on a canted Dutch angle. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot on a canted Dutch angle."
  },
  "image/twoline/all:camera": {
   "prompt": "A dancer turns. The street is wet."
  },
  "image/twoline/all:framing": {
-  "prompt": "A first-person point-of-view shot. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. In a first-person point-of-view shot."
  },
  "image/twoline/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "image/twoline/all:say": {
   "prompt": "A dancer turns. The street is wet."
@@ -585,7 +648,7 @@
   "prompt": "A dancer turns. The street is wet."
  },
  "image/twoline/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "image/twoline/audio:dialogue-only": {
   "prompt": "A dancer turns. The street is wet."
@@ -606,16 +669,16 @@
   "prompt": "A dancer turns. The street is wet."
  },
  "image/twoline/one:angle": {
-  "prompt": "Shot at eye level. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot at eye level."
  },
  "image/twoline/one:camera": {
   "prompt": "A dancer turns. The street is wet."
  },
  "image/twoline/one:framing": {
-  "prompt": "An extreme wide shot. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. In an extreme wide shot."
  },
  "image/twoline/one:light": {
-  "prompt": "Lit by soft daylight from a window. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Lit by soft daylight from a window."
  },
  "image/twoline/one:say": {
   "prompt": "A dancer turns. The street is wet."
@@ -627,25 +690,25 @@
   "prompt": "A dancer turns. The street is wet."
  },
  "image/twoline/one:tone": {
-  "prompt": "Shot with documentary realism. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot with documentary realism."
  },
  "wan14b/closed/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan14b/closed/all:action": {
   "prompt": "A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
  },
  "wan14b/closed/all:angle": {
-  "prompt": "Shot on a canted Dutch angle. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot on a canted Dutch angle."
  },
  "wan14b/closed/all:camera": {
   "prompt": "A dancer turns under a streetlight. The camera is locked off and does not move."
  },
  "wan14b/closed/all:framing": {
-  "prompt": "A first-person point-of-view shot. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. In a first-person point-of-view shot."
  },
  "wan14b/closed/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "wan14b/closed/all:say": {
   "prompt": "A dancer turns under a streetlight."
@@ -657,7 +720,7 @@
   "prompt": "A dancer turns under a streetlight."
  },
  "wan14b/closed/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "wan14b/closed/audio:dialogue-only": {
   "prompt": "A dancer turns under a streetlight."
@@ -678,16 +741,16 @@
   "prompt": "A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows."
  },
  "wan14b/closed/one:angle": {
-  "prompt": "Shot at eye level. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot at eye level."
  },
  "wan14b/closed/one:camera": {
   "prompt": "A dancer turns under a streetlight. The camera pushes in slowly, a small and steady move."
  },
  "wan14b/closed/one:framing": {
-  "prompt": "An extreme wide shot. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. In an extreme wide shot."
  },
  "wan14b/closed/one:light": {
-  "prompt": "Lit by soft daylight from a window. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window."
  },
  "wan14b/closed/one:say": {
   "prompt": "A dancer turns under a streetlight."
@@ -699,10 +762,10 @@
   "prompt": "A dancer turns under a streetlight."
  },
  "wan14b/closed/one:tone": {
-  "prompt": "Shot with documentary realism. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot with documentary realism."
  },
  "wan14b/empty/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan14b/empty/all:action": {
   "prompt": "They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
@@ -714,7 +777,7 @@
   "prompt": "The camera is locked off and does not move."
  },
  "wan14b/empty/all:framing": {
-  "prompt": "A first-person point-of-view shot."
+  "prompt": "In a first-person point-of-view shot."
  },
  "wan14b/empty/all:light": {
   "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
@@ -756,7 +819,7 @@
   "prompt": "The camera pushes in slowly, a small and steady move."
  },
  "wan14b/empty/one:framing": {
-  "prompt": "An extreme wide shot."
+  "prompt": "In an extreme wide shot."
  },
  "wan14b/empty/one:light": {
   "prompt": "Lit by soft daylight from a window."
@@ -774,22 +837,22 @@
   "prompt": "Shot with documentary realism."
  },
  "wan14b/fragment/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan14b/fragment/all:action": {
   "prompt": "a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
  },
  "wan14b/fragment/all:angle": {
-  "prompt": "Shot on a canted Dutch angle, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot on a canted Dutch angle."
  },
  "wan14b/fragment/all:camera": {
   "prompt": "a portrait of k3nan. The camera is locked off and does not move."
  },
  "wan14b/fragment/all:framing": {
-  "prompt": "A first-person point-of-view shot, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. In a first-person point-of-view shot."
  },
  "wan14b/fragment/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "wan14b/fragment/all:say": {
   "prompt": "a portrait of k3nan."
@@ -801,7 +864,7 @@
   "prompt": "a portrait of k3nan."
  },
  "wan14b/fragment/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "wan14b/fragment/audio:dialogue-only": {
   "prompt": "a portrait of k3nan."
@@ -822,16 +885,16 @@
   "prompt": "a portrait of k3nan. They fight, trading fast, tightly choreographed blows."
  },
  "wan14b/fragment/one:angle": {
-  "prompt": "Shot at eye level, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot at eye level."
  },
  "wan14b/fragment/one:camera": {
   "prompt": "a portrait of k3nan. The camera pushes in slowly, a small and steady move."
  },
  "wan14b/fragment/one:framing": {
-  "prompt": "An extreme wide shot, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. In an extreme wide shot."
  },
  "wan14b/fragment/one:light": {
-  "prompt": "Lit by soft daylight from a window, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Lit by soft daylight from a window."
  },
  "wan14b/fragment/one:say": {
   "prompt": "a portrait of k3nan."
@@ -843,25 +906,25 @@
   "prompt": "a portrait of k3nan."
  },
  "wan14b/fragment/one:tone": {
-  "prompt": "Shot with documentary realism, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot with documentary realism."
  },
  "wan14b/twoline/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan14b/twoline/all:action": {
   "prompt": "A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
  },
  "wan14b/twoline/all:angle": {
-  "prompt": "Shot on a canted Dutch angle. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot on a canted Dutch angle."
  },
  "wan14b/twoline/all:camera": {
   "prompt": "A dancer turns. The street is wet. The camera is locked off and does not move."
  },
  "wan14b/twoline/all:framing": {
-  "prompt": "A first-person point-of-view shot. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. In a first-person point-of-view shot."
  },
  "wan14b/twoline/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "wan14b/twoline/all:say": {
   "prompt": "A dancer turns. The street is wet."
@@ -873,7 +936,7 @@
   "prompt": "A dancer turns. The street is wet."
  },
  "wan14b/twoline/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "wan14b/twoline/audio:dialogue-only": {
   "prompt": "A dancer turns. The street is wet."
@@ -894,16 +957,16 @@
   "prompt": "A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows."
  },
  "wan14b/twoline/one:angle": {
-  "prompt": "Shot at eye level. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot at eye level."
  },
  "wan14b/twoline/one:camera": {
   "prompt": "A dancer turns. The street is wet. The camera pushes in slowly, a small and steady move."
  },
  "wan14b/twoline/one:framing": {
-  "prompt": "An extreme wide shot. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. In an extreme wide shot."
  },
  "wan14b/twoline/one:light": {
-  "prompt": "Lit by soft daylight from a window. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Lit by soft daylight from a window."
  },
  "wan14b/twoline/one:say": {
   "prompt": "A dancer turns. The street is wet."
@@ -915,25 +978,25 @@
   "prompt": "A dancer turns. The street is wet."
  },
  "wan14b/twoline/one:tone": {
-  "prompt": "Shot with documentary realism. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot with documentary realism."
  },
  "wan5b/closed/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan5b/closed/all:action": {
   "prompt": "A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
  },
  "wan5b/closed/all:angle": {
-  "prompt": "Shot on a canted Dutch angle. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot on a canted Dutch angle."
  },
  "wan5b/closed/all:camera": {
   "prompt": "A dancer turns under a streetlight. The camera is locked off and does not move."
  },
  "wan5b/closed/all:framing": {
-  "prompt": "A first-person point-of-view shot. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. In a first-person point-of-view shot."
  },
  "wan5b/closed/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "wan5b/closed/all:say": {
   "prompt": "A dancer turns under a streetlight."
@@ -945,7 +1008,7 @@
   "prompt": "A dancer turns under a streetlight."
  },
  "wan5b/closed/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "wan5b/closed/audio:dialogue-only": {
   "prompt": "A dancer turns under a streetlight."
@@ -966,16 +1029,16 @@
   "prompt": "A dancer turns under a streetlight. They fight, trading fast, tightly choreographed blows."
  },
  "wan5b/closed/one:angle": {
-  "prompt": "Shot at eye level. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot at eye level."
  },
  "wan5b/closed/one:camera": {
   "prompt": "A dancer turns under a streetlight. The camera pushes in slowly, a small and steady move."
  },
  "wan5b/closed/one:framing": {
-  "prompt": "An extreme wide shot. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. In an extreme wide shot."
  },
  "wan5b/closed/one:light": {
-  "prompt": "Lit by soft daylight from a window. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window."
  },
  "wan5b/closed/one:say": {
   "prompt": "A dancer turns under a streetlight."
@@ -987,10 +1050,10 @@
   "prompt": "A dancer turns under a streetlight."
  },
  "wan5b/closed/one:tone": {
-  "prompt": "Shot with documentary realism. A dancer turns under a streetlight."
+  "prompt": "A dancer turns under a streetlight. Shot with documentary realism."
  },
  "wan5b/empty/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan5b/empty/all:action": {
   "prompt": "They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
@@ -1002,7 +1065,7 @@
   "prompt": "The camera is locked off and does not move."
  },
  "wan5b/empty/all:framing": {
-  "prompt": "A first-person point-of-view shot."
+  "prompt": "In a first-person point-of-view shot."
  },
  "wan5b/empty/all:light": {
   "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
@@ -1044,7 +1107,7 @@
   "prompt": "The camera pushes in slowly, a small and steady move."
  },
  "wan5b/empty/one:framing": {
-  "prompt": "An extreme wide shot."
+  "prompt": "In an extreme wide shot."
  },
  "wan5b/empty/one:light": {
   "prompt": "Lit by soft daylight from a window."
@@ -1062,22 +1125,22 @@
   "prompt": "Shot with documentary realism."
  },
  "wan5b/fragment/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan5b/fragment/all:action": {
   "prompt": "a portrait of k3nan. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
  },
  "wan5b/fragment/all:angle": {
-  "prompt": "Shot on a canted Dutch angle, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot on a canted Dutch angle."
  },
  "wan5b/fragment/all:camera": {
   "prompt": "a portrait of k3nan. The camera is locked off and does not move."
  },
  "wan5b/fragment/all:framing": {
-  "prompt": "A first-person point-of-view shot, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. In a first-person point-of-view shot."
  },
  "wan5b/fragment/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "wan5b/fragment/all:say": {
   "prompt": "a portrait of k3nan."
@@ -1089,7 +1152,7 @@
   "prompt": "a portrait of k3nan."
  },
  "wan5b/fragment/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "wan5b/fragment/audio:dialogue-only": {
   "prompt": "a portrait of k3nan."
@@ -1110,16 +1173,16 @@
   "prompt": "a portrait of k3nan. They fight, trading fast, tightly choreographed blows."
  },
  "wan5b/fragment/one:angle": {
-  "prompt": "Shot at eye level, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot at eye level."
  },
  "wan5b/fragment/one:camera": {
   "prompt": "a portrait of k3nan. The camera pushes in slowly, a small and steady move."
  },
  "wan5b/fragment/one:framing": {
-  "prompt": "An extreme wide shot, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. In an extreme wide shot."
  },
  "wan5b/fragment/one:light": {
-  "prompt": "Lit by soft daylight from a window, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Lit by soft daylight from a window."
  },
  "wan5b/fragment/one:say": {
   "prompt": "a portrait of k3nan."
@@ -1131,25 +1194,25 @@
   "prompt": "a portrait of k3nan."
  },
  "wan5b/fragment/one:tone": {
-  "prompt": "Shot with documentary realism, a portrait of k3nan."
+  "prompt": "a portrait of k3nan. Shot with documentary realism."
  },
  "wan5b/twoline/all:87": {
-  "prompt": "A first-person point-of-view shot, shot on a canted Dutch angle, lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. The camera is locked off and does not move."
+  "prompt": "A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move."
  },
  "wan5b/twoline/all:action": {
   "prompt": "A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows. They move together and kiss. They talk to each other, taking turns to speak. They walk side by side, talking as they go. They embrace and hold each other. One runs and the other chases, closing the distance. The subject is revealed as the frame clears. One hands an object to the other. The subject turns to face the camera. They laugh together."
  },
  "wan5b/twoline/all:angle": {
-  "prompt": "Shot on a canted Dutch angle. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot on a canted Dutch angle."
  },
  "wan5b/twoline/all:camera": {
   "prompt": "A dancer turns. The street is wet. The camera is locked off and does not move."
  },
  "wan5b/twoline/all:framing": {
-  "prompt": "A first-person point-of-view shot. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. In a first-person point-of-view shot."
  },
  "wan5b/twoline/all:light": {
-  "prompt": "Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above."
  },
  "wan5b/twoline/all:say": {
   "prompt": "A dancer turns. The street is wet."
@@ -1161,7 +1224,7 @@
   "prompt": "A dancer turns. The street is wet."
  },
  "wan5b/twoline/all:tone": {
-  "prompt": "Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks."
  },
  "wan5b/twoline/audio:dialogue-only": {
   "prompt": "A dancer turns. The street is wet."
@@ -1182,16 +1245,16 @@
   "prompt": "A dancer turns. The street is wet. They fight, trading fast, tightly choreographed blows."
  },
  "wan5b/twoline/one:angle": {
-  "prompt": "Shot at eye level. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot at eye level."
  },
  "wan5b/twoline/one:camera": {
   "prompt": "A dancer turns. The street is wet. The camera pushes in slowly, a small and steady move."
  },
  "wan5b/twoline/one:framing": {
-  "prompt": "An extreme wide shot. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. In an extreme wide shot."
  },
  "wan5b/twoline/one:light": {
-  "prompt": "Lit by soft daylight from a window. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Lit by soft daylight from a window."
  },
  "wan5b/twoline/one:say": {
   "prompt": "A dancer turns. The street is wet."
@@ -1203,6 +1266,6 @@
   "prompt": "A dancer turns. The street is wet."
  },
  "wan5b/twoline/one:tone": {
-  "prompt": "Shot with documentary realism. A dancer turns. The street is wet."
+  "prompt": "A dancer turns. The street is wet. Shot with documentary realism."
  }
 }

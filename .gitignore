@@ -58,3 +58,16 @@ session-export-*/
 # history whose only way back out is a rewrite. A `git add -A` staged all of it
 # once already, and the only thing that caught it was reading the file list.
 test img set/
+
+# Render evidence. The measurements beside them are the record — see the
+# comment at app.py's REWRITE_OPS — and 87 MB of PNGs is not something a
+# clone should pay for to read a number it can already read in a log.
+tools/parse-eval-2026-08-17/**/*.png
+tools/ab-krea-expansion/*.png
+
+# Scratch that arrived during the parse evaluation and belongs to nobody.
+session-export-*.zip
+multi-subject-test-photos/
+IMG_*.jpg
+image-*.jpg
+visionary-reduced.png

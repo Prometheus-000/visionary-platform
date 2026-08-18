@@ -89,8 +89,22 @@ with sync_playwright() as pw:
     # only in them, and a board where you cannot see which is which is a board
     # of identical rectangles.
     dials = (pg.text_content("[data-session] .sess-dials") or "").lower()
-    for want in ("rank", "alpha", "batch", "lr", "optimizer", "schedule", "timesteps"):
+    for want in ("rank", "alpha", "batch", "lr", "epochs", "res"):
         check(f"a card shows its {want}", want in dials, dials[:80])
+    # And the four that are *not* on it. The optimizer, the scheduler, the
+    # timestep sampling and the flow shift are set once and then read the same
+    # on every card, so on a board they were four columns of one repeated word.
+    # Asserted by absence because the failure mode is a well-meaning re-add.
+    for gone in ("optimizer", "schedule", "timesteps", "flow shift"):
+        check(f"a card does not repeat its {gone}", gone not in dials, dials[:80])
+
+    # 3:4, and it is the shape rather than the size that is checked: a card is
+    # read in one fixation, which a 1180px row cannot be at any height.
+    box = pg.evaluate("""() => { const c = document.querySelector('[data-session]');
+        const r = c.getBoundingClientRect(); return {w: r.width, h: r.height} }""")
+    ratio = box["h"] / box["w"] if box["w"] else 0
+    check("a card is portrait", 1.28 < ratio < 1.40,
+          f'{box["w"]:.0f}x{box["h"]:.0f} = {ratio:.2f}')
 
     # ---- the form ----------------------------------------------------------
     pg.click("#new-session")
@@ -144,9 +158,13 @@ with sync_playwright() as pw:
     # are legitimately on different steps.
     pg.click("#go-train")
     pg.wait_for_selector('[data-session] [data-act="stop"]', timeout=20_000)
+    # `\s*` rather than a literal space: the label is an <i> and the value is the
+    # text node after it, so what separates them on screen is a margin and there
+    # is no whitespace in `innerText` at all. Asserting the space asserted the
+    # markup rather than the number.
     pg.wait_for_function(
         """() => [...document.querySelectorAll('[data-session]')].some(c =>
-             /step \\d+\\/\\d+/.test(c.innerText))""",
+             /step\\s*\\d+\\/\\d+/.test(c.innerText))""",
         timeout=30_000)
 
     card = pg.query_selector('[data-session]:has([data-act="stop"])')
@@ -177,13 +195,42 @@ with sync_playwright() as pw:
     # A stopped run keeps the card, its progress and its checkpoints — that is
     # what makes stopping a choice rather than a loss, and what you re-run from.
     check("a stopped run keeps what it reached", "%" in text, text[:80])
-    check("and can be run again",
-          pg.evaluate("""() => [...document.querySelectorAll('[data-session] [data-act=start]')]
-                            .some(b => /run again/i.test(b.textContent))"""))
+    # A stopped run draws its bar in red, because the fraction is the whole
+    # point there — it is where the run got to. Green is reserved for a card
+    # that is spending a GPU right now, and a finished one draws no bar at all:
+    # white at 100% across a card is a divider, and read as one.
+    check("a stopped run says so in the bar",
+          pg.evaluate("""() => { const i = document.querySelector('.sess.stopped .bar > i');
+              if (!i) return false;
+              const [r,g,b] = getComputedStyle(i).backgroundColor.match(/\\d+/g).map(Number);
+              return r > 180 && g < 140 && b < 140 }"""))
+    check("a finished run draws no bar",
+          pg.evaluate("() => !document.querySelector('.sess.completed .bar')"))
+
+    # Re-running is not a button. Nobody re-runs a finished LoRA unchanged —
+    # you come back to move a dial — so the press that matters is the one that
+    # opens the form, and that is the whole face of the card.
+    check("no card carries its own start button",
+          pg.query_selector("[data-session] [data-act=start]") is None)
+    pg.click('[data-session]:has(.chip.stopped) .sess-hit')
+    pg.wait_for_selector("#sess-form", timeout=10_000)
+    check("the card opens its settings", pg.is_visible("#go-train"))
+    check("and Start training is there", "start" in (pg.text_content("#go-train") or "").lower())
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(400)
 
     # ---- the dataset editor ------------------------------------------------
+    # Behind a door now, not in a rail beside the board. Nothing on the board
+    # reads the set list — the form picks from a menu and a card names its own —
+    # so a permanent 320px column of them was width spent on a list no decision
+    # on the screen consults.
+    pg.click("#ds-door")
+    pg.wait_for_selector("#ds-list", timeout=10_000)
+    pg.wait_for_timeout(700)
     rows = pg.evaluate("() => document.querySelectorAll('#ds-list [data-ds], #ds-list .ds-row').length")
-    check("the rail lists sets", rows > 0, f"{rows} rows")
+    check("the sets screen lists sets", rows > 0, f"{rows} rows")
+    check("and offers the drop target beside them",
+          pg.query_selector("#sets-screen #drop") is not None)
 
     # Drafts sit above saved sets under their own heading, because "unsaved,
     # cleared when you close the app" is the whole difference between them.
@@ -217,6 +264,13 @@ with sync_playwright() as pw:
     # A mixed set counts the two kinds apart and tells the tiles apart. Only one
     # of those numbers can be trained on today, so a single total would hide
     # which.
+    # Back to the index first. With a set open the index is not on screen —
+    # under an open set a list of the other sets is the rail this screen exists
+    # to have got rid of — so moving between sets goes through it, which is what
+    # `‹ Sets` in the sheet bar is for.
+    pg.click(".sheet-bar #ds-back")
+    pg.wait_for_selector("#ds-list", timeout=10_000)
+    pg.wait_for_timeout(600)
     pg.click("#ds-list >> text=wan_takes")
     pg.wait_for_timeout(1300)
     count = pg.text_content("#ds-count") or ""

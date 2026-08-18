@@ -1,0 +1,69 @@
+candidates
+  Qwen/Qwen3-VL-4B-Instruct  on L4
+
+
+========================================================================
+=== Qwen/Qwen3-VL-4B-Instruct  on L4
+========================================================================
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+vllm 0.27.1 / transformers 5.15.0
+--- serving Qwen/Qwen3-VL-4B-Instruct
+--- up after 264s
+vram 8.6 GiB
+GPU KV cache size: 66,768 tokens
+backend http://localhost:8000/v1
+model   Qwen/Qwen3-VL-4B-Instruct
+pairs   10
+
+  Each pair judged twice with the order swapped. A win counts only
+  when both orders agree; disagreement is a tie, not a tiebreak.
+
+  tie       A chaotic street market, everything moving fast, blu
+            (order-dependent: rich then bare — the pair is close)
+  tie       A completely silent apartment kitchen in the middle 
+            (order-dependent: rich then bare — the pair is close)
+  tie       A photo of three friends hanging out on a fire escap
+            (order-dependent: bare then rich — the pair is close)
+  tie       A white silk dress drifting down a dark, slow-moving
+            (order-dependent: rich then bare — the pair is close)
+  bare      An endless stretch of black asphalt cutting through 
+            Image B captures the bruised purple sky at dawn with a single rusted billboard flapping in the w
+  tie       I saw a guy standing under a streetlamp across the w
+            (order-dependent: bare then rich — the pair is close)
+  tie       It was this massive hotel lobby but completely dead,
+            (order-dependent: rich then bare — the pair is close)
+  tie       She's sitting at a cluttered vanity table, staring s
+            (order-dependent: rich then bare — the pair is close)
+  tie       There was this bird sitting on a concrete ledge, but
+            (order-dependent: rich then bare — the pair is close)
+  tie       We were walking through a regular forest, but sudden
+            (order-dependent: rich then bare — the pair is close)
+
+  replacement wins  0/10
+  bare wins         1/10
+  tie               9/10
+
+  Read this as the only measurement here that is not a proxy — and
+  read a tie as a tie. A pair the judge flips on is two pictures that
+  are genuinely close, which is a result about the feature rather
+  than a failure of the instrument.
+--- vllm tail ---
+(APIServer pid=28) INFO:     127.0.0.1:50971 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=28) INFO:     127.0.0.1:21003 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=28) INFO 08-18 06:06:32 [loggers.py:310] Engine 000: Avg prompt throughput: 316.0 tokens/s, Avg generation throughput: 27.1 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 1.8%, Prefix cache hit rate: 13.0%, MM cache hit rate: 47.4%
+(APIServer pid=28) INFO:     127.0.0.1:22789 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=28) INFO:     127.0.0.1:36844 - "POST /v1/chat/completions HTTP/1.1" 200 OK

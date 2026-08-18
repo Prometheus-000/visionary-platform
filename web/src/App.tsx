@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { failed } from './api/client'
-import { fileUrl, getState } from './api/routes'
+import { fileUrl, getState, warm } from './api/routes'
 import { Canvas } from './canvas/Canvas'
 import { useGenerate } from './canvas/useGenerate'
 import { Console } from './console/Console'
@@ -127,6 +127,10 @@ export function App() {
         if (!alive || hasDit() || useStore.getState().stateError) return
       }
     })()
+    // Once, beside the state fetch rather than in an effect of its own: they are
+    // the same event — the page opened — and a second effect would be a second
+    // thing to keep in step with it.
+    void warm()
     return () => { alive = false }
   }, [reloadState])
 
