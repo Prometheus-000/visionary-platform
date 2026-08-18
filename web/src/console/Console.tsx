@@ -10,6 +10,7 @@ import { Rail } from '../shot/Rail'
 import { SourceRow } from '../video/SourceRow'
 import { supports, useStore } from '../store'
 import { Field } from './Field'
+import { Rewrite } from './Rewrite'
 import { autoGrow } from './fieldMax'
 import { dropUnsupported, videoReady } from './resolve'
 import { ImageSampling, VideoSampling } from './SamplingButton'
@@ -138,6 +139,9 @@ export function Console({
                 is that it carries a word now instead of being a 34px opaque mark. See
                 `ShotDoor` for why it is here rather than on the rail. */}
             <ShotDoor id="g-shot" kind="image" on={!!s.shot.length} onClick={pal.toggle} />
+            {/* The third door onto the box, and it belongs with the other two
+                rather than on a line of its own — see `Rewrite`. */}
+            <Rewrite />
             <span className="actions">
               <span className="muted" id="gen-model-line">{modelNote}</span>
               <ImageSampling />
@@ -159,6 +163,7 @@ export function Console({
                 third field, read off the filename when the matched pair names it. */}
             {supports(s).loras && <LoraButton id="v-add-lora" />}
             <ShotDoor id="v-shot" kind="video" on={!!s.shot.length} onClick={pal.toggle} />
+            <Rewrite />
             <span className="actions">
               <span className="muted" id="v-model-line">{vid.note}</span>
               <VideoSampling />

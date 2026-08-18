@@ -7,7 +7,6 @@ import { negAllowed, supports, useStore } from '../store'
 import { autoGrow } from './fieldMax'
 import { moveClause } from './moveClause'
 import { Reroll } from './Reroll'
-import { Rewrite } from './Rewrite'
 import type { Marks } from './marks'
 import { runs } from './useDocument'
 
@@ -206,7 +205,6 @@ export function Field({
       {/* Under the sentence and above the strip, because it acts on the sentence
           and is reached right after writing one. Empty until there is prose, so
           it costs the console nothing at rest. */}
-      {!(s.negOn && ok) && <Rewrite />}
 
       <div className="bar2">
         {/* One icon, not a pair of chips. This is the rare case where a glyph alone

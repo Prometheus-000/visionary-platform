@@ -1955,25 +1955,4 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
    rather than the strip's: the row is affordable because it carries content,
    and the component returns null with an empty prompt so there is no empty row
    to hide. */
-#rewrite-rail {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 6px 0 0;
-}
-#rewrite-rail .rw {
-  font-size: 12px;
-  height: 24px;
-  padding: 0 9px;
-  cursor: pointer;
-  /* Set, not inherited. `.opt` never declares a colour — every other user of it
-     is an icon button that sets its own — so a bare <button> fell through to the
-     UA default and rendered black text on a black bar. Invisible rather than
-     ugly, and only a computed-style read caught it. */
-  color: var(--mut);
-}
-#rewrite-rail .rw:hover:not(:disabled) { color: var(--fg); background: rgba(255,255,255,.1); }
-#rewrite-rail .rw:disabled { opacity: 0.34; cursor: default; }
-#rewrite-rail .rw[aria-busy='true'] { color: var(--fg); opacity: 1; }
-/* Pushed to the far end: it undoes the other three rather than joining them. */
-#rewrite-rail .rw.undo { margin-left: auto; }
+
