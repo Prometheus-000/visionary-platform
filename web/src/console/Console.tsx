@@ -188,15 +188,22 @@ export function Console({
       {note && <p className="muted warn" id="lora-note">{note}</p>}
 
 
-      {busy && (
-        <div id="gen-prog" style={{ marginTop: 9 }}>
-          <div className="bar"><i style={{ width: `${image ? run.percent : vidRun.percent}%` }} /></div>
-          <div className="row" style={{ gap: 10, marginTop: 6 }}>
-            <p className="muted grow" style={{ margin: 0 }}>{image ? run.phase : vidRun.phase}</p>
-            <button className="s" type="button" onClick={onStop}>Cancel</button>
-          </div>
-        </div>
-      )}
+      {/* **A run reports itself once, and not here.** This block was a second
+          progress bar under the canvas's own hairline and a second way to stop
+          under the Generate button's own Stop — two of each for one run, a
+          screen apart.
+
+          The bar was the visible half: two white lines crossing the window,
+          top and bottom, for one number. The Cancel was the worse half. It did
+          exactly what Stop does — the job checks a flag between steps and
+          unwinds — but it sat in a block detached from the button that had just
+          become Stop, so pressing it changed a word in the wrong corner and the
+          render carried on to the next step boundary. That reads as a control
+          that does nothing, which is worse than not having one.
+
+          What replaced both: the hairline along the canvas's top edge, and
+          `#gen-meta`, where the live phase takes the render summary's place for
+          as long as there is one. */}
 
       {/* "Keyframes are ignored" only when there is a keyframe to ignore. Said
           unconditionally, it was the page's one mention of a control this layout had

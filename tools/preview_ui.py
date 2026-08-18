@@ -45,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from _from_app import CAPTION, MODULES, SHOT, TRAINER, pull
+from _from_app import CAPTION, MODULES, REWRITE, SHOT, TRAINER, pull
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
 # Argument first, then $PORT, then a default. The env var is what lets a launcher
@@ -74,7 +74,8 @@ _APP_CACHE: dict = {}
 def app_api() -> dict:
     stamp = APP.stat().st_mtime_ns
     if _APP_CACHE.get("stamp") != stamp:
-        _APP_CACHE.update(stamp=stamp, api=pull(SHOT | CAPTION | TRAINER | MODULES))
+        _APP_CACHE.update(stamp=stamp,
+                          api=pull(SHOT | CAPTION | TRAINER | MODULES | REWRITE))
     return _APP_CACHE["api"]
 
 
@@ -1116,7 +1117,7 @@ class Handler(BaseHTTPRequestHandler):
                                                         for m in STATE["models"]],
                                    "loras": [], "shot_vocab": api["SHOT_VOCAB"],
                                    "shot_langs": api["H3_LANGUAGES"], "shot_roles": [],
-                                   "caption_presets": [], "caption_models": [],
+                                   "caption_presets": [], "caption_models": [], "rewrite_ops": [],
                                    "caption_defaults": {"preset": "", "model": ""}})
             return self.reply({
                 **STATE,
@@ -1133,6 +1134,12 @@ class Handler(BaseHTTPRequestHandler):
                                    for k, m in api["CAPTION_MODELS"].items()],
                 "caption_defaults": {"preset": api["DEFAULT_CAPTION_PRESET"],
                                      "model": api["DEFAULT_CAPTION_MODEL"]},
+                # Label and note only, exactly as `state()` serves them — the
+                # instruction stays on the server. Without this the rewrite row
+                # renders nothing and the preview cannot exercise the feature at
+                # all, which is the one thing this file exists to prevent.
+                "rewrite_ops": [{"key": k, "label": o["label"], "note": o["note"]}
+                                for k, o in api["REWRITE_OPS"].items()],
                 # The session form's three menus, shaped exactly as `state()`
                 # serves them. Pulled rather than transcribed for the reason the
                 # shot vocabulary is: a menu offering a value the route rejects

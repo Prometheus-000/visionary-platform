@@ -79,6 +79,16 @@ CAPTION = {
     "DEFAULT_CAPTION_MODEL", "DEFAULT_CAPTION_PRESET",
 }
 
+# The rewrite operations, for `preview_ui.py`'s `/api/state` stub. Pulled rather
+# than transcribed for the reason the shot vocabulary is: a stub that omits them
+# renders no button at all, so the one surface this feature has is invisible in
+# the preview that exists to make the front end developable without a GPU.
+# `KREA_EXPANSION` comes too, and its absence is the one failure this file has:
+# the subset executes top-level statements in order, so `REWRITE_OPS` naming a
+# constant nobody pulled raises `NameError` from inside app.py — which reads as
+# a broken preview rather than an incomplete pull.
+REWRITE = {"REWRITE_OPS", "KREA_EXPANSION"}
+
 # The trainer's three menus and its dial defaults, for the same reason again:
 # the session form builds itself out of these, and a hand-written copy here
 # would be a form offering an optimizer `/api/sessions` rejects by name — or

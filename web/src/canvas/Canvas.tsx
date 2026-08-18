@@ -142,13 +142,16 @@ export function Canvas({
           there is a render, a new one replaces it when it lands, not when it is asked
           for, so the old picture stays and the run reports itself as a hairline along
           the top edge rather than by blanking what you were judging. */}
+      {/* The bar only. The phase used to sit under it and now lives in
+          `#gen-meta` with the card beside it, so repeating it here would be the
+          same words twice on one screen — which is what the console block below
+          the canvas was, and what came out. */}
       {running && !shown && (
         <div className="blank" id="canvas-empty">
           <div style={{ minWidth: 260 }}>
             <div className="bar">
               <i style={{ width: `${image ? run.percent : vidRun.percent}%` }} />
             </div>
-            <p className="muted" style={{ marginTop: 8 }}>{image ? run.phase : vidRun.phase}</p>
           </div>
         </div>
       )}
@@ -244,15 +247,30 @@ export function Canvas({
         </div>
       )}
 
+      {/* **One line under the picture, and the live phase takes it while there
+          is one.** The summary is what the last render *was* — sampler, steps,
+          CFG, seconds — and it is worth exactly nothing while a new one is
+          running, so a run's status replaces it rather than opening a second
+          place to look. It comes back when the run lands, describing the render
+          that is now on screen.
+
+          The GPU rides along at the front because it is the one fact here that
+          is about the *next* run rather than the last, and the one that explains
+          a wait: `H100` beside a phase reading "loading" is the whole of why a
+          first press is slow, said where somebody already looks and nowhere
+          else. */}
       {image && (
-        <p className="muted" id="gen-meta" ref={capRef} style={{ margin: '12px 2px' }}>
-          {run.meta.join(' · ')}
+        <p className="muted" id="gen-meta" ref={capRef} style={{ margin: '12px 2px' }}
+           aria-live="polite">
+          {run.running
+            ? [s.gpu.image, run.phase || 'Working…'].filter(Boolean).join(' · ')
+            : run.meta.join(' · ')}
           {/* Not a fact about the render but a report that something you asked for did
               not happen, so it carries `.warn` — the same amber the LoRA note uses for
               a name that resolves to no file. Set in the same grey as "6.2s" it was a
               caption the eye reads past, which is the wrong place to hide "your LoRA
               did nothing". */}
-          {run.skipped.length > 0 && (
+          {!run.running && run.skipped.length > 0 && (
             <>
               {run.meta.length ? ' · ' : ''}
               <span className="warn">not applied: {run.skipped.join(', ')}</span>
@@ -303,8 +321,11 @@ export function Canvas({
         </div>
       )}
       {!image && (
-        <p className="muted" id="vid-meta" style={{ margin: '12px 2px' }}>
-          {vidRun.meta.join(' · ')}
+        <p className="muted" id="vid-meta" style={{ margin: '12px 2px' }}
+           aria-live="polite">
+          {vidRun.running
+            ? [s.gpu.video, vidRun.phase || 'Working…'].filter(Boolean).join(' · ')
+            : vidRun.meta.join(' · ')}
         </p>
       )}
     </div>
