@@ -1087,6 +1087,31 @@ nobody has looked at.
   graph never gave the card back", and ComfyUI only prints its memory summary
   after it has already failed.
 
+  **The leak itself is closed now, and the recovery above stays anyway.**
+  `comfy_nodes/visionary_free_regional` sits between the sampler and the decode
+  on every regional graph and drops the session's device copies as the render
+  ends: **1026 tensors a run**, with headroom flat at 46.7 GiB across three
+  consecutive regional renders where it used to step down each time. The node
+  pack has no teardown of its own — its `run()` has a `finally` and it only
+  unhooks the forward hooks, while `_prepare` is guarded by `if "down_d" in d`,
+  so the device copies are a cache whose eviction was never written.
+
+  Three things about it are deliberate. It is **a node rather than a patch**,
+  because CLIFF_SHA's whole claim is that nothing in it is patched — an install,
+  not a vendor, with no `VENDOR.md` to keep in sync. It finds the session **by
+  shape rather than by name**, because the pack stores it four ways depending on
+  which fallbacks fire in `comfy.patcher_extension` and `ModelPatcher`, and the
+  first version matched the wrapper case and silently missed the `model_options`
+  one — which is not a crash, it is the leak returning with a log line saying
+  nothing is wrong. `smoke_free_regional.py` covers all four. And it **takes the
+  latent and returns it**, so ComfyUI cannot schedule it before the sampler; a
+  node with no edge into the result would be free to run first, and freeing
+  before `_prepare` builds is a rebuild every step rather than a fix.
+
+  What it does not do is make `_reclaim()` redundant. A graph genuinely too big
+  for the card still lands there, and a node cannot help a run that has already
+  failed.
+
 - **A family downloads itself; there is no button for the whole catalogue.**
   The group is the unit you decide in — you want the Wan stack or you do not —
   and clicking its files one at a time meant watching a 4 GB file finish to be

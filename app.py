@@ -548,6 +548,10 @@ comfy_image = (
         f"{COMFY_NODES_DIR}/visionary_rewrite",
         remote_path=f"{COMFY}/custom_nodes/visionary_rewrite",
     )
+    .add_local_dir(
+        f"{COMFY_NODES_DIR}/visionary_free_regional",
+        remote_path=f"{COMFY}/custom_nodes/visionary_free_regional",
+    )
 )
 
 
@@ -3295,6 +3299,15 @@ class _Comfy:
         out of memory left behind the thing it ran out of memory on, and the
         next one started with less room than the last.
 
+        **That accumulation is now prevented rather than only recovered from.**
+        `VisionaryFreeRegional` sits between the sampler and the decode on every
+        regional graph and drops the session's device copies as the render ends
+        — 1026 tensors a run, measured, with headroom flat at 46.7 GiB across
+        three consecutive renders where it used to step down each time. This
+        stays because prevention is not proof: a leak from somewhere else, or a
+        single graph genuinely too big for the card, still lands here, and the
+        node cannot help a run that has already failed.
+
         The bill is a checkpoint reload on the following take, charged only to a
         job that has already failed — against `max_containers=1`, where the
         alternative is every render refused until the scaledown window expires.
@@ -5395,8 +5408,26 @@ def _krea2_graph(
                    "positive": positive, "negative": negative,
                    "latent_image": ["latent", 0], "denoise": 1.0},
     }
+    # The regional session uploads every region's LoRA to the card and keeps
+    # the copies on the patcher it returned, which ComfyUI's execution cache
+    # holds — so without this each regional render leaves its LoRAs behind and
+    # the next one starts with less room. `_reclaim()` is the recovery for that
+    # and it costs a checkpoint reload; this is the prevention, and it costs a
+    # re-upload of a few hundred megabytes on the next run.
+    #
+    # Wired through the latent rather than left dangling, because a node with no
+    # edge into the result is one ComfyUI may schedule *before* the sampler —
+    # which would free the tensors `_prepare` is about to build and turn a leak
+    # into a rebuild every step.
+    samples = ["sample", 0]
+    if regions:
+        graph["free_regional"] = {
+            "class_type": "VisionaryFreeRegional",
+            "inputs": {"latent": samples, "model": sampler_model},
+        }
+        samples = ["free_regional", 0]
     graph["decode"] = {"class_type": "VAEDecode",
-                       "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}}
+                       "inputs": {"samples": samples, "vae": ["vae", 0]}}
     graph["save"] = {"class_type": "SaveImage",
                      "inputs": {"images": ["decode", 0],
                                 "filename_prefix": "visionary"}}
@@ -5426,7 +5457,7 @@ class ImageGenerator:
         # wrong, minutes into a warm GPU, when the traceback that explains it
         # scrolled past during startup.
         self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
-                                  "VisionaryRewrite")
+                                  "VisionaryRewrite", "VisionaryFreeRegional")
 
     @modal.method()
     def rewrite(self, prose: str, instruction: str,
