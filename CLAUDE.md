@@ -385,14 +385,28 @@ instruction already has:
   subjects grouped with their attributes, and that is what balance *is*. A
   dedicated Balance was a second way to ask for the first thing.
 
-What the collapse costs is the expectation the three bought. **The person
-choosing the operation was the one thing the model could not then get wrong**,
-and it answered the trust question the underlines were built for: somebody who
-pressed Expand is not surprised the sentence got longer. One generic press can
-still return 40x on a fragment, and that surprise is now paid for by `docUndo`
-alone — ⌘Z, or the Undo beside the button, restoring byte for byte. That is a
-thinner guarantee than a named button and it is the thing to watch if this ever
-reads as the app rewriting people's words at them.
+**And trust is structural here, not a property of how many buttons there are.**
+Worth stating plainly because the reasoning that built the underlines was one
+level too fine, and collapsing three buttons to one looks like it should cost
+something. It does not. The distinction that matters:
+
+> A **distrustful** feature takes your prompt, alters it, and sends it to the
+> DiT. A **trustful** one lets you decide whether to run it through a model at
+> all, shows you what came back, and lets you accept it, edit it, or throw it
+> away and run what you wrote.
+
+Every clause of the second is a property of this code rather than a claim about
+it. *You decide*: `useDocument` is still on disk and **nothing invokes it** —
+`Field.tsx` hardcodes `marks` to empty, so no parse fires on a pause and the only
+path to the model is a click. *You see it*: the answer is written into the prompt
+box, which is the same string `/api/generate` receives. *You edit it*: it is a
+plain `<textarea>` and always was. *You throw it away*: `applyRewrite` records
+`docUndo` before it writes, so ⌘Z and the Undo beside the button both restore
+byte for byte.
+
+Nothing reaches the encoder that was not on screen first. That is the whole
+guarantee, it survives the button count, and it is what the marks were an
+expensive way of approximating.
 
 Three things the measurements decided, each of which reads as a detail and is
 not:
