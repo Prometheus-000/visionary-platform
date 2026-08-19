@@ -24,6 +24,16 @@ const VIEW = { width: 1440, height: 900 }
 
 const FRAGMENT = 'empty diner, 3am'
 
+const VIDEO =
+  'Two steel battleships trade broadsides across a heavy grey sea, the nearer ' +
+  'one close enough that the red letters painted along its bow fill a third of ' +
+  'the frame. Its guns fire a full salvo; the far ship is struck amidships, ' +
+  'erupts in flame and begins to list.'
+
+const SOUND =
+  'cannon fire and its concussion rolling across open water, heavy swell ' +
+  'against steel, wind over the deck, fire roaring on the far hull'
+
 const VIDEO_STILL =
   'A woman at a rain-streaked window in a dim room, turning to look straight ' +
   'down the lens, one hard light from the street outside raking across her ' +
@@ -96,36 +106,65 @@ const SHOTS = [
     // the compiled document open. A strip at rest would look identical.
     name: 'video',
     async run(page, shoot) {
-      // **A still first, because the canvas keeps the last render.** An empty
-      // frame under the video controls shows the one thing the layout exists to
-      // prevent, and it is also the real flow: you make a frame and then decide
-      // it should move.
-      await page.fill('#prompt', VIDEO_STILL)
+      // **The console is what makes this shot worth having, not the render.**
+      // The video side differs from the image side by one control, so a strip
+      // at rest is indistinguishable — what is video-only is a camera move, and
+      // what a closed vocabulary cannot contain is a line of on-screen text or
+      // a written soundscape. Both are valued pills, both are here, and between
+      // them they say more about the palette than any framing choice does.
+      await page.fill('#prompt', VIDEO)
       await page.waitForTimeout(300)
-      await page.locator('#c-image').getByRole('button', { name: 'Generate' }).click()
-      await page.locator('#canvas img, .frame img').first().waitFor({ timeout: 600000 })
-      await page.waitForTimeout(1200)
-
       await page.click('#g-duration')
       await page.waitForTimeout(500)
       await page.getByRole('button', { name: '5s', exact: true }).click()
       await page.waitForTimeout(900)
 
-      await page.locator('#c-video').getByRole('button', { name: 'Shot' }).click()
+      const strip = page.locator('#c-video')
+      await strip.getByRole('button', { name: 'Shot' }).click()
       await page.waitForTimeout(800)
-      // Names verified against the live palette rather than guessed; a camera
-      // move is the one group the image side does not get, so the shot should
-      // carry one if the vocabulary offers it.
-      for (const pill of ['medium close-up', 'golden hour', 'slow push-in',
-                          'push in', 'handheld', 'anamorphic']) {
+      for (const pill of ['wide', 'low', 'hard sun', 'anamorphic', 'track side']) {
         const t = page.getByRole('button', { name: pill, exact: true })
-        if (await t.count()) { await t.first().click(); await page.waitForTimeout(350) }
+        if (await t.count()) { await t.first().click(); await page.waitForTimeout(320) }
       }
+      // A valued pill opens an `input.v` rather than toggling — the whole reason
+      // the rail can carry a line of dialogue at all.
+      const valued = async (label, text) => {
+        const t = page.getByRole('button', { name: label, exact: true })
+        if (!(await t.count())) return
+        await t.first().click()
+        await page.waitForTimeout(600)
+        const field = page.locator('input.v:visible').first()
+        if (await field.count()) {
+          await field.fill(text)
+          await field.press('Enter')
+          await page.waitForTimeout(600)
+        }
+      }
+      await valued('on-screen text', 'KAOS')
+      await valued('other', SOUND)
+      await page.waitForTimeout(500)
+
       await page.keyboard.press('Escape')
       await page.waitForTimeout(600)
-      // The caption promises the compiled document, so open it.
-      const peek = page.getByText('what the model reads', { exact: false }).first()
-      if (await peek.count()) { await peek.click(); await page.waitForTimeout(700) }
+      await strip.getByRole('button', { name: 'Generate' }).click()
+      await page.locator('#canvas video, .frame video').first()
+        .waitFor({ timeout: 900000 })
+      await page.waitForTimeout(3000)
+
+      // With the panel, over the take it produced.
+      await strip.getByRole('button', { name: 'Shot' }).click()
+      await page.waitForTimeout(900)
+      await page.mouse.wheel(0, -1200)
+      await page.waitForTimeout(500)
+      await shoot('video-shot')
+
+      // And without — **and without the compiled document open**, which is the
+      // correction. That disclosure is several lines of monospace against a
+      // console capped at 30% of the viewport, and the canvas yields the
+      // difference: opening it to show what a shot compiles to buried the take
+      // it compiled to.
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(800)
       await shoot('video')
     },
   },

@@ -52,7 +52,7 @@ static picture does. A dolly changes the relationship between subject and
 background and a zoom does not, so push-in scales the subject faster than the
 horizon and zoom scales both — a distinction no dropdown makes.
 
-![What you picked, and the document it compiles to](docs/video.png)
+![A take, the pills that produced it, and the gallery beside it](docs/video.png)
 
 Pick nothing and the compiler returns your typed text byte for byte, so every
 prompt written before this still means what it meant. Pick something and the
