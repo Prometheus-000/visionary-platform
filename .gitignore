@@ -6,20 +6,6 @@ node_modules/
 *.tsbuildinfo
 .env.local
 
-# Reference clone of sd-webui-forge-classic (neo). Only the slice under forge/
-# is committed — see forge/VENDOR.md for what is copied and how to re-sync.
-sd-webui-forge-classic/
-
-# Reference clones, not dependencies. ai-toolkit informed the Datasets section's
-# interaction patterns; visionary-app is the macOS curation tool whose UX
-# principles it follows. Neither is imported or built against.
-ai-toolkit/
-visionary-app/
-
-# Reference footage for the video work — 22 MB of clips and stills that
-# informed the composer, not an input to anything that builds.
-phase 3 video/
-
 # Screenshots of other people's products, kept locally as design reference.
 # Not ours to redistribute, which is what committing them to a public repo
 # would do — so they stay on disk and out of the history.
