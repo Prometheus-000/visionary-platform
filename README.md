@@ -17,10 +17,14 @@ back.
 
 ## The interface
 
-**Image and video are one workspace.** They share the prompt, the canvas and the
-gallery. The switch is a chip inside the prompt field, and the sentence survives
-it — because a shot you described as a still is the same sentence you would
-describe as a clip. There is no mode to navigate to and nothing to retype.
+**Image and video are one workspace, and there is no switch between them.**
+Duration is the control: `Still` runs Krea 2, any length runs MiniMax-H3 or
+Wan 2.2. Measured, the two strips differed by exactly one thing — a seconds
+picker — so half the application had been sitting behind a mode toggle that
+gated one parameter, announced by a 20px glyph that showed the state you were
+*in* rather than the one you would get. A still is the default and time is
+something you add. The sentence never changes, because a shot you described as
+a still is the same sentence you would describe as a clip.
 
 **The controls follow the model.** Wan 2.2 takes LoRAs, a negative prompt and
 CFG; MiniMax-H3 is guidance-distilled and carries its own soundtrack, so it
@@ -28,7 +32,7 @@ offers none of those and offers references instead. Only the controls the chosen
 model actually reads are on screen — a control that is present but ignored is
 worse than one that is absent.
 
-![Eighty-seven tiles, each animating the move it names](docs/shot-palette.png)
+![Seventy-seven tiles, each animating the move it names](docs/shot-palette.png)
 
 **The empty prompt box is the worst control on the page, so it is not the only
 one.** MiniMax-H3 does not read a paragraph. It reads a document with named
@@ -60,9 +64,47 @@ every clip because nothing had ever told it not to.
 
 One vocabulary, three destinations. Wan 2.2 gets prose with the audio pills
 dropped, because it is silent and a sidecar recording an input the model never
-read is a sidecar that lies. Krea 2 gets prose with camera, action and sound
-filtered out — dimmed in the palette rather than hidden, with the group heading
-saying why.
+read is a sidecar that lies. Krea 2 gets prose with camera and the two audio
+groups filtered out — dimmed in the palette rather than hidden, with the group
+heading saying why.
+
+There used to be a ninth group, **Action**, and it was removed rather than
+fixed. Its ten pills wrote whole sentences — *"They fight, trading fast, tightly
+choreographed blows."* — into a prompt for an encoder that reads a still frame
+and has no way to render a sequence. What actually reached the picture was two
+people in a fighting *pose*, which the framing and angle groups already say
+better and without claiming motion the model cannot produce.
+
+**And the prompt writes itself, on the model's own text encoder.** Type a
+fragment and press **Enhance**: `empty diner, 3am` comes back as a written
+prompt, with the light placed, the lens put somewhere, and the clock still
+reading 3am rather than drifting to dawn. Press ⌘Z, or the Undo that appears
+beside it, and your words come back byte for byte.
+
+The thing doing the writing is **Krea 2's own text encoder**. Krea 2 reads its
+prompt through Qwen3-VL-4B — a decoder language model, not a T5 or a CLIP — and
+it is already resident on the card during a session, so the rewrite runs on
+weights you have already paid for. The repackage strips the output head because
+conditioning never reaches it, but the model ties its embeddings, so the head is
+the embedding matrix and costs nothing to put back. The writer and the reader
+are the same model, which is the point: it writes in the dialect it parses.
+
+The instruction is Krea's own [`docs/expansion.txt`](https://github.com/krea-ai/krea-2/blob/main/docs/expansion.txt),
+vendored verbatim — the people who trained the encoder wrote the prompt for
+talking to it. Its seventh rule is why there is one button and not three: *if
+the prompt is already detailed, lightly polish rather than heavily expand*. A
+fragment grows twenty-fold; a finished prompt comes back nearly untouched with
+only the thing that would render wrong put right.
+
+It is opt-in, visible, and reversible, and that is the whole of the trust
+argument. Nothing parses as you type. Nothing reaches the encoder that was not
+in the box first. You decide whether to run it, you read what came back, and you
+keep it, edit it, or throw it away — the box is a plain textarea and always was.
+
+Judged blind against the bare fragment, both orders, a win counted only when
+both agree: **3 wins, 1 loss, 6 ties** over ten fragments. Modest, and the first
+version of this that ever beat doing nothing — the approach it replaced went
+0-for-30.
 
 ![A box per character, each LoRA masked to its own rectangle](docs/regional.png)
 
