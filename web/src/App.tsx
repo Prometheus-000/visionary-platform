@@ -12,6 +12,7 @@ import { Viewer } from './gallery/Viewer'
 import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
 import { IconBack, IconGear, IconPanel, IconTrain } from './icons'
+import { LORA_MIME, endLoraDrag } from './lora/drag'
 import { fileToB64, toB64 } from './media/files'
 import { Settings } from './settings/Settings'
 import { Train } from './train/Train'
@@ -37,7 +38,13 @@ export function App() {
   const s = useStore()
   const { items, reload, record, drop, total, behind } = useGallery()
   const [galleryOpen, setGalleryOpen] = useState(false)
-  const [drawerOpen, setDrawerOpen] = useState(true)
+  /* Closed. The canvas is the largest thing on screen, always — and the drawer is
+     the one piece of chrome that takes width from it rather than height, 320px of
+     the axis a picture wants most. Reaching the gallery is already a utility that
+     lives with the controls: the last generation is a thumbnail beside Generate,
+     and the header button is here. Opening on load spent the canvas on a grid of
+     work you have already seen, before you had made anything this session. */
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shown, setShown] = useState<{ rows: GalleryItem[]; i: number } | null>(null)
   const [meta, setMeta] = useState<GalleryItem | null>(null)
@@ -154,10 +161,23 @@ export function App() {
   useEffect(() => {
     let off: number | undefined
     const over = (e: DragEvent) => {
-      // Files only. Dragging a text selection out of the prompt field must not make the
-      // page look like it wants to eat it.
-      if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return
+      // Files, or a LoRA out of the picker. Not a text selection dragged out of the
+      // prompt field — that must not make the page look like it wants to eat it.
+      //
+      // A LoRA counts for the same reason a file does, and it is the same fact that
+      // made it necessary: over a finished render the boxes are at
+      // `pointer-events:none`, so without this a LoRA cannot be dropped on the one
+      // thing it most obviously belongs on. `fileOver` is read by `RegionLayer` to
+      // bring them back.
+      const types = [...(e.dataTransfer?.types ?? [])]
+      const lora = types.includes(LORA_MIME)
+      if (!types.includes('Files') && !lora) return
       document.body.classList.add('dragging')
+      // Which kind, because the eligible targets are disjoint: a photograph goes to
+      // the plates, the tiles and the contact sheet, none of which take a LoRA, and
+      // lighting all of them for a drag they would refuse is the page promising
+      // something it has to take back.
+      document.body.classList.toggle('dragging-lora', lora)
       // The same fact in the two places that need it. The stylesheet reads the class to
       // light every eligible target; `RegionLayer` reads the flag to bring the boxes
       // back over a finished render, because a drop cannot land on a box that is at
@@ -169,14 +189,17 @@ export function App() {
       // came from outside and landed. Neither fires when a drag leaves the window
       // entirely, which is what the timer is for.
       off = window.setTimeout(() => {
-        document.body.classList.remove('dragging')
+        document.body.classList.remove('dragging', 'dragging-lora')
         useStore.getState().setFileOver(false)
       }, 300)
     }
     const stop = () => {
       window.clearTimeout(off)
-      document.body.classList.remove('dragging')
+      document.body.classList.remove('dragging', 'dragging-lora')
       useStore.getState().setFileOver(false)
+      // The in-flight LoRA goes with the same signal that puts the page back —
+      // one lifetime, so a caption can never outlive the drag it names.
+      endLoraDrag()
     }
     window.addEventListener('dragover', over)
     window.addEventListener('drop', stop)

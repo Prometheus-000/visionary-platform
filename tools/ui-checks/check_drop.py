@@ -54,12 +54,31 @@ DROP = """
 }
 """
 
+DRAW_BOX = """
+() => {
+  // A box, drawn the way a hand draws one. Pointer events on the layer rather than
+  // a store write, for the reason every other driver here goes through the page:
+  // a check that reaches past the interface can pass while the interface is dead.
+  const lay = document.querySelector('#region-layer');
+  const b = lay.getBoundingClientRect();
+  const at = (fx, fy) => ({ clientX: b.left + b.width * fx, clientY: b.top + b.height * fy,
+                            bubbles: true, cancelable: true, pointerId: 1,
+                            pointerType: 'mouse', button: 0, buttons: 1, isPrimary: true });
+  lay.dispatchEvent(new PointerEvent('pointerdown', at(0.08, 0.10)));
+  lay.dispatchEvent(new PointerEvent('pointermove', at(0.46, 0.90)));
+  lay.dispatchEvent(new PointerEvent('pointerup', { ...at(0.46, 0.90), buttons: 0 }));
+  return true;
+}
+"""
+
+
 with sync_playwright() as pw:
     b = pw.chromium.launch(channel="chrome")
     pg = b.new_page(viewport={"width": 1400, "height": 950}, color_scheme="dark")
     pg.goto(URL, wait_until="networkidle", timeout=60_000)
     pg.wait_for_timeout(1200)
     print(f"\n=== {URL} ===")
+
 
     def report(label, sel, mime="image/png", name="x.png"):
         r = pg.evaluate(DROP, [sel, PNG, mime, name])
@@ -74,16 +93,26 @@ with sync_playwright() as pw:
               f"dragover_cancelled={r['acceptsDragover']} lit={r['litUp']} "
               f"drop_handled={r['handledDrop']}")
 
+    def set_duration(want_video):
+        """Duration is the switch now — there is no image/video chip to press.
+        `Still` is a photograph and anything above it is a clip, so changing sides
+        means picking a length. Index rather than a label, because the seconds a
+        model offers are per model: 0 is always Still and 1 is always its shortest
+        clip. See web/src/console/Duration.tsx."""
+        if pg.eval_on_selector(
+            "#c-video", "e => e.classList.contains('hide')"
+        ) != want_video:
+            return
+        pg.click("#g-duration")
+        pg.wait_for_selector(".menu button")
+        pg.locator(".menu button").nth(1 if want_video else 0).click()
+        pg.wait_for_timeout(500)
+
     def to_video():
-        """The chip inside the prompt field, which is the only way a user has."""
-        if pg.eval_on_selector("#c-video", "e => e.classList.contains('hide')"):
-            pg.click("#kind-toggle")
-            pg.wait_for_timeout(500)
+        set_duration(True)
 
     def to_image():
-        if pg.eval_on_selector("#c-image", "e => e.classList.contains('hide')"):
-            pg.click("#kind-toggle")
-            pg.wait_for_timeout(500)
+        set_duration(False)
 
     def clear_refs():
         """Every chip's own ✕. The tray and the keyframe pair put each other out of
@@ -118,15 +147,16 @@ with sync_playwright() as pw:
 
     print("\nIMAGE side")
     to_image()
-    # Arming Regions is the first half of the reveal: nothing regional exists
-    # until it does, and it is placed on the canvas now — the empty-canvas
-    # invitation's "split into two columns" is the arm. The second half is the
-    # frame button in the corner of the layer — the plates are frame-scope, so
-    # they live in the frame's card, and arming selects a *box*, whose card is a
+    # Arming Regions is the first half of the reveal: nothing regional exists until
+    # it does, and it is placed on the canvas — a box is *drawn* on the frame. The
+    # empty-canvas invitation that used to offer a "split into two columns" button
+    # is gone; drawing is what it was standing in front of. The second half is the
+    # frame button in the corner of the layer — the plates are frame-scope, so they
+    # live in the frame's card, and arming selects a *box*, whose card is a
     # different one. Two gestures, and both are gestures rather than page globals,
     # because a check that reaches past the interface can pass while the interface
     # is unreachable.
-    pg.click(".rinvite-b")
+    pg.evaluate(DRAW_BOX)
     pg.wait_for_timeout(600)
     report("region layer", "#region-layer")
     report("a region box", "#region-layer .rbox")

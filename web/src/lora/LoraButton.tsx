@@ -2,6 +2,7 @@ import { Menu } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
 import { useStore } from '../store'
 import { applyWrite, caretAt, caretScope, caretValue } from './caret'
+import { startLoraDrag } from './drag'
 import { insertLora, loraIndex, parseLoras } from './tokens'
 
 /**
@@ -17,6 +18,12 @@ import { insertLora, loraIndex, parseLoras } from './tokens'
  * that is true of every row. The token is already the shortest name that points at
  * one file, so it drops both without losing the one case that needs the folder:
  * the matched Wan speed pairs, whose files are both called `high`.
+ *
+ * **Every row is also a drag source**, which is the half that answers *where*. A
+ * click writes at the caret and so inherits wherever the caret was; a drag names
+ * its own target — a box, the sentence, or the bare frame. The click is not
+ * redundant: it is the only one of the two that works from a keyboard, and it is
+ * the faster gesture when the caret is already where you want the token.
  */
 export function LoraButton({ id }: { id: string }) {
   const state = useStore((s) => s.state)
@@ -43,6 +50,7 @@ export function LoraButton({ id }: { id: string }) {
               items={index.map((l) => ({
                 label: l.token,
                 on: inField.has(l.path),
+                drag: (e: React.DragEvent) => startLoraDrag(e, l),
                 run: () => applyWrite(insertLora(
                   index, caretValue(), caretAt(), l,
                   caretScope() === 'region' ? '1.3' : '1',

@@ -155,9 +155,6 @@ export function Console({
         <div className={image ? 'hide' : ''} id="c-video">
           <div className="opts">
             <VideoSizeButton />
-            <div className="opt">
-              <SecondsSelect />
-            </div>
             {/* Wan only, and the same picker the image side uses. The one thing the
                 A14B pair forces — which expert a LoRA patches — rides in the token as a
                 third field, read off the filename when the matched pair names it. */}
@@ -238,21 +235,6 @@ function GenerateButton({ id, busy, ready, onGenerate, onStop }: {
         Generate
       </button>
     )
-}
-
-/** The lengths the chosen family offers, which differ per checkpoint. */
-function SecondsSelect() {
-  const s = useStore()
-  const m = s.state?.video_models.find((x) => x.key === s.vid.model)
-  const lengths = m?.lengths ?? []
-  const cur = lengths.map(String).includes(s.vid.seconds)
-    ? s.vid.seconds
-    : String(m?.defaults.seconds ?? lengths[0] ?? '')
-  return (
-    <select id="v-seconds" value={cur} onChange={(e) => s.setVid({ seconds: e.target.value })}>
-      {lengths.map((n) => <option key={n} value={n}>{n}s</option>)}
-    </select>
-  )
 }
 
 function VideoNote() {

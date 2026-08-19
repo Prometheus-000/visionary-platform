@@ -38,9 +38,15 @@ def check(label, ok, detail=""):
 
 
 # A JS click rather than a driver click, for the reason check_viewer.py records:
-# the drawer starts closed on the vanilla page, so the card is in the DOM and
-# off-screen. Opening the drawer first would work and would be testing the
-# drawer.
+# the card is off-screen until the drawer is open, and a driver click on an
+# off-screen element is a scroll test.
+#
+# The drawer *is* opened first now, and that is not the same thing as testing it.
+# It is closed on load — the canvas is the largest thing on screen — and the cards
+# lazy-load their media by intersection, so with it shut no clip has a `<video>`
+# for `wantVideo` to find and this file reports six failures for a page that is
+# working. Reaching the sheet means reaching the drawer; the check has to do what
+# a person does.
 OPEN_MENU = """
 (wantVideo) => {
   const cards = [...document.querySelectorAll('#drawer-grid .gal')];
@@ -75,6 +81,10 @@ with sync_playwright() as pw:
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
     pg.goto(URL, wait_until="networkidle", timeout=60_000)
+    if not pg.evaluate(
+        "() => document.querySelector('#t-drawer')?.classList.contains('on')"
+    ):
+        pg.click("#t-drawer")
     pg.wait_for_timeout(1500)
     pg.wait_for_selector("#drawer-grid .gal", timeout=25_000)
 

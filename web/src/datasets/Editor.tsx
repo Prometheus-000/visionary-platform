@@ -197,7 +197,7 @@ export function Editor({ ds, onLightbox, lead }: {
             the name field *is* the title rather than sitting next to a heading that
             repeats it. */}
         {ds.saved ? (
-          <b id="ds-title" style={{ fontSize: 14 }}>{ds.open}</b>
+          <h2 id="ds-title">{ds.open}</h2>
         ) : (
           <>
             <div className="opt mid" id="ds-name-wrap">

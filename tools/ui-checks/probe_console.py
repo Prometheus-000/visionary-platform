@@ -121,11 +121,16 @@ def pills(pg, side, n):
 
 def run(pg, side):
     rows = []
-    # The kind chip inside the prompt field, which is the only way a person
-    # changes this too.
-    if pg.evaluate("() => document.querySelector('#kind-toggle')?.title || ''"
-                   ).lower().startswith("video") != (side == "video"):
-        pg.click("#kind-toggle")
+    # Duration is the switch now — `Still` is a photograph and anything above it is a
+    # clip, so there is no image/video chip. Index rather than a label, because the
+    # seconds a model offers are per model: 0 is always Still and 1 its shortest clip.
+    want_video = side == "video"
+    if pg.eval_on_selector(
+        "#c-video", "e => e.classList.contains('hide')"
+    ) == want_video:
+        pg.click("#g-duration")
+        pg.wait_for_selector(".menu button")
+        pg.locator(".menu button").nth(1 if want_video else 0).click()
     pg.wait_for_timeout(400)
     measure(pg, f"{side} · resting", rows)
 
@@ -133,7 +138,22 @@ def run(pg, side):
         # Arming lands boxes on the canvas, not a row in the console — which is the
         # whole point of this measurement: the region UI costs the console nothing,
         # so this row should read the same height as resting.
-        pg.click(".rinvite-b")
+        #
+        # Drawn rather than clicked. The empty canvas used to offer a "split into two
+        # columns" button and no longer does, so the box arrives the way one always
+        # actually arrives: a drag across the frame.
+        pg.evaluate("""() => {
+          const lay = document.querySelector('#region-layer');
+          const b = lay.getBoundingClientRect();
+          const at = (fx, fy) => ({ clientX: b.left + b.width * fx,
+                                    clientY: b.top + b.height * fy,
+                                    bubbles: true, cancelable: true, pointerId: 1,
+                                    pointerType: 'mouse', button: 0, buttons: 1,
+                                    isPrimary: true });
+          lay.dispatchEvent(new PointerEvent('pointerdown', at(0.08, 0.10)));
+          lay.dispatchEvent(new PointerEvent('pointermove', at(0.46, 0.90)));
+          lay.dispatchEvent(new PointerEvent('pointerup', { ...at(0.46, 0.90), buttons: 0 }));
+        }""")
         pg.wait_for_timeout(450)
         measure(pg, f"{side} · + regions", rows)
 

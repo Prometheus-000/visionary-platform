@@ -137,8 +137,13 @@ export function Settings({
                    spellCheck={false} style={{ width: 158, flex: 'none' }}
                    title="Group the files under loras/{name}/ — for a matched pair that belongs together. Leave blank to drop them in loose."
                    value={driveFolder} onChange={(e) => setDriveFolder(e.target.value)} />
-            <button className="b" type="button" disabled={dl.busy}
-                    style={{ padding: '9px 16px', fontSize: 13 }}
+            {/* `.s`, matching Save in the token row above it. This was the only
+                white primary button on the screen, which inverted the hierarchy of
+                the whole thing: pulling one file somebody sent you was drawn louder
+                than the model catalogue below, which is what this screen is *for*
+                and which pulls 17 GB. The hand-written padding went with it — it
+                made this the one `.b` in the product at 13px. */}
+            <button className="s" type="button" disabled={dl.busy}
                     onClick={() => {
                       if (!driveUrl.trim()) return
                       void dl.begin('gdrive', 'dl_gdrive', 'Downloaded.',
@@ -207,8 +212,12 @@ export function Settings({
                   </span>
                   {/* One short shows no button at all, because that is what its
                       own Download already is. */}
+                  {/* The primary action of this screen, and now the only `.b` on it.
+                      A family is the unit you decide in — you want the Wan stack or
+                      you do not — so this is the press that matters, and the per-file
+                      buttons below are the escape hatch. */}
                   {left.length > 1 && (
-                    <button className="s" type="button" disabled={dl.busy}
+                    <button className="b" type="button" disabled={dl.busy}
                             onClick={() => void dl.begin(id, id, `${f.name} downloaded.`,
                               () => downloadFamily(f.name, token), onReload)}>
                       Download all {left.length}

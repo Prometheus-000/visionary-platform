@@ -2,7 +2,8 @@ import { useCallback, useRef, useState } from 'react'
 
 import { IconRegions } from '../icons'
 import { dataUrl, shrinkB64 } from '../media/files'
-import { loraIndex } from '../lora/tokens'
+import { draggingLora, droppedLora, isLoraDrag } from '../lora/drag'
+import { insertLora, loraIndex, parseLoras, removeLora } from '../lora/tokens'
 import { NEED_EDIT_LORA } from '../lora/note'
 import { attached, newRegion, useStore, type EditMode, type Region } from '../store'
 import { askResumeFocus } from './focus'
@@ -15,6 +16,13 @@ const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const
  *  Apple's own long-press is 500ms and this is the same gesture, so it should not be a
  *  different length — a shorter one starts stealing taps. */
 const LONG_PRESS_MS = 500
+
+/** The box a dropped LoRA arrives in. Portrait and a little under half the frame,
+ *  because the overwhelming majority of what gets boxed is a person — so two drops
+ *  land clear of each other and the pair reads as the two-column split without
+ *  being snapped into it. */
+const DROP_BOX_W = 0.42
+const DROP_BOX_H = 0.82
 
 /**
  * The boxes, drawn on whatever they are drawn on — and, since the row and the map were
@@ -64,6 +72,9 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
    *  control that is visible and dimmed an inch away. Cleared by the next thing you do,
    *  so there is no timer to get wrong and nothing to dismiss. */
   const [refused, setRefused] = useState<string | null>(null)
+  /** The LoRA a drag is carrying, while it is over this layer. Drives the captions
+   *  only — the drop reads the `DataTransfer`, which is the authority. */
+  const [lora, setLora] = useState<ReturnType<typeof draggingLora>>(null)
   const index = loraIndex(state)
 
   // What this layer *draws*, which is not whether it is listening — over a render it is
@@ -79,12 +90,11 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   // at one — which deletes the only moment anyone discovers that a box takes a
   // photograph at all. `boxDrag` holds geometry up through a gesture that is already
   // under way.
-  const empty = regions.length === 0
   const mode: EditMode =
     over === 'frame' || fileOver || boxDrag ? 'geometry' : edit
 
   const rectOf = () => layer.current?.getBoundingClientRect()
-  const frameXY = (e: PointerEvent | React.PointerEvent): [number, number] => {
+  const frameXY = (e: PointerEvent | React.PointerEvent | React.DragEvent): [number, number] => {
     const b = rectOf()
     if (!b) return [0, 0]
     return [clamp01((e.clientX - b.left) / b.width), clamp01((e.clientY - b.top) / b.height)]
@@ -102,10 +112,10 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
     const target = e.target as HTMLElement
-    // The card, the frame button and the empty-state invitation are all children of
-    // this layer, so without this every click on a numeric field or the "two columns"
-    // button would start drawing a rectangle underneath it.
-    if (target.closest('.rins,.rframe-btn,.rinvite')) return
+    // The card and the frame button are children of this layer, so without this every
+    // click on a numeric field or on the corner button would start drawing a rectangle
+    // underneath it.
+    if (target.closest('.rins,.rframe-btn')) return
     setRefused(null)
     const st = useStore.getState()
     // ⌘ means "a new one, here" and skips the hit test on purpose. Once a few
@@ -309,9 +319,78 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   /* Dropping onto a box is the gesture the box exists for; dropping onto bare canvas is
      the scene, which is a different thing entirely and gated on a weight that may not
      be downloaded. One handler, because the target decides. */
+  /**
+   * A LoRA dropped on the layer. The target decides the scope exactly as it does for
+   * a photograph — onto a box it is that character, onto bare frame it is a new box
+   * holding them — and the two differ only in whether there is already a rectangle
+   * under the cursor.
+   *
+   * `1.3` either way, because both land in a box: the strength split `insertLora`
+   * takes is region-against-sentence, and there is no sentence here.
+   */
+  const dropLora = (e: React.DragEvent): void => {
+    const index = loraIndex(useStore.getState().state)
+    const l = droppedLora(e, index)
+    // A LoRA deleted between the pick-up and the drop. Said rather than swallowed, for
+    // the reason the scene refusal is: the target lit up, so nothing happening is
+    // indistinguishable from a drop the page never received.
+    if (!l) {
+      setRefused('That LoRA is no longer on the volume.')
+      return
+    }
+    const st = useStore.getState()
+    const hit = (e.target as HTMLElement).closest<HTMLElement>('.rbox')
+
+    if (hit) {
+      const i = Number(hit.dataset.i)
+      const r = st.regions[i]
+      if (!r) return
+      // One LoRA per box — the node's own shape. So a second *replaces* rather than
+      // being refused: dragging a different name onto a box that already has one is
+      // "this character instead", and answering that with an error would send you to
+      // edit the text by hand, which is the gesture this exists to remove. The
+      // outgoing name is said, because a silent overwrite of something you chose is
+      // the one outcome nobody can undo by looking at the screen.
+      const present = parseLoras(index, r.prompt).filter((t) => t.hit)
+      const base = present.length
+        ? removeLora(r.prompt, r.prompt.length, present).value
+        : r.prompt
+      const gone = present.map((t) => t.hit!.token).filter((t) => t !== l.token)
+      st.patchRegion(i, { prompt: insertLora(index, base, base.length, l, '1.3').value })
+      st.select(i)
+      setRefused(gone.length ? `${gone.join(', ')} replaced by ${l.token}.` : null)
+      return
+    }
+
+    // Bare frame: a new box holding them, centred on where it was let go. This is the
+    // gesture the empty canvas used to need three lines of copy and a "Split into two
+    // columns" button to explain — the box arrives with content in it, which is the
+    // one thing an empty rectangle could never demonstrate.
+    if (st.regions.length >= (st.state?.max_regions ?? 8)) {
+      setRefused(`That is the most boxes a run takes (${st.state?.max_regions ?? 8}).`)
+      return
+    }
+    const [px, py] = frameXY(e)
+    const w = DROP_BOX_W
+    const h = DROP_BOX_H
+    const r = newRegion({
+      x: clamp01(Math.min(px - w / 2, 1 - w)),
+      y: clamp01(Math.min(py - h / 2, 1 - h)),
+      w, h,
+    })
+    r.prompt = insertLora(index, '', 0, l, '1.3').value
+    setRefused(null)
+    useStore.setState({ regions: [...st.regions, r], rsel: st.regions.length })
+  }
+
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault()
     setDropHit(null)
+    setLora(null)
+    // Before the file test, and it never reaches it: a LoRA drag carries no `Files`,
+    // so the image path below would refuse it as "not an image" — which is true and
+    // useless.
+    if (isLoraDrag(e)) return dropLora(e)
     const f = e.dataTransfer.files[0]
     if (!f?.type.startsWith('image/')) return
     const hit = (e.target as HTMLElement).closest<HTMLElement>('.rbox')
@@ -346,18 +425,22 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   // the surface the boxes live on. Focus lands in the first box's sentence, because
   // the card opening is only half the instruction and the other half is that you can
   // start typing.
-  const seedColumns = () => {
-    setRegions([newRegion({ x: 0, y: 0, w: 0.5, h: 1 }), newRegion({ x: 0.5, y: 0, w: 0.5, h: 1 })])
-    select(0)
-    requestAnimationFrame(() => document.querySelector<HTMLInputElement>('#r-prompt')?.focus())
-  }
+
 
   return (
     <div id="region-layer" ref={layer}
-         className={[mode, empty ? 'invite' : ''].filter(Boolean).join(' ')}
+         /* Bare frame under a LoRA drag says what letting go there would do. It is
+            the layer rather than the frame that carries it because the frame does
+            not know a drag is happening — and it is suppressed the moment a box is
+            under the cursor, so the two captions are never on screen together. */
+         className={[mode, lora && dropHit === null ? 'lora-new' : ''].filter(Boolean).join(' ')}
+         data-drop={lora ? `New box · ${lora.token}` : undefined}
          onPointerDown={onPointerDown}
          onDragOver={(e) => {
            e.preventDefault()
+           // Re-read on every `dragover` rather than latched on enter: a drag can
+           // begin outside the layer, and this is the event that repeats.
+           setLora(isLoraDrag(e) ? draggingLora() : null)
            const hit = (e.target as HTMLElement).closest<HTMLElement>('.rbox')
            // Only the box under the cursor names itself. Eight captions on eight boxes
            // is the same wall of text the per-region rows were removed for, drawn on
@@ -365,7 +448,7 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
            setDropHit(hit ? Number(hit.dataset.i) : null)
          }}
          onDragLeave={(e) => {
-           if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropHit(null)
+           if (!e.currentTarget.contains(e.relatedTarget as Node)) { setDropHit(null); setLora(null) }
          }}
          onDrop={(e) => { void onDrop(e) }}
          onKeyDown={(e) => {
@@ -405,25 +488,6 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
            const el = (e.target as HTMLElement).closest<HTMLElement>('.rbox')
            if (el && Number(el.dataset.i) !== rsel) select(Number(el.dataset.i))
          }}>
-      {/* The cold canvas is the invitation, not a glyph and a line of copy. Two faint
-          columns show what a region is and where it goes; the caption says the gesture
-          and offers the even split as one click. Drawing a box (drag) or dropping a
-          box (click) both work on the bare surface underneath — the ghosts are
-          `pointer-events:none` so they never intercept the gesture they illustrate. */}
-      {empty && (
-        <>
-          <div className="rghost" style={{ left: '0%', width: '50%' }} />
-          <div className="rghost" style={{ left: '50%', width: '50%' }} />
-          <div className="rinvite">
-            <p className="rinvite-h">Place each character in its own box</p>
-            <p className="rinvite-s">Drag on the canvas to draw one — or</p>
-            <button type="button" className="rinvite-b" onClick={seedColumns}>
-              Split into two columns
-            </button>
-          </div>
-        </>
-      )}
-
       {regions.map((r, i) => {
         const tag = regionTag(index, r)
         const face = attached(r, 'identity')
@@ -431,7 +495,12 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
           <div key={r.id} className={['rbox', regionArmed(index, r) ? 'armed' : '',
                                       i === rsel || i === dropHit ? 'sel' : '',
                                       i === dropHit ? 'drop-hit' : ''].filter(Boolean).join(' ')}
-               data-i={i} tabIndex={0} data-drop="This character"
+               data-i={i} tabIndex={0}
+               /* What dropping *this* would do, rather than what the box takes in
+                  general. A photograph is always the likeness, so it can be stated
+                  once; a LoRA names itself, which is the difference between an
+                  affordance and a shrug when four boxes are lit. */
+               data-drop={lora ? `${lora.token} here` : 'This character'}
                style={{
                  left: `${clamp01(r.x) * 100}%`,
                  top: `${clamp01(r.y) * 100}%`,

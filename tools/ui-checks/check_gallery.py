@@ -33,6 +33,16 @@ def check(label, ok, detail=""):
         fails.append(label)
 
 
+def open_drawer(page):
+    """The drawer is closed on load — the canvas is the largest thing on screen and
+    the drawer is the one piece of chrome that takes width from it. So every entry
+    here opens it first, the way a person does, rather than assuming it open. Kept
+    idempotent because two of the rows below re-navigate."""
+    if not page.evaluate("() => document.querySelector('#t-drawer')?.classList.contains('on')"):
+        page.click("#t-drawer")
+    page.wait_for_timeout(250)
+
+
 def open_gallery(page):
     """Into the full grid, by the door the drawer actually offers."""
     page.click('#drawer .drawer-head button[title="Open gallery"]')
@@ -44,6 +54,7 @@ def run(page):
     page.on("request", lambda r: seen.append(r.url))
 
     page.goto(URL)
+    open_drawer(page)
     page.wait_for_selector("#drawer-grid .gal", timeout=10000)
     page.wait_for_timeout(400)
 
@@ -191,6 +202,7 @@ def run(page):
     # must be armed by the reply rather than a clock, or the fix is a poll loop against
     # a container already saying it cannot keep up.
     page.goto(f"{URL}?stale=1")
+    open_drawer(page)
     page.evaluate("""() => {
       window.__calls = 0
       const real = window.fetch

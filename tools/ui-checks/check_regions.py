@@ -202,13 +202,16 @@ with sync_playwright() as pw:
           body.get("prompt") == "a rooftop at golden hour", repr(body.get("prompt")))
 
     print("\nDRAWING, MOVING, SNAPPING")
-    # Arming is a canvas gesture now, not a console glyph: the empty canvas is the
-    # invitation, and its "split into two columns" button plants the same pair the
-    # old `#g-regional` did.
-    pg.click(".rinvite-b")
-    pg.wait_for_timeout(500)
+    # Two boxes, drawn — which is the gesture that was always underneath the thing
+    # this used to click. The empty canvas carried a "split into two columns" button
+    # and no longer does: an empty state cannot demonstrate a spatial feature, so
+    # what it advertised was regions at their least legible, permanently, on the
+    # largest surface in the app. Drawing one is the arm now, and dropping a LoRA on
+    # bare frame is the other.
+    drag(0.02, 0.05, 0.48, 0.95)
+    drag(0.52, 0.05, 0.98, 0.95)
     seeded = boxes()
-    check("the split seeds two columns", len(seeded) == 2, f"{len(seeded)} boxes")
+    check("two boxes drawn on the frame", len(seeded) == 2, f"{len(seeded)} boxes")
 
     # Clearing them is also the ⌫ assertion. Before the focus fix this loop could
     # not have terminated: `pointerdown` calls `preventDefault` to own the drag,

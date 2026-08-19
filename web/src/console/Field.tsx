@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
-import { IconPhoto, IconPlay } from '../icons'
 import { caretProps } from '../lora/caret'
-import { nudgeLora } from '../lora/tokens'
+import { droppedLora, isLoraDrag } from '../lora/drag'
+import { insertLora, loraIndex, nudgeLora } from '../lora/tokens'
 import { negAllowed, supports, useStore } from '../store'
+import { Duration } from './Duration'
 import { autoGrow } from './fieldMax'
 import { moveClause } from './moveClause'
 import { Reroll } from './Reroll'
@@ -177,6 +178,40 @@ export function Field({
                 // an event could carry it on itself.
                 onCompositionStart={() => { composing.current = true }}
                 onCompositionEnd={() => { composing.current = false }}
+                /* A LoRA let go over the sentence lands *where it was let go*, which is
+                   the whole reason to drag one here rather than press `+ LoRA`: the
+                   token's position in the prompt is what says which clause it applies
+                   to. `selectionStart` is the drop point because the browser has been
+                   moving the caret under the cursor for the length of the drag — it
+                   draws that caret itself, so reading it back is reading what the
+                   person was already aiming at.
+
+                   Files are left alone: dropping a photo on the prompt is not a
+                   gesture this field has, and swallowing it here would stop it
+                   reaching the page-level handler that does. */
+                onDragOver={(e) => {
+                  if (!isLoraDrag(e)) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'copy'
+                }}
+                onDrop={(e) => {
+                  if (!isLoraDrag(e)) return
+                  e.preventDefault()
+                  const el = e.currentTarget
+                  const index = loraIndex(useStore.getState().state)
+                  const l = droppedLora(e, index)
+                  if (!l) return
+                  const at = el.selectionStart ?? el.value.length
+                  const w = insertLora(index, el.value, at, l, '1')
+                  s.setPrompt(w.value)
+                  // After the commit, for the reason `applyWrite` does it after the
+                  // commit: this is a controlled input, so the range set now would
+                  // range over text React has not painted yet.
+                  requestAnimationFrame(() => {
+                    el.focus()
+                    el.setSelectionRange(w.caret, w.select)
+                  })
+                }}
                 {...caretProps('prompt', (v) => useStore.getState().setPrompt(v))} />
       {/* The same field in a different sign. Hidden outright on a model that reads no
           negative — H3 is guidance-distilled, Krea 2 Turbo runs at CFG 1.0, and on
@@ -207,16 +242,9 @@ export function Field({
           it costs the console nothing at rest. */}
 
       <div className="bar2">
-        {/* One icon, not a pair of chips. This is the rare case where a glyph alone
-            carries it: a camera and a play triangle are not a vocabulary anyone has to
-            learn, and the control has exactly two states so there is nothing a second
-            chip could disambiguate. It shows the state you *are* in rather than the
-            one you would get. */}
-        <button className="opt ib" id="kind-toggle" type="button"
-                title={s.kind === 'video' ? 'Video — tap for image' : 'Image — tap for video'}
-                onClick={() => s.setKind(s.kind === 'video' ? 'image' : 'video')}>
-          {s.kind === 'video' ? <IconPlay /> : <IconPhoto />}
-        </button>
+        {/* Leftmost, and it decides what everything to its right means. See
+            `Duration` for why the image/video chip is gone rather than relabelled. */}
+        <Duration />
         {children}
       </div>
     </div>

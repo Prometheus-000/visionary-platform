@@ -96,7 +96,7 @@ export function Train({ sess, onLightbox }: {
                           onClick={() => setScreen('board')}>
                     ‹ Sessions
                   </button>
-                  <b style={{ fontSize: 14 }}>Sets</b>
+                  <h2>Sets</h2>
                   <span className="muted">
                     {ds.rows.length} set{ds.rows.length === 1 ? '' : 's'}
                   </span>
@@ -130,7 +130,7 @@ export function Train({ sess, onLightbox }: {
           ) : (
             <div id="sess-board">
               <div className="opts board-head" style={{ marginTop: 0 }}>
-                <b style={{ fontSize: 14 }}>Training</b>
+                <h2>Training</h2>
                 <span className="muted">
                   {active ? `${active} running`
                     : `${sess.rows.length} session${sess.rows.length === 1 ? '' : 's'}`}

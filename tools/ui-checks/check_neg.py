@@ -59,10 +59,16 @@ with sync_playwright() as pw:
     }""")
 
     def side(want_image):
-        """The chip inside the prompt field, which is the only route a person has."""
-        if state()["imageSide"] != want_image:
-            pg.click("#kind-toggle")
-            pg.wait_for_timeout(500)
+        """Duration is the switch now — `Still` is a photograph and anything above it
+        is a clip, so there is no image/video chip. Index rather than a label: the
+        seconds a model offers are per model, but 0 is always Still and 1 is always
+        its shortest clip. See web/src/console/Duration.tsx."""
+        if state()["imageSide"] == want_image:
+            return
+        pg.click("#g-duration")
+        pg.wait_for_selector(".menu button")
+        pg.locator(".menu button").nth(0 if want_image else 1).click()
+        pg.wait_for_timeout(500)
 
     def sampling(prefix):
         """Open the Sampling popover for this side, where the model select lives."""
