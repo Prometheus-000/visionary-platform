@@ -19,20 +19,26 @@ const URL = process.argv[2] || 'http://localhost:5173'
 const OUT = 'docs'
 const VIEW = { width: 1440, height: 900 }
 
+const FRAGMENT = 'empty diner, 3am'
+
+const HERO =
+  'Black and white studio portrait, a single hard light raking from the left ' +
+  'across a bare shoulder and the line of a jaw, the head turned three-quarters ' +
+  'away, deep unbroken black behind. A calla lily held close to the collarbone, ' +
+  'its edge catching the same light. Large-format detail, fine silver grain, ' +
+  'skin rendered as sculpture, shadow doing most of the work.'
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const SHOTS = [
   {
-    // **One session, two frames, one render.** The hero used to be shot on a
-    // fresh page, which is an empty grid — the canvas is the reason the layout
-    // exists and a screenshot of it holding nothing sells the opposite of the
-    // point. So this types a fragment, enhances it, generates, and captures
-    // before and after: the written prompt with Undo beside it, then the same
-    // console under a picture it produced.
+    // **The two shots want opposite prompts, which is why they are two runs.**
+    // This one has to show a fragment *becoming* a prompt, so it starts from
+    // four words and stops before Generate: an empty canvas keeps the eye on
+    // the text, which is the whole event.
     name: 'enhance',
-    also: 'generate',
     async run(page, shoot) {
-      await page.fill('#prompt', 'empty diner, 3am')
+      await page.fill('#prompt', FRAGMENT)
       await page.waitForTimeout(300)
       // Scoped to `#c-image`, because both strips are in the DOM at once and
       // one is merely `.hide` — the same trap the duplicate `#go-gen` id was.
@@ -43,8 +49,17 @@ const SHOTS = [
       await strip.getByRole('button', { name: 'Undo' }).waitFor({ timeout: 300000 })
       await page.waitForTimeout(600)
       await shoot('enhance')
-
-      await strip.getByRole('button', { name: 'Generate' }).click()
+    },
+  },
+  {
+    // **The hero is the claim the rest of the README lives up to**, so it is
+    // written rather than fragmentary and it renders. An empty grid sells the
+    // opposite of "the canvas is the largest thing on screen".
+    name: 'generate',
+    async run(page, shoot) {
+      await page.fill('#prompt', HERO)
+      await page.waitForTimeout(300)
+      await page.locator('#c-image').getByRole('button', { name: 'Generate' }).click()
       await page.locator('#canvas img, .frame img').first()
         .waitFor({ timeout: 600000 })
       await page.waitForTimeout(1500)

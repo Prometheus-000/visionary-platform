@@ -5,7 +5,7 @@ Train a LoRA on your photographs, generate stills with it, and animate any of
 them into a clip — in one interface, on one URL, with nothing to keep alive
 between sessions.
 
-![A fragment, enhanced into a prompt, and the picture it produced](docs/generate.png)
+![A written prompt and the picture it produced, on a canvas that holds the screen](docs/generate.png)
 
 It is a real interface, not a form in front of a script. The canvas is the
 largest thing on screen at every moment, because the picture is the reason the
@@ -226,6 +226,44 @@ stock model declines on photographs of real people often enough to matter, and
 what comes back is a fluent sentence that would land in a `.txt` sidecar and
 train. Declines are detected and never written, and the second entry is the
 same checkpoint with the refusal direction removed.
+
+**A set arrives with copies in it more often than not, and copies are not
+neutral.** The trainer repeats every image the same number of times, so a
+picture present three times is trained three times as hard — and the symptom
+(*everything comes out in that room*) never points back at the folder it came
+from. So a set is scanned and grouped before you train on it.
+
+Two classes, and the second is not a softer first. A **duplicate** is one
+picture stored more than once, so its group arrives with a keeper already chosen
+and everything else marked to go; the gesture is *promotion* — touch a marked
+image to keep it too — and the last keeper cannot be demoted, so no sequence of
+clicks empties a group. A **similar** pair is two photographs that merely look
+alike, which on a training set is usually a burst and usually all worth keeping,
+so it is shown and nothing in it is ever preselected.
+
+A five-tier confidence scale was built first and is the thing to not rebuild.
+Measured on a 731-image editorial set — 266,815 pairs — the tiers flagged 813
+and the two classes flag 9. Worse, it demoted same-size same-format pairs to
+"possible", which is where most real duplicates live, so the keeper flow never
+ran on its own case. Both hashes have to agree now: edge gradients and
+low-frequency energy fail independently, so an AND is far tighter than either
+alone and a re-grade of the same photograph still reads as a copy.
+
+**And a training run is a card, not a page.** Starting one used to take the
+Train screen over, with Cancel as its only control, so the way to reach the
+second thing you wanted to train was to wait for the first. Nothing in the
+backend ever required that — each run loads its own weights, writes its own
+scratch and its own output folder, then goes away — which is why the trainer is
+the one GPU class here with no single-container pin. That absence is the
+feature: **train several LoRAs at once**, on separate cards, and leave.
+
+Status is derived on every read and never stored. It comes off the job record's
+heartbeat, which is the difference between a card that says "training" forever
+because a container was killed mid-step and one that says what actually
+happened. Making a set also stopped being the first thing Train asks of you:
+creating a session is a modal over the board, new sets are their own door, and
+choosing "create a new one" from the dataset dropdown saves the card as a draft
+rather than spending the parameters you had already typed.
 
 ---
 
