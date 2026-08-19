@@ -75,3 +75,8 @@ visionary-reduced.png
 # Saved web pages from surface audits — a person's working artefact, not source.
 Visionary Surface Audit.html
 Visionary Surface Audit_files/
+
+# macOS auto-named screenshots dropped in the repo root while working. The docs
+# screenshots have real names (generate.png, regional.png) and live in docs/, so
+# anchoring to the root keeps those while ignoring the scratch ones.
+/Screenshot*.png

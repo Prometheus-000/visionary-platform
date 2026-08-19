@@ -45,8 +45,12 @@ reference photo; drop a photo on the bare canvas instead and it becomes the
 scene the picture is generated inside.
 
 **Train your own LoRAs.** Point the trainer at a folder of images and get a
-`.safetensors` back. Train several at once — each run is its own card, so you
-can start one and keep working.
+`.safetensors` back. Runs live on a board rather than taking over a screen, so
+you can **train several at once** — each is its own card showing live epoch,
+step, rate and loss, and a finished card hands its checkpoints straight to the
+LoRA picker. Start a run, add another, and leave; status is read off each job's
+heartbeat, so a card reports what actually happened even if a container was
+killed mid-step.
 
 **Prepare datasets in the same place.** Images get prose captions from
 Qwen3-VL-8B, with presets tuned to what you're training (character, style,
@@ -130,7 +134,9 @@ name in a prompt.
 
 **Train.** LoRA training for Krea 2 on
 [musubi-tuner](https://github.com/kohya-ss/musubi-tuner). Point it at a folder
-of images, get a `.safetensors` back.
+of images, get a `.safetensors` back. Each run loads its own weights and writes
+its own output folder, so several train concurrently — the trainer is the one
+GPU class here with no single-container pin.
 
 **Caption.** Datasets are named folders of images with `.txt` sidecars beside
 them — exactly what the trainer reads.

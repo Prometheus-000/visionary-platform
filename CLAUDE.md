@@ -110,7 +110,7 @@ about what somebody meant**, which is a different failure and has no stack trace
 > The user's prose is. The document is a derived, disposable interpretation of
 > that prose.**
 
-`semantic-layer-brief.md` says the opposite — *"the scene document becomes the
+`docs/design-notes/semantic-layer-brief.md` says the opposite — *"the scene document becomes the
 source of truth"* — and is overruled, because every degrade below depends on the
 reverse. Dropping a document has to cost nothing, and it only costs nothing if
 the record survives it. *Derived*: regenerable from the prose at any time.
