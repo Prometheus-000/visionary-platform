@@ -1,273 +1,11 @@
 # Visionary
 
 A generative studio that runs on your own [Modal](https://modal.com) account.
-Train a LoRA on your photographs, generate stills with it, and animate any of
-them into a clip — in one interface, on one URL, with nothing to keep alive
-between sessions.
+Train a LoRA on your own photographs, generate stills with it, and animate any
+of them into a clip — one interface, one URL, nothing to keep running between
+sessions.
 
 ![A written prompt and the picture it produced, on a canvas that holds the screen](docs/generate.png)
-
-It is a real interface, not a form in front of a script. The canvas is the
-largest thing on screen at every moment, because the picture is the reason the
-page exists. Everything you can change lives in a bar under it — never a rail
-beside it, which would cost the image 384px of the one dimension it cannot get
-back.
-
----
-
-## The interface
-
-**Image and video are one workspace, and there is no switch between them.**
-Duration is the control: `Still` runs Krea 2, any length runs MiniMax-H3 or
-Wan 2.2. Measured, the two strips differed by exactly one thing — a seconds
-picker — so half the application had been sitting behind a mode toggle that
-gated one parameter, announced by a 20px glyph that showed the state you were
-*in* rather than the one you would get. A still is the default and time is
-something you add. The sentence never changes, because a shot you described as
-a still is the same sentence you would describe as a clip.
-
-**The controls follow the model.** Wan 2.2 takes LoRAs, a negative prompt and
-CFG; MiniMax-H3 is guidance-distilled and carries its own soundtrack, so it
-offers none of those and offers references instead. Only the controls the chosen
-model actually reads are on screen — a control that is present but ignored is
-worse than one that is absent.
-
-![Seventy-seven tiles, each animating the move it names](docs/shot-palette.png)
-
-**The empty prompt box is the worst control on the page, so it is not the only
-one.** MiniMax-H3 does not read a paragraph. It reads a document with named
-fields, published in the model repo — and a textarea in front of that is why
-nobody knows where camera direction goes, whether tone and genre matter, or
-what to do with a reference image you were told not to describe. A documented
-grammar presented as free prose reads as superstition, and a take is two to
-three minutes, so every guess is paid for at that rate.
-
-So the closed vocabulary is a palette: one icon in the strip, a popover of
-small animated tiles, and a rail of pills under the prompt. The prompt field
-keeps only what nothing else can say — who is in the shot and what happens.
-This is the "a control that shows its own value gets no label" rule applied to
-words instead of numbers, and it is the one place on the page where an icon can
-teach: a tile *shows* a dolly-out, which is the thing neither the word nor a
-static picture does. A dolly changes the relationship between subject and
-background and a zoom does not, so push-in scales the subject faster than the
-horizon and zoom scales both — a distinction no dropdown makes.
-
-![A take, the pills that produced it, and the gallery beside it](docs/video.png)
-
-Pick nothing and the compiler returns your typed text byte for byte, so every
-prompt written before this still means what it meant. Pick something and the
-document appears — and `what the model reads` shows the exact string the
-encoder will be handed, compiled by the same route that compiles the real run,
-so a preview cannot disagree with what happens. `non_diegetic_music: N/A` is
-the default, and is worth the feature on its own: H3 invented a soundtrack for
-every clip because nothing had ever told it not to.
-
-One vocabulary, three destinations. Wan 2.2 gets prose with the audio pills
-dropped, because it is silent and a sidecar recording an input the model never
-read is a sidecar that lies. Krea 2 gets prose with camera and the two audio
-groups filtered out — dimmed in the palette rather than hidden, with the group
-heading saying why.
-
-There used to be a ninth group, **Action**, and it was removed rather than
-fixed. Its ten pills wrote whole sentences — *"They fight, trading fast, tightly
-choreographed blows."* — into a prompt for an encoder that reads a still frame
-and has no way to render a sequence. What actually reached the picture was two
-people in a fighting *pose*, which the framing and angle groups already say
-better and without claiming motion the model cannot produce.
-
-![`empty diner, 3am` becomes a prompt, and Undo sits beside the button that wrote it](docs/enhance.png)
-
-**And the prompt writes itself, on the model's own text encoder.** Type a
-fragment and press **Enhance**: `empty diner, 3am` comes back as a written
-prompt, with the light placed, the lens put somewhere, and the clock still
-reading 3am rather than drifting to dawn. Press ⌘Z, or the Undo that appears
-beside it, and your words come back byte for byte.
-
-The thing doing the writing is **Krea 2's own text encoder**. Krea 2 reads its
-prompt through Qwen3-VL-4B — a decoder language model, not a T5 or a CLIP — and
-it is already resident on the card during a session, so the rewrite runs on
-weights you have already paid for. The repackage strips the output head because
-conditioning never reaches it, but the model ties its embeddings, so the head is
-the embedding matrix and costs nothing to put back. The writer and the reader
-are the same model, which is the point: it writes in the dialect it parses.
-
-The instruction is Krea's own [`docs/expansion.txt`](https://github.com/krea-ai/krea-2/blob/main/docs/expansion.txt),
-vendored verbatim — the people who trained the encoder wrote the prompt for
-talking to it. Its seventh rule is why there is one button and not three: *if
-the prompt is already detailed, lightly polish rather than heavily expand*. A
-fragment grows twenty-fold; a finished prompt comes back nearly untouched with
-only the thing that would render wrong put right.
-
-It is opt-in, visible, and reversible, and that is the whole of the trust
-argument. Nothing parses as you type. Nothing reaches the encoder that was not
-in the box first. You decide whether to run it, you read what came back, and you
-keep it, edit it, or throw it away — the box is a plain textarea and always was.
-
-Judged blind against the bare fragment, both orders, a win counted only when
-both agree: **3 wins, 1 loss, 6 ties** over ten fragments. Modest, and the first
-version of this that ever beat doing nothing — the approach it replaced went
-0-for-30.
-
-![A box per character, each LoRA masked to its own rectangle](docs/regional.png)
-
-**Regional multi-character LoRA.** Draw a rectangle on the frame and write a
-`<lora:name:1.3>` into it, and that LoRA's activation delta is multiplied by
-zero everywhere outside the box — so there is no pathway left for one
-character's identity to reach another's. The boxes *are* the list: drag to
-place one, drag to move it, drag a handle to size it, and they snap to halves,
-thirds and quarters and to each other.
-
-**And the box is where you say who is in it.** Touch one and it opens into a
-card rooted in its own edge, carrying the sentence, the strength, the photograph
-and the four coordinates. Nothing about a region lives under the canvas any
-more: you no longer drag a rectangle at the top of the screen and describe it at
-the bottom. The frame has the same card, reached by a button in the corner,
-because scene, outfit and the global region weight are about every box at once
-and belong to none of them — so the scope is simply where the card is. It costs
-the console nothing: arming used to add a 44px row, and now measures at zero.
-
-A box takes a photograph as well as a LoRA — a latent mold that pulls that
-rectangle toward that face during sampling, which is worth having on a platform
-whose other half is a trainer. Drop a photo on the bare canvas instead and it
-becomes the **scene**: the picture is generated inside it, with lighting,
-perspective and shadows integrated rather than the subjects pasted in. The
-frame's card takes an outfit too. Both need the Krea 2 identity-edit weight, so
-without it they are dimmed rather than hidden — a weight-gated control is a
-purchase you have not made yet, and hiding it hides the decision rather than the
-capability.
-
-All three are one record with a role on it — this character, this scene, this
-outfit — which is what a ControlNet would be too, if one existed for this model:
-a picture with a structural role, frame-wide on the frame and masked on a box,
-needing no control that is not already there.
-
-**LoRAs are written in the prompt.** `<lora:my_style:0.8>`, the syntax anyone who
-has trained these models already types. Strength defaults to 1 and the token
-sits where the LoRA applies, so a fifth LoRA costs the canvas nothing — the rows
-this replaced cost 380px of it for four filenames. `+ LoRA` still opens a
-picker, because you cannot type a syntax you have never seen.
-
-**Shape and resolution are one control, not two.** Every aspect preset used to be
-1024-based, so picking 16:9 chose a shape *and* silently chose ~1 MP — and the
-only route to the same shape at 2K was arithmetic in two boxes at the far end of
-Advanced. One button now shows what it resolved to (`16:9 · 2016×1152`), with the
-ratios as proportioned rectangles and the scale as a separate row. The buckets
-are multiplied rather than recomputed, because Krea 2 inherits Qwen-Image's
-trained sizes and the honest arithmetic for 4:3 at a 1024 short edge is a size
-nothing was trained on.
-
-**There is no Advanced drawer.** "Advanced" names where something is rather than
-what it does, and behind it sat five controls that are not advanced — they are
-rarely changed. Sampler, steps, guidance and shift live behind one button that
-shows the values it resolved to, and it draws only the rows the chosen model
-reads: MiniMax-H3 is guidance-distilled, so it gets no CFG row at all.
-
-**The negative prompt is a mode on the prompt field.** A small marker in the
-corner, and only on models that read one — Krea 2 Turbo is distilled to CFG 1.0,
-where a negative prompt is not weak but unread. The gate is the effective CFG
-rather than the checkpoint's name, so raising CFG brings the control back. A dot
-appears when there is text on the other side, because otherwise the negative is
-invisible from the positive.
-
-**The console has a budget: 30% of the viewport.** Everything else in it is fixed
-or conditional, so the prompt field is the only part that grows without asking —
-and it is the part that yields. It takes whatever the budget has left, down to a
-two-line floor, and re-measures when the pill rail appears.
-
-**It is designed for a tablet in portrait, and desktop inherits.** Below 1024px
-the layout stacks, the gallery crops to a 1:1 grid, and the last generation
-becomes a thumbnail beside Generate — the Camera app's arrangement, because you
-press one and then want the other. Three faults found that way had been live on
-desktop for months, including a drag that was broken on trackpads specifically.
-
-**Nothing sits on top of a render.** Animate and As reference are icons under the
-bottom-left corner that appear on hover. Regional boxes come off the picture the
-moment a render lands, and two things bring them back: the mode button, which
-reveals rather than disarms on the first press after a result, and a file
-dragged over the window — which is also the only moment the page says a box will
-take a photograph.
-
-**Copy is a last resort — but a number is not a value it can show.** Design
-first, then an icon, then words. A control that shows its own value gets no
-label; the two keyframe tiles put the mark where the frame sits in the clip
-rather than captioning themselves "first" and "last". Hyperparameters are the
-exception, and they are the exception on purpose: "32" is a rank, an alpha, an
-epoch count or a seed with equal plausibility, so every numeric field carries
-its name and the tooltip says what the number *does*.
-
-![Everything you have made, in one grid](docs/gallery.png)
-
-**Your work stays beside your work.** The gallery is a drawer next to the canvas,
-not a destination you leave the studio to visit, because the still you made an
-hour ago is raw material for the clip you are making now. Any image can go
-straight back to the prompt, or become the first frame of a video, without a
-download and a re-upload. Open it full-width when you want the whole room.
-
-![Captioning is a workspace, not a batch job](docs/dataset.png)
-
-**Datasets are for reading, not just uploading.** Captions are written in prose
-by Qwen3-VL-8B, because the text encoders these models use parse grammar — "red
-dress, blue jacket" cannot say which garment is which, and a sentence can. The
-panel beside the contact sheet reads the set back to you: trigger-word coverage,
-caption length, duplicates, and the clauses your captions repeat, so you can see
-what the LoRA is about to learn by accident.
-
-**A preset is what the caption leaves out.** Whatever the captions name is what
-the model learns to vary, and whatever they never name is what the trigger word
-ends up owning — so **Character** describes pose, wardrobe, framing and light
-and refuses to describe a face, **Style** describes the content and never the
-look, and **Concept** describes everything around the thing you are training.
-Each also names the flaws worth prompting away later: a watermark, a harsh
-flash, a hand at the edge of frame. Pick the intent; the instruction behind it
-lives on the server, so the run is reproducible from the job record.
-
-Beside it is a captioner picker, because a refusal here is not an error. The
-stock model declines on photographs of real people often enough to matter, and
-what comes back is a fluent sentence that would land in a `.txt` sidecar and
-train. Declines are detected and never written, and the second entry is the
-same checkpoint with the refusal direction removed.
-
-**A set arrives with copies in it more often than not, and copies are not
-neutral.** The trainer repeats every image the same number of times, so a
-picture present three times is trained three times as hard — and the symptom
-(*everything comes out in that room*) never points back at the folder it came
-from. So a set is scanned and grouped before you train on it.
-
-Two classes, and the second is not a softer first. A **duplicate** is one
-picture stored more than once, so its group arrives with a keeper already chosen
-and everything else marked to go; the gesture is *promotion* — touch a marked
-image to keep it too — and the last keeper cannot be demoted, so no sequence of
-clicks empties a group. A **similar** pair is two photographs that merely look
-alike, which on a training set is usually a burst and usually all worth keeping,
-so it is shown and nothing in it is ever preselected.
-
-A five-tier confidence scale was built first and is the thing to not rebuild.
-Measured on a 731-image editorial set — 266,815 pairs — the tiers flagged 813
-and the two classes flag 9. Worse, it demoted same-size same-format pairs to
-"possible", which is where most real duplicates live, so the keeper flow never
-ran on its own case. Both hashes have to agree now: edge gradients and
-low-frequency energy fail independently, so an AND is far tighter than either
-alone and a re-grade of the same photograph still reads as a copy.
-
-**And a training run is a card, not a page.** Starting one used to take the
-Train screen over, with Cancel as its only control, so the way to reach the
-second thing you wanted to train was to wait for the first. Nothing in the
-backend ever required that — each run loads its own weights, writes its own
-scratch and its own output folder, then goes away — which is why the trainer is
-the one GPU class here with no single-container pin. That absence is the
-feature: **train several LoRAs at once**, on separate cards, and leave.
-
-Status is derived on every read and never stored. It comes off the job record's
-heartbeat, which is the difference between a card that says "training" forever
-because a container was killed mid-step and one that says what actually
-happened. Making a set also stopped being the first thing Train asks of you:
-creating a session is a modal over the board, new sets are their own door, and
-choosing "create a new one" from the dataset dropdown saves the card as a draft
-rather than spending the parameters you had already typed.
-
----
-
-## Install
 
 ```bash
 pip install modal
@@ -276,39 +14,51 @@ modal deploy app.py
 ```
 
 That is the whole install. The last command prints a URL, and the URL is the
-application: interface, API and GPU jobs. Nothing runs on your machine, nothing
-runs when you are not using it, and there is no config file to fill in first.
+application — interface, API and GPU jobs. Nothing runs on your machine, nothing
+runs while you are not using it.
 
 ---
 
-## What runs underneath
+## What you can do
 
-**Train.** LoRA training for Krea 2 on [musubi-tuner](https://github.com/kohya-ss/musubi-tuner).
-Point it at a folder of images, get a `.safetensors` back.
+**Generate stills and video in one workspace.** Image and video share a prompt,
+a canvas and a gallery. Duration is the switch: `Still` runs Krea 2, any length
+runs MiniMax-H3 or Wan 2.2. The controls on screen follow the model you pick, so
+you only ever see the ones that model actually reads.
 
-**Caption.** Datasets are named folders of images with `.txt` sidecars beside
-them, which is exactly what the trainer reads.
+**Write prompts as pills, not paragraphs.** Camera moves, framing, lighting,
+tone and audio come from a palette of animated tiles — a tile *shows* you a
+dolly-out rather than making you guess the wording. The prompt field keeps only
+what nothing else can say: who is in the shot and what happens. A live preview
+shows the exact string the model will be handed.
 
-**Generate stills.** Krea 2 inference through the same driven ComfyUI the video
-side uses, with LoRA stacking and regional multi-character LoRA — a box per
-character, each LoRA masked to its own rectangle so two trained identities do
-not blend into one another. Drop a photo in and the scene is regenerated around
-the boxes instead of the subjects being pasted into it.
+**Let the model finish a fragment.** Type `empty diner, 3am`, press **Enhance**,
+and it comes back as a written prompt with the light placed and the clock still
+reading 3am. ⌘Z or the Undo beside the button restores your words exactly. The
+rewrite runs on Krea 2's own text encoder — already loaded during a session — so
+it writes in the same dialect it reads.
 
-**Generate video.** Two families through a driven ComfyUI:
+**Place multiple characters with regional LoRAs.** Draw a box on the frame, drop
+a `<lora:name:1.3>` into it, and that LoRA applies only inside the box — two
+trained identities stay separate instead of blending. Each box can also take a
+reference photo; drop a photo on the bare canvas instead and it becomes the
+scene the picture is generated inside.
 
-|                | MiniMax-H3              | Wan 2.2                    |
-| -------------- | ----------------------- | -------------------------- |
-| Audio          | yes, same latent        | silent                     |
-| CFG / negative | no — guidance-distilled | yes                        |
-| LoRAs          | no                      | yes                        |
-| References     | ref2va checkpoint       | no                         |
-| Experts        | one                     | two on A14B, one on the 5B |
+**Train your own LoRAs.** Point the trainer at a folder of images and get a
+`.safetensors` back. Train several at once — each run is its own card, so you
+can start one and keep working.
 
-Adding Wan did not add a backend. It reuses the container, the warm ComfyUI
-process and the job contract; what is per-family is a graph builder and one row
-of capabilities — which is also the row the composer reads to decide what to
-show you.
+**Prepare datasets in the same place.** Images get prose captions from
+Qwen3-VL-8B, with presets tuned to what you're training (character, style,
+concept). A panel reads the set back to you — trigger-word coverage, caption
+length, repeated clauses — and duplicate detection flags copies before they
+train unevenly.
+
+![Seventy-seven tiles, each animating the move it names](docs/shot-palette.png)
+![A take, the pills that produced it, and the gallery beside it](docs/video.png)
+![A box per character, each LoRA masked to its own rectangle](docs/regional.png)
+![Everything you have made, in one grid](docs/gallery.png)
+![Captioning is a workspace, not a batch job](docs/dataset.png)
 
 ---
 
@@ -326,9 +76,9 @@ HuggingFace token is pasted into the UI and stored in a Modal Dict.
 
 ## First run: get the weights
 
-**Nothing downloads on its own.** A fresh deployment has an empty volume and
-every model is opt-in, because the full catalogue is ~206 GB and almost nobody
-wants all of it. Open the deployed URL, click the gear, and pick what you need.
+A fresh deployment has an empty volume — nothing downloads on its own, because
+the full catalogue is ~206 GB and almost nobody wants all of it. Open the
+deployed URL, click the gear, and pick what you need.
 
 | Family                       |   Size | Gated | What it buys                              |
 | ---------------------------- | -----: | ----- | ----------------------------------------- |
@@ -338,26 +88,17 @@ wants all of it. Open the deployed URL, click the gear, and pick what you need.
 | Wan 2.2 speed LoRAs          |   5 GB | no    | fewer steps per clip                      |
 | Krea 2 style LoRAs           |   4 GB | no    | Krea's own nine styles, for the prompt    |
 
-The style LoRAs are the cheapest way to see regional prompting actually work.
-Two character LoRAs in two boxes produce a picture of two people, and nothing
-in that picture distinguishes "each LoRA was masked to its rectangle" from
-"the model drew two people". Two *styles* do: ink wash on one side, motion blur
-on the other and a hard seam between them is the masking, visible.
-
-You do not need a whole family. The smallest useful video setup is Wan 2.2
-TI2V 5B at **18 GB** — the 5B checkpoint, umT5-XXL and the 2.2 VAE — which does
+You do not need a whole family. The smallest useful video setup is **Wan 2.2
+TI2V 5B at 18 GB** — the 5B checkpoint, umT5-XXL and the 2.2 VAE — which does
 both text-to-video and image-to-video on its own.
 
-Downloads run on **CPU containers**, never on a GPU. Pulling 26 GB while an
-A100 idles is money burned for nothing.
+The **style LoRAs** are the cheapest way to see regional prompting work: put two
+styles in two boxes and the hard seam between them — ink wash on one side,
+motion blur on the other — is the masking, made visible.
 
-A transfer reports the bytes it has and the rate it is getting them at, and if
-it goes quiet for four minutes it is abandoned and **resumed** from where it
-stopped, up to five times. Both exist because of one failure: a 17 GB pull
-stopping dead at 4 GB and the job staying "running" — no error, no log line, no
-byte count — until the four-hour timeout collected it. A download that can hang
-is survivable; one that can hang silently costs you the four hours before you
-learn anything.
+Downloads run on CPU containers, never on a GPU, and report the bytes and rate
+as they go. A transfer that goes quiet for four minutes is abandoned and resumed
+from where it stopped, up to five times.
 
 ### Gated weights
 
@@ -376,16 +117,40 @@ Most LoRAs worth having were never published to HuggingFace — they are a link
 someone sent you. Paste one under the gear and it lands in `loras/`, ready to
 name in a prompt.
 
-- A file link or a bare id both work; so does a folder link.
-- Only `.safetensors` is kept. A folder's preview grid and readme are named as
-  skipped rather than quietly copied onto the volume.
-- Leave **folder** blank and the files drop in loose, each its own entry. Give
-  one and they are grouped as versions of a single LoRA under
-  `loras/{folder}/` — which is right for a matched pair and wrong for a bag of
-  unrelated ones, so it stays your call.
-- The link has to be shared with anyone who has it. Drive answers an unshared
-  file with a sign-in page rather than an error, so the failure names that case
-  explicitly instead of surfacing a parse error.
+- A file link, a bare id, or a folder link all work.
+- Only `.safetensors` is kept; a folder's preview grid and readme are skipped.
+- Leave **folder** blank and files drop in loose, each its own entry. Give one
+  and they are grouped as versions of a single LoRA under `loras/{folder}/`.
+- The link must be shared with anyone who has it. An unshared file is named as
+  that case explicitly, rather than surfacing a parse error.
+
+---
+
+## What runs underneath
+
+**Train.** LoRA training for Krea 2 on
+[musubi-tuner](https://github.com/kohya-ss/musubi-tuner). Point it at a folder
+of images, get a `.safetensors` back.
+
+**Caption.** Datasets are named folders of images with `.txt` sidecars beside
+them — exactly what the trainer reads.
+
+**Generate stills.** Krea 2 inference through a driven ComfyUI, with LoRA
+stacking and regional multi-character LoRA.
+
+**Generate video.** Two families through the same driven ComfyUI:
+
+|                | MiniMax-H3              | Wan 2.2                    |
+| -------------- | ----------------------- | -------------------------- |
+| Audio          | yes, same latent        | silent                     |
+| CFG / negative | no — guidance-distilled | yes                        |
+| LoRAs          | no                      | yes                        |
+| References     | ref2va checkpoint       | no                         |
+| Experts        | one                     | two on A14B, one on the 5B |
+
+Both video families reuse one container, the warm ComfyUI process and one job
+contract; what differs per family is a graph builder and a row of capabilities —
+the same row the UI reads to decide which controls to show.
 
 ---
 
@@ -401,9 +166,8 @@ outputs/{job}/        generated media + a visionary.json sidecar
 work/, .cache/        disposable
 ```
 
-The layout is the contract, not the code. Datasets are folders of images with
-text files beside them — the same thing the trainer reads — so nothing here is
-required to get your data back out.
+The layout is the contract: datasets are folders of images with text files
+beside them, so nothing here is required to get your data back out.
 
 Run a second, isolated copy against its own storage by setting the volume name:
 
@@ -413,114 +177,66 @@ VISIONARY_VOLUME=visionary-test modal deploy app.py
 
 ---
 
-## GPUs and what they cost you
+## GPUs and cost
 
 Each job type picks its own class, and most are switchable in the UI:
 
-| Job              | Default   | Options                        |
-| ---------------- | --------- | ------------------------------ |
-| Training         | A100-40GB | —                              |
-| Captioning       | A100-40GB | —                              |
-| Image generation | H100      | H100, H200                     |
-| Video generation | H100      | H100, H200                     |
+| Job              | Default   | Options    |
+| ---------------- | --------- | ---------- |
+| Training         | A100-40GB | —          |
+| Captioning       | A100-40GB | —          |
+| Image generation | H100      | H100, H200 |
+| Video generation | H100      | H100, H200 |
 
-Image generation was an A100-40GB until it moved onto ComfyUI. Both inference
-paths now share one image, and its SageAttention kernels are compiled for
-Hopper — an A100 would load the weights, find no kernel, and quietly run slow.
-The regional path wants the headroom regardless.
+Image and video generation share one image whose SageAttention kernels are
+compiled for Hopper, so both want an H100/H200 — an A100 would run slow.
 
 Containers stay warm between requests (10 minutes for images, 15 for video) so
 consecutive takes skip the model load, then scale to zero. You are billed for
-GPU time while a job runs and while a container is warm — not for the
-deployment sitting idle.
-
-Anything that can fail cheaply does. A bad LoRA path, an unknown aspect ratio
-or a missing weight is rejected on CPU in milliseconds, before a GPU is rented.
+GPU time while a job runs and while a container is warm — not for an idle
+deployment. Bad inputs (a wrong LoRA path, an unknown aspect ratio, a missing
+weight) are rejected on CPU in milliseconds, before a GPU is rented.
 
 ---
 
 ## Verifying a deployment
 
-Three smoke tests, all cheap, all runnable against your own account:
+Four smoke tests, all cheap, all runnable against your own account:
 
 ```bash
-modal run tools/smoke_graphs.py
+modal run tools/smoke_graphs.py     # every graph validates against ComfyUI's node schema (CPU, no weights)
+modal run tools/smoke_caption.py    # every captioner repo id resolves and parses (CPU); --gpu captions a real image
+python3 tools/smoke_prompt.py       # the shot compiler matches MiniMax's published format (stdlib, no network)
+python3 tools/smoke_pins.py         # every pinned wheel still resolves, before a deploy spends 20 minutes finding out
 ```
 
-Checks every graph the app can build — the three Krea 2 shapes and all twelve
-video variants across both families — against the real ComfyUI node schema on a
-**CPU** container with no weights present. Catches a renamed node, a moved
-input, a dangling link, a sampler the UI offers that ComfyUI does not have, and
-a custom node that failed to import. It does not run a sampler, so it says
-nothing about whether the picture looks right.
-
-```bash
-modal run tools/smoke_caption.py
-```
-
-Checks that the pinned transformers has the class and that **every** repo id in
-the captioner picker resolves and parses, on a CPU container that downloads
-config files rather than weights. `--gpu` loads one and captions a real image;
-`--model` and `--preset` choose which captioner and which instruction, and the
-result says whether the model refused.
-
-```bash
-python3 tools/smoke_prompt.py
-```
-
-```bash
-python3 tools/smoke_pins.py
-```
-
-Asks whether every pinned wheel in `app.py` still exists, before a deploy
-spends twenty minutes finding out. It resolves and installs nothing, inside
-each image's own base layer — remotely rather than locally, because a local
-`pip --dry-run --platform` cannot evaluate `platform_system == "Linux"` markers
-and silently drops the `nvidia-*` dependencies, which is the exact class of
-failure this exists to catch. Run it after any version bump, and when a build
-that worked last week stops.
-
-Checks the shot compiler against the format MiniMax published: the alignment
-sentences verbatim for each of the four tasks, the three field labels once each
-in order, and a line of dialogue with commas, an ellipsis and a trailing
-exclamation surviving byte for byte inside `<d>…</d>`. Pure stdlib and no
-network — it reads the real compiler out of `app.py` by AST rather than
-importing it, because importing `app.py` builds Modal image definitions at
-module scope and wants credentials to answer a question about a string.
-
-### What has actually been run end to end
+### What has been run end to end
 
 Being honest about coverage, since "it deploys" is not "it works":
 
-- **Wan 2.2 TI2V 5B** — text-to-video and image-to-video both verified on an
-  H100, output inspected frame by frame.
-- **MiniMax-H3** — text-to-video run end to end on an H100 and clips returned.
-  The shot compiler's output has been checked against the published format by
-  `smoke_prompt.py`, and `/api/compile` shows the same string the run is given.
-  What is still unverified by ear is the audio: whether
-  `non_diegetic_music: N/A` actually silences the invented soundtrack is an
-  observation nobody has written down yet.
-- **Wan 2.2 A14B** — graphs validate structurally. The two-expert handover
-  cannot be checked structurally: wrong noise flags give a washed-out clip
-  rather than an error, so only a real run will show it.
+- **Wan 2.2 TI2V 5B** — text-to-video and image-to-video verified on an H100,
+  output inspected frame by frame.
+- **MiniMax-H3** — text-to-video run end to end on an H100. The compiler output
+  is checked against the published format by `smoke_prompt.py`. Still unverified
+  by ear: whether `non_diegetic_music: N/A` actually silences the soundtrack.
+- **Wan 2.2 A14B** — graphs validate structurally. The two-expert handover can
+  only be confirmed by a real run — wrong noise flags give a washed-out clip
+  rather than an error.
 
 ---
 
 ## Working on the UI locally
 
-The front end is React and TypeScript under `web/`, built by Vite into the
-image at deploy time — so `modal deploy app.py` remains the whole install and
-no local Node is needed to ship. For development, `npm run dev` in `web/`
-proxies to `tools/preview_ui.py`, which serves the real prompt compilers and
-the real shot vocabulary against stubbed jobs: the entire UI is workable with
-no Modal account, no GPU and nothing billed.
+The front end is React and TypeScript under `web/`, built by Vite into the image
+at deploy time — so `modal deploy app.py` stays the whole install and no local
+Node is needed to ship. For development, `npm run dev` in `web/` proxies to
+`tools/preview_ui.py`, which serves the real prompt compilers and shot vocabulary
+against stubbed jobs, so the entire UI is workable with no Modal account, no GPU
+and nothing billed:
 
 ```bash
 python3 tools/preview_ui.py 8777
 ```
-
-The stubs are shaped to hold the awkward states — a missing model, an
-uncaptioned dataset, a prompt too long to belong in a gallery card.
 
 ---
 
@@ -534,48 +250,29 @@ tools/_from_app.py  pulls plain-Python pieces out of app.py by AST
 CLAUDE.md           the design rationale — why the code is shaped the way it is
 ```
 
-`_from_app.py` exists because two tools need the *real* thing rather than a
-copy: a compiler checked against a reimplementation is checking the
-reimplementation, and a palette previewed from a hand-written vocabulary is a
-preview of a palette that does not exist.
-
-`app.py` is deliberately one file. It is long, but the alternative — a package
-whose modules are imported by Modal image builds — trades one long file for a
-build-order problem, and the file is navigable by its banner comments.
-
-If you are going to change anything, read `CLAUDE.md` first. It explains the
-tradeoffs the code is holding, including several that look like mistakes until
-you know what they are avoiding.
+`app.py` is deliberately one file — long, but navigable by its banner comments,
+and it keeps `modal deploy app.py` the whole install. If you are going to change
+anything, read `CLAUDE.md` first: it explains the tradeoffs the code is holding,
+several of which look like mistakes until you know what they avoid.
 
 ---
 
 ## Licensing
 
-**[AGPL-3.0](LICENSE).** Worth understanding before you fork this or run it for
-anyone but yourself.
+**[AGPL-3.0](LICENSE).** Strong copyleft with a network-use clause: section 13
+means that if you modify this and let other people use it over a network, you owe
+those users the corresponding source — deploying, not just distributing, counts.
+Since this deploys as a web application by design, that is the normal case here.
+Running your own private instance triggers nothing.
 
-This used to be an inheritance rather than a choice: `forge/` was a vendored
-slice of [sd-webui-forge-classic](https://github.com/Haoming02/sd-webui-forge-classic),
-which is AGPL-3.0, imported and executed on the image path. That tree is gone —
-see CLAUDE.md for why — so the AGPL now comes from this repository's own
-[LICENSE](LICENSE) and not from a dependency. AGPL-3.0 is strong copyleft with
-a network-use clause: section 13 means that if you modify this and let other
-people use it over a network, you owe those users the corresponding source —
-deploying rather than distributing is not the loophole it is under the GPL.
-Since this deploys as a web application by design, that clause is the normal
-case here, not an edge one. Running your own private instance triggers nothing.
+The images install, rather than vendor, two upstreams:
 
-What the images now install, rather than vendor:
-
-- **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)** — GPL-3.0. Cloned into
-  the container at the commit in `COMFY_SHA`, run as its own process, and
-  driven over its HTTP API. Nothing here is linked against it or patched.
+- **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)** — GPL-3.0. Cloned at
+  `COMFY_SHA`, run as its own process, driven over its HTTP API. Not linked
+  against or patched.
 - **[Krea2 Regional Multi-LoRA](https://github.com/CliffNodes/Krea2-Multi-Character-Lora-Node-with-bounding-box-Scene-and-Outfit-Edit)**
   — MIT. Cloned at `CLIFF_SHA` into ComfyUI's `custom_nodes/`, unmodified.
 
-None of that is legal advice, and the combination is worth a look of your own
-if you plan to distribute this or run it for other people.
-
-Model weights carry their own separate licences — Krea 2's in particular is
-gated and has terms you accept on HuggingFace. Nothing here grants you rights
-to them.
+None of this is legal advice. Model weights carry their own separate licences —
+Krea 2's in particular is gated and has terms you accept on HuggingFace. Nothing
+here grants you rights to them.
