@@ -5,7 +5,7 @@ Train a LoRA on your photographs, generate stills with it, and animate any of
 them into a clip — in one interface, on one URL, with nothing to keep alive
 between sessions.
 
-![The canvas holds the screen; the console is a bar beneath it](docs/generate.png)
+![A fragment, enhanced into a prompt, and the picture it produced](docs/generate.png)
 
 It is a real interface, not a form in front of a script. The canvas is the
 largest thing on screen at every moment, because the picture is the reason the
@@ -74,6 +74,8 @@ choreographed blows."* — into a prompt for an encoder that reads a still frame
 and has no way to render a sequence. What actually reached the picture was two
 people in a fighting *pose*, which the framing and angle groups already say
 better and without claiming motion the model cannot produce.
+
+![`empty diner, 3am` becomes a prompt, and Undo sits beside the button that wrote it](docs/enhance.png)
 
 **And the prompt writes itself, on the model's own text encoder.** Type a
 fragment and press **Enhance**: `empty diner, 3am` comes back as a written
