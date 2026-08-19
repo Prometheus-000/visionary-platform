@@ -115,10 +115,17 @@ export function Console({
     s.state?.models.find((m) => m.key === k)?.present)
   const vid = videoReady(s)
   const ready = image ? anyImageModel : vid.ready
-  const modelNote = image
+  // `anyImageModel` is false both when the volume is genuinely empty and when
+  // `state` has not arrived yet — `s.state?.…?.present` short-circuits to
+  // undefined before the fetch returns. Left conflated, the second case paints
+  // "No DiT on the volume" on first render, telling you to download weights the
+  // app has not yet looked for. So say nothing until there is a real answer.
+  const modelNote = !s.state
+    ? ''
+    : image
     ? (anyImageModel
-        ? (s.state?.models.find((m) => m.key === 'vae')?.present
-           && s.state?.models.find((m) => m.key === 'text_encoder')?.present
+        ? (s.state.models.find((m) => m.key === 'vae')?.present
+           && s.state.models.find((m) => m.key === 'text_encoder')?.present
             ? '' : 'The VAE and text encoder are also required.')
         // The gear is the only route to the fix, so the note names it.
         : 'No DiT on the volume — download Krea 2 Turbo under Settings.')
