@@ -208,9 +208,9 @@ check("every non-valued pill has a phrase to write",
        if not it.get("valued") and not it.get("solo") and not it["phrase"]], [])
 check("every pill has a glyph class",
       [k for k, (_, it) in G["SHOT_ITEMS"].items() if not it.get("glyph")], [])
-check("the image side reads no camera, action or audio pill",
+check("the image side reads no camera or audio pill",
       sorted(g["key"] for g in G["SHOT_VOCAB"] if not g["image"]),
-      ["action", "camera", "say", "score", "sound"])
+      ["camera", "say", "score", "sound"])
 check("an unknown pill key is refused, not dropped",
       refused(lambda: G["_validate_shot"]([{"key": "camera.dolly"}])), True)
 check("an unknown reference role is refused",
