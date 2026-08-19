@@ -169,34 +169,46 @@ const SHOTS = [
     },
   },
   {
-    // Regions are a canvas verb, so this draws them rather than opening a panel:
-    // two boxes on the empty frame, then one touched so its card is showing.
+    // **Boxes are drawn before the render and revealed after it.** A render
+    // puts them away every time — `off` is re-entered on every land, which is
+    // what keeps a finished picture clean — so a plain drag afterwards is not
+    // "draw a box", it is a click on bare canvas. Geometry comes back with
+    // ⌘, the same modifier that already meant "a new box, here".
     name: 'regional',
     async run(page, shoot) {
-      // Drawn over a render, which is what the boxes are for — CLAUDE.md's
-      // reason they survive a result at all is that you adjust them against the
-      // picture you actually got.
       await page.fill('#prompt', REGIONAL_STILL)
-      await page.waitForTimeout(300)
-      await page.locator('#c-image').getByRole('button', { name: 'Generate' }).click()
-      await page.locator('#canvas img, .frame img').first().waitFor({ timeout: 600000 })
-      await page.waitForTimeout(1200)
+      await page.waitForTimeout(400)
       const frame = page.locator('#canvas, .frame').first()
       const box = await frame.boundingBox()
       if (!box) throw new Error('no frame to draw on')
+      const at = (fx, fy) => [box.x + box.width * fx, box.y + box.height * fy]
       const drag = async (x1, y1, x2, y2) => {
-        await page.mouse.move(box.x + box.width * x1, box.y + box.height * y1)
+        await page.mouse.move(...at(x1, y1))
         await page.mouse.down()
-        await page.mouse.move(box.x + box.width * x2, box.y + box.height * y2, { steps: 18 })
+        await page.mouse.move(...at(x2, y2), { steps: 18 })
         await page.mouse.up()
         await page.waitForTimeout(500)
       }
-      await drag(0.08, 0.14, 0.46, 0.9)
-      await drag(0.54, 0.14, 0.92, 0.9)
-      // Touch the first one so its card opens — the card is where a region says
-      // who is in it, and a screenshot of bare rectangles shows none of that.
-      await page.mouse.click(box.x + box.width * 0.27, box.y + box.height * 0.5)
-      await page.waitForTimeout(800)
+      // On the empty frame a plain drag places one — this is the gesture the
+      // empty canvas describes in words.
+      await drag(0.10, 0.16, 0.47, 0.9)
+      await drag(0.53, 0.16, 0.90, 0.9)
+
+      await page.locator('#c-image').getByRole('button', { name: 'Generate' }).click()
+      await page.locator('#canvas img, .frame img').first().waitFor({ timeout: 600000 })
+      await page.waitForTimeout(1500)
+
+      // ⌘-click to bring geometry back over the result, which is the whole
+      // reason the boxes survive a render: you adjust them against the picture
+      // you actually got.
+      await page.keyboard.down('Meta')
+      await page.mouse.click(...at(0.28, 0.5))
+      await page.keyboard.up('Meta')
+      await page.waitForTimeout(900)
+      // Then open one, so the card is showing — a rectangle says nothing about
+      // who is in it.
+      await page.mouse.click(...at(0.28, 0.5))
+      await page.waitForTimeout(900)
       await shoot('regional')
     },
   },
