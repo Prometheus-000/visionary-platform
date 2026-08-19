@@ -367,6 +367,24 @@ it. `REWRITE_OPS` holds **one** instruction and `/api/rewrite` returns **prose**
 not a document. The instruction is Krea's own `docs/expansion.txt`, vendored
 verbatim: the people who trained the encoder wrote the prompt for talking to it.
 
+**The number that turned this around, and it is the only one that is not a
+proxy.** Rendered blind, both orders, a win counted only when both agree:
+
+|  | beats bare | loses to bare | tie |
+|---|---|---|---|
+| the document layer, 30 comparisons | **0** | 4-10 | rest |
+| `REWRITE_OPS`, 10 fragments | **3** | 1 | 6 |
+
+The document approach never won a single pair across two model sizes and two
+rule sets. This is the first configuration that beats doing nothing — and the
+three wins are *the fragments the old validator refused*: "night. no, late
+afternoon" (coverage 59%), "something like a courtroom but colder" (31%), "the
+kitchen after the party". The cases the apparatus threw away are the cases the
+feature exists for, which is the finding this whole section is downstream of.
+
+Read it honestly: n is 10, six were ties, and the net is +2 pairs. It is a real
+win, it is the first one, and it is not a landslide.
+
 **It was three — Expand, Balance, Enhance — and the collapse is a measurement
 rather than a tidy-up.** The blind A/B that beat the bare fragment 3-1 ran
 `op: expand` on every pair, which is `KREA_EXPANSION` and nothing else. The other
@@ -499,6 +517,87 @@ clauses each and a third with none renders two friends and a bystander — and a
 clause that names two subjects merges them. `smoke_parse.py`'s scene corpus
 carries a case for each, plus a well-formed prompt as the control, because the
 risk of one job is that everything gets treated as narration.
+
+### The rewriter is the encoder, and that was almost free
+
+Krea 2 reads its prompt through **Qwen3-VL-4B** — a decoder language model, not
+a T5 or a CLIP — and it is already resident in the image container during a
+session. So the rewrite runs there, on weights the platform has already paid
+for. `REWRITE_BACKEND` selects it; the `"interpreter"` arm still names the old
+L4 and exists so this is reversible by one constant.
+
+**The file can generate, and finding that out is the whole decision.** Comfy's
+repackage strips `lm_head` — it is dead weight for conditioning, which taps
+layers 2-35 and never reaches the head. But `tie_word_embeddings: true`, and
+`model.language_model.embed_tokens.weight` is present, so the head *is* the
+embedding matrix and supplying it is a reference rather than a copy. Read off
+the safetensors index before a line was written: 713 tensors, all 36 layers,
+vision tower included, `lm_head` absent.
+
+**Nobody else does this, and the reason is not that it is a bad idea.** The
+three ComfyUI prompt-enhancer node packs all load their own model — Ollama, LM
+Studio, a `gokaygokay/Flux-Prompt-Enhance` seq2seq. None reuses the encoder,
+because Flux's is T5-XXL and SD's is CLIP and both are **encoder-only**: there
+is no head to reach and no tokens to sample. Krea 2 is the unusual case where
+the question can even be asked.
+
+**A second copy in the same container, not the resident instance.** Reusing what
+ComfyUI holds saves ~9 GiB and was declined on arithmetic: Krea 2 is ~24 GiB
+resident and the worst case on record is ~30 GiB steady plus ~18 GiB transient,
+so a second copy lands near 56 of 80 GiB — measured at **70.1 of 79.2 GiB free**
+before a run. Against that saving, reuse means reaching into `comfy.sd.CLIP` at
+a pinned `COMFY_SHA` and hand-writing a KV-cached decode loop, because ComfyUI's
+wrapper runs a single forward for conditioning and has no cache. A pinned-fragile
+dependency and our own sampler, to save memory that is not scarce, for a one-time
+~20s load. Recorded as considered and declined rather than left as a TODO.
+
+**And the OOM cascade that argues against it is a leak, not a ceiling.**
+`_reclaim()` exists because the regional node strands its per-region LoRAs in
+ComfyUI's execution cache where `unload_all_models()` cannot see them — a bug in
+an interaction, since closed by `visionary_free_regional`. An 80 GB Hopper card
+carrying 9 GiB alongside Krea 2 is not what triggers it.
+
+Two things in the node are load-bearing and both look like the obvious
+optimisation is missing:
+
+- **The vision tower is loaded even though this path never sees a picture.**
+  Dropping its 315 tensors saves ~1-2 GiB and leaves every `model.visual.*`
+  parameter on the meta device, because `assign=True` materialises only what the
+  state dict carries — and `.to("cuda")` then dies with *"Cannot copy out of meta
+  tensor; no data"*, which names the symptom and not the cause.
+- **It is built on CPU with real storage, not on `meta`.** Meta init is the fast
+  way and it does not work here: a model's *non-persistent buffers* — the rotary
+  `inv_freq` among them — are created at init and appear in no checkpoint. They
+  stay meta, `load_state_dict` does not report them in `missing`, and the failure
+  surfaces two lines later naming a device rather than a buffer.
+
+**The concurrency objection was written about a different feature.**
+`PARSE_GPU`'s comment rejects "a second model in either process" because
+`max_inputs=1` is what `_publish`'s process-local lock depends on. That is right
+about the *parse*, which fired on every 500ms typing pause and could land
+mid-render. A rewrite is a button you press and then wait for, before pressing
+Generate: they are sequential, on a single-user platform, and a rewrite queuing
+behind a take is correct rather than a defect.
+
+**What it bought, measured.** Warm **2.2-9.2s**; growth 21-22x on a fragment,
+1.6x on a prompt that only needed polish. Cold is **~200s and no better than the
+L4** — a cold image container loads 35 GB of checkpoint before anything — so the
+honest claim is narrower than "no cold start": the rewrite no longer needs *its
+own* container, and rides one a session is paying for anyway.
+
+**The transport is the one the file already had.** The node is `OUTPUT_NODE` and
+returns `{"ui": {"text": [...]}}`, which lands in `/history/{prompt_id}` — the
+same place `_await` already polls for renders. No second channel, and
+`require_nodes` gains `VisionaryRewrite` so a missing node is a named startup
+failure rather than a mystery at request time.
+
+**And the stock model earns the fork nothing here.** `docs/vendor-parse-model.md`
+took an abliterated checkpoint because a *schema-bound* refusal arrives as an
+evasive storyline nothing downstream can tell from a real one. Prose has no such
+problem — a refusal is visible text — and on five deliberately charged fragments
+the stock encoder rewrote **5 of 5**, none evasive. `_looks_like_refusal()` is
+kept on the path as a guard rather than an expectation, falling back to the
+original prose.
 
 ### Relations are the weakest link, and the rules were making it worse
 
@@ -705,6 +804,7 @@ linen dress. The frame is what holds it to the person's scene.
     tools/prompt_ab.py  render a prompt pair and have a vision model judge it —
                         the only measurement of this that is not a proxy
     tools/does_it_help.py renders the same fragment bare and interpreted, one seed
+    tools/smoke_rewrite.py  the rewrite path offline — no GPU, no Modal
     tools/judge_renders.py scores a rendered pair blind, both orders, or it is a tie
 
 **The front end is built into the image, not mounted from your disk.** That is
@@ -1854,6 +1954,17 @@ two domains, and the page follows the domains.
 is worked on locally instead of paying an image build and a cold start per CSS
 change. Its stubs are shaped to hold the awkward states — a missing model, an
 uncaptioned dataset, a prompt too long to belong in a gallery card.
+
+**A stub that omits a menu is a preview of a control that does not exist**, and
+it fails silently: `rewrite_ops` missing from `/api/state` rendered no Enhance
+button at all, so the one surface the feature has was invisible in the very file
+that exists to make the front end developable without a GPU. Every menu the page
+builds itself out of is pulled from app.py rather than transcribed, for that
+reason — and pulling one means pulling **what it references**. `REWRITE_OPS`
+names `KREA_EXPANSION`, and a subset without it raises `NameError` from inside
+app.py, which reads as a broken preview rather than an incomplete pull. That is
+`_from_app.py`'s one failure mode and the reason its subset is named rather than
+pattern-matched.
 
 ## Where the console redesign got to
 
