@@ -11,10 +11,11 @@ import { MetaSheet } from './gallery/MetaSheet'
 import { Viewer } from './gallery/Viewer'
 import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
-import { IconBack, IconGear, IconPanel, IconTrain } from './icons'
+import { IconBack, IconGear, IconPanel, IconPhoto, IconTrain } from './icons'
 import { LORA_MIME, endLoraDrag } from './lora/drag'
 import { fileToB64, toB64 } from './media/files'
 import { Settings } from './settings/Settings'
+import { warmDatasets } from './datasets/useDatasets'
 import { Train } from './train/Train'
 import { isActive, useSessions } from './train/useSessions'
 import { supports, useStore } from './store'
@@ -138,6 +139,11 @@ export function App() {
     // the same event — the page opened — and a second effect would be a second
     // thing to keep in step with it.
     void warm()
+    // The sets listing too, and for the same reason the sessions door gets its
+    // rows at app level: Sets is a front-door destination now, and the click
+    // that opens it should find the rows already waiting rather than start the
+    // volume walk it then blanks on.
+    warmDatasets()
     return () => { alive = false }
   }, [reloadState])
 
@@ -238,6 +244,45 @@ export function App() {
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [canvasSrc, s.kind, lightbox])
+
+  /* Typing with nothing focused lands in the prompt, not in the hotkeys. A click that
+     misses the field by a few pixels leaves focus on the body, and the sentence typed
+     next used to arrive as a hotkey barrage — every space toggling the viewer, every
+     backspace one keystroke from clearing the canvas. Letters only: Space keeps its
+     full-screen meaning when it is the *first* thing pressed, because a sentence never
+     starts with one — the first letter moves the caret into the field and the spaces
+     after it are just spaces. Routed to whichever prompt is showing, with the caret at
+     the end, which is where a caret that was never placed belongs. */
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return
+      if (e.key.length !== 1 || e.key === ' ') return
+      const t = e.target as HTMLElement | null
+      if (t?.matches?.('input,textarea,select') || t?.isContentEditable) return
+      if (t?.closest?.('#region-layer')) return
+      if (document.querySelector('.lb,.menu,.pal,.scrim')) return
+      const field = document.querySelector<HTMLTextAreaElement>(
+        'textarea#prompt:not(.hide), textarea#neg:not(.hide)')
+      if (!field || field.readOnly) return
+      e.preventDefault()
+      // Focus *synchronously*, so this handler only ever routes the first key —
+      // everything after it lands in the field natively. Deferred to the next
+      // frame (the `applyWrite` pattern), each keystroke of the sentence arrived
+      // here as its own stray key while focus was still in flight.
+      field.focus()
+      const st = useStore.getState()
+      const write = field.id === 'neg' ? st.setNegative : st.setPrompt
+      // Never welded to the last word — the same courtesy `insertLora` extends.
+      const sep = field.value && !/\s$/.test(field.value) ? ' ' : ''
+      write(field.value + sep + e.key)
+      // After the commit, for the reason `applyWrite` waits: the field is controlled,
+      // and a range set now would range over text React has not painted yet.
+      requestAnimationFrame(() =>
+        field.setSelectionRange(field.value.length, field.value.length))
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
 
   /* ⌘/Ctrl+Enter generates from anywhere — the point being *from a region's prompt
      field*, which is what turns the edit-and-regenerate loop into one keystroke. The
@@ -352,6 +397,10 @@ export function App() {
   // open, slowly while something is running elsewhere, and not at all
   // otherwise — see `useSessions`.
   const sess = useSessions(train)
+  // Lifted out of Train for the same reason the sessions were: the header's
+  // Sets door has to land on the sets screen directly, and Train is not
+  // mounted from Generate to be told which screen to open on.
+  const [trainScreen, setTrainScreen] = useState<'board' | 'sets'>('board')
 
   return (
     <>
@@ -361,7 +410,23 @@ export function App() {
           Visionary
         </button>
         <span className="grow" />
-        <Door running={sess.rows.filter(isActive)} />
+        {/* Sets is a front-door destination, not a room inside Training. It was
+            two levels deep — Training, then a text button on the board — which
+            made the half of the product you build datasets in read as a detail
+            of the half you train them in. A door, so it takes a word; hidden in
+            Train because there the header's job is the way back, and moving
+            between the board and the sets stays on the stage where it happens. */}
+        {!train && (
+          <button className="door" id="door-sets" type="button"
+                  onClick={() => { setTrainScreen('sets'); s.setMode('train') }}>
+            <IconPhoto />
+            Sets
+          </button>
+        )}
+        {/* Each door names its own landing: Training opens on the board even if
+            Sets was the last screen open in there — a door that lands you
+            somewhere other than what it says is the header lying. */}
+        <Door running={sess.rows.filter(isActive)} onOpen={() => setTrainScreen('board')} />
         {/* The drawer toggle is a Generate control; it has nothing to say in Train. */}
         {!train && (
           <button className={`ico${drawerOpen ? ' on' : ''}`} id="t-drawer" title="Gallery"
@@ -381,7 +446,7 @@ export function App() {
           // handed. The route is the tell — `/api/clip/` is the only thing that serves
           // one — which keeps the Editor's callback one argument wide rather than making
           // every caller classify a file for it.
-          <Train sess={sess}
+          <Train sess={sess} screen={trainScreen} setScreen={setTrainScreen}
                  onLightbox={(src) => lightbox(src, src.startsWith('/api/clip/') ? 'video' : 'image')} />
         ) : (
           <div className={`view studio${drawerOpen ? '' : ' nodrawer'}`} id="v-generate">
@@ -462,9 +527,10 @@ export function App() {
  * ring averages them. Naming one of four runs would be naming whichever the
  * server listed first, which is a number about a card you cannot see from here.
  */
-function Door({ running }: { running: Session[] }) {
+function Door({ running, onOpen }: { running: Session[]; onOpen: () => void }) {
   const mode = useStore((st) => st.mode)
   const setMode = useStore((st) => st.setMode)
+  const enter = () => { onOpen(); setMode('train') }
   const pct = running.length
     ? Math.round(running.reduce((a, r) => a + Number(r.percent ?? 0), 0) / running.length)
     : null
@@ -480,14 +546,14 @@ function Door({ running }: { running: Session[] }) {
   }
   if (pct == null) {
     return (
-      <button className="door" id="door" type="button" onClick={() => setMode('train')}>
+      <button className="door" id="door" type="button" onClick={enter}>
         <IconTrain />
         Train
       </button>
     )
   }
   return (
-    <button className="door live" id="door" type="button" onClick={() => setMode('train')}>
+    <button className="door live" id="door" type="button" onClick={enter}>
       <svg className="ring" viewBox="0 0 16 16">
         <circle className="bg" cx="8" cy="8" r="6" />
         <circle className="fg" cx="8" cy="8" r="6"

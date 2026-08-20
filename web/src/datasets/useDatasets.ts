@@ -42,8 +42,32 @@ export type DatasetImage = {
   height?: number
 }
 
+/**
+ * The last listing, module-level so it survives the hook unmounting.
+ *
+ * The hook lives inside Train, so leaving the screen used to throw the rows
+ * away — every visit to Sets started from nothing and showed a blank page for
+ * the length of the fetch. Now a revisit paints the previous rows instantly
+ * and the refresh lands behind them, the same stale-while-revalidate the
+ * gallery gets from keeping its listing mounted. Never cleared: a stale row
+ * is corrected by the refresh already in flight, and an emptied one is a
+ * blank screen again.
+ */
+let cachedRows: DatasetRow[] | null = null
+
+/** Fill the cache before anyone opens Sets — called once at app mount, the
+ *  same warmth the sessions door already gets, so the first click usually
+ *  finds the rows waiting. Fire and forget: nothing on screen depends on it,
+ *  and a slow first listing is the only cost of it failing. */
+export function warmDatasets(): void {
+  void listDatasets().then((r) => {
+    if (!failed(r)) cachedRows = (r as { datasets?: DatasetRow[] }).datasets ?? []
+  })
+}
+
 export function useDatasets() {
-  const [rows, setRows] = useState<DatasetRow[]>([])
+  const [rows, setRows] = useState<DatasetRow[]>(() => cachedRows ?? [])
+  const [loading, setLoading] = useState(cachedRows == null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const [images, setImages] = useState<DatasetImage[]>([])
@@ -57,9 +81,15 @@ export function useDatasets() {
 
   const load = useCallback(async () => {
     const r = await listDatasets()
-    if (failed(r)) return setError(r.error)
+    if (failed(r)) {
+      setLoading(false)
+      return setError(r.error)
+    }
     setError(null)
-    setRows((r as { datasets?: DatasetRow[] }).datasets ?? [])
+    const next = (r as { datasets?: DatasetRow[] }).datasets ?? []
+    cachedRows = next
+    setRows(next)
+    setLoading(false)
   }, [])
 
   const refreshInsight = useCallback(async (name: string, trig: string) => {
@@ -166,7 +196,7 @@ export function useDatasets() {
   return {
     rows, error, open, openRow, saved, images, insight, trigger, editError,
     setTrigger, setImages, setEditError,
-    load, choose, loadTiles, create, suggestName, save, remove, commitTrigger,
+    load, loading, choose, loadTiles, create, suggestName, save, remove, commitTrigger,
     refreshInsight,
   }
 }

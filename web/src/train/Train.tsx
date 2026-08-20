@@ -33,16 +33,20 @@ import type { Session, TrainParams } from '../api/types'
  * using, so the sets got a screen of their own — index and drop target together,
  * which is what the rail and the empty editor each had half of.
  */
-export function Train({ sess, onLightbox }: {
+export function Train({ sess, onLightbox, screen, setScreen }: {
   sess: ReturnType<typeof useSessions>
   onLightbox: (src: string) => void
+  /** Two screens on one stage: the board, and the sets. Explicit rather than
+   *  keyed on `ds.open` being null, because the sets screen with nothing open
+   *  is the index *and* the drop target, and is where "+ New set" lands. Owned
+   *  by App rather than here, because the header's Sets door has to be able to
+   *  land on the sets screen directly — a high-level feature is one the front
+   *  door reaches, not one found two levels into Training. */
+  screen: 'board' | 'sets'
+  setScreen: (s: 'board' | 'sets') => void
 }) {
   const state = useStore((s) => s.state)
   const ds = useDatasets()
-  // Two screens on one stage: the board, and the sets. Explicit rather than
-  // keyed on `ds.open` being null, because the sets screen with nothing open is
-  // the index *and* the drop target, and is where "+ New set" lands.
-  const [screen, setScreen] = useState<'board' | 'sets'>('board')
   const [form, setForm] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -98,7 +102,9 @@ export function Train({ sess, onLightbox }: {
                   </button>
                   <h2>Sets</h2>
                   <span className="muted">
-                    {ds.rows.length} set{ds.rows.length === 1 ? '' : 's'}
+                    {ds.loading && !ds.rows.length
+                      ? 'Loading…'
+                      : `${ds.rows.length} set${ds.rows.length === 1 ? '' : 's'}`}
                   </span>
                 </div>
               )}
@@ -121,9 +127,20 @@ export function Train({ sess, onLightbox }: {
               {!ds.open && (
                 <div id="ds-index">
                   {ds.error && <div className="err-box">{ds.error}</div>}
-                  <div id="ds-list" className="grid">
-                    <Rail ds={ds} onOpen={openSet} />
-                  </div>
+                  {/* Said out loud, not left blank: the listing walks the
+                      volume, and an empty screen for the length of that walk
+                      reads as "no sets" — which is a lie about a library that
+                      merely has not answered yet. Only on the first-ever
+                      fetch; after that the cached rows paint instantly. */}
+                  {ds.loading && !ds.rows.length ? (
+                    <p className="muted" id="ds-loading" style={{ margin: '18px 2px' }}>
+                      Loading your sets…
+                    </p>
+                  ) : (
+                    <div id="ds-list" className="grid">
+                      <Rail ds={ds} onOpen={openSet} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>

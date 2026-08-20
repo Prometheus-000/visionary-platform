@@ -3894,13 +3894,54 @@ def _caption_of(img: Path) -> str:
 
 
 def _dataset_stats(d: Path) -> dict[str, Any]:
-    images = _dataset_images(d)
-    videos = _dataset_videos(d)
-    # Both kinds carry sidecars, so both count toward "captioned" — a clip with
-    # no caption is as uncaptioned as a photograph with none, and a set that
-    # reported 24 of 24 while holding six uncaptioned clips would be reporting
-    # the answer to a question nobody asked.
-    captioned = sum(1 for p in images + videos if _caption_of(p))
+    """
+    One scandir pass, and no caption file is ever opened.
+
+    This used to call `_dataset_images` and `_dataset_videos` (a walk each),
+    stat every media file for `modified`, and *read every sidecar in the set*
+    to count "captioned" — and the listing calls it for every set, so opening
+    Sets cost roughly three FUSE round trips per file in the whole library.
+    The gallery never paid that (one sidecar per job, paginated), which is why
+    the two screens felt like different products. Now a sidecar that exists
+    and is non-empty counts as captioned — the panel inside a set still reads
+    the real text, so the only thing this can miscount is a sidecar holding
+    pure whitespace — and everything comes off one directory listing plus one
+    cached stat per entry.
+
+    Both kinds still count toward "captioned": a clip with no caption is as
+    uncaptioned as a photograph with none, and a set that reported 24 of 24
+    while holding six uncaptioned clips would be answering a question nobody
+    asked.
+    """
+    images: list[str] = []
+    videos: list[str] = []
+    sidecars: set[str] = set()
+    newest = 0.0
+    try:
+        with os.scandir(d) as it:
+            for entry in it:
+                try:
+                    if not entry.is_file():
+                        continue
+                    name = entry.name
+                    dot = name.rfind(".")
+                    ext = name[dot:].lower() if dot >= 0 else ""
+                    if ext in IMAGE_EXTS:
+                        images.append(name)
+                        newest = max(newest, entry.stat().st_mtime)
+                    elif ext in VIDEO_EXTS:
+                        videos.append(name)
+                        newest = max(newest, entry.stat().st_mtime)
+                    elif ext == ".txt" and entry.stat().st_size:
+                        sidecars.add(name[:dot])
+                except OSError:
+                    continue  # a file swept mid-listing costs the file, not the set
+    except OSError:
+        pass
+    images.sort()
+    # The sidecar replaces the media suffix (`photo.jpg` → `photo.txt`), so
+    # membership is by the same stem `with_suffix` produces.
+    captioned = sum(1 for n in images + videos if n[: n.rfind(".")] in sidecars)
     meta = d / "dataset.json"
     info: dict[str, Any] = {}
     if meta.is_file():
@@ -3921,11 +3962,11 @@ def _dataset_stats(d: Path) -> dict[str, Any]:
         "captioned": captioned,
         "uncaptioned": len(images) + len(videos) - captioned,
         "trigger_word": str(info.get("trigger_word") or ""),
-        "modified": max((p.stat().st_mtime for p in images + videos), default=0.0),
+        "modified": newest,
         # A clip has no cover — web_image has no ffmpeg — so a video-only set
         # shows the empty glyph rather than a broken thumbnail, which is what
         # /api/thumb would answer for one.
-        "cover": images[0].name if images else None,
+        "cover": images[0] if images else None,
         # Which parent it sits under, not a field in dataset.json: the flag and
         # the folder cannot then disagree about whether the set is kept.
         "saved": d.parent == DATASETS,
@@ -9585,8 +9626,11 @@ def web():
     def session_ping(payload: dict) -> dict[str, Any]:
         """
         The page saying it is still open, and the only thing keeping a draft
-        alive. Sweeping here as well as on the listing means a window left open
-        on Generate still clears out the drafts of the one you closed.
+        alive. This is also the *only* place drafts are swept now — the listing
+        used to sweep too, and moving housekeeping off the route the page waits
+        on is part of why Sets opens fast. A window left open on Generate still
+        clears out the drafts of the one you closed, because the beat fires on
+        load and then periodically wherever the app is open.
         """
         _reload_volume()
         DRAFTS.mkdir(parents=True, exist_ok=True)
@@ -9597,11 +9641,16 @@ def web():
 
     @api.get("/api/datasets")
     def list_datasets() -> dict[str, Any]:
+        """
+        Read-only, deliberately. The draft sweep used to run here too, which
+        put a JSON read per draft — and a volume commit whenever anything
+        swept — on the path the page waits on with a blank screen. The session
+        heartbeat already sweeps, fires on page load and then periodically, and
+        nobody is watching its latency; housekeeping lives there.
+        """
         _reload_volume()
         DATASETS.mkdir(parents=True, exist_ok=True)
         DRAFTS.mkdir(parents=True, exist_ok=True)
-        if _sweep_drafts():
-            volume.commit()
         out = [
             _dataset_stats(d)
             for root in (DATASETS, DRAFTS)
