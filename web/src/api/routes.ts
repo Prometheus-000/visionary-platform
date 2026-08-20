@@ -111,6 +111,30 @@ export const datasetInsight = (name: string, trigger = '') =>
   api<Insight>(`/api/datasets/${seg(name)}/insight?trigger=${seg(trigger)}`)
 export const prependTrigger = (name: string, body: unknown) =>
   post<Record<string, unknown>>(`/api/datasets/${seg(name)}/prepend-trigger`, body)
+/** Find & replace across caption sidecars. `images` scopes it to the page's
+ *  current filtered view — the filters are the targeting tool. */
+export const replaceCaptions = (name: string, body: {
+  find: string
+  replace: string
+  match_case: boolean
+  images?: string[]
+}) => post<{ ok?: boolean; changed?: number }>(`/api/datasets/${seg(name)}/replace`, body)
+
+/* ---- caption presets and models --------------------------------------- */
+
+/** Save the edited instruction as a named preset, kept in the config Dict so
+ *  it survives redeploys. Re-saving the same name updates it. */
+export const saveCaptionPreset = (label: string, instruction: string) =>
+  post<{ ok?: boolean; key?: string }>('/api/caption/presets', { label, instruction })
+export const deleteCaptionPreset = (key: string) =>
+  post<{ ok?: boolean }>('/api/caption/presets/delete', { key })
+/** A captioner by HF repo id. Validated server-side against the repo's own
+ *  config.json before it lands in the menu, so a typo or a text-only model is
+ *  a form error rather than a cold GPU start. */
+export const addCaptionModel = (repo: string, label?: string) =>
+  post<{ ok?: boolean; key?: string }>('/api/caption/models', { repo, label: label || '' })
+export const deleteCaptionModel = (key: string) =>
+  post<{ ok?: boolean }>('/api/caption/models/delete', { key })
 
 /**
  * Duplicate groups at one of three named similarity levels.

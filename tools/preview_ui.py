@@ -262,10 +262,12 @@ STATE = {
         # placeholders so a screenshot taken against this server names weights a
         # reader can actually download.
         {"name": "darkbrush", "trigger_word": "monochrome ink wash style",
+         "strength": 1.3,
          "root": "/workspace/loras/darkbrush.safetensors", "bytes": 469_291_992,
          "catalogue": "Krea 2 style LoRAs", "files": [
             {"path": "/workspace/loras/darkbrush.safetensors", "name": "darkbrush.safetensors"}]},
         {"name": "sunsetblur", "trigger_word": "ethereal motion blur style",
+         "strength": 1.3,
          "root": "/workspace/loras/sunsetblur.safetensors", "bytes": 469_291_992,
          "catalogue": "Krea 2 style LoRAs", "files": [
             {"path": "/workspace/loras/sunsetblur.safetensors", "name": "sunsetblur.safetensors"}]},
@@ -383,6 +385,11 @@ STATE = {
 # does over several polls, and a fixed reply cannot show a transfer moving.
 GDRIVE = {"mode": "ok", "folder": "", "polls": 0}
 _COLD = {"n": 0}
+# What the config Dict holds in production: presets saved from the captioner
+# row and captioners added under the gear. In memory so the preview can
+# exercise add, appear-in-menu and delete without a server.
+CUSTOM_PRESETS: dict = {}
+CUSTOM_VLMS: dict = {}
 
 CAPTIONS = [
     "ohwx_style a photograph of a person seated by a window in soft daylight.",
@@ -849,6 +856,79 @@ class Handler(BaseHTTPRequestHandler):
             DATASETS.insert(0, row)
             return self.reply({"ok": True, **row})
 
+        # Caption presets and models mutate in memory, like the sessions board:
+        # the states worth looking at are a saved preset appearing in the menu
+        # and a custom captioner gaining its ✕ in Settings. The add validates
+        # the repo shape and treats "text-only" in the id as the config-json
+        # refusal, because those are the two errors the real route answers with
+        # and neither is reachable by pasting a plausible repo at a stub.
+        if path == "/api/caption/presets":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            label = str(p.get("label") or "").strip()
+            if not label:
+                return self.reply({"error": "A preset needs a name."})
+            key = "preset:" + re.sub(r"[^a-z0-9_-]+", "-", label.lower()).strip("-")
+            CUSTOM_PRESETS[key] = {
+                "label": label, "instruction": str(p.get("instruction") or ""),
+                "note": "Your preset."}
+            return self.reply({"ok": True, "key": key})
+        if path == "/api/caption/presets/delete":
+            try:
+                key = str(json.loads(body or b"{}").get("key") or "")
+            except json.JSONDecodeError:
+                key = ""
+            if key not in CUSTOM_PRESETS:
+                return self.reply({"error": f"No custom preset {key!r}."})
+            del CUSTOM_PRESETS[key]
+            return self.reply({"ok": True})
+        if path == "/api/caption/models":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            repo = str(p.get("repo") or "").strip().strip("/")
+            if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+                return self.reply({
+                    "error": f"{repo or '(empty)'} is not a HuggingFace repo id. "
+                             "The shape is owner/name, like Qwen/Qwen3-VL-8B-Instruct."})
+            if "text-only" in repo:
+                return self.reply({
+                    "error": f"{repo} does not look like a vision-language model "
+                             "(model_type 'llama', no vision config). A captioner "
+                             "has to read images."})
+            key = "vlm:" + re.sub(r"[^a-z0-9_-]+", "-", repo.lower()).strip("-")
+            CUSTOM_VLMS[key] = {
+                "repo": repo, "label": str(p.get("label") or "").strip() or repo.split("/")[-1],
+                "note": "Added by you. First run pulls the weights."}
+            return self.reply({"ok": True, "key": key})
+        if path == "/api/caption/models/delete":
+            try:
+                key = str(json.loads(body or b"{}").get("key") or "")
+            except json.JSONDecodeError:
+                key = ""
+            if key not in CUSTOM_VLMS:
+                return self.reply({"error": f"No custom captioner {key!r}."})
+            del CUSTOM_VLMS[key]
+            return self.reply({"ok": True})
+
+        # Find & replace answers with the count it was scoped to. The captions
+        # themselves are generated per request here, so the honest half is the
+        # count and the reload the page does next.
+        m = re.match(r"/api/datasets/([^/]+)/replace$", path)
+        if m:
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            if not str(p.get("find") or ""):
+                return self.reply({"error": "Nothing to find."})
+            asked = p.get("images")
+            n = len(asked) if isinstance(asked, list) else 0
+            return self.reply({"ok": True, "changed": n})
+
         # Google Drive. Driven by what is in the url field, because the states
         # worth looking at here are the failures: a link that is not shared and
         # a folder with no weights in it are the two things that actually happen,
@@ -1125,13 +1205,23 @@ class Handler(BaseHTTPRequestHandler):
                 "shot_langs": api["H3_LANGUAGES"],
                 "shot_roles": [dict(spec, key=k)
                                for k, spec in api["SHOT_REF_ROLES"].items()],
-                # Shaped exactly as `state()` serves them — label and note, no
-                # instruction — so the preview shows what the note line will
-                # actually be able to say.
-                "caption_presets": [{"key": k, "label": p["label"], "note": p["note"]}
-                                    for k, p in api["CAPTION_PRESETS"].items()],
-                "caption_models": [{"key": k, "label": m["label"], "note": m["note"]}
-                                   for k, m in api["CAPTION_MODELS"].items()],
+                # Shaped exactly as `state()` serves them — instruction and
+                # custom flag included, because the textarea the preset prefills
+                # is now the control this preview exists to exercise. The
+                # in-memory customs ride behind the built-ins the way the
+                # config Dict's do.
+                "caption_presets": (
+                    [{"key": k, "label": p["label"], "note": p["note"],
+                      "instruction": p["instruction"], "custom": False}
+                     for k, p in api["CAPTION_PRESETS"].items()]
+                    + [{"key": k, **p, "custom": True}
+                       for k, p in CUSTOM_PRESETS.items()]),
+                "caption_models": (
+                    [{"key": k, "label": m["label"], "note": m["note"],
+                      "repo": m["repo"], "custom": False}
+                     for k, m in api["CAPTION_MODELS"].items()]
+                    + [{"key": k, **m, "custom": True}
+                       for k, m in CUSTOM_VLMS.items()]),
                 "caption_defaults": {"preset": api["DEFAULT_CAPTION_PRESET"],
                                      "model": api["DEFAULT_CAPTION_MODEL"]},
                 # Label and note only, exactly as `state()` serves them — the

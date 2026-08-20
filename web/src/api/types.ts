@@ -72,6 +72,10 @@ export type LoraFile = { name: string; bytes: number; path?: string }
 export type LoraEntry = {
   name: string
   trigger_word: string
+  /** The strength the picker writes for this LoRA when nothing else decides —
+   *  served for the Krea style set, whose measured working point is 1.3, and
+   *  null/absent everywhere else. Optional because an older server omits it. */
+  strength?: number | null
   root: string
   bytes: number
   catalogue: string
@@ -158,12 +162,16 @@ export type AppState = {
   shot_vocab: ShotGroup[]
   shot_langs: string[]
   shot_roles: ShotRole[]
-  caption_presets: { key: string; label: string; note: string }[]
+  /** The instruction rides along: the captioner row shows it in a textarea the
+   *  preset prefills, and the job record carries the exact text that ran, so a
+   *  run stays reproducible after the preset changes. `custom` marks presets
+   *  saved from the row, which are the deletable ones. */
+  caption_presets: { key: string; label: string; note: string; instruction: string; custom?: boolean }[]
   /** The three jobs the interpreter will do on your sentence. The instruction
    *  stays on the server and the page sends a key, so a run is reproducible
    *  from the job record rather than from whatever text was in a field. */
   rewrite_ops: { key: string; label: string; note: string }[]
-  caption_models: { key: string; label: string; note: string }[]
+  caption_models: { key: string; label: string; note: string; repo?: string; custom?: boolean }[]
   caption_defaults: { preset: string; model: string }
   train_optimizers: TrainChoice[]
   lr_schedulers: TrainChoice[]

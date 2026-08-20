@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 
 import { failed } from '../api/client'
 import {
-  deleteLora, downloadFamily, setToken, startDownload, startGdrive,
+  addCaptionModel, deleteCaptionModel, deleteLora, downloadFamily, setToken,
+  startDownload, startGdrive,
 } from '../api/routes'
 import type { AppState, GpuChoice, LoraEntry, ModelEntry } from '../api/types'
 import { useStore } from '../store'
@@ -198,6 +199,11 @@ export function Settings({
           </div>
         </div>
 
+        {/* Captioners are menu rows, not catalogue entries: the weights pull
+            into the HF cache on first use rather than downloading here, so the
+            card offers add-by-repo instead of a Download button. */}
+        <CaptionModels state={state} onReload={onReload} />
+
         <div id="models">
           {families.map((f) => {
             const left = f.items.filter((m) => !m.present)
@@ -265,6 +271,82 @@ export function Settings({
           })}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The captioner menu, editable.
+ *
+ * Any vision-language model on HuggingFace, by repo id. The add is validated
+ * server-side against the repo's own config.json — a typo, a gated repo
+ * without a token, or a text-only model is a named error here, in
+ * milliseconds, rather than a cold GPU start that dies mid-pull. Built-ins
+ * have no ✕ because they are baked into the image; deleting one could only
+ * hide it until the next deploy.
+ */
+function CaptionModels({ state, onReload }: {
+  state: AppState | null
+  onReload: () => void
+}) {
+  const [repo, setRepo] = useState('')
+  const [label, setLabel] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ text: string; err?: boolean } | null>(null)
+  const models = state?.caption_models ?? []
+
+  const add = async () => {
+    if (!repo.trim() || busy) return
+    setBusy(true)
+    setNote(null)
+    const r = await addCaptionModel(repo.trim(), label.trim())
+    setBusy(false)
+    if (failed(r)) return setNote({ text: r.error, err: true })
+    setRepo('')
+    setLabel('')
+    setNote({ text: 'Added. The weights pull into the cache on its first run.' })
+    onReload()
+  }
+
+  const remove = async (key: string, name: string) => {
+    if (!confirm(`Remove “${name}” from the captioner menu?\n\n`
+      + 'Only the menu entry goes — weights already in the cache stay cached.')) return
+    const r = await deleteCaptionModel(key)
+    if (failed(r)) return setNote({ text: r.error, err: true })
+    onReload()
+  }
+
+  return (
+    <div className="card" id="caption-models">
+      <label>Caption models</label>
+      {models.map((m) => (
+        <div className="lora-row" key={m.key}>
+          <div className="grow" style={{ minWidth: 0 }}>
+            <b>{m.label}</b> <span className="muted">{m.note}</span>
+            {m.repo && <div className="muted" style={{ marginTop: 3 }}><code>{m.repo}</code></div>}
+          </div>
+          {m.custom && (
+            <button className="lora-x" title="Remove from the menu" type="button"
+                    onClick={() => void remove(m.key, m.label)}>✕</button>
+          )}
+        </div>
+      ))}
+      <div className="row" style={{ marginTop: 10 }}>
+        <input id="cm-repo" className="grow" placeholder="owner/repo — any vision LM on HuggingFace"
+               autoComplete="off" spellCheck={false} value={repo}
+               onChange={(e) => setRepo(e.target.value)}
+               onKeyDown={(e) => { if (e.key === 'Enter') void add() }} />
+        <input id="cm-label" placeholder="label (optional)" autoComplete="off"
+               spellCheck={false} style={{ width: 158, flex: 'none' }} value={label}
+               onChange={(e) => setLabel(e.target.value)} />
+        <button className="s" type="button" disabled={busy || !repo.trim()}
+                onClick={() => void add()}>
+          {busy ? 'Checking…' : 'Add'}
+        </button>
+      </div>
+      {note && (
+        <p className={note.err ? 'err' : 'ok'} style={{ marginTop: 8 }}>{note.text}</p>
+      )}
     </div>
   )
 }

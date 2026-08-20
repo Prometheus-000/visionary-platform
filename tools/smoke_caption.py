@@ -22,12 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import (  # noqa: E402
     CAPTION_LENGTHS,
-    CAPTION_MODELS,
-    CAPTION_PRESETS,
     DEFAULT_CAPTION_MODEL,
     DEFAULT_CAPTION_PRESET,
     HF_CACHE,
     _caption_instruction,
+    _caption_models,
+    _caption_presets,
     _looks_like_refusal,
     caption_image,
     hf_cache,
@@ -42,7 +42,13 @@ smoke_image = caption_image.add_local_python_source("app")
 def check() -> dict:
     """No GPU, no weights — prove the pinned transformers actually has the class."""
     import transformers
-    from transformers import AutoProcessor, Qwen3VLForConditionalGeneration  # noqa: F401
+    # Both classes: the live path loads through the Auto class now (so custom
+    # repos work), and the Qwen class is the floor the pin was chosen for.
+    from transformers import (  # noqa: F401
+        AutoModelForImageTextToText,
+        AutoProcessor,
+        Qwen3VLForConditionalGeneration,
+    )
 
     # Config only: downloads a few KB per repo, not 17 GB each, but still proves
     # every repo id is right and that this transformers can parse each
@@ -51,8 +57,11 @@ def check() -> dict:
     # so `arch` is the assertion, not decoration.
     from transformers import AutoConfig
 
+    # The merged table, not the literal: a captioner added under the gear is a
+    # repo id typed once and never config-checked again, so this is the one
+    # place a later transformers bump can prove it still parses.
     models = {}
-    for key, spec in CAPTION_MODELS.items():
+    for key, spec in _caption_models().items():
         try:
             models[key] = {"repo": spec["repo"],
                            "arch": AutoConfig.from_pretrained(spec["repo"]).architectures}
@@ -62,7 +71,7 @@ def check() -> dict:
     return {
         "transformers": transformers.__version__,
         "models": models,
-        "presets": list(CAPTION_PRESETS),
+        "presets": list(_caption_presets()),
         "lengths": sorted(CAPTION_LENGTHS),
     }
 
@@ -78,7 +87,7 @@ def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
 
     import torch
     from PIL import Image
-    from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+    from transformers import AutoModelForImageTextToText, AutoProcessor
 
     volume.reload()
 
@@ -97,14 +106,16 @@ def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
 
     img_path = candidates[0]
     cache_dir = str(HF_CACHE)
-    repo = CAPTION_MODELS[model]["repo"]
+    repo = _caption_models()[model]["repo"]
 
     started = time.time()
     processor = AutoProcessor.from_pretrained(
         repo, cache_dir=cache_dir,
         min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
     )
-    vlm = Qwen3VLForConditionalGeneration.from_pretrained(
+    # The same class the live path loads through, so what this smokes is the
+    # path a run takes rather than a sibling of it.
+    vlm = AutoModelForImageTextToText.from_pretrained(
         repo, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
     )
     vlm.eval()
@@ -145,10 +156,10 @@ def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
 def main(gpu: bool = False, dataset: str = "",
          model: str = DEFAULT_CAPTION_MODEL, preset: str = DEFAULT_CAPTION_PRESET,
          trigger: str = ""):
-    if model not in CAPTION_MODELS:
-        raise SystemExit(f"--model must be one of: {', '.join(CAPTION_MODELS)}")
-    if preset not in CAPTION_PRESETS:
-        raise SystemExit(f"--preset must be one of: {', '.join(CAPTION_PRESETS)}")
+    if model not in _caption_models():
+        raise SystemExit(f"--model must be one of: {', '.join(_caption_models())}")
+    if preset not in _caption_presets():
+        raise SystemExit(f"--preset must be one of: {', '.join(_caption_presets())}")
     print(check.remote())
     if gpu:
         print(caption_one.remote(dataset, model, preset, trigger))

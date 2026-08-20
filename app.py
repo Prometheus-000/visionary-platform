@@ -55,6 +55,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import zipfile
@@ -912,6 +913,13 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
 # is the activation delta being zeroed outside the box, which is the actual
 # claim. A first-party, ungated set that anyone can download is what makes
 # that demonstrable on someone else's install rather than only on this one.
+# What the picker writes for one of these when nothing else says otherwise.
+# Measured on first-run renders rather than argued: retroanime at the generic
+# 1.0 with no phrase in the prompt reads as a grade over the picture, not a
+# style — the weight is live and looks like it did nothing, which is the
+# failure the LoRA note exists to catch. At 1.3 with the phrase present the
+# style is unmistakably on. Served per entry so the page never hardcodes it.
+KREA_STYLE_STRENGTH = 1.3
 KREA_STYLE_LORAS: dict[str, str] = {
     "darkbrush": "monochrome ink wash style",
     "retroanime": "Purple retro anime style",
@@ -1038,6 +1046,47 @@ CAPTION_MODELS: dict[str, dict[str, str]] = {
     },
 }
 DEFAULT_CAPTION_MODEL = "qwen3vl"
+
+
+def _custom_key(prefix: str, text: str) -> str:
+    """A stable menu key derived from what the user typed, so re-adding the
+    same repo or re-saving the same preset name lands on one entry rather than
+    accumulating near-duplicates."""
+    slug = re.sub(r"[^a-z0-9_-]+", "-", text.strip().lower()).strip("-")[:48]
+    return f"{prefix}:{slug or 'unnamed'}"
+
+
+def _caption_models() -> dict[str, dict[str, Any]]:
+    """
+    Built-ins plus the repos added under the gear.
+
+    The customs live in the `config` Dict rather than in this table because the
+    table is baked into the image — a captioner added through the UI has to
+    survive a redeploy without an edit to this file. Read fresh on every call
+    for the same reason `_hf_token()` is: the Dict is the source of truth and a
+    module-level cache would hold a deleted model in the menu until the
+    container recycled.
+    """
+    out: dict[str, dict[str, Any]] = dict(CAPTION_MODELS)
+    try:
+        for key, spec in (config.get("custom_caption_models") or {}).items():
+            out[key] = {**spec, "custom": True}
+    except Exception:
+        pass  # an unreachable Dict costs the customs, never the built-ins
+    return out
+
+
+def _caption_presets() -> dict[str, dict[str, Any]]:
+    """Built-ins plus presets saved from the captioner row. Same shape and the
+    same reasoning as `_caption_models()`."""
+    out: dict[str, dict[str, Any]] = dict(CAPTION_PRESETS)
+    try:
+        for key, spec in (config.get("custom_caption_presets") or {}).items():
+            out[key] = {**spec, "custom": True}
+    except Exception:
+        pass
+    return out
+
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"}
 # A dataset holds clips too. Nothing trains on them yet — see the TODO at
@@ -1181,17 +1230,52 @@ def _looks_like_refusal(caption: str) -> bool:
     return bool(REFUSAL_RE.match(caption.strip()))
 
 
-def _caption_instruction(preset: str, length: str, trigger_word: str) -> str:
+def _strip_leading_trigger(text: str, trigger_word: str) -> str:
+    """
+    Drop the trigger word from the front of a caption, however many times it
+    is there.
+
+    The instruction tells the model the trigger is prepended automatically and
+    it complies most of the time — but a caption that opens with the trigger
+    anyway used to get the prefix stacked on top, and a recaption over an
+    already-doubled sidecar tripled it: "chgl, chgl, chgl, …". The loop is what
+    heals those, one layer per run touched.
+
+    Bounded at a word edge for the reason `prepend_trigger` uses `startswith`:
+    a "cat" trigger must not eat the front of "category". Case-insensitive
+    because the model recapitalises the token when it opens a sentence — which
+    is exactly the case the exact-match checks kept missing.
+    """
+    t = trigger_word.strip()
+    while t:
+        head = text.lstrip()
+        if not head.lower().startswith(t.lower()):
+            return head if head != text else text
+        rest = head[len(t):]
+        if rest and (rest[0].isalnum() or rest[0] == "_"):
+            return head  # a longer word that merely begins with the trigger
+        text = rest.lstrip(" ,.:;-").lstrip()
+    return text
+
+
+def _caption_instruction(
+    preset: str, length: str, trigger_word: str, instruction: str = "",
+) -> str:
     """
     One prompt out of the preset, the length and the trigger word.
 
-    The trigger clause is added here rather than written into each preset
-    because it is a fact about *this run* — the token is prepended in Python
-    once the caption comes back, so the model has to be told both that the
-    subject has a name and that writing it would double it.
+    `instruction` overrides the preset's body when the page sends one — the
+    preset is a starting point the textarea prefills, not a lock. The trigger
+    clause, the length clause and CAPTION_RULES still compose around whatever
+    body is used: the trigger is a fact about *this run* (the token is
+    prepended in Python once the caption comes back, so the model has to be
+    told both that the subject has a name and that writing it would double
+    it), and the rules are the sentences the refusal/preamble parsing depends
+    on — an instruction free to drop them is a parser free to miss.
     """
-    spec = CAPTION_PRESETS.get(preset) or CAPTION_PRESETS[DEFAULT_CAPTION_PRESET]
-    out = spec["instruction"]
+    presets = _caption_presets()
+    spec = presets.get(preset) or presets[DEFAULT_CAPTION_PRESET]
+    out = instruction.strip() or spec["instruction"]
     if trigger_word:
         out += (
             f" Every caption in this set is prefixed with the trigger word "
@@ -2303,23 +2387,28 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
 
 def _caption_images(
     image_dir: Path, trigger_word: str, job_id: str,
-    preset: str, length: str, overwrite: bool, model_key: str,
+    preset: str, length: str, write_mode: str, model_key: str,
+    instruction: str = "", max_tokens: int = 320,
+    temperature: float = 0.6, top_p: float = 0.9,
 ) -> tuple[int, int]:
     import torch
     from PIL import Image
-    from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+    from transformers import AutoModelForImageTextToText, AutoProcessor
 
     every = sorted(p for p in image_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+    # "skip" only fills empties; every other mode has something to do with a
+    # caption that already exists, so it visits the whole set.
     todo = [
         p for p in every
-        if overwrite
+        if write_mode != "skip"
         or not p.with_suffix(".txt").exists()
         or not p.with_suffix(".txt").read_text().strip()
     ]
     if not todo:
         return 0, 0
 
-    spec = CAPTION_MODELS.get(model_key) or CAPTION_MODELS[DEFAULT_CAPTION_MODEL]
+    models = _caption_models()
+    spec = models.get(model_key) or models[DEFAULT_CAPTION_MODEL]
     repo = spec["repo"]
     print(f"[caption] {len(todo)}/{len(every)} images · {preset} · {repo}")
     _publish(job_id, phase="caption", step=0, total_steps=len(todo), percent=0)
@@ -2332,7 +2421,12 @@ def _caption_images(
         repo, cache_dir=cache_dir,
         min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
     )
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
+    # The Auto class rather than Qwen3VLForConditionalGeneration, because the
+    # menu is no longer two known repos: a captioner added under the gear can be
+    # any vision LM transformers maps — Qwen-VL, LLaVA, InternVL, Idefics. The
+    # add route already proved the repo's config resolves and looks multimodal;
+    # this load is the final authority, and its failure names the repo.
+    model = AutoModelForImageTextToText.from_pretrained(
         repo, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
     )
     model.eval()
@@ -2343,7 +2437,7 @@ def _caption_images(
     except Exception as exc:
         print(f"[caption] hf cache commit skipped: {exc}")
 
-    instruction = _caption_instruction(preset, length, trigger_word)
+    instruction = _caption_instruction(preset, length, trigger_word, instruction)
 
     written = refused = 0
     for i, img_path in enumerate(todo, 1):
@@ -2364,9 +2458,13 @@ def _caption_images(
             ).to("cuda:0")
 
             with torch.no_grad():
+                # temperature 0 means greedy, and transformers refuses
+                # temperature=0.0 with do_sample=True rather than inferring it.
                 out = model.generate(
-                    **inputs, max_new_tokens=320, do_sample=True,
-                    temperature=0.6, top_p=0.9,
+                    **inputs, max_new_tokens=max_tokens,
+                    do_sample=temperature > 0,
+                    **({"temperature": temperature, "top_p": top_p}
+                       if temperature > 0 else {}),
                 )[0][inputs["input_ids"].shape[1]:]
             caption = processor.decode(out, skip_special_tokens=True).strip()
 
@@ -2386,8 +2484,31 @@ def _caption_images(
                 print(f"[caption] {img_path.name} refused: {caption[:80]}")
                 refused += 1
             else:
-                final = f"{trigger_word}, {caption}" if trigger_word else caption
-                img_path.with_suffix(".txt").write_text(final[:MAX_CAPTION_CHARS])
+                # The model is told the trigger is prepended automatically and
+                # usually complies; when it does not, prepending over its copy
+                # is where "chgl, chgl, …" came from — and each recaption run
+                # stacked one more. Stripped here, once, so every branch below
+                # composes from a caption that is known not to carry it.
+                caption = _strip_leading_trigger(caption, trigger_word)
+                txt = img_path.with_suffix(".txt")
+                existing = txt.read_text().strip() if txt.exists() else ""
+                if write_mode == "append" and existing:
+                    # The trigger already leads the existing text (or the Fix
+                    # button will put it there); prefixing it again here would
+                    # double it mid-caption.
+                    final = f"{existing} {caption}"
+                elif write_mode == "prepend" and existing:
+                    # The new caption takes the front, so the trigger moves
+                    # with it — stripped off the old text rather than left to
+                    # appear twice. The helper loops, so a sidecar already
+                    # doubled by the old bug comes out healed rather than
+                    # carrying its history.
+                    existing = _strip_leading_trigger(existing, trigger_word)
+                    head = f"{trigger_word}, {caption}" if trigger_word else caption
+                    final = f"{head} {existing}"
+                else:
+                    final = f"{trigger_word}, {caption}" if trigger_word else caption
+                txt.write_text(final[:MAX_CAPTION_CHARS])
                 written += 1
         except Exception as exc:
             print(f"[caption] {img_path.name} failed: {exc}")
@@ -2410,9 +2531,12 @@ def _caption_images(
 def caption_job(
     job_id: str, dataset: str, trigger_word: str = "",
     preset: str = DEFAULT_CAPTION_PRESET, length: str = "medium",
-    overwrite: bool = False, model: str = DEFAULT_CAPTION_MODEL,
+    write_mode: str = "skip", model: str = DEFAULT_CAPTION_MODEL,
+    instruction: str = "", max_tokens: int = 320,
+    temperature: float = 0.6, top_p: float = 0.9,
 ) -> dict[str, Any]:
-    spec = CAPTION_MODELS.get(model) or CAPTION_MODELS[DEFAULT_CAPTION_MODEL]
+    models = _caption_models()
+    spec = models.get(model) or models[DEFAULT_CAPTION_MODEL]
     # The label rides the record because the first minute of this job is a cold
     # start that may also be a 17 GB pull, and "Loading captioner…" for twenty
     # minutes is the same UI state as a hang. Naming which one is loading is the
@@ -2426,11 +2550,20 @@ def caption_job(
 
     started = time.time()
     written, refused = _caption_images(
-        src, trigger_word.strip(), job_id, preset, length, overwrite, model)
+        src, trigger_word.strip(), job_id, preset, length, write_mode, model,
+        instruction=instruction, max_tokens=max_tokens,
+        temperature=temperature, top_p=top_p)
     res = {
         "status": "completed", "job_id": job_id, "dataset": dataset,
         "captioned": written, "refused": refused, "preset": preset,
         "model": model, "model_label": spec["label"],
+        # The instruction is editable now, so the key alone no longer says what
+        # ran — the record carries the exact text. Bounded at ~2 kB, so it does
+        # not violate "keep the polled thing small", which is about results
+        # that grow with output.
+        "instruction": _caption_instruction(
+            preset, length, trigger_word.strip(), instruction),
+        "write_mode": write_mode,
         "duration_s": round(time.time() - started, 1),
     }
     _publish(job_id, **res)
@@ -2488,7 +2621,7 @@ TIMESTEP_SAMPLINGS = {
 TRAIN_DEFAULTS = {
     "resolution": 1024, "batch_size": 1, "num_repeats": 1,
     "network_dim": 32, "network_alpha": 32, "learning_rate": 1e-4,
-    "max_train_epochs": 30, "save_every_n_epochs": 1, "seed": 42,
+    "max_train_epochs": 30, "save_every_n_epochs": 5, "seed": 42,
     "optimizer_type": "adamw8bit", "lr_scheduler": "constant",
     "timestep_sampling": "shift", "discrete_flow_shift": 2.5,
     "fp8": False, "blocks_to_swap": 0,
@@ -2503,7 +2636,7 @@ def train_job(
     job_id: str, dataset: str, lora_name: str, trigger_word: str,
     resolution: int = 1024, batch_size: int = 1, num_repeats: int = 1,
     network_dim: int = 32, network_alpha: int = 32, learning_rate: float = 1e-4,
-    max_train_epochs: int = 30, save_every_n_epochs: int = 1,
+    max_train_epochs: int = 30, save_every_n_epochs: int = 5,
     discrete_flow_shift: float = 2.5, seed: int = 42,
     optimizer_type: str = "adamw8bit", lr_scheduler: str = "constant",
     timestep_sampling: str = "shift",
@@ -8954,6 +9087,7 @@ def web():
                             pass
                     loras.append({
                         "name": d.name, "trigger_word": trigger,
+                        "strength": None,
                         "path": str(files[0]),
                         # `root` is served rather than left for the page to
                         # rebuild from a file path, for the same reason the LoRA
@@ -8971,9 +9105,17 @@ def web():
                     })
                 elif d.suffix == ".safetensors":
                     # No sidecar to read a trigger word out of, and no epochs to
-                    # choose between — one file, one entry, named for itself.
+                    # choose between — one file, one entry, named for itself. The
+                    # catalogue may still know its phrase: the Krea style LoRAs
+                    # land exactly here, and each is near-invisible until its
+                    # trigger is in the prompt — so serving "" for them told the
+                    # picker nothing about the one fact that decides whether the
+                    # weight does anything on a first try.
                     loras.append({
-                        "name": d.stem, "trigger_word": "",
+                        "name": d.stem,
+                        "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
+                        "strength": (KREA_STYLE_STRENGTH
+                                     if d.stem in KREA_STYLE_LORAS else None),
                         "path": str(d),
                         "root": str(d),
                         "bytes": _tree_bytes(d),
@@ -9025,13 +9167,15 @@ def web():
             "shot_vocab": SHOT_VOCAB,
             "shot_langs": H3_LANGUAGES,
             "shot_roles": [dict(spec, key=k) for k, spec in SHOT_REF_ROLES.items()],
-            # Label and note only. The instruction itself stays on the server for
-            # the reason the shot vocabulary's phrasing does: what the page sends
-            # is a key, so the run is reproducible from the job record rather
-            # than from whatever text happened to be in a field.
+            # The instruction rides along now — the page shows it in a textarea
+            # the preset prefills, so hiding it would be hiding the one thing
+            # the control edits. Reproducibility moved with it: the job record
+            # carries the exact text that ran, not just the key, so a run is
+            # still replayable from its record after the preset changes.
             "caption_presets": [
-                {"key": k, "label": p["label"], "note": p["note"]}
-                for k, p in CAPTION_PRESETS.items()
+                {"key": k, "label": p["label"], "note": p["note"],
+                 "instruction": p["instruction"], "custom": bool(p.get("custom"))}
+                for k, p in _caption_presets().items()
             ],
             # The instruction stays here and the page sends a key, for the
             # reason the captioner does the same: a run has to be reproducible
@@ -9040,9 +9184,13 @@ def web():
                 {"key": k, "label": o["label"], "note": o["note"]}
                 for k, o in REWRITE_OPS.items()
             ],
+            # The repo is shown in the gear's Caption models section, and
+            # `custom` is what makes an entry deletable there — a built-in has
+            # no delete because there is nothing behind it to remove.
             "caption_models": [
-                {"key": k, "label": m["label"], "note": m["note"]}
-                for k, m in CAPTION_MODELS.items()
+                {"key": k, "label": m["label"], "note": m.get("note", ""),
+                 "repo": m["repo"], "custom": bool(m.get("custom"))}
+                for k, m in _caption_models().items()
             ],
             "caption_defaults": {"preset": DEFAULT_CAPTION_PRESET,
                                  "model": DEFAULT_CAPTION_MODEL},
@@ -9811,10 +9959,16 @@ def web():
             cur = txt.read_text().strip() if txt.exists() else ""
             if not cur:
                 new = trigger
-            elif cur.startswith(trigger):
-                continue
             else:
-                new = f"{trigger}, {cur}"
+                # Composed from the caption with the trigger stripped, not
+                # tested with a bare `startswith`: exact-case startswith let
+                # "Chgl, …" collect a second "chgl, " on top, and a sidecar the
+                # captioner had already doubled kept every copy. Building the
+                # canonical form heals both, and skipping when it matches is
+                # what keeps this idempotent.
+                new = f"{trigger}, {_strip_leading_trigger(cur, trigger)}".rstrip(", ")
+            if new == cur:
+                continue
             txt.write_text(new[:MAX_CAPTION_CHARS])
             changed += 1
 
@@ -9839,23 +9993,170 @@ def web():
         # container that captions eighty images with the wrong instruction, or
         # downloads 17 GB of the wrong checkpoint. Same argument as
         # `_validate_loras()`: this is a form error in milliseconds.
+        presets, models = _caption_presets(), _caption_models()
         preset = str(payload.get("preset") or DEFAULT_CAPTION_PRESET)
-        if preset not in CAPTION_PRESETS:
+        if preset not in presets:
             return {"error": f"No caption preset {preset!r}. "
-                             f"One of: {', '.join(CAPTION_PRESETS)}"}
+                             f"One of: {', '.join(presets)}"}
         model = str(payload.get("model") or DEFAULT_CAPTION_MODEL)
-        if model not in CAPTION_MODELS:
+        if model not in models:
             return {"error": f"No captioner {model!r}. "
-                             f"One of: {', '.join(CAPTION_MODELS)}"}
+                             f"One of: {', '.join(models)}"}
+        write_mode = str(payload.get("write_mode") or "skip")
+        if write_mode not in ("skip", "append", "prepend", "replace"):
+            return {"error": f"No write mode {write_mode!r}. "
+                             "One of: skip, append, prepend, replace"}
+
+        # Clamped rather than refused: these arrive from spinner-less number
+        # fields, and a typo of 3200 tokens should cost the typo, not the run.
+        def _clamp(key: str, default: float, lo: float, hi: float) -> float:
+            try:
+                return min(hi, max(lo, float(payload.get(key, default))))
+            except (TypeError, ValueError):
+                return default
 
         job_id = f"cap{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         caption_job.spawn(
             job_id=job_id, dataset=name, trigger_word=trigger,
             preset=preset, model=model,
             length=str(payload.get("length") or "medium"),
-            overwrite=bool(payload.get("overwrite")),
+            write_mode=write_mode,
+            instruction=str(payload.get("instruction") or "")[:4000],
+            max_tokens=int(_clamp("max_tokens", 320, 16, 1024)),
+            temperature=_clamp("temperature", 0.6, 0.0, 1.5),
+            top_p=_clamp("top_p", 0.9, 0.05, 1.0),
         )
         return {"ok": True, "job_id": job_id}
+
+    # ---- caption presets and models ---------------------------------------
+    #
+    # Both live in the `config` Dict beside the HF token, because they are the
+    # same kind of thing: something typed into the UI once that every later
+    # session should still have. The catalogue is not the model here — a
+    # captioner is pulled into the HF cache on first use, not downloaded under
+    # the gear — so these are rows in a menu, not entries with a `dest` path.
+
+    @api.post("/api/caption/presets")
+    def save_caption_preset(payload: dict) -> dict[str, Any]:
+        label = str(payload.get("label") or "").strip()
+        instruction = str(payload.get("instruction") or "").strip()
+        if not label:
+            return {"error": "A preset needs a name."}
+        if not instruction:
+            return {"error": "A preset needs an instruction."}
+        key = _custom_key("preset", label)
+        stored = dict(config.get("custom_caption_presets") or {})
+        stored[key] = {
+            "label": label, "instruction": instruction[:4000],
+            # What the note line can say about a preset the server did not
+            # write: whose it is.
+            "note": "Your preset.",
+        }
+        config["custom_caption_presets"] = stored
+        return {"ok": True, "key": key}
+
+    @api.post("/api/caption/presets/delete")
+    def delete_caption_preset(payload: dict) -> dict[str, Any]:
+        key = str(payload.get("key") or "")
+        stored = dict(config.get("custom_caption_presets") or {})
+        if key not in stored:
+            # Built-ins are not deletable — they are baked into the image, so a
+            # delete could only hide one until the next deploy un-hid it.
+            return {"error": f"No custom preset {key!r}."}
+        del stored[key]
+        config["custom_caption_presets"] = stored
+        return {"ok": True}
+
+    @api.post("/api/caption/models")
+    def add_caption_model(payload: dict) -> dict[str, Any]:
+        repo = str(payload.get("repo") or "").strip().strip("/")
+        label = str(payload.get("label") or "").strip()
+        if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+            return {"error": f"{repo or '(empty)'!s} is not a HuggingFace repo id. "
+                             "The shape is owner/name, like Qwen/Qwen3-VL-8B-Instruct."}
+
+        # Validated here, on the CPU container, because the alternative is a
+        # cold GPU start and a 17 GB pull before a typo surfaces. config.json
+        # answers both questions that matter in milliseconds: does the repo
+        # resolve (typos, gated-without-token), and is it a vision LM at all.
+        # The GPU load stays the final authority — transformers may still lack
+        # a mapping for an exotic architecture — but that failure names the
+        # repo and the architecture when it happens.
+        from huggingface_hub import hf_hub_download
+        try:
+            cfg_path = hf_hub_download(
+                repo, "config.json", token=_hf_token(),
+                cache_dir=tempfile.mkdtemp(prefix="capcfg-"))
+            cfg = json.loads(Path(cfg_path).read_text())
+        except Exception as exc:
+            hint = (" The repo is gated — paste an HF token above and accept "
+                    "its licence." if "gated" in str(exc).lower() else "")
+            return {"error": f"Could not read {repo}/config.json: {exc}.{hint}"}
+        if not any("vision" in k for k in cfg):
+            return {"error": f"{repo} does not look like a vision-language model "
+                             f"(model_type {cfg.get('model_type')!r}, no vision "
+                             "config). A captioner has to read images."}
+
+        key = _custom_key("vlm", repo)
+        stored = dict(config.get("custom_caption_models") or {})
+        stored[key] = {
+            "repo": repo, "label": label or repo.split("/")[-1],
+            "note": "Added by you. First run pulls the weights.",
+        }
+        config["custom_caption_models"] = stored
+        return {"ok": True, "key": key}
+
+    @api.post("/api/caption/models/delete")
+    def delete_caption_model(payload: dict) -> dict[str, Any]:
+        key = str(payload.get("key") or "")
+        stored = dict(config.get("custom_caption_models") or {})
+        if key not in stored:
+            return {"error": f"No custom captioner {key!r}."}
+        del stored[key]
+        config["custom_caption_models"] = stored
+        return {"ok": True}
+
+    @api.post("/api/datasets/{name}/replace")
+    def replace_in_captions(name: str, payload: dict) -> dict[str, Any]:
+        """
+        Find & replace across caption sidecars.
+
+        The page sends the names in its current filtered view, so the filters
+        are the targeting tool — "Uncaptioned" can never match anything, and a
+        search narrows the blast radius to what is on screen. No names means
+        the whole set, which is what an unfiltered view shows anyway.
+        """
+        find = str(payload.get("find") or "")
+        if not find:
+            return {"error": "Nothing to find."}
+        replace = str(payload.get("replace") or "")
+        match_case = bool(payload.get("match_case"))
+
+        _reload_volume()
+        d, err = _dataset_or_error(name)
+        if err:
+            return err
+
+        wanted = payload.get("images")
+        names = {str(n) for n in wanted} if isinstance(wanted, list) else None
+        # A regex only for the case fold; the find string itself is literal.
+        # The lambda replacement keeps backslashes in the replacement literal
+        # too — re.sub would otherwise read "\1" as a group reference.
+        pat = re.compile(re.escape(find), 0 if match_case else re.IGNORECASE)
+        changed = 0
+        for img in _dataset_images(d):
+            if names is not None and img.name not in names:
+                continue
+            txt = img.with_suffix(".txt")
+            if not txt.exists():
+                continue
+            cur = txt.read_text()
+            new = pat.sub(lambda _m: replace, cur)
+            if new != cur:
+                txt.write_text(new.strip()[:MAX_CAPTION_CHARS])
+                changed += 1
+        volume.commit()
+        return {"ok": True, "changed": changed}
 
     # ---- training sessions ------------------------------------------------
     #

@@ -1066,10 +1066,22 @@ nobody has looked at.
   wardrobe, framing and light and refuses to describe a face; Style describes
   the content and never the look; Concept describes the context around the
   thing. Each also names the flaws worth prompting away later, because a
-  watermark nobody mentioned is a watermark the LoRA learned. The instruction
-  stays on the server and the page sends a key, for the reason `SHOT_VOCAB`
-  does: a run has to be reproducible from the job record rather than from
-  whatever text was in a field at the time.
+  watermark nobody mentioned is a watermark the LoRA learned.
+
+  The instruction used to stay on the server with the page sending a key, for
+  reproducibility. That lock is gone: the row shows the instruction in a
+  textarea the preset prefills, edits apply to that run, and Save keeps them as
+  a preset of your own (in the `config` Dict, beside the custom captioner
+  repos the gear's Caption models section takes). What the rule was protecting
+  moved rather than died — the job record now carries the exact composed
+  instruction that ran, so a run is still replayable after the preset changes.
+  What is *not* editable is what composes around the body: the trigger clause,
+  the length clause and `CAPTION_RULES`, because those are the sentences the
+  refusal and preamble parsing depend on. Write modes (skip, append, prepend,
+  replace) and the sampling numbers travel with the job the same way, and
+  find & replace across sidecars is scoped by the page's current filter — the
+  filters are the targeting tool, and the count is on the button before you
+  press it.
 
   The captioner picker is the other half. A stock instruct model declines to
   describe photographs of real people often enough to matter, and on a character
@@ -1379,6 +1391,13 @@ two domains, and the page follows the domains.
   What reports the run instead is a hairline along the top edge of the canvas.
   The full centred bar is for a cold start, where there is nothing to keep.
 
+  And when the render is a clip, it *plays* when it lands — muted, looping. The
+  `muted` is load-bearing, not a taste: every browser refuses unmuted autoplay
+  without a gesture, so removing it (say, to honour H3's soundtrack) does not
+  produce autoplay with sound, it produces a 200s render arriving as a strip
+  parked at 0:00 — the product's best moment spent asking for a click. The
+  soundtrack is one tap away on the native controls.
+
 - **The canvas is the largest thing on screen, always.** Options live in a bar
   under it, never a rail beside it: a settings column costs the picture 384px
   of the one dimension it cannot get back, and vertical is the cheap axis. The
@@ -1446,6 +1465,28 @@ two domains, and the page follows the domains.
   and without it a long prompt sat at 30.0% and climbed to 38.1% when they
   arrived. It converges in one pass because `fieldMax` subtracts the field's own
   height, so `other` does not move when the field does.
+
+- **The note line under the strip is reserved, and Generate does not move under
+  your finger.** The warnings (`#console-notes`) used to mount on demand, which
+  read as the obvious economy — a line that says nothing should cost nothing —
+  and missed where the cost went: the console is pinned to the bottom of the
+  stage, so a note appearing shifted every control in it by one line, at
+  exactly the moments a hand is over Generate (the LoRA notes arrive
+  mid-typing, the keyframe note mid-attach). One 18px row held at rest is the
+  price of a button that stays where you aimed; `fieldMax` absorbs it, so the
+  30% budget still holds at every viewport. Two spans share the row, and only
+  a second line — both notes at once, or one wrapping — still moves anything.
+
+- **Typing with nothing focused lands in the prompt, not in the hotkeys.** A
+  click that misses the field by a few pixels leaves focus on the body, and a
+  sentence typed next used to arrive as a hotkey barrage — every space toggling
+  the full-screen viewer, every backspace one keystroke from clearing the
+  canvas. The first stray letter now focuses the visible prompt and lands in
+  it; everything after types natively. Letters only, and the focus is
+  synchronous: Space keeps its full-screen meaning when it is the *first* key
+  pressed, because a sentence never starts with one — and a focus deferred a
+  frame (the `applyWrite` pattern) let the whole sentence arrive as stray keys
+  while it was still in flight.
 
 - **An icon invites, a tooltip names, a click teaches — and for a control whose
   home you are already in, that is enough.** The rule survives; what changed is
@@ -1587,9 +1628,19 @@ two domains, and the page follows the domains.
   node's shape; a second is rejected by name rather than quietly ignored. `+
   LoRA` writes into whichever of the two fields you last had the caret in, so
   "put this character here" is: draw a rectangle, click `+ LoRA`, pick a name.
-  It writes `:1.3` into a box and `:1` into the main prompt, because the node
-  pack's guidance for a character is 1.3–1.4 and the main prompt is a style
-  stack far more often than a character.
+  It writes `:1.3` into a box, because the node pack's guidance for a character
+  is 1.3–1.4. Into the main prompt it writes whatever strength the server says
+  that LoRA works at, falling back to `:1` — and the trigger phrase beside the
+  token, when one is known and not already in the field. Both came out of one
+  first-run render: a Krea style LoRA at the generic `:1` with no phrase reads
+  as a faint grade over the picture, which is a LoRA that silently did nothing
+  delivered by the picker itself. The server knows the phrases — the training
+  sidecar for LoRAs made here, `KREA_STYLE_LORAS` for the catalogue set — so
+  `/api/state` serves `trigger_word` and `strength` per entry, the picker's row
+  shows the phrase before you pick, and the note warns when a token's known
+  phrase is missing from the prose. Phrases are written into the main prompt
+  only: the regional node encodes the main prompt and nothing else, so a
+  trigger in a box would never reach the encoder.
 
 - **A region is drawn on the canvas, and so is everything about it.** The boxes
   are the list: drag on the frame to place one, drag it to move it, drag a
@@ -1626,6 +1677,16 @@ two domains, and the page follows the domains.
   ninth to the eight it just showed you. Gating geometry behind *clearing the
   canvas* was the version before this, and it was invented friction — a step
   that exists to protect a render nobody was being asked to give up.
+
+  The two-press rule holds *while there is something behind the gate*. With no
+  boxes at all, "show me the boxes" shows nothing, so the reveal-only press was
+  a dead press — and worse, the layer used to mount over a render only when a
+  box already existed, so on a fresh session ⌘-drag over the picture hit bare
+  pixels and did nothing at all: the only way to draw a first box was to clear
+  the render you wanted to draw against. The layer now mounts over every
+  render (it paints nothing in `off`, so an empty one costs no chrome), and a
+  ⌘-drag with an empty set falls through the reveal and draws the first box in
+  one gesture.
 
   The four coordinates were the right parameter and the wrong primary. "0.5 0
   0.5 1" is a rectangle you rebuild in your head every time; the rectangle is

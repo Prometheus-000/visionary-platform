@@ -2,7 +2,8 @@ import { useMemo, useRef, useState } from 'react'
 
 import { everyMs, failed } from '../api/client'
 import {
-  caption, captionDataset, clipUrl, imageUrl, prependTrigger, removeImage, status, thumbUrl,
+  caption, captionDataset, clipUrl, deleteCaptionPreset, getState, imageUrl, prependTrigger,
+  removeImage, replaceCaptions, saveCaptionPreset, status, thumbUrl,
 } from '../api/routes'
 import { fmtFileSize } from '../format'
 import { IconSliders, IconTag, IconUpload } from '../icons'
@@ -315,6 +316,7 @@ export function Editor({ ds, onLightbox, lead }: {
       {insightOpen && (
         <div id="ins-panel" className="adv" style={{ margin: '0 0 14px' }}>
           <Captioner ds={ds} state={state} />
+          <FindReplace ds={ds} visible={visible} />
           <Insight data={ds.insight}
                    onIsolate={(names, label) => setIsolated({ names, label })}
                    onIsolatePhrase={(phrase) => {
@@ -448,18 +450,55 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
   const [preset, setPreset] = useState('')
   const [model, setModel] = useState('')
   const [length, setLength] = useState('medium')
-  const [over, setOver] = useState(false)
+  const [mode, setMode] = useState('skip')
+  // null means "follow the preset": the textarea shows the preset's own text
+  // until the first keystroke, and switching presets snaps back to following.
+  const [instr, setInstr] = useState<string | null>(null)
+  const [adv, setAdv] = useState(false)
+  const [maxTokens, setMaxTokens] = useState(320)
+  const [temperature, setTemperature] = useState(0.6)
+  const [topP, setTopP] = useState(0.9)
   const [prog, setProg] = useState<{ pct: number; note: string } | null>(null)
 
   const presets = state?.caption_presets ?? []
   const models = state?.caption_models ?? []
   const curPreset = preset || state?.caption_defaults.preset || presets[0]?.key || ''
   const curModel = model || state?.caption_defaults.model || models[0]?.key || ''
+  const presetSpec = presets.find((p) => p.key === curPreset)
+  const shownInstr = instr ?? presetSpec?.instruction ?? ''
+  const edited = instr !== null && instr.trim() !== (presetSpec?.instruction ?? '').trim()
   // What the two words cannot say: which half of the picture a preset throws away, and
   // that the second captioner is a download. Both come from the server, so the note and
   // the instruction behind it can never disagree.
-  const note = [presets.find((p) => p.key === curPreset)?.note,
+  const note = [presetSpec?.note,
                 models.find((m) => m.key === curModel)?.note].filter(Boolean).join(' · ')
+
+  // The store's state is the served vocabulary, so saving or deleting a preset
+  // re-asks the server rather than patching a local copy that could drift.
+  const reloadState = async () => {
+    const r = await getState()
+    if (!failed(r)) useStore.getState().setState(r)
+  }
+
+  const savePreset = async () => {
+    const name = window.prompt('Name this preset', presetSpec?.custom ? presetSpec.label : '')
+    if (!name?.trim()) return
+    const r = await saveCaptionPreset(name.trim(), shownInstr)
+    if (failed(r)) return ds.setEditError(r.error)
+    await reloadState()
+    if (r.key) setPreset(r.key)
+    setInstr(null)
+  }
+
+  const removePreset = async () => {
+    if (!presetSpec?.custom) return
+    if (!confirm(`Delete the preset “${presetSpec.label}”?`)) return
+    const r = await deleteCaptionPreset(presetSpec.key)
+    if (failed(r)) return ds.setEditError(r.error)
+    setPreset('')
+    setInstr(null)
+    await reloadState()
+  }
 
   const run = async () => {
     if (!ds.open) return
@@ -467,7 +506,11 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
     ds.setEditError(null)
     const r = await caption({
       dataset: ds.open, trigger_word: ds.trigger.trim(),
-      preset: curPreset, model: curModel, length, overwrite: over,
+      preset: curPreset, model: curModel, length, write_mode: mode,
+      // Sent only when it differs from the preset, so an untouched box runs
+      // exactly what picking the preset always ran.
+      instruction: edited ? shownInstr : '',
+      max_tokens: maxTokens, temperature, top_p: topP,
     })
     if (failed(r)) {
       setProg(null)
@@ -530,10 +573,15 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
         {/* Three menus, no labels: "Character", "Medium" and "Qwen3-VL 8B" each name
             themselves, and none could be mistaken for another. */}
         <div className="opt">
-          <select id="cap-preset" value={curPreset} onChange={(e) => setPreset(e.target.value)}>
+          <select id="cap-preset" value={curPreset}
+                  onChange={(e) => { setPreset(e.target.value); setInstr(null) }}>
             {presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
           </select>
         </div>
+        {presetSpec?.custom && (
+          <button className="s" id="cap-preset-del" type="button"
+                  title="Delete this preset" onClick={() => void removePreset()}>✕</button>
+        )}
         <div className="opt">
           <select id="cap-len" value={length} onChange={(e) => setLength(e.target.value)}>
             <option value="short">Short</option>
@@ -546,18 +594,78 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
             {models.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
         </div>
-        <label className="row" style={{ gap: 7, margin: 0, color: '#ddd', fontSize: 13 }}>
-          <input type="checkbox" id="cap-over" style={{ width: 'auto' }}
-                 checked={over} onChange={(e) => setOver(e.target.checked)} />
-          Replace existing
-        </label>
+        {/* The four honest answers to "this image already has a caption", replacing
+            a checkbox that could only say two of them. Skip leads because it is the
+            only one that cannot lose work. */}
+        <div className="opt">
+          <select id="cap-mode" value={mode} onChange={(e) => setMode(e.target.value)}
+                  title="What happens to images that already have a caption">
+            <option value="skip">Skip captioned</option>
+            <option value="append">Append</option>
+            <option value="prepend">Prepend</option>
+            <option value="replace">Replace</option>
+          </select>
+        </div>
         <span className="actions">
+          <button className={`s${adv ? ' on' : ''}`} id="cap-adv" type="button"
+                  title="Max tokens, temperature, top-p"
+                  onClick={() => setAdv((v) => !v)}>
+            Advanced
+          </button>
           <button className="s" id="do-caption" type="button" disabled={!!prog}
                   onClick={() => void run()}>
             Caption
           </button>
         </span>
       </div>
+      {/* The instruction itself, unhidden. The preset prefills it; the first
+          keystroke makes it this run's, and Save keeps it as a preset of your
+          own. What still composes around it on the server — the trigger clause,
+          the length, the formatting rules the refusal parser depends on — is
+          not shown, because it is not editable. */}
+      <textarea id="cap-instr" value={shownInstr} spellCheck={false} rows={3}
+                style={{ width: '100%', marginTop: 8, resize: 'vertical' }}
+                onChange={(e) => setInstr(e.target.value)} />
+      {edited && (
+        <div className="row" style={{ gap: 8, marginTop: 6 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Edited — this run uses your text.
+          </span>
+          <button className="s" id="cap-save-preset" type="button"
+                  onClick={() => void savePreset()}>
+            Save as preset
+          </button>
+          <button className="s" id="cap-instr-reset" type="button"
+                  title="Back to the preset's own instruction"
+                  onClick={() => setInstr(null)}>
+            Reset
+          </button>
+        </div>
+      )}
+      {adv && (
+        <div className="opts" id="cap-adv-row" style={{ marginTop: 8 }}>
+          {/* Named, every one — "320" is a token cap, a seed or a size with equal
+              plausibility, and a bare number is not a value. */}
+          <div className="opt" data-lb="Max tokens">
+            <span className="lead">Max tokens</span>
+            <input type="number" id="cap-max-tokens" min={16} max={1024} step={16}
+                   style={{ width: 64 }} value={maxTokens}
+                   onChange={(e) => setMaxTokens(Number(e.target.value) || 320)} />
+          </div>
+          <div className="opt" data-lb="Temperature">
+            <span className="lead">Temperature</span>
+            <input type="number" id="cap-temp" min={0} max={1.5} step={0.05}
+                   style={{ width: 64 }} value={temperature}
+                   onChange={(e) => setTemperature(Number(e.target.value))} />
+          </div>
+          <div className="opt" data-lb="Top-p">
+            <span className="lead">Top-p</span>
+            <input type="number" id="cap-top-p" min={0.05} max={1} step={0.05}
+                   style={{ width: 64 }} value={topP}
+                   onChange={(e) => setTopP(Number(e.target.value))} />
+          </div>
+        </div>
+      )}
       <p className="muted" id="cap-note" style={{ margin: '8px 2px 0' }}>{note}</p>
       {prog && (
         <div id="cap-prog" style={{ marginTop: 9 }}>
@@ -566,5 +674,71 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
         </div>
       )}
     </>
+  )
+}
+
+/**
+ * Find & replace across the captions on screen.
+ *
+ * Scoped to the current filtered view rather than the whole set, so the
+ * filters are the targeting tool — and the count is on the button, because a
+ * number that changes when you touch a filter is only trustworthy if you can
+ * see it change before you press. The count is computed the same way the
+ * server matches (literal string, optional case fold), so what the button
+ * promises is what the route does.
+ */
+function FindReplace({ ds, visible }: { ds: Ds; visible: DatasetImage[] }) {
+  const [find, setFind] = useState('')
+  const [repl, setRepl] = useState('')
+  const [caseOn, setCaseOn] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  const hits = useMemo(() => {
+    if (!find) return 0
+    const f = caseOn ? find : find.toLowerCase()
+    return visible.filter((i) => {
+      const cap = i.caption || ''
+      return (caseOn ? cap : cap.toLowerCase()).includes(f)
+    }).length
+  }, [visible, find, caseOn])
+
+  const run = async () => {
+    if (!ds.open || !find || !hits) return
+    const r = await replaceCaptions(ds.open, {
+      find, replace: repl, match_case: caseOn,
+      images: visible.map((i) => i.name),
+    })
+    if (failed(r)) return ds.setEditError(r.error)
+    const n = Number(r.changed ?? 0)
+    setNote(`${n} caption${n === 1 ? '' : 's'} changed.`)
+    await ds.loadTiles(ds.open)
+    await ds.refreshInsight(ds.open, ds.trigger.trim())
+  }
+
+  return (
+    <div className="opts" id="cap-replace" style={{ marginTop: 10 }}>
+      <div className="opt mid">
+        <input id="fr-find" placeholder="find in captions" spellCheck={false}
+               value={find} onChange={(e) => { setFind(e.target.value); setNote(null) }}
+               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void run() } }} />
+      </div>
+      <div className="opt mid">
+        <input id="fr-replace" placeholder="replace with" spellCheck={false}
+               value={repl} onChange={(e) => setRepl(e.target.value)}
+               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void run() } }} />
+      </div>
+      <label className="row" style={{ gap: 7, margin: 0, color: '#ddd', fontSize: 13 }}>
+        <input type="checkbox" id="fr-case" style={{ width: 'auto' }}
+               checked={caseOn} onChange={(e) => setCaseOn(e.target.checked)} />
+        Match case
+      </label>
+      <span className="actions">
+        {note && <span className="muted" id="fr-note" style={{ fontSize: 12 }}>{note}</span>}
+        <button className="s" id="fr-run" type="button" disabled={!hits}
+                onClick={() => void run()}>
+          Replace in {hits}
+        </button>
+      </span>
+    </div>
   )
 }
