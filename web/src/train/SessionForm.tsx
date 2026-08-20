@@ -31,13 +31,13 @@ const DIALS = {
   // alpha ÷ rank, so the two are one decision and were four fields apart.
   network_dim: { label: 'Rank', title: 'Network dimension — how much the LoRA can learn. Higher fits more and overfits sooner.' },
   network_alpha: { label: 'Alpha', title: "Scales the LoRA's contribution: the effective strength is alpha ÷ rank. Equal to rank means no scaling." },
-  max_train_epochs: { label: 'Epochs', title: 'Passes over the set. A checkpoint is saved each one, so this is also how many you get to choose between.' },
+  max_train_epochs: { label: 'Epochs', title: 'Passes over the set. Checkpoints land on the Save every interval, so this divided by that is how many you get to choose between.' },
   learning_rate: { label: 'Learning rate', title: 'Step size per update. 1e-4 is the usual starting point for a rank-32 LoRA.', step: 0.00001 },
   batch_size: { label: 'Batch size', title: 'Images per update. Higher is steadier and needs more VRAM.' },
   resolution: { label: 'Resolution', title: 'Training pixels per side. Images are bucketed to it; higher costs VRAM quadratically.', step: 64 },
   num_repeats: { label: 'Repeats', title: 'How many times each image is seen per epoch. Raise it for a set too small to fill an epoch.' },
   seed: { label: 'Seed', title: 'Fixes shuffling and noise so two runs differing in one dial are actually comparable.' },
-  save_every_n_epochs: { label: 'Save every', title: 'Epochs between checkpoints. Every epoch is the default because a stopped run keeps whatever it has written.' },
+  save_every_n_epochs: { label: 'Save every', title: 'Epochs between checkpoints. Every 5 keeps a 30-epoch run to six files instead of thirty; drop to 1 to keep everything a stopped run has written.' },
   discrete_flow_shift: { label: 'Flow shift', title: 'Weights the flow-matching schedule toward the noisy end. Only the Shift timestep sampling reads it.', step: 0.05 },
   blocks_to_swap: { label: 'Blocks to swap', title: 'Offload this many transformer blocks to CPU. Buys VRAM at the cost of speed; 0 keeps everything on the card.' },
 } as const

@@ -26,6 +26,11 @@ export type MenuItem =
       on?: boolean
       danger?: boolean
       sep?: false
+      /** A dim clause after the label — what picking this will actually write
+       *  beyond the label itself. The LoRA picker puts the trigger phrase here,
+       *  because a row that is about to write words into your sentence should
+       *  show them first. */
+      hint?: string
       /** Written onto the drag as one private MIME type. See `lora/drag.ts`. */
       drag?: (e: React.DragEvent) => void
     }
@@ -67,6 +72,7 @@ export function Menu({
                     it.run()
                   }}>
             {it.label}
+            {it.hint && <span className="hint">{it.hint}</span>}
           </button>
         ),
       )}

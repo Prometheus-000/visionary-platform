@@ -350,12 +350,19 @@ svg{width:100%;height:100%;display:block}
    instead of staying at --dim while the icon lights up. */
 .opt.ib>.lead{order:2;color:inherit}
 .adv{margin-top:9px;padding-top:10px;border-top:1px solid var(--line)}
-/* Not an inline style, which is what this was: an empty <p> is zero-height but
-   still spends its margin, and the :empty rule that reclaims it cannot outrank
-   a style attribute. A line that has nothing to say most of the time should
-   cost the canvas nothing most of the time. */
-#lora-note{margin:7px 2px 0}
-#lora-note:empty{margin:0}
+/* The note line under the strip is *reserved*: one row of height, present
+   whether or not it has anything to say. It used to collapse when empty —
+   cheaper for the canvas — but the console is pinned to the bottom of the
+   stage, so a note appearing pushed every control in it the moment a warning
+   arrived, which is mid-typing for the LoRA notes and mid-attach for the
+   keyframe one: exactly when a hand is over Generate. 17px at rest is the
+   price of a button that stays where you aimed. Two spans share the row and
+   only a second line (both notes at once, or a long one wrapping) still
+   moves anything. The line-height is pinned so the reserve and the line are
+   the same number — a 17px guess against an 18px line still moved Generate by
+   the difference. */
+#console-notes{margin:7px 2px 0;line-height:18px;min-height:18px}
+#console-notes span:not(:empty)~span:not(:empty){margin-left:8px}
 
 /* The prompt field. The textarea and the Image/Video chip are one bordered
    box, and the prompt itself is shared by both — switching mid-sentence keeps
@@ -745,6 +752,10 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .menu button.on::before{content:"";position:absolute;left:12px;top:50%;margin-top:-5px;
   width:5px;height:9px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
 .menu.checks button{position:relative}
+/* What picking the row will write beyond its label — the LoRA picker's trigger
+   phrase. Dim, because it is a preview of the write rather than the name; the
+   row's own ellipsis still bounds the pair. */
+.menu button .hint{color:var(--dim);margin-left:8px;font-size:11px}
 .menu hr{border:0;border-top:1px solid var(--line);margin:5px 7px}
 
 /* The shot palette ------------------------------------------------------

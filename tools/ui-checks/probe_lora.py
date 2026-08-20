@@ -90,6 +90,16 @@ with sync_playwright() as pw:
     n = note_for(pg, "a shot <lora:nosuchlora:1>")
     check("a missing name is named", "nosuchlora" in n, repr(n))
 
+    # A resolved LoRA whose known phrase is absent from the prose. The weight
+    # loads and does almost nothing, which nothing downstream can tell apart
+    # from a LoRA that ran — the note is the only place that can say it.
+    n = note_for(pg, "a plaza at noon <lora:darkbrush:1.3>")
+    check("a missing trigger phrase is named",
+          "monochrome ink wash style" in n, repr(n))
+    # Case-folded: the phrase is prose, and someone who typed it lowercase said it.
+    n = note_for(pg, "a plaza at noon <lora:darkbrush:1.3> Monochrome ink wash style")
+    check("a present trigger phrase is silent", n == "", repr(n))
+
     # Past the cap. MAX_LORAS is 6 on the stub.
     many = " ".join(f"<lora:{x}:1>" for x in
                     ["my_style", "darkbrush", "sunsetblur", "portrait", "Portrait",

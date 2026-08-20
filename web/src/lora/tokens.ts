@@ -31,6 +31,12 @@ export type LoraFile = {
    *  `k3nan.safetensors` gets `<lora:k3nan:1>`; the matched Wan speed pairs,
    *  whose files are both called `high`, get the folder that tells them apart. */
   token: string
+  /** The phrase this LoRA's training bound everything to — from the training
+   *  sidecar, or from the catalogue for the Krea style set. Empty when nobody
+   *  knows one. */
+  trigger: string
+  /** The strength the server says this LoRA works at, when it says one. */
+  strength: number | null
 }
 
 /**
@@ -51,7 +57,13 @@ export function loraIndex(state: AppState | null): LoraFile[] {
     l.files.map((f) => {
       const path = String(f.path ?? '')
       const rel = (path.split('/loras/').pop() ?? path).replace(/\.safetensors$/i, '')
-      return { path, rel, stem: rel.split('/').pop() ?? rel, file: path.split('/').pop() ?? path }
+      return {
+        path, rel,
+        stem: rel.split('/').pop() ?? rel,
+        file: path.split('/').pop() ?? path,
+        trigger: l.trigger_word ?? '',
+        strength: l.strength ?? null,
+      }
     }),
   )
   cacheKey = rows
@@ -265,23 +277,33 @@ export type Written = { value: string; caret: number; select: number }
  * and the picker looks like it silently did nothing. There is no prompt that
  * wants the duplicate, so the second pick is free to mean the other thing.
  *
- * No trigger word is written. The picker used to prepend one, and the reason it
- * no longer does is that the right destination stopped being answerable: on the
- * regional path the node encodes the main prompt and nothing else, so a trigger
- * auto-written into a box would silently never reach the encoder, and one written
- * into the main prompt instead would be the picker editing a sentence the caret
- * was nowhere near. Triggers are typed.
+ * The trigger phrase is written beside the token — for a main-prompt insert
+ * only, and only when the phrase is known and not already somewhere in the
+ * field. The picker used to *prepend* one, and that was retired because the
+ * destination stopped being answerable: on the regional path the node encodes
+ * the main prompt and nothing else, so a trigger auto-written into a box would
+ * silently never reach the encoder, and one prepended to the main prompt was
+ * the picker editing a sentence the caret was nowhere near. Neither objection
+ * touches this: the phrase lands *at the caret*, glued to the token the same
+ * pick just wrote, and `withTrigger` is false on every region path. What
+ * brought it back is a measurement — a style LoRA at the generic strength with
+ * no phrase renders as a faint grade, which is the "LoRA that silently does
+ * nothing" failure this whole module exists to avoid, delivered by the picker
+ * itself on every first try. Unpicking removes the token only: the phrase is
+ * visible prose in an editable field, and a picker click that deletes words
+ * out of a sentence is the worse surprise.
  */
 export function insertLora(
   index: LoraFile[],
   value: string,
   caret: number,
   l: LoraFile,
-  /** 1.3 in a region, 1 everywhere else. The node pack's guidance for a
-   *  character LoRA is 1.3–1.4, and a picker that writes the known-weak value
-   *  into the one field where it is known to be weak is doing the wrong thing
-   *  quietly. The main prompt is a style stack far more often than a character. */
-  strength: '1' | '1.3',
+  /** 1.3 in a region, and in the main prompt whatever the server says this
+   *  LoRA works at, falling back to 1. The node pack's guidance for a character
+   *  LoRA is 1.3–1.4, and a picker that writes a known-weak value into a field
+   *  where it is known to be weak is doing the wrong thing quietly. */
+  strength: string,
+  withTrigger = false,
 ): Written {
   const present = parseLoras(index, value).filter((t) => t.hit?.path === l.path)
   if (present.length) return removeLora(value, caret, present)
@@ -299,8 +321,14 @@ export function insertLora(
   // survives the strip but reads as a typo while you are writing.
   const before = value.slice(0, at)
   const after = value.slice(at)
+  // Case-folded because the phrase is prose: someone who already typed "purple
+  // retro anime style" has said it, and writing it again is the picker repeating
+  // them.
+  const phrase = withTrigger && l.trigger
+    && !value.toLowerCase().includes(l.trigger.toLowerCase())
+    ? ` ${l.trigger}` : ''
   const tok = (before && !/\s$/.test(before) ? ' ' : '')
-    + `<lora:${l.token}:${strength}>`
+    + `<lora:${l.token}:${strength}>` + phrase
     + (after && !/^\s/.test(after) ? ' ' : '')
   // Caret onto the strength, selected, so the next thing you can do is ⌘↑ it or
   // type over it.

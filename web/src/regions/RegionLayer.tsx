@@ -50,8 +50,9 @@ const DROP_BOX_H = 0.82
  * the surface the feature lives on.
  */
 export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
-  // No flag anywhere: regions are on when a box exists, which both hosts have already
-  // asked `regionsLive` before mounting this. What is left here is what to draw.
+  // No flag anywhere: regions are on when a box exists. Both hosts mount this with
+  // zero boxes too — the frame for the invite, the render because this layer is also
+  // the surface ⌘-drag draws the *first* box on. What is left here is what to draw.
   const regions = useStore((z) => z.regions)
   const rsel = useStore((z) => z.rsel)
   const boxDrag = useStore((z) => z.boxDrag)
@@ -141,9 +142,12 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
         // Reveal, and nothing else. ⌘ *inside* geometry means "a new box, here" — so
         // letting this one press do both would answer "show me the boxes" by adding a
         // ninth one to the eight it just showed you. The gate and the gesture it gates
-        // are two presses.
+        // are two presses — *while there is something behind the gate*. With no boxes
+        // at all, "show me the boxes" shows nothing, and a reveal-only press is a dead
+        // press over exactly the surface ⌘-drag is supposed to draw on. So an empty
+        // set falls through and this one gesture draws the first box.
         st.setEdit('geometry')
-        return
+        if (st.regions.length) return
       } else {
         // Resolved on release, not on press, so one gesture can still become the other:
         // a quick tap is "open this", the same press held is "let me move things". On a

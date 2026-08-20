@@ -93,7 +93,13 @@ export function Canvas({
   const shown = image ? n > 0 : !!vidSrc
   const ready = !!s.state && !s.stateError
 
-  const boxesOnShot = regionsLive(s) && n > 0
+  // Whenever a render is up, not only when boxes exist. `regionsLive` used to gate
+  // this, which read as the obvious economy and deleted a gesture: with zero regions
+  // there was no layer over the render at all, so ⌘-drag — "a new box, here",
+  // everywhere else — hit bare picture and did nothing, and the only way to draw a
+  // first box was to clear the render you wanted to draw against. The layer draws
+  // nothing in `off` mode, so an empty one over a render costs no paint.
+  const boxesOnShot = image && n > 0
     && !attached(s.frame, 'scene') && !attached(s.frame, 'outfit')
   // The frame is the region surface, and now the empty-canvas invitation too. With no
   // render it carries either the boxes you placed or — when there are none — the cold
@@ -311,7 +317,14 @@ export function Canvas({
              }}>
           {vidSrc && (
             <>
-              <video controls autoPlay loop playsInline src={vidSrc} />
+              {/* `muted`, or `autoPlay` is a word rather than a behaviour: every
+                  browser refuses unmuted autoplay without a gesture, so a 200s
+                  render used to land as a strip parked at 0:00 — the one moment
+                  the product has to sell itself, spent asking for a click. The
+                  clip plays silent and looping the instant it lands, which is
+                  what "the result on screen is the canvas" means for video; the
+                  native controls are right there for the soundtrack. */}
+              <video controls autoPlay muted loop playsInline src={vidSrc} />
               <button className="zoom" title="Full screen" type="button"
                       onClick={() => onOpenVideo(vidSrc)}>
                 <IconExpand />

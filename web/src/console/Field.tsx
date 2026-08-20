@@ -202,7 +202,9 @@ export function Field({
                   const l = droppedLora(e, index)
                   if (!l) return
                   const at = el.selectionStart ?? el.value.length
-                  const w = insertLora(index, el.value, at, l, '1')
+                  // The served strength and the trigger phrase, exactly as a picker
+                  // click writes them — a drop is the same insert aimed by hand.
+                  const w = insertLora(index, el.value, at, l, String(l.strength ?? 1), true)
                   s.setPrompt(w.value)
                   // After the commit, for the reason `applyWrite` does it after the
                   // commit: this is a controlled input, so the range set now would

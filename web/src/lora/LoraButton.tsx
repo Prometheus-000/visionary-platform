@@ -49,12 +49,24 @@ export function LoraButton({ id }: { id: string }) {
         <Menu anchor={pop.anchor} onClose={pop.close}
               items={index.map((l) => ({
                 label: l.token,
+                // The trigger phrase, on the row that is about to write it. A
+                // style LoRA is near-invisible without its phrase, so the hint
+                // is what makes the pick's write legible before it happens —
+                // and the only place the phrase appears for a LoRA you did not
+                // train yourself.
+                hint: l.trigger || undefined,
                 on: inField.has(l.path),
                 drag: (e: React.DragEvent) => startLoraDrag(e, l),
-                run: () => applyWrite(insertLora(
-                  index, caretValue(), caretAt(), l,
-                  caretScope() === 'region' ? '1.3' : '1',
-                )),
+                run: () => {
+                  const region = caretScope() === 'region'
+                  applyWrite(insertLora(
+                    index, caretValue(), caretAt(), l,
+                    region ? '1.3' : String(l.strength ?? 1),
+                    // Never into a box — a trigger there never reaches the
+                    // encoder. See `insertLora`.
+                    !region,
+                  ))
+                },
               }))} />
       )}
     </>

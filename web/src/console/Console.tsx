@@ -193,8 +193,18 @@ export function Console({
       <Peek />
 
       {/* Only ever says what is wrong. A line confirming the LoRAs you can already read
-          in the prompt above it would be the page telling you what you can see. */}
-      {note && <p className="muted warn" id="lora-note">{note}</p>}
+          in the prompt above it would be the page telling you what you can see.
+
+          The line is *reserved* — one row of height whether or not there is a note.
+          Mounted on demand, each note that appeared grew the console, and the console
+          is pinned to the bottom of the stage, so everything in it shifted the moment
+          a warning arrived — which is mid-typing for the LoRA notes and mid-attach for
+          the keyframe one, exactly when a hand is over Generate. A button that moves
+          as you reach for it costs more than the 17px this holds at rest. */}
+      <p className="muted warn" id="console-notes">
+        <span id="lora-note">{note}</span>
+        {!image && <VideoNote />}
+      </p>
 
 
       {/* **A run reports itself once, and not here.** This block was a second
@@ -214,11 +224,6 @@ export function Console({
           `#gen-meta`, where the live phase takes the render summary's place for
           as long as there is one. */}
 
-      {/* "Keyframes are ignored" only when there is a keyframe to ignore. Said
-          unconditionally, it was the page's one mention of a control this layout had
-          already made unfindable — a warning about something you do not have, pointing
-          at somewhere you cannot see. */}
-      {!image && <VideoNote />}
     </div>
   )
 }
@@ -244,6 +249,11 @@ function GenerateButton({ id, busy, ready, onGenerate, onStop }: {
     )
 }
 
+/** "Keyframes are ignored" only when there is a keyframe to ignore. Said
+ *  unconditionally, it was the page's one mention of a control this layout had
+ *  already made unfindable — a warning about something you do not have, pointing
+ *  at somewhere you cannot see. A span in the reserved note line, so appearing
+ *  costs no layout. */
 function VideoNote() {
   const s = useStore()
   const n = s.refs.length + s.refVids.length
@@ -254,6 +264,5 @@ function VideoNote() {
         ? `${supports(s).references ? '' : 'Image-to-video. '}`
           + 'Canvas follows the first frame’s aspect ratio.'
         : '')
-  if (!text) return null
-  return <p className="muted warn" id="vid-note" style={{ margin: '8px 2px 0' }}>{text}</p>
+  return <span id="vid-note">{text}</span>
 }

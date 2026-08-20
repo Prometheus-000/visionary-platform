@@ -38,6 +38,24 @@ export function loraNote(s: Store): string {
   }
   if (toks.filter((t) => t.hit).length > max) bits.push(`Only the first ${max} LoRAs are applied.`)
 
+  // A LoRA whose training bound everything to a phrase is near-invisible until
+  // the phrase is in the prompt — the weight loads, the render changes a little,
+  // and it reads as a LoRA that did nothing, which nothing else on the page can
+  // tell apart from one that ran. Main prompt only: a trigger in a box never
+  // reaches the encoder, so there is nothing there to warn about. Skipped when
+  // the model reads no LoRAs at all — that note already covers the whole stack.
+  if (s.kind === 'image' || supports(s).loras) {
+    const low = stripLoras(s.prompt).toLowerCase()
+    const untriggered = [...new Set(
+      toks.filter((t) => t.hit?.trigger && !low.includes(t.hit.trigger.toLowerCase()))
+        .map((t) => t.hit!.token),
+    )]
+    for (const n of untriggered) {
+      const hit = toks.find((t) => t.hit?.token === n)!.hit!
+      bits.push(`"${n}" does little without its phrase — add “${hit.trigger}”.`)
+    }
+  }
+
   // One per box is the node's shape, and the backend rejects the rest rather than
   // applying the first — so say it here, while the second token is still under
   // the caret, instead of after a round trip.
