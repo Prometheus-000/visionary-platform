@@ -39,6 +39,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -648,25 +649,33 @@ def _params(**over) -> dict:
 
 
 SESSIONS: list = []
+# The server is threaded and the seed is lazy, so the first two requests race:
+# both find SESSIONS empty, both build the list — paying the cold app.py pull
+# inside _params(), which is the window — and both extend, and every card sits
+# on the board twice under a duplicate React key. The dev page makes the race
+# routine rather than rare: StrictMode mounts effects twice, so the first two
+# fetches arrive together.
+_SEED_LOCK = threading.Lock()
 
 
 def seed_sessions() -> None:
-    if SESSIONS:
-        return
-    SESSIONS.extend([
-        {"id": "s1", "lora_name": "k3nan_v3", "trigger_word": "k3nan",
-         "dataset": "studio_portraits", "params": _params(network_dim=64, network_alpha=32),
-         "job_id": "train900", "created": time.time() - 400, "runs": 1},
-        {"id": "s2", "lora_name": "street_look", "trigger_word": "ohwx_night",
-         "dataset": "street_night", "params": _params(max_train_epochs=12),
-         "job_id": "train901", "created": time.time() - 9000, "runs": 2},
-        {"id": "s3", "lora_name": "", "trigger_word": "", "dataset": "",
-         "params": _params(), "job_id": "", "created": time.time() - 60, "runs": 0},
-    ])
-    # The finished one is finished on its first poll rather than four minutes
-    # in: a board with nothing terminal on it cannot show Run again, Edit or
-    # Delete, which is half of what a card does.
-    RUNS["train901"] = {"polls": 99, "stopped": False}
+    with _SEED_LOCK:
+        if SESSIONS:
+            return
+        SESSIONS.extend([
+            {"id": "s1", "lora_name": "k3nan_v3", "trigger_word": "k3nan",
+             "dataset": "studio_portraits", "params": _params(network_dim=64, network_alpha=32),
+             "job_id": "train900", "created": time.time() - 400, "runs": 1},
+            {"id": "s2", "lora_name": "street_look", "trigger_word": "ohwx_night",
+             "dataset": "street_night", "params": _params(max_train_epochs=12),
+             "job_id": "train901", "created": time.time() - 9000, "runs": 2},
+            {"id": "s3", "lora_name": "", "trigger_word": "", "dataset": "",
+             "params": _params(), "job_id": "", "created": time.time() - 60, "runs": 0},
+        ])
+        # The finished one is finished on its first poll rather than four minutes
+        # in: a board with nothing terminal on it cannot show Run again, Edit or
+        # Delete, which is half of what a card does.
+        RUNS["train901"] = {"polls": 99, "stopped": False}
 
 
 def session_view(rec: dict) -> dict:
