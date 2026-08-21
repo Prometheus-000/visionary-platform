@@ -187,14 +187,6 @@ VIDEO_GPUS = ("H100", "H200")
 # kernels — for 42.5 GB and int8 tensor-core matmuls instead of bf16 ones. On
 # one card that is the difference between offloading every request and holding
 # the model resident, on top of roughly 2x on the denoise loop itself.
-#
-# Why ComfyUI at all, when diffusers has a MiniMax-H3 pipeline: the diffusers
-# integration runs the released bf16 weights, 123.6 GB across the transformer
-# and the Qwen3-VL-32B conditioner. ComfyUI runs Comfy's repackage — modulation
-# weights pruned into a lookup table, int8-convrot weights, and their own
-# kernels — for 42.5 GB and int8 tensor-core matmuls instead of bf16 ones. On
-# one card that is the difference between offloading every request and holding
-# the model resident, on top of roughly 2x on the denoise loop itself.
 COMFY_SHA = "16e3f3034f2bba1fff6c70cbd759339778555cd6"  # 2026-08-03, H3 VAE fix
 COMFY = Path("/opt/comfyui")
 COMFY_PORT = 8188
