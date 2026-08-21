@@ -32,7 +32,7 @@ export function Rewrite() {
     if (s.rewriting) return
     s.setRewriting(op)
     try {
-      const r = await rewrite({ prose, op })
+      const r = await rewrite({ prose, op, kind: s.kind })
       // `failed` is the transport; `ok` is the route's own verdict. The route
       // answers with the original text on either, so the worst case here is the
       // box unchanged rather than the box emptied.

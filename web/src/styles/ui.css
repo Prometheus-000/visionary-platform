@@ -792,6 +792,18 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .pal .tl.on{background:var(--sel);border-color:var(--line-2);color:#fff}
 .pal .tl.off{opacity:.26;cursor:default}
 
+/* The motion panel ------------------------------------------------------
+   The palette's shell — same width, same section rhythm, same headings — with
+   sentence rows where the tile grid was, because a suggestion is a sentence
+   about *this* frame and a glyph cannot draw one. Rows, not tiles: reading is
+   the gesture here, and a grid truncates the one thing worth reading. */
+.pal.motion .sug{display:block;width:100%;text-align:left;padding:7px 9px;margin:0 0 4px;
+  border:1px solid transparent;border-radius:9px;background:none;color:#ddd;cursor:pointer;
+  font-size:12.5px;line-height:1.35}
+.pal.motion .sug:hover{background:var(--wash-3);border-color:var(--sel)}
+.pal.motion .sug.on{background:var(--sel);border-color:var(--line-2);color:#fff}
+.pal.motion .mo-note{margin:2px 3px 8px}
+
 /* One skeleton, eighty behaviours -----------------------------------------
    Every tile is the same nine shapes — a frame, a horizon, its posts, two
    subjects, an object, a light wedge, bars, grain — and what makes a push-in

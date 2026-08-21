@@ -89,6 +89,18 @@ CAPTION = {
 # a broken preview rather than an incomplete pull.
 REWRITE = {"REWRITE_OPS", "KREA_EXPANSION"}
 
+# The motion panel's sections and its parser, for the same two callers the
+# rewrite set has: `preview_ui.py` serves `motion_groups` and stubs
+# `/api/motion` through the real parser, and `smoke_rewrite.py` asserts the
+# instruction budget and the parse cases. `_THINK` and `_oneline` ride along
+# because `_parse_motion` calls them — the rule the MODULES comment records:
+# a constant a pulled function names has to be pulled in the same edit.
+MOTION = {
+    "MOTION_GROUPS", "MOTION_MAX_PER", "MOTION_PHRASE_MAX", "MOTION_TOKENS",
+    "_MOTION_HEAD_IMAGE", "_MOTION_HEAD_TEXT", "_MOTION_LINE",
+    "_motion_instruction", "_parse_motion", "_THINK", "_oneline",
+}
+
 # The trainer's three menus and its dial defaults, for the same reason again:
 # the session form builds itself out of these, and a hand-written copy here
 # would be a form offering an optimizer `/api/sessions` rejects by name — or

@@ -30,6 +30,9 @@ G = pull({
     "_rewrite_tokens", "REWRITE_TOKEN_FLOOR", "REWRITE_TOKEN_CEILING",
     "_clean_rewrite", "_PREAMBLE", "_META", "_THINK", "_oneline",
     "_looks_like_refusal", "REFUSAL_RE", "MODULE_TEXT_MAX",
+    "MOTION_GROUPS", "MOTION_MAX_PER", "MOTION_PHRASE_MAX", "MOTION_TOKENS",
+    "_MOTION_HEAD_IMAGE", "_MOTION_HEAD_TEXT", "_MOTION_LINE",
+    "_motion_instruction", "_parse_motion",
 })
 
 
@@ -188,8 +191,98 @@ def wiring() -> int:
     return bad
 
 
+def motion() -> int:
+    """
+    The motion path — the video side's grounded replacement for the palette.
+
+    Same rules as the rewrite it rides beside: the instruction has a size
+    budget because 10.2k characters of well-reasoned rules measurably degraded
+    the output, and everything after the model answers is deterministic —
+    a line parser whose failure mode is a shorter list, never an error.
+    """
+    print("\nmotion — the instruction, then the parser")
+    bad = 0
+
+    # The budget, per variant. Four combinations because the two axes are real:
+    # a frame or prose to ground on, and a model that can or cannot hear.
+    for image in (True, False):
+        for audio in (True, False):
+            text = G["_motion_instruction"](image=image, audio=audio)
+            n = len(text)
+            ok = 500 <= n <= 2000
+            bad += not ok
+            print(f"  {'ok  ' if ok else 'FAIL'}  instruction"
+                  f"(image={image!s:5}, audio={audio!s:5}) = {n} chars")
+            has_audio = "SOUND:" in text
+            ok = has_audio == audio
+            bad += not ok
+            print(f"  {'ok  ' if ok else 'FAIL'}    audio lines "
+                  f"{'present' if has_audio else 'absent'} as they should be")
+
+    P = G["_parse_motion"]
+    CASES = [
+        ("SUBJECT: She lifts the cup.\nENVIRONMENT: Steam curls up.\n"
+         "CAMERA: The camera pushes in slowly.",
+         True, {"subject": 1, "environment": 1, "camera": 1},
+         "well-formed lines land in their groups"),
+        ("- SUBJECT: She lifts the cup.\n* CAMERA — a slow push in.\n"
+         "**SOUND**: rain on the glass",
+         True, {"subject": 1, "camera": 1, "sound": 1},
+         "bullets, dashes and bold survive the parse"),
+        ("What moves here? The woman, the steam.\nExpanded prompt: "
+         "SUBJECT: She sets the cup down.",
+         True, {"subject": 1},
+         "a thinking block is dropped before parsing"),
+        ("The scene is quiet and nothing much happens beyond the rain.",
+         True, {},
+         "prose with no labels parses to nothing, not an error"),
+        ("SOUND: rain on the glass\nDIALOGUE: \"You came back.\"\n"
+         "SUBJECT: He turns from the window.",
+         False, {"subject": 1},
+         "a silent model is never offered a sound the compiler would drop"),
+        ("SUBJECT: She waves.\nSUBJECT: She waves.\nSUBJECT: She nods.",
+         True, {"subject": 2},
+         "a repeated line is the model repeating itself, kept once"),
+        ("\n".join(f"SUBJECT: gesture number {i}." for i in range(9)),
+         True, {"subject": G["MOTION_MAX_PER"]},
+         "a group is capped, however long the model runs on"),
+        ("DIALOGUE: \"I thought you weren't coming.\"",
+         True, {"dialogue": 1},
+         "wrapping quotes are stripped from a spoken line"),
+    ]
+    for said, audio, want, why in CASES:
+        got = {k: len(v) for k, v in P(said, audio=audio).items()}
+        ok = got == want
+        bad += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  {why}")
+        if not ok:
+            print(f"        want: {want!r}")
+            print(f"        got : {got!r}")
+
+    # The phrase cap is a cap on what a row can carry, not a truncation the
+    # model is asked for.
+    long = P("SUBJECT: " + "x" * 900, audio=True)["subject"][0]
+    ok = len(long) <= G["MOTION_PHRASE_MAX"]
+    bad += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'}  a runaway phrase is bounded at "
+          f"{G['MOTION_PHRASE_MAX']} chars")
+
+    # Every group the parser can emit is a group the page was served, and the
+    # audio ones are marked as such — the gate `/api/motion` applies is only as
+    # good as this table.
+    groups = G["MOTION_GROUPS"]
+    ok = set(groups) == {"subject", "environment", "camera", "sound", "dialogue"}
+    bad += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'}  MOTION_GROUPS carries the five sections")
+    ok = all(groups[k]["needs"] == "audio" for k in ("sound", "dialogue")) \
+        and all(groups[k]["needs"] is None for k in ("subject", "environment", "camera"))
+    bad += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'}  sound and dialogue are the audio-gated pair")
+    return bad
+
+
 def main() -> int:
-    bad = ops() + clean() + refusals() + wiring()
+    bad = ops() + clean() + refusals() + wiring() + motion()
     print(f"\n{'PASS' if not bad else str(bad) + ' FAILED'}")
     print("\nThis proves the plumbing. Whether the rewrite makes a better picture\n"
           "is tools/prompt_ab.py, which renders the pair and judges it blind.")

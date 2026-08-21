@@ -37,9 +37,28 @@ import threading
 # Module-level and guarded, because ComfyUI may execute two graphs back to back
 # and `@modal.enter` has no equivalent here — the node is constructed per
 # execution, so anything cached on `self` is cached for one call.
-_LOCK = threading.Lock()
-_LOADED: dict = {}
-
+#
+# **Loaded at container warm-up, not on first use, and the memory objection
+# does not survive its own arithmetic.** This was lazy, and the cost landed on
+# whoever pressed the button first: ~8 GB read off a *network* volume plus the
+# CPU construction priced at forty seconds below. Minutes, charged to the one
+# person in the system who is sitting there watching — and charged for a
+# feature whose whole job happens *before* a generation, on a container that
+# only exists because of one.
+#
+# It was then staged on CPU and promoted on first use, to keep 9 GiB off a card
+# holding 42.5 GB of H3. That caution had the numbers backwards: 42.5 GB is
+# what the int8 repackage buys *so that the model is resident rather than
+# offloading every request*, on an 80 GB card. 42.5 + 9 leaves 28.5 GB. The
+# half-measure bought nothing real and cost a second code path.
+#
+# One thing the arithmetic does not cover, so it is written down: this copy is
+# outside ComfyUI's model management. `unload_all_models()` cannot see it and
+# `/free` will not drop it, so the 9 GiB is subtracted from what ComfyUI
+# believes it has for the whole life of the container. That is the same class
+# of fact as the regional node's stranded LoRAs — see `_reclaim()` — and the
+# reason it is fine here rather than a leak is that it is bounded, constant,
+# and known at startup instead of growing per run.
 MODEL_FILE = os.environ.get(
     "VISIONARY_TE_FILE", "/workspace/models/qwen3vl-4b-bf16.safetensors")
 # The tokenizer and config come from the base repo, baked into the image at
@@ -49,19 +68,26 @@ BASE_REPO = os.environ.get("VISIONARY_TE_REPO", "Qwen/Qwen3-VL-4B-Instruct")
 
 
 def _load():
-    """The text half of Qwen3-VL, once per container, on first use."""
-    if _LOADED:
-        return _LOADED
+    """The text half of Qwen3-VL, once per container, resident on the card."""
+    if _READY:
+        return _READY
     with _LOCK:
-        if _LOADED:  # won by another thread while we waited
-            return _LOADED
+        if _READY:  # won by another thread while we waited
+            return _READY
 
         import torch
         from safetensors.torch import load_file
-        from transformers import AutoConfig, AutoTokenizer, Qwen3VLForConditionalGeneration
+        from transformers import (AutoConfig, AutoProcessor, AutoTokenizer,
+                                  Qwen3VLForConditionalGeneration)
 
         cfg = AutoConfig.from_pretrained(BASE_REPO)
         tok = AutoTokenizer.from_pretrained(BASE_REPO)
+        # The processor is the vision path's tokenizer — it writes the image
+        # placeholder tokens into the template and turns pixels into
+        # `pixel_values`/`image_grid_thw`. Loaded unconditionally because it is
+        # a config read, not weights, and a lazy load would make the first
+        # image request the one that discovers the cache is incomplete.
+        proc = AutoProcessor.from_pretrained(BASE_REPO)
 
         state = load_file(MODEL_FILE)
         # **The vision tower is loaded even though this path never sees a
@@ -115,12 +141,12 @@ def _load():
         model = model.to("cuda", dtype=torch.bfloat16).eval()
         del state
         gc.collect()
-        _LOADED.update(model=model, tok=tok, torch=torch)
-        return _LOADED
+        _READY.update(model=model, tok=tok, proc=proc, torch=torch)
+        return _READY
 
 
 class VisionaryRewrite:
-    """prose + instruction -> prose, on the resident encoder."""
+    """prose + instruction (+ an optional frame) -> prose, on the resident encoder."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -129,7 +155,22 @@ class VisionaryRewrite:
                 "prose": ("STRING", {"multiline": True, "default": ""}),
                 "instruction": ("STRING", {"multiline": True, "default": ""}),
                 "max_tokens": ("INT", {"default": 420, "min": 16, "max": 2048}),
-            }
+            },
+            # Base64 as a STRING rather than an IMAGE socket, deliberately: the
+            # caller holds base64 (it is what the routes carry), the graph is
+            # already an HTTP POST so the bytes ride the same channel as
+            # everything else, and `LoadImage` would hand back a ComfyUI float
+            # tensor that the processor wants converted straight back to PIL.
+            # One input, no staging, no cleanup.
+            "optional": {
+                "image_b64": ("STRING", {"multiline": True, "default": ""}),
+                # The container's warm-up knock. `@modal.enter` runs in the
+                # Modal process and the weights live in ComfyUI's, so a graph
+                # is the only way to reach across — and this is the existing
+                # one rather than a second transport, which is why it is an
+                # input here instead of a node of its own.
+                "warm_only": ("BOOLEAN", {"default": False}),
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -148,15 +189,51 @@ class VisionaryRewrite:
         # exactly like a model that ignored the button.
         return float("nan")
 
-    def run(self, prose, instruction, max_tokens):
+    def run(self, prose, instruction, max_tokens, image_b64="", warm_only=False):
+        # Loaded and not a token further. The caller is the container saying
+        # "do the slow part now, while nothing is waiting on you" — sampling
+        # here would put a decode loop in front of the first real render for
+        # nobody's benefit.
+        if warm_only:
+            _load()
+            return {"ui": {"text": [""]}, "result": ("",)}
+
         got = _load()
         torch, model, tok = got["torch"], got["model"], got["tok"]
 
-        text = tok.apply_chat_template(
-            [{"role": "system", "content": instruction},
-             {"role": "user", "content": prose}],
-            tokenize=False, add_generation_prompt=True)
-        ids = tok(text, return_tensors="pt").to(model.device)
+        if image_b64:
+            # The vision path — the tower was resident all along (see `_load`),
+            # so this is the plumbing that finally uses it. The message content
+            # becomes a parts list because that is what makes the chat template
+            # emit the vision placeholder tokens; a bare string never does,
+            # and the failure is a model that silently answers without looking.
+            import base64
+            import io
+
+            from PIL import Image
+            try:
+                img = Image.open(
+                    io.BytesIO(base64.b64decode(image_b64))).convert("RGB")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"image_b64 did not decode to an image: {exc}") from exc
+            proc = got["proc"]
+            text = proc.apply_chat_template(
+                [{"role": "system", "content": instruction},
+                 {"role": "user", "content": [
+                     {"type": "image"},
+                     {"type": "text", "text": prose}]}],
+                tokenize=False, add_generation_prompt=True)
+            ids = proc(text=[text], images=[img],
+                       return_tensors="pt").to(model.device)
+        else:
+            # The text path, byte-for-byte what it was before the image input
+            # existed — Enhance's behaviour is not this feature's to change.
+            text = tok.apply_chat_template(
+                [{"role": "system", "content": instruction},
+                 {"role": "user", "content": prose}],
+                tokenize=False, add_generation_prompt=True)
+            ids = tok(text, return_tensors="pt").to(model.device)
 
         with torch.inference_mode():
             out = model.generate(

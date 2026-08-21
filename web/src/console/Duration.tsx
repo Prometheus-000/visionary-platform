@@ -1,3 +1,4 @@
+import { warm } from '../api/routes'
 import { Menu } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
 import { useStore } from '../store'
@@ -68,7 +69,15 @@ export function Duration() {
                 {
                   label: 'Still',
                   on: still,
-                  run: () => s.setKind('image'),
+                  run: () => {
+                    s.setKind('image')
+                    // The switch is the earliest honest signal of which
+                    // container this session is about to want, and Enhance
+                    // lives on that container. Warming here is what turns the
+                    // first press after a switch into a press rather than a
+                    // wait. Fire and forget; a repeat is a no-op on a warm one.
+                    void warm('image')
+                  },
                 },
                 ...lengths.map((n) => ({
                   label: `${n}s`,
@@ -79,6 +88,7 @@ export function Duration() {
                     // would paint one frame of the previous length.
                     s.setVid({ seconds: String(n) })
                     s.setKind('video')
+                    void warm('video')
                   },
                 })),
               ]} />

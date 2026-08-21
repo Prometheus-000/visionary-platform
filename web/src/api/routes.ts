@@ -13,7 +13,7 @@
  */
 import { api, post, type Res } from './client'
 import type {
-  RewriteResult, AppState, CompileResult, DupeReport, Insight, JobStatus, ParseElement, ParseResult, Session, ShotPill } from './types'
+  RewriteResult, AppState, CompileResult, DupeReport, Insight, JobStatus, MotionResult, ParseElement, ParseResult, Session, ShotPill } from './types'
 
 const seg = encodeURIComponent
 
@@ -242,8 +242,19 @@ export const parse = (body: { prose: string }) =>
  * surprised that the sentence got longer, so the question the underlines were
  * built to answer is answered by the gesture instead.
  */
-export const rewrite = (body: { prose: string; op: string }) =>
+export const rewrite = (body: { prose: string; op: string; kind?: 'image' | 'video' }) =>
   post<RewriteResult>('/api/rewrite', body)
+
+/**
+ * What could move in this frame — the one route where a model is shown a
+ * *picture* of the user's rather than their words. `first_frame` is the full
+ * base64, unlike `compile`'s booleans: this is a press, not a keystroke
+ * follower, and grounding is the whole point. Audio categories are gated by
+ * the server against the model's own `supports`, so a silent model's reply
+ * simply never contains them.
+ */
+export const motion = (body: { prose: string; model: string; first_frame?: string | null }) =>
+  post<MotionResult>('/api/motion', body)
 
 /**
  * One element read again — the same route, not a second one.
@@ -257,16 +268,19 @@ export const reroll = (body: { prose: string; document: ParseElement[]; only: st
   post<ParseResult>('/api/parse', body)
 
 /**
- * Start the interpreter's container while the user is still reading the page.
+ * Start the container this session will use, while the page is still being read.
  *
- * The first parse fires on the first 500ms pause in the prompt box, which on a
- * fresh page is fifteen-odd seconds after load — and a cold L4 is a model load
- * plus a torch.compile. Spending that window is what buys scale-to-zero: the
- * card is warm exactly when it is wanted and rented no earlier. Fire and
- * forget, because nothing on screen depends on it and a slow first parse is the
- * only cost of it failing.
+ * It warmed the interpreter's L4 for a long time after nothing routed there,
+ * which cost a cold start on every page load to warm a card no request would
+ * reach. It warms the *generator* now — the one that answers both Enhance and
+ * the motion suggestions — and that container loads the rewrite weights as it
+ * comes up, so this window is spent on exactly what the first press waits for.
+ *
+ * Fire and forget: nothing on screen depends on it, and a slow first press is
+ * the only cost of it failing.
  */
-export const warm = () => post<{ ok: boolean }>('/api/warm', {})
+export const warm = (kind: 'image' | 'video' = 'image') =>
+  post<{ ok: boolean }>('/api/warm', { kind })
 
 /* ---- outputs and the gallery ----------------------------------------- */
 

@@ -56,6 +56,11 @@ export type ShotGroup = {
 
 export type ShotRole = { key: string; label: string; noun: string; retain: string }
 
+/** One section of the motion panel. `needs` is the same fact it is on a shot
+ *  group — sound and dialogue are audio, and a silent model is never offered
+ *  them (the server enforces it; this is what lets the panel say why). */
+export type MotionGroup = { key: string; label: string; needs: 'audio' | null }
+
 export type ModelEntry = {
   key: string
   label: string
@@ -171,6 +176,9 @@ export type AppState = {
    *  stays on the server and the page sends a key, so a run is reproducible
    *  from the job record rather than from whatever text was in a field. */
   rewrite_ops: { key: string; label: string; note: string }[]
+  /** The motion panel's sections, and the feature flag in one: absent (an
+   *  older server) means the video strip renders the old shot palette. */
+  motion_groups?: MotionGroup[]
   caption_models: { key: string; label: string; note: string; repo?: string; custom?: boolean }[]
   caption_defaults: { preset: string; model: string }
   train_optimizers: TrainChoice[]
@@ -372,3 +380,12 @@ export type DupeReport = {
 /** Prose in, prose out. `text` is the original on any failure, so a model that
  *  fell over can never blank the box. */
 export type RewriteResult = { ok: boolean; op?: string; text: string; error?: string }
+
+/** What `/api/motion` answers: grouped suggestion sentences, keyed by
+ *  MotionGroup key. Empty groups on any failure — the panel says so and the
+ *  prompt box is never touched by a model that fell over. */
+export type MotionResult = {
+  ok: boolean
+  error?: string
+  groups: Record<string, string[]>
+}

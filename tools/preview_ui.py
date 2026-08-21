@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from _from_app import CAPTION, MODULES, REWRITE, SHOT, TRAINER, pull
+from _from_app import CAPTION, MODULES, MOTION, REWRITE, SHOT, TRAINER, pull
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
 # Argument first, then $PORT, then a default. The env var is what lets a launcher
@@ -76,7 +76,8 @@ def app_api() -> dict:
     stamp = APP.stat().st_mtime_ns
     if _APP_CACHE.get("stamp") != stamp:
         _APP_CACHE.update(stamp=stamp,
-                          api=pull(SHOT | CAPTION | TRAINER | MODULES | REWRITE))
+                          api=pull(SHOT | CAPTION | TRAINER | MODULES
+                                   | REWRITE | MOTION))
     return _APP_CACHE["api"]
 
 
@@ -1058,6 +1059,44 @@ class Handler(BaseHTTPRequestHandler):
                                "prominence": api["_prominence"](mods),
                                "text": api["_compile_image_prompt"]("", [], mods)})
 
+        # Half stubbed, like `/api/parse`: **which** motions the model proposes
+        # is canned, because there is no model here — but the canned answer is
+        # written the way the model writes (labelled lines, a bullet, a bolded
+        # label) and goes through the real `_parse_motion`, so what the panel
+        # renders is what the parser actually yields. Audio gating reads the
+        # stub's own video_models, the same table the composer draws from, so
+        # picking Wan here hides Sound and Dialogue the way the deployment
+        # would. The sleep is the busy state — without it "Reading the frame…"
+        # is a string nobody has ever seen.
+        if path == "/api/motion":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            api = app_api()
+            model = str(p.get("model") or "")
+            keys = {m["key"]: m for m in STATE["video_models"]}
+            if model not in keys:
+                return self.reply({"ok": False, "groups": {},
+                                   "error": f"no such video model: {model!r}"})
+            if not str(p.get("prose") or "").strip() and not p.get("first_frame"):
+                return self.reply({"ok": True, "groups": {}})
+            time.sleep(0.8)
+            said = (
+                "SUBJECT: She lifts the cup and takes a slow sip.\n"
+                "SUBJECT: Her eyes track something passing outside the window.\n"
+                "- SUBJECT: She tucks a strand of hair behind her ear.\n"
+                "ENVIRONMENT: Steam curls up from the cup and drifts sideways.\n"
+                "ENVIRONMENT: Rain streaks slide down the glass behind her.\n"
+                "**CAMERA**: The camera pushes in slowly toward her face.\n"
+                "CAMERA: A gentle handheld drift keeps the frame alive.\n"
+                "SOUND: rain against the window\n"
+                "SOUND: the ceramic cup set down on wood\n"
+                "DIALOGUE: \"I thought you weren't coming.\"\n")
+            audio = bool(keys[model]["supports"].get("audio"))
+            return self.reply({"ok": True,
+                               "groups": api["_parse_motion"](said, audio=audio)})
+
         # Not stubbed: this route is pure and cheap, and what it answers is the
         # only question the preview server cannot fake usefully. A hand-written
         # reply here would let the rail look right while compiling to something
@@ -1207,6 +1246,11 @@ class Handler(BaseHTTPRequestHandler):
                                    "loras": [], "shot_vocab": api["SHOT_VOCAB"],
                                    "shot_langs": api["H3_LANGUAGES"], "shot_roles": [],
                                    "caption_presets": [], "caption_models": [], "rewrite_ops": [],
+                                   # Empty on a cold answer, which is also the
+                                   # degrade rehearsal: no motion_groups means
+                                   # the video strip falls back to the old shot
+                                   # door, and this is the one place to see it.
+                                   "motion_groups": [],
                                    "caption_defaults": {"preset": "", "model": ""}})
             return self.reply({
                 **STATE,
@@ -1239,6 +1283,12 @@ class Handler(BaseHTTPRequestHandler):
                 # all, which is the one thing this file exists to prevent.
                 "rewrite_ops": [{"key": k, "label": o["label"], "note": o["note"]}
                                 for k, o in api["REWRITE_OPS"].items()],
+                # Pulled for the reason every menu here is: a stub that omits
+                # this renders no Motion door at all, and the old palette would
+                # look like the shipped behaviour in the one file that exists
+                # to make the front end developable without a GPU.
+                "motion_groups": [dict(v, key=k)
+                                  for k, v in api["MOTION_GROUPS"].items()],
                 # The session form's three menus, shaped exactly as `state()`
                 # serves them. Pulled rather than transcribed for the reason the
                 # shot vocabulary is: a menu offering a value the route rejects

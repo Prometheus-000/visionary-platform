@@ -536,10 +536,17 @@ comfy_image = (
     # the reason `trainer_image` bakes the same one: an H100 that is already
     # warm should never wait on HuggingFace, and an outage there should not be
     # able to take renders with it.
+    # AutoProcessor beside the tokenizer, because the motion path shows the
+    # model a frame and the processor is what turns pixels into
+    # `pixel_values`/`image_grid_thw` — it is a config download, not weights,
+    # and fetching it at request time would put HuggingFace back on a path the
+    # two lines below exist to keep it off.
     .run_commands(
-        "python -c \"from transformers import AutoConfig, AutoTokenizer; "
+        "python -c \"from transformers import AutoConfig, AutoProcessor, "
+        "AutoTokenizer; "
         "r='Qwen/Qwen3-VL-4B-Instruct'; "
-        "AutoConfig.from_pretrained(r); AutoTokenizer.from_pretrained(r)\""
+        "AutoConfig.from_pretrained(r); AutoTokenizer.from_pretrained(r); "
+        "AutoProcessor.from_pretrained(r)\""
     )
     .add_local_dir(
         f"{COMFY_NODES_DIR}/visionary_boxes",
@@ -5608,6 +5615,53 @@ def _krea2_graph(
     return graph
 
 
+# Load the rewrite model during a cold start that is already happening, on both
+# generator containers, so it is resident before anybody asks for it.
+#
+# **The ordering problem this exists to fix.** Enhance runs *before* a
+# generation and lived on the container that only exists *because of* one, so
+# the first thing anyone does in a session was the one thing with no warm host.
+# Worse, the load was lazy and the "one-time ~20s" this claimed was wrong twice
+# over: ~8 GB read off a *network* volume plus a CPU construction the node
+# prices at forty seconds, all of it charged to whoever pressed the button
+# first.
+#
+# **The memory objection was checked rather than deferred to.** 9 GiB beside
+# 42.5 GB of H3 on an 80 GB card leaves 28.5 GB — and 42.5 GB is itself the
+# number the int8 repackage was chosen for, precisely so the model stays
+# resident instead of offloading every request. Sizing a rewrite out of a card
+# that was specified to hold its own model comfortably was caution pointed at
+# the wrong number.
+#
+# A thread rather than an inline await, because `@modal.enter` gates the first
+# request: ComfyUI can render the moment it has started, so the load rides
+# alongside rather than in front, and a generate never waits on a rewrite's
+# weights. The one cost is that a render arriving inside the warm window queues
+# behind it in ComfyUI's own queue — acceptable, because that window only
+# exists on a container that is about to load a 35 GB checkpoint anyway.
+#
+# Swallowed, always. A warm-up that failed is a slow first press, which is what
+# the situation was before it existed; raising here would turn it into a
+# container that refuses to start and takes renders down with it.
+def _warm_rewrite(comfy: "_Comfy", where: str) -> None:
+    def go() -> None:
+        started = time.time()
+        try:
+            comfy.run_text({"rw": {"class_type": "VisionaryRewrite",
+                                   "inputs": {"prose": "", "instruction": "",
+                                              "max_tokens": 16,
+                                              "warm_only": True}}},
+                           timeout=600.0)
+            print(f"[rewrite] {where} model resident in "
+                  f"{time.time() - started:.0f}s", flush=True)
+        except Exception as exc:
+            print(f"[rewrite] {where} warm-up failed after "
+                  f"{time.time() - started:.0f}s, first press pays it: {exc}",
+                  flush=True)
+
+    threading.Thread(target=go, daemon=True).start()
+
+
 @app.cls(
     image=comfy_image, gpu=GPU, cpu=4.0, timeout=60 * 60,
     volumes={"/workspace": volume},
@@ -5632,10 +5686,11 @@ class ImageGenerator:
         # scrolled past during startup.
         self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
                                   "VisionaryRewrite", "VisionaryFreeRegional")
+        _warm_rewrite(self._comfy, "image")
 
     @modal.method()
     def rewrite(self, prose: str, instruction: str,
-                max_tokens: int = 420) -> dict[str, Any]:
+                max_tokens: int = 420, image_b64: str = "") -> dict[str, Any]:
         """
         The rewrite, on the encoder this container already holds.
 
@@ -5651,11 +5706,25 @@ class ImageGenerator:
         the take rather than competing with it — and in the ordinary flow the
         two are sequential anyway, because you rewrite the prompt and then press
         Generate.
+
+        `image_b64` is the motion path's whole reason for being here rather
+        than on the interpreter: this arm is the one with eyes. The vision
+        tower was always loaded (see the node's own comment on why dropping it
+        broke), so a frame riding along costs plumbing, not memory — and the
+        `"interpreter"` arm cannot take one, which is why `/api/motion` calls
+        this class directly instead of going through `_rewrite_backend`'s seam.
         """
         graph = {"rw": {"class_type": "VisionaryRewrite",
                         "inputs": {"prose": prose, "instruction": instruction,
-                                   "max_tokens": int(max_tokens)}}}
+                                   "max_tokens": int(max_tokens),
+                                   "image_b64": image_b64}}}
         return {"text": self._comfy.run_text(graph)}
+
+    @modal.method()
+    def warm(self) -> dict[str, Any]:
+        """A knock, so the page can start this container on load. `enter` is
+        what does the work; arriving here at all means it has run."""
+        return {"ok": True}
 
     @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -7286,12 +7355,35 @@ _REWRITE_TAIL = (
 REWRITE_BACKEND = "comfy"
 
 
-def _rewrite_backend(prose: str, instruction: str, max_tokens: int) -> str:
+def _rewrite_generator(kind: str):
+    """
+    The container the session is already keeping warm.
+
+    **Which container answers is the whole latency story**, and getting it
+    wrong is what made this feature unusable: a rewrite always went to
+    `ImageGenerator`, so a video session paid a second container's cold start —
+    ComfyUI and 35 GB of Krea 2 — to write a sentence. Both hold the same
+    weights off the same volume, so the only question worth asking is which one
+    is already on, and the session's own kind is the answer.
+    """
+    return VideoGenerator() if kind == "video" else ImageGenerator()
+
+
+def _rewrite_backend(prose: str, instruction: str, max_tokens: int,
+                     kind: str = "image") -> str:
     """Prose in, prose out, wherever the model happens to live."""
     if REWRITE_BACKEND == "comfy":
-        said = ImageGenerator().rewrite.remote(prose, instruction, max_tokens)
-    else:
-        said = Interpreter().rewrite.remote(prose, instruction, max_tokens)
+        said = _rewrite_generator(kind).rewrite.remote(
+            prose, instruction, max_tokens)
+        # Cleaned here, not in the node — its own comment says cleaning stays in
+        # app.py, and for a while nothing here held up that half of the bargain:
+        # the comfy arm returned the model's text verbatim while the interpreter
+        # arm cleaned inside `Interpreter.rewrite`. Per arm rather than hoisted
+        # below the if, because running the interpreter's already-clean answer
+        # through the quote-strip rule a second time is how a prompt that
+        # legitimately ends in quoted speech loses its quotes.
+        return _clean_rewrite(said.get("text") or "")
+    said = Interpreter().rewrite.remote(prose, instruction, max_tokens)
     return said.get("text") or ""
 
 
@@ -7392,6 +7484,122 @@ def _clean_rewrite(said: str) -> str:
         if cut > 40:
             text = text[:cut + 1]
     return text.strip()
+
+
+# --------------------------------------------------------------------------
+# Motion suggestions — the video side's answer to the shot palette, which it
+# replaces. The palette's flaw was named precisely by the person this is built
+# for: it added comma-separated phrases in a vacuum, with no knowledge of what
+# those phrases were acting on, against an encoder that reads prose where
+# elements and subjects tie together. The fix is grounding: the model *looks at
+# the attached frame* (the Qwen3-VL beside Krea 2 has its vision tower resident
+# — see visionary_rewrite's loading comment) and proposes motion for the
+# subjects that are actually there. On t2v, where there is no frame, it grounds
+# on the typed prose instead — same instruction frame, different first line.
+#
+# The keys are the panel's sections and the parser's labels, in the order the
+# clauses should land in the prompt — subject, then environment, then camera,
+# which is the guide's own clause order. `needs` is the same fact it is in
+# SHOT_VOCAB: sound and dialogue are audio, and a silent model must never be
+# offered a category the compiler would drop. Served to the page, and serving it
+# is also the feature flag — a client that finds no `motion_groups` renders the
+# old palette, so the degrade is the app as it was.
+MOTION_GROUPS: dict[str, dict[str, Any]] = {
+    "subject":     {"label": "Subjects",    "needs": None},
+    "environment": {"label": "Environment", "needs": None},
+    "camera":      {"label": "Camera",      "needs": None},
+    "sound":       {"label": "Sound",       "needs": "audio"},
+    "dialogue":    {"label": "Dialogue",    "needs": "audio"},
+}
+
+# Two heads, one body. The i2v head is the whole point of the feature — the
+# frame already fixes the scene, so describing looks is the failure mode — and
+# the t2v head is the same discipline applied to prose. No scene examples
+# anywhere in the body: the 10.2k-character PARSE_RULES lesson is that concrete
+# examples get parroted back as the answer, and a format spec is the part a
+# model cannot infer while "what does a kitchen do" is the part it can.
+_MOTION_HEAD_IMAGE = (
+    "You are directing a short video clip. The still image you are given is "
+    "its first frame: it already fixes the scene, the subjects, the light and "
+    "the framing, so never describe how anything looks. Propose only what "
+    "MOVES.")
+_MOTION_HEAD_TEXT = (
+    "You are directing a short video clip from the written description you "
+    "are given. The description already says what the scene is; do not "
+    "restate it. Propose only what MOVES over the clip.")
+
+
+def _motion_instruction(*, image: bool, audio: bool) -> str:
+    """
+    Assembled per request rather than four baked constants, because the two
+    axes are independent facts about the request — is there a frame, can the
+    model hear — and 2x2 near-identical strings is the drift this file keeps
+    paying for elsewhere. Size budget 500-2000 characters, asserted in
+    `smoke_rewrite.py` like every other instruction here.
+    """
+    lines = [
+        "SUBJECT: one short present-tense sentence of motion for one visible "
+        "subject",
+        "ENVIRONMENT: one short sentence of ambient or background motion",
+        "CAMERA: one camera move with its size and speed, written as action",
+    ]
+    counts = "Give 2-4 SUBJECT lines, 2-3 ENVIRONMENT lines and 2-3 CAMERA lines"
+    if audio:
+        lines += [
+            "SOUND: a few words naming a sound the scene itself would carry",
+            "DIALOGUE: one short line a visible subject could plausibly say",
+        ]
+        counts += ", 2-3 SOUND lines and 1-2 DIALOGUE lines"
+    return (
+        (_MOTION_HEAD_IMAGE if image else _MOTION_HEAD_TEXT)
+        + "\n\nEvery proposal must be concrete, modest and tied to something "
+        "actually present — motion a few seconds of video can complete. One "
+        "proposal per line, each formatted exactly as one of:\n"
+        + "\n".join(lines)
+        + "\n\n" + counts + ". No headers, no numbering, no commentary: "
+        "nothing but these lines.")
+
+
+# Tolerant at the front — models bullet, bold and dash their lists however
+# firmly the instruction says not to — and strict about the label itself,
+# because the label is the only structure this contract has. A line that
+# matches nothing is dropped, never an error: a suggestion list three lines
+# short is still a suggestion list, where the parse path's whole apparatus
+# existed because a malformed *document* is never an acceptable output.
+_MOTION_LINE = re.compile(
+    r"^[^A-Za-z]{0,4}(subject|environment|camera|sound|dialogue)"
+    r"\**\s*[:—-]\s*(.+)$", re.I)
+MOTION_MAX_PER = 4
+MOTION_PHRASE_MAX = 200
+# A flat cap, not `_rewrite_tokens`: that one scales with the input because a
+# polish comes back about as long as it went in, and a suggestion list does not
+# — fifteen short lines is the whole answer whatever was typed.
+MOTION_TOKENS = 512
+
+
+def _parse_motion(said: str, *, audio: bool) -> dict[str, list[str]]:
+    """LABEL: sentence lines in, grouped phrases out. Deterministic, lossy."""
+    text = said or ""
+    # The think-block guard, reused: planning arrives in front of the answer on
+    # this path too, and a reasoning line that happens to start with "Camera"
+    # would otherwise be served as a suggestion.
+    if (hit := _THINK.match(text)) and text[hit.end():].strip():
+        text = text[hit.end():]
+    out: dict[str, list[str]] = {k: [] for k in MOTION_GROUPS}
+    for raw in text.splitlines():
+        m = _MOTION_LINE.match(raw.strip())
+        if not m:
+            continue
+        key = m.group(1).lower()
+        # Asserted here as well as in the instruction, because the instruction
+        # is a request: a silent model's panel must not offer a sound however
+        # helpfully the model volunteered one.
+        if not audio and MOTION_GROUPS[key]["needs"] == "audio":
+            continue
+        phrase = _oneline(m.group(2)).strip().strip("\"'")[:MOTION_PHRASE_MAX].strip()
+        if phrase and phrase not in out[key] and len(out[key]) < MOTION_MAX_PER:
+            out[key].append(phrase)
+    return {k: v for k, v in out.items() if v}
 
 
 PARSE_REROLL = """
@@ -8803,6 +9011,44 @@ class VideoGenerator:
     def setup(self):
         self._comfy = _Comfy("video")
         self._comfy.start()
+        # Named at startup for the reason the image side names its four: a node
+        # that failed to import leaves ComfyUI running happily without it, and
+        # the first symptom is otherwise a rewrite rejected for an unknown
+        # class_type — minutes into a session, with the traceback long scrolled.
+        self._comfy.require_nodes("VisionaryRewrite")
+        _warm_rewrite(self._comfy, "video")
+
+    @modal.method()
+    def rewrite(self, prose: str, instruction: str,
+                max_tokens: int = 420, image_b64: str = "") -> dict[str, Any]:
+        """
+        The same rewrite, on the container the video session is already using.
+
+        **This exists because the alternative was a two-hundred-second wait for
+        a sentence.** Every rewrite used to answer on `ImageGenerator`, so
+        pressing Enhance halfway through a video session woke a *second*
+        container from zero — ComfyUI plus 35 GB of Krea 2 — to produce text,
+        on a card whose checkpoint the run would never touch. The weights this
+        needs are the same file on the same volume, so the fix is a method
+        rather than an architecture: whichever container the session is already
+        keeping warm is the one that answers.
+
+        It is not the video encoder. H3 reads its own and Wan reads umT5, so
+        unlike the image side there is nothing resident here to reuse — this is
+        Qwen3-VL loaded beside them at `enter`, 9 GiB against the 28.5 GB this
+        card has spare once H3's 42.5 GB is in. See `_warm_rewrite`.
+        """
+        graph = {"rw": {"class_type": "VisionaryRewrite",
+                        "inputs": {"prose": prose, "instruction": instruction,
+                                   "max_tokens": int(max_tokens),
+                                   "image_b64": image_b64}}}
+        return {"text": self._comfy.run_text(graph)}
+
+    @modal.method()
+    def warm(self) -> dict[str, Any]:
+        """A knock, so the page can start this container on load. `enter` is
+        what does the work; arriving here at all means it has run."""
+        return {"ok": True}
 
     @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -9225,6 +9471,10 @@ def web():
                 {"key": k, "label": o["label"], "note": o["note"]}
                 for k, o in REWRITE_OPS.items()
             ],
+            # The motion panel's sections, and the feature flag in one: a page
+            # that finds no `motion_groups` renders the old shot palette on the
+            # video side, so turning this feature off is deleting one key.
+            "motion_groups": [dict(v, key=k) for k, v in MOTION_GROUPS.items()],
             # The repo is shown in the gear's Caption models section, and
             # `custom` is what makes an entry deletable there — a built-in has
             # no delete because there is nothing behind it to remove.
@@ -9291,24 +9541,30 @@ def web():
         return {"ok": True, "hf_token_set": bool(_hf_token())}
 
     @api.post("/api/warm")
-    def warm_interpreter(payload: dict) -> dict[str, Any]:
+    def warm_generator(payload: dict) -> dict[str, Any]:
         """
-        Start the interpreter's container while the user is still typing.
+        Start the container this session will actually use, on page load.
 
-        A cold L4 is a model load and a torch.compile, and the first parse fires
-        on the first 500ms pause in the prompt box — which on a fresh page is
-        around fifteen seconds after load. Spending that window on the cold
-        start is what lets this scale to zero instead of holding a card warm for
-        a single user who is not looking at it yet.
+        **It used to start the interpreter's L4, and that was worse than
+        useless.** `REWRITE_BACKEND` has been `"comfy"` since the rewrite moved
+        onto the resident encoder, so nothing on any user-facing path answers
+        there — yet every page load rented a card and paid a vLLM cold start
+        for it. A warm-up that warms something no request will reach is not a
+        no-op; it is competing for the same quota as the container that *is*
+        about to be asked for something.
 
-        `spawn`, so the page is never waiting on it, and errors are swallowed:
-        a warm-up that fails is a slower first parse, not something to put on
-        screen. Nothing downstream depends on this having happened.
+        So it warms the generator instead, which is where both the rewrite and
+        the motion suggestions live. `enter` stages the rewrite weights, so the
+        window this buys is spent on the exact thing the first press waits for.
+
+        `spawn`, so the page never waits, and errors are swallowed: a warm-up
+        that fails is a slower first press, not something to put on screen.
         """
+        kind = "video" if str(payload.get("kind") or "") == "video" else "image"
         try:
-            Interpreter().warm.spawn()
+            _rewrite_generator(kind).warm.spawn()
         except Exception as exc:
-            print(f"[parse] warm-up failed: {exc}", flush=True)
+            print(f"[rewrite] {kind} warm-up failed: {exc}", flush=True)
         return {"ok": True}
 
     @api.post("/api/rewrite")
@@ -9328,6 +9584,9 @@ def web():
         original text, so the box is never left empty by a model that fell over.
         """
         prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
+        # Which container answers, not which model runs — the weights are the
+        # same file either side. See `_rewrite_generator`.
+        kind = "video" if str(payload.get("kind") or "") == "video" else "image"
         op = str(payload.get("op") or "")
         if op not in REWRITE_OPS:
             return {"ok": False, "error": f"no such rewrite: {op!r}",
@@ -9337,7 +9596,7 @@ def web():
         try:
             text = _rewrite_backend(
                 prose, REWRITE_OPS[op]["instruction"] + _REWRITE_TAIL,
-                _rewrite_tokens(prose))
+                _rewrite_tokens(prose), kind)
         except Exception as exc:
             print(f"[rewrite] {op} failed on {REWRITE_BACKEND}: {exc}", flush=True)
             return {"ok": False, "error": str(exc), "text": prose}
@@ -9356,6 +9615,69 @@ def web():
         # An empty answer is a failure wearing a success's clothes: it would
         # blank the box. The original standing is always the safe degrade.
         return {"ok": True, "op": op, "text": text or prose}
+
+    @api.post("/api/motion")
+    def motion_suggest(payload: dict) -> dict[str, Any]:
+        """
+        What could move in this frame — grounded suggestions, grouped.
+
+        The one route where a model is shown a *picture* of the user's rather
+        than their words: the attached first frame rides along and the encoder
+        proposes motion for the subjects actually in it. Nothing here writes
+        into the prompt — the page composes the picks into prose on screen,
+        where they are editable and one ⌘Z from gone, which is the same trust
+        shape as the rewrite: nothing reaches the encoder that was not in the
+        box first.
+
+        Audio categories are gated per model *here*, not on the page: a reply
+        that offers a sound to a silent model is a reply the compiler would
+        have to drop later, and the sidecar-must-not-lie rule is cheaper to
+        enforce before the suggestion exists.
+
+        Every failure answers with empty groups and a reason. The panel says
+        so; the prompt box is never touched by a model that fell over.
+        """
+        prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
+        model = str(payload.get("model") or "")
+        if model not in VIDEO_MODELS:
+            return {"ok": False, "groups": {},
+                    "error": f"no such video model: {model!r} — one of "
+                             f"{sorted(VIDEO_MODELS)}"}
+        image = str(payload.get("first_frame") or "")
+        # The page shrinks a frame to 1536px before sending it (the reference
+        # cap), so a shrunk frame is 1-3 MB of base64. Anything past this bound
+        # is a client that skipped the shrink, and refusing it by name beats
+        # feeding a 12 MB phone original through the processor.
+        if len(image) > 8_000_000:
+            return {"ok": False, "groups": {},
+                    "error": "first_frame is too large — the page caps a frame "
+                             "at 1536px before sending it"}
+        if not prose and not image:
+            return {"ok": True, "groups": {}}
+        audio = bool(VIDEO_MODELS[model]["supports"].get("audio"))
+        instruction = _motion_instruction(image=bool(image), audio=audio)
+        try:
+            # ImageGenerator directly, not `_rewrite_backend`: the seam swaps
+            # between two arms and only this one has eyes. An empty user turn is
+            # undefined behaviour in a chat template, so the i2v-with-no-prose
+            # case sends a stand-in that says where the answer should come from.
+            # The video container, because this is a video-only surface and it
+            # is the one the session already has warm. Both hold the same
+            # weights; the image container is a cold start away.
+            said = _rewrite_generator("video").rewrite.remote(
+                prose or "(nothing was typed — ground every proposal in the image)",
+                instruction, MOTION_TOKENS, image_b64=image)
+        except Exception as exc:
+            print(f"[motion] failed: {exc}", flush=True)
+            return {"ok": False, "groups": {}, "error": str(exc)}
+        raw = said.get("text") or ""
+        # Prose declines are visible, so the rewrite's guard covers this path
+        # too — anchored, because "I cannot" inside a suggestion is a line about
+        # the picture.
+        if raw and _looks_like_refusal(raw):
+            print(f"[motion] declined: {raw[:80]!r}", flush=True)
+            raw = ""
+        return {"ok": True, "groups": _parse_motion(raw, audio=audio)}
 
     @api.post("/api/parse")
     def parse_prose(payload: dict) -> dict[str, Any]:

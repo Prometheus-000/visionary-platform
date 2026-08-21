@@ -137,8 +137,9 @@ export function App() {
     })()
     // Once, beside the state fetch rather than in an effect of its own: they are
     // the same event — the page opened — and a second effect would be a second
-    // thing to keep in step with it.
-    void warm()
+    // thing to keep in step with it. The kind rides along because it decides
+    // *which* container is warmed, and the page opens on stills.
+    void warm(useStore.getState().kind)
     // The sets listing too, and for the same reason the sessions door gets its
     // rows at app level: Sets is a front-door destination now, and the click
     // that opens it should find the rows already waiting rather than start the
