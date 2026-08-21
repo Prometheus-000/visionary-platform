@@ -174,13 +174,41 @@ is today. One builder is what makes it reachable from `smoke_graphs.py`.
 `extra_model_paths.yaml` already maps `text_encoders: models/` and both
 containers share `_Comfy`, so the file resolves on both with no build change.
 
-## The video container
+## The video container, and the encoder that is there
 
-It has no Qwen3-VL to share — H3 reads its own encoder and Wan reads umT5 — so
-it loads Krea 2's purely as a rewriter. That is not a regression; it is what it
-does today, and the docstring at `VideoGenerator.rewrite` already says so. What
-changes is that the copy becomes ComfyUI-managed rather than invisible, so
-`/free` reaches it and `_reclaim()` can drop it on an OOM.
+An earlier draft of this note said the video container "has no Qwen3-VL to
+share." That is wrong and worth correcting in place, because the true version is
+more interesting than the false one. H3's text encoder **is** Qwen3-VL — the 32B
+(`h3_te`), against Krea 2's 4B. What it is not is a model that can generate, and
+the reasons are worth writing down because they are the reasons the LTX
+comparison does not carry.
+
+LTX-2's enhancer is cheap because LTX-2 loads `Gemma3ForConditionalGeneration` —
+the complete causal LM, `lm_head` included. That is why upstream's
+`TextGenerateLTX2Prompt` is a system prompt and nothing else. H3's checkpoint is
+the opposite end of the same axis. From ComfyUI's own `Qwen3VL_32BConfig`,
+comment included:
+
+```python
+# MiniMax H3 conditioning checkpoint: truncated to the first 50 of 64 layers,
+# consumed as the unnormalized hidden state after layer 50 (no final norm, no lm_head)
+num_hidden_layers: int = 50
+lm_head: bool = False
+final_norm: bool = False
+```
+
+Fourteen layers are not in the file, the final norm is not in the file, and
+neither is a head. And unlike the 4B there is no free head to reconstruct:
+checked against the published configs, Qwen3-VL-4B is `tie_word_embeddings:
+true` while the 8B and 32B are both `false`. So `BaseQwen3.logits` falling back
+to `embed_tokens.weight` — correct for the 4B — would on the 32B be an input
+embedding matrix used as an output projection, which yields garbage rather than
+an error. On top of that the file is nvfp4-AWQ.
+
+So for **Phase 1** the video container loads Krea 2's 4B purely as a rewriter,
+which is what it does today and what `VideoGenerator.rewrite`'s docstring
+already says. What changes is that the copy becomes ComfyUI-managed rather than
+invisible, so `/free` reaches it and `_reclaim()` can drop it on an OOM.
 
 Which means **one node, one graph shape, both containers**. The alternative —
 keep the loading node for video and add a sharing node for images — is two code
@@ -190,6 +218,64 @@ where nothing is shared.
 Arithmetic, so nobody has to re-derive it: H3 is 42.5 GiB and the encoder 8.9,
 against 80 GiB. Krea 2 is ~24 and the encoder 8.9. Neither is near the line, so
 `load_models_gpu` has nothing to evict to make room.
+
+## Phase 2: H3's own encoder, and the generation tail
+
+Not out of scope — sequenced after, and recorded here so it is a decision rather
+than an oversight.
+
+`ethanfel/ComfyUI-MiniMax-H3-Guide` solves exactly the problem above with a
+**Generation Tail Loader**. Its `hybrid_tail.py` docstring: *"The connected
+standard MiniMax H3 CLIP owns the embedding, vision tower, and language layers
+0..49. This module loads only layers 50..63, the final norm, and the LM head
+while text is generated."* The tail is a separate weight file and is released
+after decoding.
+
+**Which file, and why it is not the obvious one.** `generate_with_tail`'s
+`logits()` falls through to `self.model.lm_head(...)` only when the head weight
+carries no `_qdata`/`scale`; any quantized layout reaches `_validate_int8_head`,
+which raises on anything but `TensorWiseINT8Layout`. So the 5.40 GB nvfp4 tail
+in that repo is rejected by that repo's own loader, and the one to take is the
+**7.61 GB int8 ConvRot** tail. Our nvfp4 body underneath it is fine: layers
+0–49 and 50–63 are separate modules exchanging hidden states, so the two
+quantizations do not have to agree.
+
+**Why it is worth doing at all**, given that it costs a fourth pinned SHA, a
+7.61 GB catalogue entry and a per-press load: a 32B writing H3's prompts is a
+better model than a 4B, and it is the encoder that will read the result. That is
+this node's own founding argument — *a rewriter which is the encoder writes in
+the dialect the encoder reads* — applied where it has the most force. It is also
+the only claim here that cannot be settled by reading, which is why Phase 2
+opens as a spike rather than as an implementation.
+
+**Why it is sequenced second rather than folded in.** Three unknowns, none
+measured: whether the pack imports headless, whether an nvfp4 body plus an int8
+tail actually decodes, and whether the result writes better prose than the 4B in
+bf16. `tools/prompt_ab.py` answers the third and is the gate. Phase 1 does not
+depend on any of them, and if Phase 2 wins it changes two things and no more:
+the video graph names a different loader, and the node gains one optional
+`clip_tail` input that routes generation through `generate_with_tail`. That is
+why Phase 1 does not need to anticipate it — an optional input is additive, and
+building a hook for a phase that may not land is the speculation this file
+argues against everywhere else.
+
+**Pinned, not vendored** — the `CLIFF_SHA` pattern, for the reason that entry
+gives: nothing in it is patched, so there is no `VENDOR.md` to keep in sync.
+
+**On the per-press load.** It is real — 7.61 GB off the volume every time
+Enhance is pressed on an H3 session — and it was accepted deliberately rather
+than overlooked. The workflow is the argument: image prompts are enhanced while
+brainstorming, where a wait lands between keystrokes, but video is worked in
+takes and a session may enhance once in five renders. A load amortised over
+minutes of sampling is not the same cost as one felt mid-thought.
+
+**Wan gets nothing, and that is accepted.** `UMT5EncoderModel` is an encoder
+stack with no decoder; there is no tail that makes it generate. Wan sessions
+keep Enhance in Phase 1 because the 4B is still the video rewriter there. If
+Phase 2 lands before Wan is retired, Wan loses Enhance, and the honest form of
+that is the `VIDEO_MODELS[...]["supports"]` gate the composer already uses for
+audio and negative prompts — a control the model will not honour should be
+absent, not present and ignored.
 
 ## Why the render/rewrite handoff does not stall
 
