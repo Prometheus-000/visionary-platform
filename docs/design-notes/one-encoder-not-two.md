@@ -327,12 +327,33 @@ Every row is a thing that could be wrong, not a thing believed to be fine.
 | Cache does not survive alternation | `RAMPressureCache` evicts under system-RAM pressure and the container is `cpu=4.0` | render → rewrite → render on a warm container, and grep ComfyUI's stdout for a second text-encoder load line |
 | Decode hits SageAttention | `--use-sage-attention` is process-wide, and sage asserts `mask is None` | `Llama2_.forward` picks `optimized_attention_for_device(device, mask=mask is not None, small_input=True)`; at `seq_len == 1` there is no mask and `small_input` is set, so it should be SDPA — assert it rather than trust the read |
 | `<think>` does not tokenise | ComfyUI bundles a `qwen25_tokenizer`; `<think>` is a Qwen3 addition | round-trip `clip.tokenize` → `clip.decode` on the composed template and compare |
-| Output drifts | different tokenizer, different sampler code, same weights | re-run `tools/rewrite-dump.jsonl`'s inputs through both paths and diff |
+| The model sees different tokens | ComfyUI bundles its own `qwen25_tokenizer`; HF's is a different file | tokenize the composed string both ways, compare id lists — exact |
+| The model is structurally wrong | wrong head, wrong layer count, mis-assembled template | first generated token must agree across the two paths |
+| Fluent garbage | a wrong head produces confident nonsense that passes every other check | growth ratio inside the measured band, non-empty after `_clean_rewrite`, not caught by `_looks_like_refusal` |
 | `COMFY_SHA` bump breaks the rewrite | three upstream names are now load-bearing where the old node depended on none | `smoke_rewrite.py` and `smoke_graphs.py`, both named in the bump checklist |
 
-The output-drift row is the gate. The same weights, greedy, at bf16 should mean
-byte-identical prose; anything else is a bug worth finding before this lands
-rather than a tolerance to accept.
+**Token-id parity is the gate, and prose equality is deliberately not asserted.**
+An earlier draft of this note required byte-identical output on the grounds that
+same weights plus greedy decode is deterministic. It is — given identical
+logits, which these two paths will not produce. A different attention kernel, a
+preallocated KV cache written in place against HF's dynamic one, a different
+order of operations: all mathematically equivalent, none bitwise equal in bf16.
+Somewhere in a 400-token decode two candidates land within a few ULPs, argmax
+flips, and everything after diverges. That is arithmetic, not a defect, and a
+gate that fails on it would send whoever runs it chasing numerics.
+
+It is also the trap this repo has already paid for once. A byte-diff over prose
+is a lexical check standing in for a judgement — the same shape as the coverage
+and invention thresholds, and as the anchoring score `smoke_parse.py` keeps as
+`anchor_sweep` so the next person can watch it fail rather than reinvent it.
+
+So exactness is required where exactness exists. The token ids are deterministic
+and comparable, and if the model sees the same ids the interesting risk is gone.
+The first generated token is a structural smoke signal, cheap and near-certain
+under agreement. The growth band is arithmetic over a number this file already
+measured. Whether the prose is *better* is read, and if it is in doubt it goes
+to `tools/prompt_ab.py` — blind, both orders, old path against new. Judgement in
+the harness, arithmetic in the gate.
 
 ## Out of scope
 
