@@ -318,6 +318,75 @@ way — see the table below.
   code they describe; the paragraph on `PARSE_GPU`'s concurrency objection
   stands unchanged.
 
+## Enhance becomes a reroll
+
+Not a widening of scope so much as a fault the encoder work surfaced. It rides
+in Phase 1 because it changes the same three files and because shipping the
+sampling half without the reroll half would be worse than shipping neither.
+
+**The fault, as it stands today.** `Rewrite.tsx` sends
+`stripLoras(s.prompt).trim()` — whatever is in the box *now*. So a second press
+rewrites the first press's output, and `KREA_EXPANSION`'s rule 7 ("if the user's
+prompt is already detailed, lightly polish and finalize rather than heavily
+expanding") makes R2 a polish of a polish. Four presses is four removes from what
+the person meant, with nothing having gone wrong anywhere.
+
+And the undo cannot recover it. `applyRewrite` writes
+`docUndo: { prompt: s.prompt, doc: s.doc }`, so press 2 records **R1** as the
+thing to restore and the original sentence leaves the slot. `undoDoc`'s comment —
+*"there is only ever one parse write to take back"* — is true of the parse, which
+fires once, and false of a button anybody can press twice.
+
+So Enhance is a one-shot that does not stop you pressing it twice. Greedy hides
+the drift rather than preventing it.
+
+**The rule this is built to, in the user's words:** *good experience is the
+ability to reroll; bad experience is each reroll drifting further and getting
+worse.* Those are separable, and separating them is the whole design.
+
+**Every press reads the prose, not the box.** A new store field —
+`rewriteFrom: string | null` — holds the string every press is a reading of. It
+is set on the first press and kept across the rest, so press N is an independent
+interpretation of what was actually typed rather than an interpretation of an
+interpretation. No press is further from intent than the first.
+
+**A hand edit re-bases it.** If you edit the rewritten prompt and press again,
+the box *is* the intent now — you authored that text. So `rewriteFrom` is
+invalidated whenever the box no longer equals the last answer. This is exactly
+the rule `motion.base` already carries: *"the moment the box no longer reads as
+base-plus-picks (a hand edit), the next toggle re-bases on what is actually
+there rather than stomping it."* One pattern, two places.
+
+**Undo lands on your sentence, never on the previous rewrite.** `applyRewrite`
+records the undo pair only when the slot is empty or has just been re-based, so
+⌘Z from press 4 restores what you typed.
+
+**And that is what forces sampling.** With `rewriteFrom` in place and a greedy
+decode, press 2 returns byte-identical text — same input, same argmax — and the
+page would report "found nothing to change" about a button that did precisely
+what it did the first time. Reroll-from-prose and `do_sample=True` are one
+decision, not two.
+
+**Sampling parameters: proposed, not settled.** `CLIP.generate` takes the full
+set. Qwen3's own guidance for non-thinking mode is `temperature=0.7, top_p=0.8,
+top_k=20, min_p=0`; ComfyUI's `TextGenerate` defaults are Gemma-shaped
+(`0.7 / 0.95 / 64 / 0.05`) and are the wrong family. A small presence penalty is
+indicated by a symptom this file already recorded — the red armchair coming back
+as *"a pristine, bright red velvet armchair, velvet, bright red, pristine"*.
+These are constants that shape every rewrite and they are written here to be
+argued with rather than inherited.
+
+**The seed is the server's, so the harness can pin it.** `_rewrite_backend`
+takes a seed and draws a fresh one per press; `smoke_parse.py`, `prompt_ab.py`
+and the judge pass a fixed one. Repeatability was never a product requirement —
+it was a measurement requirement, and it belongs to the harness rather than to a
+constant in the node.
+
+**One interaction to watch:** `toggleMotion` writes through the same `docUndo`
+slot. Motion is video-side and the rewrite can follow it, so the re-basing rule
+has to not strand a motion composition. Named here so the plan tests it rather
+than discovers it.
+
 ## Risks, and the check for each
 
 Every row is a thing that could be wrong, not a thing believed to be fine.
