@@ -878,12 +878,16 @@ volume invisible to the picker, which reads as "training never produced
 anything" rather than "this listing has an opinion about directory layout." A
 file a run can load is a file the picker has to offer.
 
-This is also why a `<lora:…>` token resolves by the **shortest unambiguous
-name**. One `k3nan.safetensors` on the volume is `<lora:k3nan:1>`; the matched
-Wan speed pairs, whose files are both called `high` and `low`, are qualified by
-their folder. When a name matches more than one file the note says which ones,
-because "no LoRA named high" sends you looking for a file that is sitting right
-there.
+This is also why a LoRA is **named by the shortest unambiguous name**. One
+`k3nan.safetensors` on the volume is `k3nan`; the matched Wan speed pairs, whose
+files are both called `high` and `low`, are qualified by their folder.
+
+That rule used to be about *typing* — it decided what `<lora:…>` you could write
+and the note said which files a name matched when it matched several. LoRAs are
+chips now, so nothing is typed and nothing is ambiguous: the name is what the
+chip reads, and it is picked from a list. What survives unchanged is why the
+short form has to be *correct* rather than merely pretty — "high" would name two
+real files, and a label that says `high` twice is a picker you cannot use.
 
 **Case is part of the name.** Resolution is exact first, and case-insensitive
 only as a fallback that still has to land on one file. Folding case before
@@ -895,6 +899,12 @@ went untypeable and the note blamed a missing file for a file that is sitting
 right there. Nothing in the backend folds case: it addresses LoRAs by exact path
 and ComfyUI validates them against a directory listing, so the resolver was the
 only place on the path where two distinct files became one name.
+
+**The resolver outlived the syntax that needed it.** Nobody types a name any
+more, so nothing goes "untypeable" — but a *sidecar* records what ran as a name
+rather than a path, so `reuse.ts` still starts from one and still has to land on
+the right file. The failure would just arrive somewhere else now: a reused card
+silently coming back with one fewer LoRA than the run it claims to reproduce.
 
 ### Saving a set is a choice, and it is the only thing `drafts/` means
 
