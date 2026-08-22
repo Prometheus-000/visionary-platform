@@ -1649,6 +1649,14 @@ two domains, and the page follows the domains.
   One live set and one dormant, swapped in `setKind` — the invalid state is
   unreachable because there is only ever one to read. What still differs beyond
   that is the options, which rebuild from `VIDEO_MODELS` — see below.
+
+  **And the console itself is splitting, so read the stash as the halfway point
+  rather than the destination.** The workflows have diverged past what one strip
+  can carry: the video side is losing its prompt box entirely to the scene
+  composer. Two buffers behind one live slot is the right *shape* — it is already
+  two composer states — but once each side owns its own surface they stop being
+  swapped and start being separate. Nothing in `setKind` is wasted by that; what
+  changes is who reads it.
 - **Copy is a last resort — but a number is not a value it can show.** Design
   first, then an icon, then words. A control that shows its own value gets no
   label: "Krea 2 Turbo", "16:9", "720p", "5s" name themselves. Twice the icon
@@ -1728,6 +1736,20 @@ two domains, and the page follows the domains.
   the screen, then haul up to a box on the canvas. A reference image comes from
   the Finder, where a drag is the only gesture there is, so every file drop is
   untouched. See `docs/design-notes/loras-are-not-text.md`.
+
+  **Everything above about *placement* is the Krea 2 side, and only that.** The
+  `▸ 4 LoRAs` disclosure, `+ LoRA` in the strip, the region dropdown, `LoraBox`,
+  `LoraButton` and every id in `check_loras.py` describe a console with a prompt
+  box in it. **The video side is not getting one** — the scene composer replaces
+  it, and a LoRA there is a chip that lives beside setting, character, shot and
+  audio rather than under a sentence. Do not port these controls across, and do
+  not read a rule about `#lora-box` as a rule about video.
+
+  What *is* shared is the idea and nothing else: **a LoRA is a file plugged into a
+  module, a trigger phrase is text, and the two do not live in the same place.**
+  That is the whole transferable claim. Where the chip sits, what opens it and
+  what the count says are per-side, because the two sides no longer share a
+  console at all.
 
 - **A region is drawn on the canvas, and so is everything about it.** The boxes
   are the list: drag on the frame to place one, drag it to move it, drag a
