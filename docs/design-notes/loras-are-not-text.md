@@ -181,21 +181,39 @@ with a guess about where you were looking.
 today and a second click takes it out; that survives, and it is what makes the
 tick legible as a state rather than as decoration.
 
-## Drag and drop is deleted
+## Dragging a *LoRA* is deleted. Dragging a *file* is not.
 
-`web/src/lora/drag.ts` goes, with its private MIME type and its wiring in
-`App.tsx`, `ui/Menu.tsx`, `regions/RegionLayer.tsx`, `console/Field.tsx` and
-`lora/LoraButton.tsx`, plus `.menu button.draggable` in `ui.css`.
+**The distinction is where the thing comes from, and it decides everything.** A
+reference image comes from the Finder — outside the application — so a drag is
+the only gesture that exists, and it stays exactly as it is. A LoRA comes from a
+list this app already draws, and dragging it meant opening a menu at the prompt
+bar, at the bottom of the screen, then hauling the cursor up to a box on the
+canvas. Picking from a list **inside the region** is shorter than picking from a
+list somewhere else and then travelling.
 
-It exists to answer *where* — *"a click writes at the caret and so inherits
-wherever the caret was; a drag names its own target."* Once every target owns a
-control, there is no *where* left to answer: the canvas chips are in the canvas
-box, a region's chip is on that region. A gesture that exists to disambiguate
-scope is dead weight when scope is structural.
+So `web/src/lora/drag.ts` goes, with its private MIME type and the LoRA half of
+its wiring in `App.tsx`, `ui/Menu.tsx`, `regions/RegionLayer.tsx`,
+`console/Field.tsx` and `lora/LoraButton.tsx`, plus `.menu button.draggable` in
+`ui.css`.
+
+**What survives untouched in `RegionLayer.tsx`:** `onDrop`'s file path, the
+`onDragOver`/`onDragLeave` pair, `dropHit`, and every `.rbox` lighting up under
+a dragged photograph. Only three lines leave — the `isLoraDrag(e)` early return
+at the top of `onDrop`, the `setLora(isLoraDrag(e) ? draggingLora() : null)` in
+`onDragOver`, and the `lora-new` / `data-drop` caption that named the LoRA a bare
+frame would hold. The comment above that early return — *"a LoRA drag carries no
+`Files`, so the image path below would refuse it as 'not an image'"* — describes
+a collision that ceases to exist, which is what makes this a clean subtraction
+rather than an untangling.
+
+The private MIME type is the reason it is clean. Its own docstring says every
+file drop on the page is gated on `types.includes('Files')`, so *"a drag carrying
+its own type is invisible to all of them."* That invisibility runs both ways:
+removing it cannot disturb a single file-drop handler.
 
 It is a real loss on one axis and worth saying so: dropping a LoRA onto bare
-canvas created a new box holding it, which was one gesture for what is now two.
-That is the cost, it is small, and it buys back a subsystem.
+canvas created a new box already holding it, which was one gesture for what is
+now two. That is the cost, it is small, and it buys back a subsystem.
 
 ## Trigger phrases: nothing writes them, nothing warns
 
