@@ -34,6 +34,7 @@
 import { create } from 'zustand'
 
 import type { AppState, ParseElement, ShotGroup, ShotItem, ShotPill, VideoModel } from './api/types'
+import type { LoraChip } from './lora/tokens'
 
 export type Kind = 'image' | 'video'
 export type Mode = 'generate' | 'train'
@@ -71,6 +72,10 @@ export type Region = {
   w: number
   h: number
   prompt: string
+  /** One per box — the node's shape. A dropdown on the card rather than a token
+   *  in the field: the field is for words this performer's description needs,
+   *  and which box a LoRA belongs to is said by which card you are looking at. */
+  lora: LoraChip | null
   /** Carried as a bool in the job record, never the bytes — it is polled. */
   attachments: Attachment[]
 }
@@ -78,7 +83,7 @@ export type Region = {
 let regionSeq = 0
 export const newRegion = (r: Partial<Region> = {}): Region => ({
   id: `r${++regionSeq}`,
-  x: 0, y: 0, w: 0.5, h: 1, prompt: '', attachments: [],
+  x: 0, y: 0, w: 0.5, h: 1, prompt: '', lora: null, attachments: [],
   ...r,
 })
 
@@ -170,12 +175,25 @@ export type VideoComposer = {
   refSize: 'match' | 'max'
 }
 
+export type { LoraChip }
+
 export type Keyframes = { first: string | null; last: string | null }
+
+/** Everything that is per-kind and lives at the root while its kind is showing.
+ *  `shot` is in here because pills compile *into* the prompt — a rail left
+ *  standing after a switch is pills belonging to a sentence no longer on screen. */
+export type Composed = {
+  prompt: string
+  negative: string
+  negOn: boolean
+  shot: ShotPill[]
+  loras: LoraChip[]
+}
 
 const IMAGE: ImageComposer = {
   model: 'turbo',
-  // 4:3, the ratio the page opens on — and the reason 3:4 exists on the menu at
-  // all: it was the one landscape entry with no portrait counterpart to flip to.
+  // 4:3, the ratio the page opens on. Its transpose is not on the menu, so the
+  // swap arrow lands this one on Custom — see `swapSize`.
   aspect: '1152x896',
   scale: '1',
   width: 1152,
@@ -233,20 +251,51 @@ export type Store = {
   mode: Mode
   kind: Kind
   setMode: (m: Mode) => void
-  /** The prompt survives the switch, because a shot you described as a still is
-   *  the same sentence you would describe as a clip. */
+  /**
+   * **The composer is per-kind. Only the canvas and the gallery are shared.**
+   *
+   * This used to say the prompt survives the switch, on the grounds that a shot
+   * described as a still is the same sentence you would describe as a clip. True
+   * of the sentence and false of everything around it: a Krea 2 LoRA is not a
+   * Wan LoRA, and carrying one across loaded it into a run that could not use it
+   * — silently, because `loraNote` warns about names that resolve to nothing and
+   * about models that read no LoRAs at all, and a LoRA for the wrong
+   * architecture is neither.
+   *
+   * Both buffers are kept. Switch away and back and the sentence, the pills and
+   * the chips are exactly as they were, which is the promise `img`/`vid` already
+   * make about model, size, steps and seed.
+   */
   setKind: (k: Kind) => void
+  /**
+   * The kind you are not looking at.
+   *
+   * **One live set, one dormant, and `setKind` is the only place both exist.**
+   * Moving these five onto `ImageComposer`/`VideoComposer` is the more literal
+   * reading and touches every `s.prompt` in the codebase; this touches one
+   * function. It keeps the invalid state unreachable by the same means `docFor`
+   * does — there is exactly one live set, so no component is able to read the
+   * wrong one.
+   */
+  stash: { image: Composed | null; video: Composed | null }
 
-  /* ---- the composer ----------------------------------------------------- */
+  /* ---- the composer. Live for `kind`; the other one is in `stash`. ------- */
   prompt: string
   negative: string
-  /** Which of the two textareas is showing. One buffer for both kinds, like the
-   *  prompt and for the same reason: what you are steering away from does not
-   *  stop being true when the sentence becomes a clip. */
+  /** Which of the two textareas is showing. Per-kind with the rest: H3 has no
+   *  negative branch at all, so a buffer shared with the image side was already
+   *  half-fictional. */
   negOn: boolean
+  /** The LoRAs plugged into this canvas. Regions carry their own. */
+  loras: LoraChip[]
   setPrompt: (p: string) => void
   setNegative: (n: string) => void
   setNegOn: (on: boolean) => void
+  /** Picking one already picked takes it out — the tick in the menu is a state,
+   *  so a second click has to mean something. */
+  toggleLora: (chip: LoraChip) => void
+  dropLora: (path: string) => void
+  patchLora: (path: string, patch: Partial<LoraChip>) => void
 
   /** **Never read this directly — use `docFor(s, prose)`.** A document is valid
    *  only for the exact prose it was derived from, and an accessor that demands
@@ -293,6 +342,10 @@ export type Store = {
   /** Which valued pill is expanded, if any. */
   shotOpen: string | null
   peekOpen: boolean
+  /** The LoRA box's disclosure. Beside `peekOpen` because it is the same
+   *  gesture on the same kind of thing. */
+  loraOpen: boolean
+  setLoraOpen: (on: boolean) => void
   setShot: (pills: ShotPill[]) => void
   toggleShot: (key: string) => void
   setPill: (key: string, patch: Partial<ShotPill>) => void
@@ -391,14 +444,45 @@ export const useStore = create<Store>((set, get) => ({
   mode: 'generate',
   kind: 'image',
   setMode: (mode) => set({ mode }),
-  setKind: (kind) => set({ kind }),
+  stash: { image: null, video: null },
+  // The swap, and the only statement in the file where both sets exist at once.
+  // `docUndo` is dropped rather than stashed: an undo that restores the other
+  // kind's sentence is worse than no undo.
+  setKind: (kind) => set((s) => {
+    if (kind === s.kind) return {}
+    const mine = s.stash[kind]
+    return {
+      kind,
+      stash: { ...s.stash, [s.kind]: {
+        prompt: s.prompt, negative: s.negative, negOn: s.negOn,
+        shot: s.shot, loras: s.loras,
+      } },
+      prompt: mine?.prompt ?? '',
+      negative: mine?.negative ?? '',
+      negOn: mine?.negOn ?? false,
+      shot: mine?.shot ?? [],
+      loras: mine?.loras ?? [],
+      doc: null,
+      docUndo: null,
+    }
+  }),
 
   prompt: '',
   negative: '',
   negOn: false,
+  loras: [],
   setPrompt: (prompt) => set({ prompt }),
   setNegative: (negative) => set({ negative }),
   setNegOn: (negOn) => set({ negOn }),
+  toggleLora: (chip) => set((s) => ({
+    loras: s.loras.some((l) => l.path === chip.path)
+      ? s.loras.filter((l) => l.path !== chip.path)
+      : [...s.loras, chip],
+  })),
+  dropLora: (path) => set((s) => ({ loras: s.loras.filter((l) => l.path !== path) })),
+  patchLora: (path, patch) => set((s) => ({
+    loras: s.loras.map((l) => (l.path === path ? { ...l, ...patch } : l)),
+  })),
 
   doc: null,
   docUndo: null,
@@ -457,9 +541,11 @@ export const useStore = create<Store>((set, get) => ({
   shot: [],
   shotOpen: null,
   peekOpen: false,
+  loraOpen: false,
   setShot: (shot) => set({ shot }),
   setShotOpen: (shotOpen) => set({ shotOpen }),
   setPeekOpen: (peekOpen) => set({ peekOpen }),
+  setLoraOpen: (loraOpen) => set({ loraOpen }),
   setPill: (key, patch) =>
     set((s) => ({ shot: s.shot.map((p) => (p.key === key ? { ...p, ...patch } : p)) })),
 

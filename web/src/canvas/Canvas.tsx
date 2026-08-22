@@ -212,7 +212,15 @@ export function Canvas({
                       in it: a click on the canvas addresses whatever is under it, so
                       over a region it opens that region and over bare picture it does
                       nothing. Full screen is the expand button and Space. */}
+                  {/* `width`/`height` are the reservation, not a size: `.shot img` is
+                      `width:auto;height:auto`, so they never set the box — the browser
+                      takes the ratio from them and holds the space before a byte
+                      arrives. Without it the column reflowed as each render landed,
+                      under a hand already over the strip. Omitted rather than zeroed
+                      when the run has no request behind it, since `width="0"` would
+                      reserve a ratio of nothing. */}
                   <img src={fileUrl(run.jobId!, f)} alt="" decoding="async"
+                       width={run.w || undefined} height={run.h || undefined}
                        fetchPriority={i === at ? 'high' : 'auto'} />
                   {/* Each still carries its own way into video. Two, because they are
                       genuinely different jobs: a first frame is the shot the clip starts
@@ -279,7 +287,10 @@ export function Canvas({
           {!run.running && run.skipped.length > 0 && (
             <>
               {run.meta.length ? ' · ' : ''}
-              <span className="warn">not applied: {run.skipped.join(', ')}</span>
+              {/* Semicolons, not commas: each entry is now a clause with its own
+                  comma in it — see `skipNote` — so a comma-joined list of two ran
+                  the reason for one LoRA straight into the name of the next. */}
+              <span className="warn">not applied: {run.skipped.join('; ')}</span>
             </>
           )}
         </p>

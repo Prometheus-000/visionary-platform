@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
-import { everyMs, failed } from '../api/client'
+import { everyMs, failed, type Res } from '../api/client'
 import {
   deleteSession, listSessions, putSession, startSession, stopSession,
 } from '../api/routes'
@@ -83,15 +83,29 @@ export function useSessions(open: boolean) {
   // one the route just wrote, and `rows` in the caller's closure is the list
   // from before the reload. Reading an id out of state that has not been set
   // yet is the bug this shape prevents.
-  const act = useCallback(async <T,>(fn: () => Promise<T | { error: string }>) => {
+  //
+  // The promise deliberately spans the reload as well as the mutation, and
+  // callers are expected to await it rather than fire and forget. A delete is
+  // two round trips — the route, then the whole board again — and the button
+  // that started it has to stay disabled and stay saying so for both of them,
+  // or the card sits there looking untouched for the second one and gets
+  // pressed again. `SessionCard` gates its ✕ and its stop dialog on exactly
+  // this promise; see `../ui/useBusy`.
+  // `Res<T>` and `failed()`, not a hand-written `T | {error: string}` with a structural
+  // check. Those looked equivalent while `ApiError` was exactly `{error: string}`; it
+  // now carries an optional `detail`, so the literal no longer matches it, `T` widened
+  // to the whole union, and every caller started getting `T | ApiError` back — reading
+  // `.session` off the result stopped compiling. The guard in client.ts is the single
+  // place that knows this shape, which is the reason it exists.
+  const act = useCallback(async <T,>(fn: () => Promise<Res<T>>) => {
     const r = await fn()
-    if (r && typeof r === 'object' && 'error' in r) {
-      setError((r as { error: string }).error)
+    if (failed(r)) {
+      setError(r.error)
       return null
     }
     setError(null)
     await load()
-    return r as T
+    return r
   }, [load])
 
   return {

@@ -1,8 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
 import { caretProps } from '../lora/caret'
-import { droppedLora, isLoraDrag } from '../lora/drag'
-import { insertLora, loraIndex, nudgeLora } from '../lora/tokens'
 import { negAllowed, supports, useStore } from '../store'
 import { Duration } from './Duration'
 import { autoGrow } from './fieldMax'
@@ -100,21 +98,9 @@ export function Field({
       requestAnimationFrame(() => el.setSelectionRange(moved.caret, moved.caret))
       return
     }
-    // ⌘↑ / ⌘↓ on a strength, the way the same chord nudges attention weights in
-    // Automatic. Only swallowed when the caret was actually in a token; outside one,
-    // ⌘↑ is still the caret-to-top the rest of the OS says it is.
-    if ((e.metaKey || e.ctrlKey) && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-      const w = nudgeLora(value, el.selectionStart ?? 0, e.key === 'ArrowUp' ? 0.05 : -0.05)
-      if (!w) return
-      e.preventDefault()
-      write(w.value)
-      requestAnimationFrame(() => el.setSelectionRange(w.caret, w.select))
-      return
-    }
     // ⌘Z while there is a parse write to take back. Native undo is already
-    // superseded on three paths in this field — `moveClause`, `nudgeLora` and
-    // the `+ LoRA` caret sink all write the value through React — so this is one
-    // more, not a new kind of thing. It falls through to the browser's own undo
+    // superseded by `moveClause`, which writes the value through React — so this
+    // is one more, not a new kind of thing. It falls through to the browser's own undo
     // when the slot is empty, which is every keystroke that is not the one
     // immediately after a document landed.
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'z'
@@ -178,42 +164,6 @@ export function Field({
                 // an event could carry it on itself.
                 onCompositionStart={() => { composing.current = true }}
                 onCompositionEnd={() => { composing.current = false }}
-                /* A LoRA let go over the sentence lands *where it was let go*, which is
-                   the whole reason to drag one here rather than press `+ LoRA`: the
-                   token's position in the prompt is what says which clause it applies
-                   to. `selectionStart` is the drop point because the browser has been
-                   moving the caret under the cursor for the length of the drag — it
-                   draws that caret itself, so reading it back is reading what the
-                   person was already aiming at.
-
-                   Files are left alone: dropping a photo on the prompt is not a
-                   gesture this field has, and swallowing it here would stop it
-                   reaching the page-level handler that does. */
-                onDragOver={(e) => {
-                  if (!isLoraDrag(e)) return
-                  e.preventDefault()
-                  e.dataTransfer.dropEffect = 'copy'
-                }}
-                onDrop={(e) => {
-                  if (!isLoraDrag(e)) return
-                  e.preventDefault()
-                  const el = e.currentTarget
-                  const index = loraIndex(useStore.getState().state)
-                  const l = droppedLora(e, index)
-                  if (!l) return
-                  const at = el.selectionStart ?? el.value.length
-                  // The served strength and the trigger phrase, exactly as a picker
-                  // click writes them — a drop is the same insert aimed by hand.
-                  const w = insertLora(index, el.value, at, l, String(l.strength ?? 1), true)
-                  s.setPrompt(w.value)
-                  // After the commit, for the reason `applyWrite` does it after the
-                  // commit: this is a controlled input, so the range set now would
-                  // range over text React has not painted yet.
-                  requestAnimationFrame(() => {
-                    el.focus()
-                    el.setSelectionRange(w.caret, w.select)
-                  })
-                }}
                 {...caretProps('prompt', (v) => useStore.getState().setPrompt(v))} />
       {/* The same field in a different sign. Hidden outright on a model that reads no
           negative — H3 is guidance-distilled, Krea 2 Turbo runs at CFG 1.0, and on

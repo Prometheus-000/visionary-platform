@@ -1,10 +1,10 @@
 import { useCallback, useState } from 'react'
 
-import { everyMs, failed } from '../api/client'
+import { everyMs, failed, type ApiError } from '../api/client'
 import { status, stop, video } from '../api/routes'
 import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
-import { loraIndex, readVidLoras, stripLoras } from '../lora/tokens'
+import { readVidChips, stripLoras } from '../lora/tokens'
 import { docFor, docFrom, negAllowed, readShot, useStore, type Store } from '../store'
 import { resolveVid } from '../console/resolve'
 
@@ -34,7 +34,9 @@ export type VideoRun = {
   runId: string | null
   percent: number
   phase: string
-  error: string | null
+  /** See `RunState.error`: the whole `ApiError`, so `ErrorNote` still has the
+   *  server's report to fold away under the sentence. */
+  error: string | ApiError | null
   meta: string[]
 }
 
@@ -45,7 +47,6 @@ const IDLE: VideoRun = {
 
 export function videoBody(s: Store): Record<string, unknown> {
   const r = resolveVid(s)
-  const index = loraIndex(s.state)
   // See `imageBody`: one string, keying both halves of the same request.
   const prompt = stripLoras(s.prompt)
   return {
@@ -65,7 +66,7 @@ export function videoBody(s: Store): Record<string, unknown> {
     switch_at: s.vid.switchAt,
     sampler: r.sampler,
     scheduler: r.scheduler,
-    loras: readVidLoras(index, s.prompt, s.state?.max_loras ?? 6,
+    loras: readVidChips(s.loras, s.state?.max_loras ?? 6,
                         s.state?.wan_experts ?? ['both', 'high', 'low']),
     shot: readShot(s.shot),
     ref_roles: s.refRoles.slice(0, s.refs.length),
@@ -123,8 +124,8 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
     const r = await video(videoBody(s))
     if (failed(r)) {
       // The last clip stays: a request that never started should not blank what you
-      // were watching.
-      setRun((p) => ({ ...p, running: false, runId: null, error: r.error }))
+      // were watching. The whole `ApiError` — see `useGenerate`, same reason.
+      setRun((p) => ({ ...p, running: false, runId: null, error: r }))
       return
     }
     const runId = r.job_id
@@ -137,8 +138,15 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
         finish(st, runId)
       } else if (st.status === 'failed') {
         clearInterval(t)
+        // See `useGenerate` for why the bare fallback went. The advice differs on
+        // this side because the failures do: a clip is the run that dies on card
+        // memory, and duration is the one lever in the strip that changes how much
+        // of it the run asks for.
         setRun((p) => ({
-          ...p, running: false, runId: null, error: st.error || 'Generation failed',
+          ...p, running: false, runId: null,
+          error: st.error
+            || 'The clip failed and the job gave no reason — press Generate to try'
+               + ' again, or pick a shorter duration if it keeps failing.',
         }))
       } else if (st.status === 'stopped') {
         clearInterval(t)

@@ -9,7 +9,7 @@
  * taught the dragging.
  */
 import { attached, type Region } from '../store'
-import { parseLoras, stripLoras, type LoraFile } from '../lora/tokens'
+import { stripLoras, type LoraFile } from '../lora/tokens'
 
 /** Below this a box is not grabbable, and 0 is rejected by the backend outright. */
 export const MIN_SIDE = 0.04
@@ -58,14 +58,13 @@ export function snapEdge(
  *  or a photograph. That is the distinction that decides what comes out — an empty
  *  rectangle is filled by the scene prompt, a box with an identity in it is a
  *  person — and it is the same one the old 32px plots drew. */
-export const regionArmed = (index: LoraFile[], r: Region): boolean =>
-  !!(attached(r, 'identity') || parseLoras(index, r.prompt || '').some((t) => t.hit))
+export const regionArmed = (_index: LoraFile[], r: Region): boolean =>
+  !!(attached(r, 'identity') || r.lora)
 
 /** What the box calls itself. The LoRA name is the identity, so it wins; the prompt
  *  is the fallback because a photo-only box still has words worth showing. */
-export function regionTag(index: LoraFile[], r: Region): { text: string; muted: boolean } {
-  const hit = parseLoras(index, r.prompt || '').find((t) => t.hit)
-  if (hit?.hit) return { text: hit.hit.token, muted: false }
+export function regionTag(_index: LoraFile[], r: Region): { text: string; muted: boolean } {
+  if (r.lora) return { text: r.lora.rel, muted: false }
   const words = stripLoras(r.prompt || '').trim()
   if (words) return { text: words.length > 28 ? `${words.slice(0, 27)}…` : words, muted: false }
   return attached(r, 'identity') ? { text: 'photo', muted: true } : { text: '', muted: false }
@@ -97,14 +96,15 @@ export function distribute(regions: Region[], cols: boolean): Region[] {
  * The second LoRA in a box is sent rather than dropped, so the backend can say "a
  * region takes one" about it instead of this quietly losing it.
  */
-export function readRegions(index: LoraFile[], regions: Region[], on: boolean) {
+export function readRegions(_index: LoraFile[], regions: Region[], on: boolean) {
   if (!on) return []
   return regions
     .map((r) => {
-      const toks = parseLoras(index, r.prompt || '').filter((t) => t.hit)
       return {
         prompt: stripLoras(r.prompt || ''),
-        loras: toks.map((t) => ({ path: t.hit!.path, unet: parseFloat(t.a) || 1 })),
+        // Still a list, because that is the shape the backend takes — the node
+        // itself allows one per box, which is why the card offers one.
+        loras: r.lora ? [{ path: r.lora.path, unet: r.lora.strength }] : [],
         ref: attached(r, 'identity'),
         x: r.x, y: r.y, width: r.w, height: r.h,
       }

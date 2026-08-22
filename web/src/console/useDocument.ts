@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { failed } from '../api/client'
 import { parse } from '../api/routes'
-import { loraSyntax, stripLoras } from '../lora/tokens'
+import { stripLoras } from '../lora/tokens'
 import { useStore } from '../store'
 import { documentMarks, editDocument, remap, remapCaret,
          type Mark, type Marks } from './marks'
@@ -195,7 +195,8 @@ export function useDocument(
       // LoRA stack would be the one thing worse than not writing at all. Put
       // back at the end, because a token's position in the main prompt means
       // nothing to the backend, which reads them into a stack.
-      const next = [text, ...loraSyntax(asked)].join(' ').trim()
+      // Was `[text, ...loraSyntax(asked)]`; see `Reroll`. Chips are not text.
+      const next = text.trim()
       const caret = el.current?.selectionStart ?? null
       if (caret != null) caretTo.current = remapCaret(caret, asked, next)
       // **Keyed to what the box now holds**, not to what was typed a moment

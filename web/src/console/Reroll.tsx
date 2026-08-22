@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { failed } from '../api/client'
 import { reroll } from '../api/routes'
-import { loraSyntax, stripLoras } from '../lora/tokens'
+import { stripLoras } from '../lora/tokens'
 import { useStore } from '../store'
 import { derivedText, documentMarks, inventedAt } from './marks'
 
@@ -87,7 +87,10 @@ export function Reroll({ mirror, el }: {
     // gives: a reroll is a request to write this differently, so refusing it
     // for having written it differently refuses the button. The old document is
     // one ⌘Z away and `from` still points at the sentence behind both.
-    const next = [text, ...loraSyntax(s.prompt)].join(' ').trim()
+    // Was `[text, ...loraSyntax(s.prompt)]` — the tokens rode along because a
+    // write that replaced the box would otherwise delete them. A LoRA is a chip
+    // now and lives nowhere near this string.
+    const next = text.trim()
     useStore.getState().applyDoc(next,
       { for: stripLoras(next), from: useStore.getState().doc?.from ?? prose,
         elements: r.elements, text })

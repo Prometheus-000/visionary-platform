@@ -9,10 +9,18 @@ import { fmtFileSize } from '../format'
 import { IconSliders, IconTag, IconUpload } from '../icons'
 import { useNearViewport } from '../media/inview'
 import { useStore } from '../store'
+import { ErrorNote } from '../ui/ErrorNote'
+import { Masonry } from '../ui/Masonry'
+import { useBusy } from '../ui/useBusy'
 import { Duplicates } from './Duplicates'
 import { Insight } from './Insight'
 import type { DatasetImage, useDatasets } from './useDatasets'
 import { SESSION } from './session'
+
+/** A tile's height that is not the picture: the caption box's 66px floor and the
+ *  tile's own border. Only the packer reads it — a column of landscape tiles
+ *  packed as though their captions were free is a column that comes up short. */
+const TILE_CHROME = 68
 
 type Ds = ReturnType<typeof useDatasets>
 
@@ -49,6 +57,7 @@ export function Editor({ ds, onLightbox, lead }: {
   const [isolated, setIsolated] = useState<{ names: string[]; label: string } | null>(null)
   const [insightOpen, setInsightOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
+  const { busy, run } = useBusy()
 
   const flags = (img: DatasetImage) => {
     const cap = (img.caption || '').trim()
@@ -105,8 +114,20 @@ export function Editor({ ds, onLightbox, lead }: {
         r = JSON.parse(x.responseText)
       } catch { /* a 500 from Modal is a plain-text traceback */ }
       if (r.error || x.status >= 400) {
-        const detail = r.error || x.responseText.slice(0, 300) || 'no response body'
-        ds.setEditError(`Upload failed (${x.status}): ${detail}`)
+        // The sentence first, the body underneath — the split `client.ts` already makes
+        // for every other route, which this one missed by building its own message. It
+        // read `Upload failed (500): ` and then 300 characters sliced out of the middle
+        // of a Modal traceback: unreadable as a headline, and truncated exactly where
+        // the person who *could* read it needed the rest. The clamp goes with it, since
+        // the disclosure is closed and costs a line whatever is inside.
+        ds.setEditError({
+          error: r.error
+            || `The upload did not finish (${x.status}) — nothing was added to the set.`
+              + ' Try the same files again.',
+          // Only when the server did not already give us a sentence, or the disclosure
+          // is the same words a second time.
+          detail: r.error ? undefined : x.responseText.trim() || undefined,
+        })
         return
       }
       // The rail as well as the sheet: the image count Start training reads lives in the
@@ -116,7 +137,14 @@ export function Editor({ ds, onLightbox, lead }: {
     }
     x.onerror = () => {
       setUploading(0)
-      ds.setEditError('Network error during upload.')
+      // XHR hands over nothing here — no status, no body — so the old "Network error
+      // during upload." was accurate and a dead end. It has the same three causes as
+      // `api()`'s fetch failure (server not running, dev proxy on the wrong port,
+      // dropped wifi) and the page cannot tell them apart, so it says the one thing
+      // true of all three and what to do next. The files never left, so the retry is
+      // the same drop again.
+      ds.setEditError('The upload was cut off before it finished — check that the server'
+        + ' is still running, then drop the same files again.')
     }
     x.send(fd)
   }
@@ -175,7 +203,25 @@ export function Editor({ ds, onLightbox, lead }: {
   }
 
   const cols = [10, 8, 6, 5, 3][Math.max(0, Math.min(4, density))] ?? 6
-  const captioned = ds.images.filter((i) => (i.caption || '').trim()).length
+  /* One tally, counted once, from the array the tiles are drawn from.
+     The bar used to carry this count and the insight's server-computed pair a few
+     centimetres apart — "12 images · 5 captioned" next to "19/24 captioned" — and
+     neither was wrong. `/insight` is a second request over `_dataset_images` (stills
+     only, no clips), answered with the *committed* trigger word, so it trails the tiles
+     by a round trip and by every keystroke in the trigger box that has not blurred yet.
+     Two right answers to the same question still read as a broken page, and labelling
+     one "as of the last analysis" would have been asking the person to reconcile them.
+     So the bar states the count once and spends the second slot on the one fact the
+     count does not carry: how many of those captions actually contain the trigger. Both
+     come off `ds.images` and the live `ds.trigger`, matched the way the server matches
+     (substring, case-folded — triggers are deliberately unwordlike), so the bar cannot
+     disagree with itself or with the borders on the tiles below it. `ds.insight` still
+     feeds the panel, where it is framed as an analysis and has nothing beside it to
+     contradict. */
+  const trig = ds.trigger.trim().toLowerCase()
+  const captions = ds.images.map((i) => (i.caption || '').trim()).filter(Boolean)
+  const captioned = captions.length
+  const withTrigger = trig ? captions.filter((c) => c.toLowerCase().includes(trig)).length : 0
   // Counted apart, and never summed. A set of 24 images and 6 clips is not a
   // set of 30 of anything — one of those numbers is what the trainer will read
   // and the other is not, and a single total hides which is which.
@@ -212,12 +258,18 @@ export function Editor({ ds, onLightbox, lead }: {
                      onKeyDown={(e) => {
                        if (e.key !== 'Enter') return
                        e.preventDefault()
-                       void ds.save(saveName || ds.open!)
+                       void run('save', () => ds.save(saveName || ds.open!))
                      }} />
             </div>
+            {/* Save is a rename on the volume, a re-list and a re-open, and it painted
+                nothing for the length of all three — so the button looked unpressed and
+                got pressed again, which is two saves racing to move the same draft out
+                of `drafts/`. Enter in the name field goes through `run` for the same
+                reason: holding the key is the fastest double-submit on the page. */}
             <button className="s" id="ds-save" title="Keep this set in datasets/"
-                    type="button" onClick={() => void ds.save(saveName || ds.open!)}>
-              Save
+                    type="button" disabled={!!busy}
+                    onClick={() => void run('save', () => ds.save(saveName || ds.open!))}>
+              {busy === 'save' ? 'Saving…' : 'Save'}
             </button>
           </>
         )}
@@ -266,20 +318,28 @@ export function Editor({ ds, onLightbox, lead }: {
           </button>
         </span>
         {/* Its own group, because it is its own control: two ends of one
-            stepper rather than two more filters. */}
-        <span className="seg" id="ds-density">
-          <button className="s" id="dens-down" title="Smaller tiles" type="button"
+            stepper rather than two more filters.
+            Named on the face of it. A bare − / + between the filters and the tallies is
+            two glyphs that could plausibly step a page, a count or a zoom, and the only
+            thing that said which was a hover tooltip — which is no answer at all for
+            anyone reading this with a keyboard or a screen reader, and a slow one for
+            everybody else. The word costs one slot in a bar that has room for it. */}
+        <span className="seg" id="ds-density" role="group" aria-label="Thumbnail size">
+          <span className="muted" style={{ padding: '0 6px' }}>Size</span>
+          <button className="s" id="dens-down" type="button"
+                  title="Smaller thumbnails" aria-label="Smaller thumbnails"
                   onClick={() => setDensity((d) => Math.max(0, d - 1))}>−</button>
-          <button className="s" id="dens-up" title="Larger tiles" type="button"
+          <button className="s" id="dens-up" type="button"
+                  title="Larger thumbnails" aria-label="Larger thumbnails"
                   onClick={() => setDensity((d) => Math.min(4, d + 1))}>+</button>
         </span>
         <span className="actions">
-          <span className="muted" id="ins-summary">
-            {ds.insight && (
-              (ds.insight.trigger_word && ds.insight.captioned
-                ? `${ds.insight.with_trigger}/${ds.insight.captioned} trigger · ` : '')
-              + `${ds.insight.captioned}/${ds.insight.images} captioned`
-            )}
+          {/* A ratio over captions, not over images: "0/0 trigger" on a set nobody has
+              captioned yet reads as a failure rather than a not-yet, which is the same
+              reason the panel holds this stat back. */}
+          <span className="muted" id="ins-summary"
+                title="Captions containing the trigger word">
+            {!!trig && !!captioned && `${withTrigger}/${captioned} trigger`}
           </span>
           {/* Named, not just iconed. The sliders glyph is already spoken for — the two
               Advanced toggles wear it — so one glyph standing for three unrelated panels
@@ -304,7 +364,7 @@ export function Editor({ ds, onLightbox, lead }: {
                e.target.value = ''
              }} />
 
-      {ds.editError && <div className="err-box">{ds.editError}</div>}
+      <ErrorNote err={ds.editError} />
       {!!uploading && (
         <div style={{ margin: '10px 0' }}>
           <div className="bar"><i style={{ width: `${uploading}%` }} /></div>
@@ -333,9 +393,16 @@ export function Editor({ ds, onLightbox, lead }: {
       {dupes ? (
         <Duplicates ds={ds} onLightbox={onLightbox} onExit={() => setDupes(false)} />
       ) : (
-      <div className="tiles" id="tiles"
-           style={{ gridTemplateColumns: `repeat(${cols},minmax(0,1fr))` }}>
-        {visible.map((i) => {
+      /* Packed rather than gridded, for the reason `.tile .ph`'s own comment gives:
+         you cannot judge a crop you cannot see. A square cell with `contain`
+         showed the whole frame and spent the difference on bars — a portrait set
+         at ten across was two thirds `--wash-2`. The cell is the picture's shape
+         now and the columns absorb the ragged bottoms; the density slider still
+         decides how many there are, because that is a person saying how big they
+         want to look at these. */
+      <Masonry id="tiles" items={visible} cols={cols} gap={10} chrome={TILE_CHROME}
+               ratio={(i) => (i.width && i.height ? i.height / i.width : 1)}
+               render={(i) => {
           const f = flags(i)
           const sz = fmtFileSize(i.bytes)
           // The badge is clipped by the tile at high density, so what it can
@@ -351,7 +418,11 @@ export function Editor({ ds, onLightbox, lead }: {
                  className={['tile', i.kind === 'video' ? 'vid' : '',
                              f.thin ? 'thin' : '', f.noTrig ? 'notrig' : '',
                              isolated ? 'sel' : ''].filter(Boolean).join(' ')}>
-              <div className="ph">
+              {/* Overrides `.tile .ph`'s square. An image the server could not
+                  measure keeps it and letterboxes, which is the same fallback the
+                  packer above is using for it. */}
+              <div className="ph"
+                   style={i.width && i.height ? { aspectRatio: `${i.width}/${i.height}` } : undefined}>
                 <Frame set={ds.open!} item={i} onLightbox={onLightbox} />
                 <div className="dim">{i.width ? `${i.width}×${i.height} · ` : ''}{sz}</div>
                 <button className="rm" title="Delete" type="button"
@@ -365,8 +436,7 @@ export function Editor({ ds, onLightbox, lead }: {
               <CaptionBox image={i} onSave={(v) => void saveCaption(i, v)} />
             </div>
           )
-        })}
-      </div>
+        }} />
       )}
     </div>
   )
@@ -459,6 +529,9 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
   const [temperature, setTemperature] = useState(0.6)
   const [topP, setTopP] = useState(0.9)
   const [prog, setProg] = useState<{ pct: number; note: string } | null>(null)
+  // `runBusy`, because `run` here is already the captioning run — which has `prog` for
+  // its readout and is a poll rather than a round trip, so it keeps it.
+  const { busy, run: runBusy } = useBusy()
 
   const presets = state?.caption_presets ?? []
   const models = state?.caption_models ?? []
@@ -544,7 +617,18 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
       } else if (st.status === 'failed') {
         clearInterval(t)
         setProg(null)
-        ds.setEditError(st.error || 'Captioning failed')
+        // Two dead ends in one line: the job's own error was the headline, so a run that
+        // died on an OOM shouted a CUDA traceback, and when the job carried no error at
+        // all it said "Captioning failed" and stopped there. The captions already
+        // written are still on the volume, and the two knobs that get a stuck run
+        // through are the length and the model — so the sentence says both, and the
+        // traceback rides underneath for whoever wants it.
+        ds.setEditError({
+          error: 'The captioning run stopped before it finished. Whatever it had already'
+            + ' written is kept — run it again, and if it keeps stopping try a shorter'
+            + ' length or a different captioner.',
+          detail: st.error ? String(st.error) : undefined,
+        })
       }
     }, 2500)
   }
@@ -559,16 +643,22 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
                  onChange={(e) => ds.setTrigger(e.target.value)}
                  onBlur={() => void ds.commitTrigger(ds.trigger)} />
         </div>
-        <button className="s" id="do-prepend" type="button"
+        {/* Two round trips behind one press — the rewrite of every sidecar that lacks
+            the word, then a reload of every tile in the set — and it had no pending
+            state at all, so on a set of eighty the only evidence anything happened was
+            the grid repainting some seconds later. A second press in that gap cannot
+            double a prefix — the route is idempotent on purpose — but it does rewrite
+            every sidecar and reload every tile again, which is how the wait doubles. */}
+        <button className="s" id="do-prepend" type="button" disabled={!!prog || !!busy}
                 title="Put the trigger word at the front of every caption that lacks it"
-                onClick={async () => {
+                onClick={() => void runBusy('prepend', async () => {
                   const trig = ds.trigger.trim()
                   if (!trig) return ds.setEditError('Set a trigger word first.')
                   const r = await prependTrigger(ds.open!, { trigger_word: trig })
-                  if (failed(r)) return ds.setEditError(r.error)
+                  if (failed(r)) return ds.setEditError(r)
                   await ds.loadTiles(ds.open!)
-                }}>
-          Fix
+                })}>
+          {busy === 'prepend' ? 'Fixing…' : 'Fix'}
         </button>
         {/* Three menus, no labels: "Character", "Medium" and "Qwen3-VL 8B" each name
             themselves, and none could be mistaken for another. */}
@@ -612,7 +702,7 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
                   onClick={() => setAdv((v) => !v)}>
             Advanced
           </button>
-          <button className="s" id="do-caption" type="button" disabled={!!prog}
+          <button className="s" id="do-caption" type="button" disabled={!!prog || !!busy}
                   onClick={() => void run()}>
             Caption
           </button>

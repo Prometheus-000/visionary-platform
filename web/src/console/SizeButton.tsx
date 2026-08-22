@@ -3,8 +3,8 @@ import { NumInput } from '../ui/NumInput'
 import { IconSwap } from '../icons'
 import { useStore, videoModel } from '../store'
 import {
-  BUCKETS, SIZE_SCALES, commitBoxes, nearestBucket, ratio, readSize, sizeLabel,
-  swapSize, withAspect, withScale,
+  BUCKETS, SIZE_SCALES, commitBoxes, nearestBucket, ratio, readSize, scaleKey,
+  sizeLabel, swapSize, withAspect, withScale,
 } from './size'
 import { resolveVid } from './resolve'
 
@@ -30,15 +30,15 @@ function Tile({ w, h, label, on, onPick }: {
  *
  * A view over the store, never a second copy of it: every click writes the aspect,
  * the scale or the boxes, and the frame, the payload and the arrow keys all read
- * those. Rebuilt on each change rather than patched, because at seven tiles and
- * three scales the diff is more code than the redraw and one of them can be wrong.
+ * those. Rebuilt on each change rather than patched, because at eight tiles and
+ * four scales the diff is more code than the redraw and one of them can be wrong.
  */
 export function SizeButton() {
   const img = useStore((s) => s.img)
   const setImg = useStore((s) => s.setImg)
   const pop = usePopover()
   const [w, h] = readSize(img)
-  const k = String(Number(img.scale) || 1)
+  const k = scaleKey(img.scale)
 
   return (
     <>

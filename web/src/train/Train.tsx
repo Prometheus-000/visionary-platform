@@ -4,6 +4,7 @@ import { thumbUrl } from '../api/routes'
 import { Editor } from '../datasets/Editor'
 import { useDatasets } from '../datasets/useDatasets'
 import { useStore } from '../store'
+import { ErrorNote } from '../ui/ErrorNote'
 import { SessionCard } from './SessionCard'
 import { SessionForm } from './SessionForm'
 import { type Draft, isActive, paramsToForm, type useSessions } from './useSessions'
@@ -126,7 +127,7 @@ export function Train({ sess, onLightbox, screen, setScreen }: {
                   and a list of the others beneath it is a rail again. */}
               {!ds.open && (
                 <div id="ds-index">
-                  {ds.error && <div className="err-box">{ds.error}</div>}
+                  <ErrorNote err={ds.error} />
                   {/* Said out loud, not left blank: the listing walks the
                       volume, and an empty screen for the length of that walk
                       reads as "no sets" — which is a lie about a library that
@@ -171,15 +172,19 @@ export function Train({ sess, onLightbox, screen, setScreen }: {
                 </span>
               </div>
 
-              {sess.error && <div className="err-box">{sess.error}</div>}
+              <ErrorNote err={sess.error} />
 
               {!sess.rows.length && sess.loaded && (
                 <div className="blank" id="sess-empty">
                   <div>
                     <b>No sessions yet.</b>
+                    {/* One noun for the record, all the way through the
+                        sentence: it used to introduce a session and then finish
+                        by promising a GPU to a "run", which reads as a second
+                        kind of thing the board has not mentioned. */}
                     <p className="muted" style={{ marginTop: 8 }}>
                       A session is a LoRA, a set and its dials. Start as many as you
-                      like — each run gets its own GPU.
+                      like — each one gets its own GPU.
                     </p>
                   </div>
                 </div>
@@ -187,11 +192,16 @@ export function Train({ sess, onLightbox, screen, setScreen }: {
 
               <div id="sess-list">
                 {sess.rows.map((s) => (
+                  // `sess.stop` and `sess.remove` are handed over rather than
+                  // voided: the card gates its own ✕ and its stop dialog on the
+                  // returned promise, and `act()` does not settle it until the
+                  // board reload behind the mutation has landed — which is the
+                  // half of the wait that used to show nothing.
                   <SessionCard key={s.id} s={s}
                                ds={ds.rows.find((r) => r.name === s.dataset)}
                                onEdit={() => setForm(edit(s))}
-                               onStop={() => void sess.stop(s.id)}
-                               onDelete={() => void sess.remove(s.id)}
+                               onStop={() => sess.stop(s.id)}
+                               onDelete={() => sess.remove(s.id)}
                                onOpenDataset={() => openSet(s.dataset)} />
                 ))}
               </div>
@@ -245,8 +255,14 @@ function Rail({ ds, onOpen }: { ds: ReturnType<typeof useDatasets>; onOpen: (n: 
           </div>
         </div>
       </button>
-      <button className="ds-x" title="Delete" type="button"
-              onClick={() => void ds.remove(d.name)}>×</button>
+      {/* The readout for the delete `useDatasets` already guards. The hook refuses a
+          second call while one is out, so this is not the safety — it is the part that
+          says so, on the row whose set is going rather than on all of them. */}
+      <button className="ds-x" title={ds.removing === d.name ? 'Deleting…' : 'Delete'}
+              type="button" disabled={!!ds.removing}
+              onClick={() => void ds.remove(d.name)}>
+        {ds.removing === d.name ? '…' : '×'}
+      </button>
     </div>
   )
 

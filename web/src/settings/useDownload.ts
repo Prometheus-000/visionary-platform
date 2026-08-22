@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 
-import { everyMs, failed } from '../api/client'
+import { everyMs, failed, type Res } from '../api/client'
 import { status, stop, type DownloadStart } from '../api/routes'
 
 /**
@@ -27,6 +27,12 @@ export type Progress = {
   message: string
   tone: 'plain' | 'ok' | 'err'
   running: boolean
+  /** What the server actually said, when there was a server behind the failure. Only a
+   *  refused *start* has one: `begin`'s call answers `{error, detail}` and the detail is
+   *  the traceback or the fetch error underneath the sentence. A job that fails while
+   *  running carries only `s.error`, so this stays absent there rather than being filled
+   *  with something invented. `Line` folds it into the err-box's disclosure. */
+  detail?: string
 }
 
 const IDLE: Progress = { percent: 0, message: '', tone: 'plain', running: false }
@@ -66,7 +72,23 @@ export function useDownload() {
           setBusy(false)
         } else if (s.status === 'failed') {
           clearInterval(t)
-          set(id, { message: s.error || 'Download failed', tone: 'err', running: false })
+          // The fallback is reached when the record is failed with no error on it — a
+          // container killed mid-pull, or one that ran out of disk, never gets as far as
+          // writing one. It said "Download failed", which names no next step at all, so
+          // the only move it suggested was closing the sheet. Two things *are* known
+          // here: how many files landed, and that clearing `busy` hands the uplink back,
+          // so pressing Download again is a real option rather than a hope. The same
+          // count the Cancel branch above prints, for the same reason — a queue that got
+          // four files in has done work worth naming.
+          const got = (s.downloaded as unknown[] | undefined)?.length ?? 0
+          set(id, {
+            message: s.error || (got
+              ? `Download failed after ${got} file${got === 1 ? '' : 's'} — those are on the`
+                + ' volume and are not fetched twice, so press Download again to pick up the rest.'
+              : 'Download failed before any file landed — press Download again; if it stops the'
+                + ' same way, a gated repo needs the HuggingFace token saved above.'),
+            tone: 'err', running: false,
+          })
           setBusy(false)
         } else {
           set(id, {
@@ -90,13 +112,20 @@ export function useDownload() {
    */
   const begin = useCallback(
     async (id: string, jobId: string, doneText: string,
-           call: () => Promise<DownloadStart | { error: string }>,
+           // `Res<DownloadStart>`, not `DownloadStart | {error: string}`: the literal
+           // stopped matching `ApiError` when it gained an optional `detail`, and the
+           // failed() branch then narrowed nothing — every field read below it was
+           // suddenly being read off the error type too.
+           call: () => Promise<Res<DownloadStart>>,
            onDone: () => void) => {
       setBusy(true)
-      set(id, { percent: 0, message: 'Starting…', tone: 'plain', running: true })
+      // `detail: undefined` explicitly: `set` merges into the row's last state, so a
+      // traceback from the attempt before this one would otherwise still be sitting in
+      // the disclosure under a message it has nothing to do with.
+      set(id, { percent: 0, message: 'Starting…', tone: 'plain', running: true, detail: undefined })
       const r = await call()
       if (failed(r)) {
-        set(id, { message: r.error, tone: 'err', running: false })
+        set(id, { message: r.error, detail: r.detail, tone: 'err', running: false })
         setBusy(false)
         return
       }

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { ApiError } from '../api/client'
 import { failed } from '../api/client'
 import {
   createDataset, datasetInsight, deleteDataset, getDataset, listDatasets, saveDataset,
   setDatasetMeta,
 } from '../api/routes'
 import type { Insight } from '../api/types'
+import { useBusy } from '../ui/useBusy'
 import { SESSION, beat, keepAlive } from './session'
 
 /**
@@ -73,8 +75,13 @@ export function useDatasets() {
   const [images, setImages] = useState<DatasetImage[]>([])
   const [insight, setInsight] = useState<Insight | null>(null)
   const [trigger, setTrigger] = useState('')
-  const [editError, setEditError] = useState<string | null>(null)
+  /** An `ApiError` as well as a string, so a failure that came off a route can hand the
+   *  server's own report to `ErrorNote` instead of dropping it. The raisers that never
+   *  had a server behind them ("Give the set a name to save it.") still pass a bare
+   *  string. */
+  const [editError, setEditError] = useState<string | ApiError | null>(null)
   const drafts = useRef(false)
+  const { busy, run } = useBusy()
 
   const openRow = rows.find((r) => r.name === open)
   const saved = !!openRow?.saved
@@ -174,6 +181,12 @@ export function useDatasets() {
    *  safety net — there is no `.trash` behind it — so it says how much is going and that
    *  it is not coming back. */
   const remove = useCallback(async (name: string) => {
+    // Checked before the dialog rather than only inside `run`, because the dialog is the
+    // expensive half: a delete already in flight has already been confirmed, and asking
+    // again puts a modal question about a set that will not exist by the time it is
+    // answered. The rail's ✕ painted nothing while the unlink was out, so it was pressed
+    // twice as a matter of course.
+    if (busy) return
     const d = rows.find((x) => x.name === name)
     const held = (d?.count ?? 0) + (d?.videos ?? 0)
     if (held && !confirm(
@@ -181,11 +194,15 @@ export function useDatasets() {
       + (d!.videos ? ` and ${d!.videos} clip${d!.videos === 1 ? '' : 's'}` : '')
       + ' and their captions are unlinked from the volume. This cannot be undone.',
     )) return
-    const r = await deleteDataset(name)
-    if (failed(r)) return setError(r.error)
-    if (name === open) await choose(null)
-    await load()
-  }, [choose, load, open, rows])
+    // Keyed by name: the rail is a column of ✕ buttons, and the one that is working has
+    // to be the one that says so.
+    await run(`remove:${name}`, async () => {
+      const r = await deleteDataset(name)
+      if (failed(r)) return setError(r.error)
+      if (name === open) await choose(null)
+      await load()
+    })
+  }, [busy, choose, load, open, rows, run])
 
   const commitTrigger = useCallback(async (v: string) => {
     if (!open) return
@@ -195,6 +212,10 @@ export function useDatasets() {
 
   return {
     rows, error, open, openRow, saved, images, insight, trigger, editError,
+    /** The set whose delete is out, or null. The name rather than a boolean because the
+     *  rail draws one ✕ per row and only one of them is doing anything — the others just
+     *  go quiet while it does. */
+    removing: busy?.startsWith('remove:') ? busy.slice('remove:'.length) : null,
     setTrigger, setImages, setEditError,
     load, loading, choose, loadTiles, create, suggestName, save, remove, commitTrigger,
     refreshInsight,

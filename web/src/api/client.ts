@@ -15,7 +15,18 @@
  * would reintroduce exactly the failure this shape exists to prevent.
  */
 
-export type ApiError = { error: string }
+/**
+ * `error` is the sentence a person reads; `detail` is what the server actually said.
+ *
+ * They were one field, and the field was
+ * `${status} ${statusText} ${body.slice(0, 400)}` — so the headline of every failure on
+ * this page was 400 characters of Modal traceback, in an `alert()` or an err-box, with
+ * the one useful word somewhere in the middle of it. A person cannot act on that, and
+ * the person who *can* act on it wants the whole thing rather than the first 400 bytes.
+ * Splitting it serves both: the sentence says what to do, `detail` rides along for the
+ * disclosure to open, and nothing is thrown away.
+ */
+export type ApiError = { error: string; detail?: string }
 export type Res<T> = T | ApiError
 
 /** Narrowing guard. `if (failed(r)) return r.error` is the whole idiom. */
@@ -28,14 +39,48 @@ async function api<T>(path: string, init?: RequestInit): Promise<Res<T>> {
   try {
     r = await fetch(path, init)
   } catch (e) {
-    return { error: String(e instanceof Error ? e.message : e) }
+    // `Failed to fetch` is what the browser says for a server that is not running, a
+    // dev proxy pointed at the wrong port, and a dropped wifi connection alike. The
+    // page cannot tell those apart, so it says the one thing true of all three and
+    // keeps the browser's wording underneath for whoever can.
+    return {
+      error: 'Could not reach the server — check that it is running, then try again.',
+      detail: String(e instanceof Error ? e.message : e),
+    }
   }
   const body = await r.text()
   try {
     return JSON.parse(body) as T
   } catch {
-    return { error: `${r.status} ${r.statusText || ''} ${body.slice(0, 400)}`.trim() }
+    return { error: statusNote(r.status, r.statusText), detail: body.trim() || undefined }
   }
+}
+
+/**
+ * A status, as a next step rather than a number.
+ *
+ * Only reached when the body would not parse, which on this stack means the server did
+ * not get as far as writing JSON: a traceback, a proxy's HTML error page, or an empty
+ * 502 from a container that has not finished starting. The number stays in the sentence
+ * because it is what you quote when you ask someone; it is no longer the whole message.
+ */
+function statusNote(status: number, statusText: string): string {
+  if (status === 404) {
+    return `Not found (404) — this build is asking for a route the server does not have,`
+      + ` which usually means the page and the deployment are different versions.`
+  }
+  if (status === 401 || status === 403) {
+    return `Not authorised (${status}) — check the HuggingFace token under Settings.`
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return `The server did not answer (${status}) — it may still be starting up,`
+      + ` so give it a moment and try again.`
+  }
+  if (status >= 500) {
+    return `The server hit an error (${status}) partway through this request; its own`
+      + ` report is below.`
+  }
+  return `Request failed (${status}${statusText ? ` ${statusText}` : ''}).`
 }
 
 function post<T>(path: string, body?: unknown): Promise<Res<T>> {

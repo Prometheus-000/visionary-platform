@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
+import { ErrorNote } from '../ui/ErrorNote'
 import { usePopover } from '../ui/Popover'
+import { LoraBox } from '../lora/LoraBox'
 import { LoraButton } from '../lora/LoraButton'
 import { loraNote } from '../lora/note'
 import { MotionDoor } from '../motion/MotionDoor'
@@ -60,6 +62,28 @@ export function Console({
   const box = useRef<HTMLDivElement>(null)
   const pal = usePopover()
   const mo = usePopover()
+
+  /* What a rewrite that wrote nothing has to say, held here rather than in
+     `Rewrite` because the line it goes in is a row below the strip that button
+     sits in — and because both strips mount their own `Rewrite`, so one owner
+     above them is the only version where the note cannot be said twice.
+
+     Transient: it is about a press, not about the state of the composer, and a
+     press stops being news. Kept as `{text, n}` so pressing again on the same
+     failure re-arms the timer — keyed on the text alone, a repeat set the same
+     value, React skipped the render, and the second note inherited the first
+     one's remaining seconds. */
+  const [rw, setRw] = useState<{ text: string; calm: boolean; n: number } | null>(null)
+  const rwN = useRef(0)
+  const sayRewrite = useCallback((text: string, calm?: boolean) => {
+    rwN.current += 1
+    setRw(text ? { text, calm: !!calm, n: rwN.current } : null)
+  }, [])
+  useEffect(() => {
+    if (!rw) return
+    const t = window.setTimeout(() => setRw(null), 7000)
+    return () => window.clearTimeout(t)
+  }, [rw])
 
   // The console has to watch itself, because the prompt is not the only thing that
   // grows: arming Regions adds a bar and picking pills adds a rail, and both happen
@@ -136,7 +160,9 @@ export function Console({
 
   return (
     <div className="console" ref={box}>
-      {err && <div className="err-box">{err}</div>}
+      {/* `ErrorNote` rather than a bare err-box, so the server's own report rides
+          under the sentence instead of being the sentence — see `ui/ErrorNote`. */}
+      <ErrorNote err={err} />
 
       <Field consoleEl={box} onSubmit={() => { if (ready && !busy) onGenerate() }}>
         <div className={image ? '' : 'hide'} id="c-image">
@@ -151,7 +177,7 @@ export function Console({
             <ShotDoor id="g-shot" kind="image" on={!!s.shot.length} onClick={pal.toggle} />
             {/* The third door onto the box, and it belongs with the other two
                 rather than on a line of its own — see `Rewrite`. */}
-            <Rewrite />
+            <Rewrite onNote={sayRewrite} />
             <span className="actions">
               <span className="muted" id="gen-model-line">{modelNote}</span>
               <ImageSampling />
@@ -179,7 +205,7 @@ export function Console({
                             on={motionLive(s) || !!s.shot.length}
                             onClick={mo.toggle} />
               : <ShotDoor id="v-shot" kind="video" on={!!s.shot.length} onClick={pal.toggle} />}
-            <Rewrite />
+            <Rewrite onNote={sayRewrite} />
             <span className="actions">
               <span className="muted" id="v-model-line">{vid.note}</span>
               <VideoSampling />
@@ -204,10 +230,15 @@ export function Console({
       {!image && <SourceRow />}
 
       <Rail />
+      <LoraBox />
       <Peek />
 
       {/* Only ever says what is wrong. A line confirming the LoRAs you can already read
-          in the prompt above it would be the page telling you what you can see.
+          in the prompt above it would be the page telling you what you can see. The
+          rewrite note is the one thing here that can be good news, and it is only
+          allowed because its subject is a press rather than a state — you cannot look
+          at the composer and tell whether Enhance decided or died. It comes in grey
+          rather than amber for exactly that reason; see `Rewrite`'s `onNote`.
 
           The line is *reserved* — one row of height whether or not there is a note.
           Mounted on demand, each note that appeared grew the console, and the console
@@ -218,6 +249,15 @@ export function Console({
       <p className="muted warn" id="console-notes">
         <span id="lora-note">{note}</span>
         {!image && <VideoNote />}
+        {/* A press that changed nothing, saying which nothing it was. It goes
+            here rather than beside the button precisely because this row is
+            reserved: a note mounted under Enhance would grow the console, and
+            the console is pinned to the bottom of the stage, so it would shift
+            Generate out from under the hand that just pressed Enhance. The gap
+            before it is `#console-notes span:not(:empty)~span:not(:empty)` in
+            the stylesheet — no spacing is written here, so an empty line ahead
+            of it does not leave an indent. */}
+        <span id="rewrite-note" className={rw?.calm ? 'muted' : ''}>{rw?.text ?? ''}</span>
       </p>
 
 

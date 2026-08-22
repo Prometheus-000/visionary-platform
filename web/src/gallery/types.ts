@@ -120,3 +120,27 @@ export function ago(ts?: number): string {
   const d = Math.floor(h / 24)
   return d < 7 ? `${d}d ago` : new Date(ts * 1000).toLocaleDateString()
 }
+
+/**
+ * The card's shape, from the sidecar rather than from the picture.
+ *
+ * `width`/`height` are what the run was asked for, so they are known before the
+ * cover is fetched — which is what lets the masonry pack without measuring and
+ * without reflowing as each image decodes. A folder with no sidecar has neither
+ * (see `_gallery`, which lists it anyway), so `null` is a real answer and not an
+ * error: those cards keep the 4:3 box the stylesheet gives them.
+ *
+ * Deliberately not read off the decoded image as a fallback. That would make the
+ * layout depend on the network, which is the whole failure this avoids, and it
+ * would be a second source for a number the server already knows.
+ */
+export function aspectOf(it: GalleryItem): string | null {
+  return it.width && it.height ? `${it.width}/${it.height}` : null
+}
+
+/** Height over width, for the packer. The fallback is 4:3 because that is what
+ *  a card with no recorded size is drawn as — a packer and a stylesheet
+ *  disagreeing about one card is a gap under it. */
+export function ratioOf(it: GalleryItem): number {
+  return it.width && it.height ? it.height / it.width : 3 / 4
+}

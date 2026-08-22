@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { failed } from '../api/client'
+import { failed, type ApiError } from '../api/client'
 import { deleteOutput, fileUrl, gallery, purgeOutputs } from '../api/routes'
 import { IconBack, IconExpand, IconRefresh } from '../icons'
+import { ErrorNote } from '../ui/ErrorNote'
+import { Masonry } from '../ui/Masonry'
 import { Menu, type MenuItem } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
+import { useBusy } from '../ui/useBusy'
+import { useMedia } from '../ui/useMedia'
 import { Card } from './Card'
 import { forget, merged, mine, remember } from './mine'
 import { reuse } from './reuse'
 import { Viewer } from './Viewer'
-import type { Filter, GalleryItem } from './types'
+import { aspectOf, ratioOf, type Filter, type GalleryItem } from './types'
 
 /** How many times a listing that admits it is behind is asked again, and how long
  *  each wait is. Sized against a media transfer finishing rather than a value changing
@@ -19,6 +23,13 @@ const STALE_TRIES = 2
 const STALE_BACKOFF = [1200, 3000]
 /** One page. The server clamps its own limit; this is what the grid asks for. */
 const PAGE = 200
+/** A card's height that is not the picture — the foot's 40px and the two border
+ *  pixels. Only the packer needs it, and only so that a column of wide cards is
+ *  not packed as though their footers were free. */
+const GAL_CHROME = 42
+/** The full grid is packed above this and cropped to squares below it, which is
+ *  `@media(max-width:1024px)` in the stylesheet read from the other side. */
+const GAL_PACKED = '(min-width:1025px)'
 
 /**
  * Three layers, and the third is the one that is easy to miss: the drawer beside the canvas,
@@ -141,7 +152,10 @@ export function Gallery({
   behind: boolean
   open: boolean
   onClose: () => void
-  onReload: () => void
+  /** May hand back the reload it starts, and should: `remove` and `purge` stay busy until
+   *  the listing has actually come back, and a caller that returns `void` ends that wait at
+   *  the reply instead — which on a slow volume is the shorter half of the two. */
+  onReload: () => void | Promise<void>
   onDropped: (jobIds: string[]) => void
   onMeta: (it: GalleryItem) => void
   onHandoff: (it: GalleryItem, as: 'first' | 'reference' | 'refvideo') => void
@@ -150,6 +164,12 @@ export function Gallery({
   const [viewing, setViewing] = useState<{ rows: GalleryItem[]; i: number } | null>(null)
   const [menuFor, setMenuFor] = useState<GalleryItem | null>(null)
   const pop = usePopover()
+  const { busy, run } = useBusy()
+  const wide = useMedia(GAL_PACKED)
+  // Where `alert(r.error)` used to go. Kept here rather than per card because a delete
+  // outlives the menu it was started from — the menu closes on the click — so there is no
+  // card-shaped thing left to hang the failure on by the time it arrives.
+  const [err, setErr] = useState<ApiError | string | null>(null)
 
   const shown = useMemo(
     () => (filter === 'all' ? items : items.filter((i) => i.kind === filter)),
@@ -168,22 +188,33 @@ export function Gallery({
     }
   }
 
-  const remove = async (it: GalleryItem) => {
+  // Keyed by job so the card being deleted is the one that dims, and inside `run` from the
+  // confirm onward rather than from the reply: a second Delete while the first is out used
+  // to raise a second confirm dialog for a file already on its way to being unlinked.
+  const remove = (it: GalleryItem) => run(`del:${it.job_id}`, async () => {
     // Deletion unlinks. The confirm dialog is the safety net, so it has to say what is going
     // and how much of it — a dialog that undersells the blast radius is the failure this
     // replaced.
     const n = it.files.length
     const what = n > 1 ? `${n} files` : it.files[0]
     if (!confirm(`Delete ${what}? This cannot be undone.`)) return
+    setErr(null)
     const r = await deleteOutput(it.job_id)
-    if (failed(r)) return alert(r.error)
+    // Inline, not `alert()`. The sentence got better when `client.ts` split it from the
+    // server's report, but a modal can only ever carry the sentence — it has nowhere to
+    // fold the report that says *why* the unlink was refused, and it stops the panel to
+    // say one line you then have to dismiss before you can look at what it is about.
+    if (failed(r)) return setErr(r)
     // Before the reload, not after: the session record is merged into whatever the
     // listing returns, so a delete that only reached the volume comes straight back.
     onDropped([it.job_id])
-    onReload()
-  }
+    // Awaited, so the card stays dim through the refetch too. The reply is not the end of
+    // the wait — the grid is wrong until the new listing lands, and that was the half of
+    // it with nothing on screen.
+    await onReload()
+  })
 
-  const purge = async () => {
+  const purge = () => run('purge', async () => {
     // Spells out the count and the scope, because a filtered gallery and an unfiltered one
     // put the same button in the same place over very different amounts of work.
     const n = shown.length
@@ -202,11 +233,14 @@ export function Gallery({
     // The ids, not the filter: what goes is exactly what was counted in the dialog, even if
     // a run lands while it is open.
     const ids = shown.map((i) => i.job_id)
+    setErr(null)
     const r = await purgeOutputs({ confirm: 'delete', job_ids: ids })
-    if (failed(r)) return alert(r.error)
+    // Same reasoning as `remove`, and more so: a purge that half-failed has a server report
+    // worth reading, and an alert threw it away.
+    if (failed(r)) return setErr(r)
     onDropped(ids)
-    onReload()
-  }
+    await onReload()
+  })
 
   /** What you can do to one result. Reuse first, because it is the reason the sidecar is
    *  kept at all; Delete last and red, because it unlinks. */
@@ -232,16 +266,24 @@ export function Gallery({
    * chevrons and the count are a claim about how much there is, not about how many
    * cards happened to be rendered beside the canvas.
    */
-  const cards = (rows: GalleryItem[], all: GalleryItem[] = rows) => rows.map((it) => (
+  const card = (it: GalleryItem, all: GalleryItem[], packed: boolean) => (
     <Card key={`${it.job_id}:${it.files[0]}`} item={it}
+          busy={busy === `del:${it.job_id}`}
+          aspect={packed ? aspectOf(it) : null}
           onOpen={() => setViewing({ rows: all, i: Math.max(0, all.indexOf(it)) })}
-          onDownload={() => download(it)}
-          onDelete={() => void remove(it)}
           onMenu={(anchor) => {
             setMenuFor(it)
             pop.at(anchor)
           }} />
-  ))
+  )
+
+  /** The drawer is one column, so it needs no packing — but it is the same picture
+   *  as the one in the grid, and letterboxing it in the column beside the canvas
+   *  while the full gallery shows it whole is the same render disagreeing with
+   *  itself on one screen. Below 1024px it is a horizontal strip whose cards are
+   *  sized by flex, and an aspect-ratio there fights the height it is given. */
+  const cards = (rows: GalleryItem[], all: GalleryItem[] = rows) =>
+    rows.map((it) => card(it, all, wide))
 
   return (
     <>
@@ -257,6 +299,12 @@ export function Gallery({
             </button>
           </div>
           <div id="drawer-grid" className="grid">{cards(items.slice(0, 24), items)}</div>
+          {/* A card's Delete is reachable from the drawer with the full gallery shut, and a
+              failure rendered only inside `#gal-full` would then be painted behind a panel
+              nobody is looking at — silence, which is what replacing the alert must not
+              become. Only while it is shut, because the overlay covers this and one failure
+              shown twice reads as two. */}
+          {!open && <ErrorNote err={err} style={{ marginTop: 6 }} />}
           {!items.length && (
             <p className="muted" style={{ marginTop: 6 }}>Nothing generated yet.</p>
           )}
@@ -284,19 +332,41 @@ export function Gallery({
                 stopped trying. A tooltip naming a state on a control whose home you are
                 already in is what the icon rule licenses; a banner over the grid is
                 not. */}
-            <button className="ico" type="button" onClick={onReload}
+            <button className="ico" type="button" onClick={() => void onReload()}
+                    disabled={!!busy}
                     title={behind ? 'Refresh — the listing may be behind' : 'Refresh'}>
               <IconRefresh />
             </button>
-            <button className="pill danger" type="button" disabled={!shown.length}
+            {/* Says what it is doing, and shuts while anything else is. `disabled` was
+                `!shown.length` alone, so through the purge itself — the longest request in
+                the app, one round trip per result — this pill sat there fully live reading
+                "Delete 200 results", which is an invitation to press it again. The label
+                is the signal; the guard against the second press is in `run`, because
+                `disabled` is a paint and a queued click was already past it. */}
+            <button className="pill danger" type="button"
+                    disabled={!shown.length || !!busy}
                     onClick={() => void purge()}>
-              {!shown.length ? 'Delete all'
+              {busy === 'purge' ? 'Deleting…'
+                : !shown.length ? 'Delete all'
                 : `Delete ${shown.length} ${filter === 'all' ? 'result' : filter}`
                   + (shown.length === 1 ? '' : 's')}
             </button>
           </div>
 
-          <div id="gal-grid" className="grid">{cards(shown)}</div>
+          {/* Above the grid it is about, which is the thing the alert could not do: a modal
+              covers the panel to say one sentence, and you have to agree to it before you
+              can look at what failed. This stays until the next attempt clears it. */}
+          <ErrorNote err={err} style={{ marginBottom: 14 }} />
+
+          {/* Two layouts, and they are different DOM rather than two stylesheets:
+              below 1024px the grid crops to squares — the one place this app trades
+              information for density, because there the screen is the constraint —
+              and a masonry's columns would hand that grid its cards in chronological
+              order down each column instead of across each row. */}
+          {wide
+            ? <Masonry id="gal-grid" items={shown} ratio={ratioOf} min={232} gap={14}
+                       chrome={GAL_CHROME} render={(it) => card(it, shown, true)} />
+            : <div id="gal-grid" className="grid">{cards(shown)}</div>}
           {/* Stated rather than silent. The cap was invisible, so a volume holding more
               than a page looked like a volume that had lost the rest. */}
           {filter === 'all' && total > shown.length && (

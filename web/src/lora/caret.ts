@@ -1,26 +1,28 @@
 /**
- * Where the caret was when `+ LoRA` was pressed, and which field had it.
+ * Where the caret is, and which field has it.
  *
- * Clicking the button takes focus away, and the menu takes it again, so by the
- * time an item is chosen `selectionStart` is meaningless — it would put every
- * pick at the end of the sentence, which is the one place the syntax makes no
- * difference.
+ * **It was `+ LoRA`'s, and `+ LoRA` no longer writes anything.** The button used
+ * to insert `<lora:name:1>` at the caret, so it needed to know where the caret
+ * had been before the menu stole focus — and two fields, because a region's
+ * prompt took the same syntax at a smaller scope. Both of those are gone: a LoRA
+ * is a chip now and a region has its own dropdown, so nothing picks a *place* to
+ * write a LoRA any more.
  *
- * Two fields, not one, since a region's prompt takes the same syntax at a smaller
- * scope. Tracking which was last touched is what makes "select a box, click
- * + LoRA, pick a name" put that character in that box — the shortest path this
- * feature has, and the only one that involves no typing at all.
+ * What still needs the sink is `moveClause` — ⌥←/⌥→ moving the clause under the
+ * caret — and the region field registering itself so that chord works there too.
  *
  * A module-level ref rather than store state: this changes on every keyup and
  * click in two text fields, which is pointer rate, and nothing renders from it.
  */
-import type { Written } from './tokens'
 
 type Field = HTMLTextAreaElement | HTMLInputElement
 
+/** A rewritten field value with the selection to restore after it commits. */
+export type Written = { value: string; caret: number; select: number }
+
 type Sink = {
   el: Field
-  /** `1.3` in a region and `1` in the main prompt — see `insertLora`. */
+  /** Which field, so a chord can be scoped to one of them. */
   scope: 'prompt' | 'region'
   /** Push the new text back through React. The selection is restored after the
    *  commit, not before: these are controlled inputs, so writing `el.value`

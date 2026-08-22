@@ -12,11 +12,9 @@ import { Popover } from './Popover'
  * the LoRA picker (already in the prompt) and the reference role menu (this
  * picture's role), which are the two menus where an item has a state.
  *
- * `drag` makes an item a *source* as well as a command — the LoRA picker's rows,
- * which can be dropped on a box, the prompt or the bare frame instead of being
- * clicked. It is opt-in per item rather than a property of the menu because the
- * other two menus here act on an object that is already selected: there is
- * nowhere to carry them to.
+ * `drag` is gone with `lora/drag.ts`. It made the LoRA picker's rows drag
+ * sources, so one gesture could name both which LoRA and which box — and every
+ * target owns a control now, so there is no *which box* left to answer.
  */
 export type MenuItem =
   | { sep: true }
@@ -31,8 +29,6 @@ export type MenuItem =
        *  because a row that is about to write words into your sentence should
        *  show them first. */
       hint?: string
-      /** Written onto the drag as one private MIME type. See `lora/drag.ts`. */
-      drag?: (e: React.DragEvent) => void
     }
 
 export function Menu({
@@ -50,20 +46,7 @@ export function Menu({
       {items.map((it, i) =>
         it.sep ? <hr key={`sep${i}`} /> : (
           <button key={it.label} type="button"
-                  className={[it.danger ? 'danger' : '', it.on ? 'on' : '',
-                              it.drag ? 'draggable' : ''].filter(Boolean).join(' ')}
-                  draggable={!!it.drag}
-                  onDragStart={it.drag && ((e) => {
-                    it.drag!(e)
-                    // Deferred by a tick, and that tick is the whole of it. The menu
-                    // covers the canvas it is anchored over, so leaving it up means
-                    // dragging a LoRA across an opaque panel to reach a box it is
-                    // hiding. Closing *synchronously* inside dragstart unmounts the
-                    // source node before the browser has snapshotted its drag image,
-                    // which cancels the drag outright in WebKit. One turn of the loop
-                    // is after the snapshot and long before the first `dragover`.
-                    setTimeout(onClose, 0)
-                  })}
+                  className={[it.danger ? 'danger' : '', it.on ? 'on' : ''].filter(Boolean).join(' ')}
                   onClick={() => {
                     // Closed first. Several of these open a dialog or a sheet of
                     // their own, and a menu still on screen behind a confirm is

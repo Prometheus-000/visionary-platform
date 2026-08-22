@@ -14,71 +14,34 @@
  */
 import type { Store } from '../store'
 import { attached, regionsLive, supports, videoModel } from '../store'
-import { loraAlternatives, loraIndex, parseLoras, stripLoras } from './tokens'
+import { stripLoras } from './tokens'
 
 export function loraNote(s: Store): string {
-  const index = loraIndex(s.state)
   const max = s.state?.max_loras ?? 6
-  const toks = parseLoras(index, s.prompt)
-  const regionToks = s.regions.flatMap((r) => parseLoras(index, r.prompt || ''))
-  const bad = [...new Set([...toks, ...regionToks].filter((t) => !t.hit).map((t) => t.name))]
   const bits: string[] = []
 
-  // Ambiguous first and named individually: the fix is to copy one of the
-  // alternatives, so listing them is the whole message.
-  for (const b of bad) {
-    const alts = loraAlternatives(index, b)
-    if (alts.length > 1) bits.push(`"${b}" names ${alts.length} LoRAs — use ${alts.join(' or ')}.`)
-  }
-  const gone = bad.filter((b) => !loraAlternatives(index, b).length)
-  if (gone.length) {
-    bits.push(gone.length === 1
-      ? `No LoRA named "${gone[0]}" on the volume.`
-      : `No LoRAs named ${gone.map((b) => `"${b}"`).join(', ')} on the volume.`)
-  }
-  if (toks.filter((t) => t.hit).length > max) bits.push(`Only the first ${max} LoRAs are applied.`)
-
-  // A LoRA whose training bound everything to a phrase is near-invisible until
-  // the phrase is in the prompt — the weight loads, the render changes a little,
-  // and it reads as a LoRA that did nothing, which nothing else on the page can
-  // tell apart from one that ran. Main prompt only: a trigger in a box never
-  // reaches the encoder, so there is nothing there to warn about. Skipped when
-  // the model reads no LoRAs at all — that note already covers the whole stack.
-  if (s.kind === 'image' || supports(s).loras) {
-    const low = stripLoras(s.prompt).toLowerCase()
-    const untriggered = [...new Set(
-      toks.filter((t) => t.hit?.trigger && !low.includes(t.hit.trigger.toLowerCase()))
-        .map((t) => t.hit!.token),
-    )]
-    for (const n of untriggered) {
-      const hit = toks.find((t) => t.hit?.token === n)!.hit!
-      bits.push(`"${n}" does little without its phrase — add “${hit.trigger}”.`)
-    }
-  }
-
-  // One per box is the node's shape, and the backend rejects the rest rather than
-  // applying the first — so say it here, while the second token is still under
-  // the caret, instead of after a round trip.
-  s.regions.forEach((r, i) => {
-    if (parseLoras(index, r.prompt || '').filter((t) => t.hit).length > 1)
-      bits.push(`Region ${i + 1} names more than one LoRA — a region takes one.`)
-  })
+  // **Three notes are gone, and they are gone because they became impossible.**
+  // A typed name could resolve to nothing (`No LoRA named "x"`) or to two files
+  // (`"high" names 2 LoRAs`), and a LoRA bound to a trigger phrase could sit in
+  // the stack doing almost nothing while the phrase was missing from the prose.
+  // A chip is picked from a list, so the first two cannot happen. The third can,
+  // and is deliberately not said: it is managed by hand. `/api/state` still
+  // carries `trigger_word` per entry, which is where a check or an agent reads
+  // the fact — what went is the nagging, not the information.
+  if (s.loras.length > max) bits.push(`Only the first ${max} LoRAs are applied.`)
 
   if (regionsLive(s)) {
-    // The same LoRA in the prompt and in a box is the one combination that
-    // quietly undoes the feature: the prompt copy goes onto the global
-    // LoraLoader chain and patches the whole canvas, so the box's mask is still
-    // there and no longer separating anything. It looks like regional bleeding
-    // rather than like two copies of one LoRA, which is why it has to be named.
-    const boxed = new Set(
-      s.regions.flatMap((r) => parseLoras(index, r.prompt || '').filter((t) => t.hit)
-        .map((t) => t.hit!.path)),
-    )
-    const both = [...new Set(toks.filter((t) => t.hit && boxed.has(t.hit.path))
-      .map((t) => t.hit!.token))]
-    for (const n of both) {
-      bits.push(`"${n}" is in the prompt and in a box — the prompt copy applies to `
-        + 'the whole canvas and cancels the masking.')
+    // The same LoRA on the canvas and in a box is the one combination that
+    // quietly undoes the feature: the canvas copy goes onto the global
+    // LoraLoader chain and patches everything, so the box's mask is still there
+    // and no longer separating anything. It looks like regional bleeding rather
+    // than like two copies of one LoRA, which is why it has to be named.
+    const boxed = new Set(s.regions.flatMap((r) => (r.lora ? [r.lora.path] : [])))
+    for (const c of s.loras) {
+      if (boxed.has(c.path)) {
+        bits.push(`"${c.rel}" is on the canvas and in a box — the canvas copy applies `
+          + 'to the whole frame and cancels the masking.')
+      }
     }
     // Region weight multiplies every box's own strength, so a zero here is not a
     // weak render — it is every boxed LoRA switched off. The node answers that by
@@ -86,15 +49,15 @@ export function loraNote(s: Store): string {
     // the caption alone. That is what earns the line: nothing else on the page
     // tells that render apart from one the LoRAs actually ran in.
     if (parseFloat(s.regionWeight) === 0 && boxed.size)
-      bits.push('Region weight is 0 — every box’s LoRA is switched off.')
+      bits.push('Region weight is 0 — every box\u2019s LoRA is switched off.')
   }
 
-  // The prompt is shared by image and video, so a stack typed for one is still
-  // sitting there when you switch to the other. Saying that beats letting a
-  // guidance-distilled checkpoint quietly ignore four of them.
-  if (s.kind === 'video' && !supports(s).loras && toks.some((t) => t.hit)) {
+  // **The composer is per-kind now, so this is no longer about a stack left
+  // behind by the other side** — a Krea 2 chip cannot follow you to video at
+  // all. What it still catches is a Wan stack under a model that reads none.
+  if (s.kind === 'video' && !supports(s).loras && s.loras.length) {
     bits.push(`${videoModel(s)?.label ?? 'This model'} takes no LoRAs — `
-      + 'the ones in the prompt are ignored.')
+      + 'the ones on the canvas are ignored.')
   }
   return bits.join(' ')
 }
@@ -120,10 +83,8 @@ export function regionNote(s: Store, live: number): string {
   // is no LoRA delta to mask, so it is a soft placement rather than a guaranteed
   // one. Worth saying, because the two kinds of box look identical on the canvas
   // and do not hold their ground equally.
-  const index = loraIndex(s.state)
   const soft = s.regions.filter((r) =>
-    stripLoras(r.prompt || '').trim() && !attached(r, 'identity')
-    && !parseLoras(index, r.prompt || '').some((t) => t.hit)).length
+    stripLoras(r.prompt || '').trim() && !attached(r, 'identity') && !r.lora).length
   const softNote = soft ? ` ${soft} described only — placed by the words, not held by a mask.` : ''
   return `${live} region${live > 1 ? 's' : ''}, one pass. `
     + `Each LoRA is masked to its box.${tail}${softNote}`

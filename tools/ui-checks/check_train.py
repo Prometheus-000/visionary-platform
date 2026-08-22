@@ -40,10 +40,14 @@ URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8791"
 # name -> the label it must show. The ids survived the move out of the console
 # and into the form on purpose: an id that changes with a rehousing is a check
 # that silently stops checking.
-RESTING = {"a-dim": "Rank", "a-alpha": "Alpha", "a-epochs": "Epochs",
-           "a-lr": "Learning rate", "a-bs": "Batch size", "a-res": "Resolution",
-           "a-shift": "Flow shift"}
-ADVANCED = {"a-rep": "Repeats", "a-seed": "Seed", "a-save": "Save every",
+# Epochs is the only dial left at rest. The form used to open on eighteen controls
+# spread verbatim from the server's `train_defaults`, so its subject was the request
+# body rather than the job; the other nine dials moved behind `#t-toggle-adv` at the
+# same defaults. Everything is still reachable — this split is the assertion.
+RESTING = {"a-epochs": "Epochs"}
+ADVANCED = {"a-dim": "Rank", "a-alpha": "Alpha", "a-lr": "Learning rate",
+            "a-bs": "Batch size", "a-res": "Resolution", "a-shift": "Flow shift",
+            "a-rep": "Repeats", "a-seed": "Seed", "a-save": "Save every",
             "a-swap": "Blocks to swap"}
 
 fails: list[str] = []
@@ -114,6 +118,18 @@ with sync_playwright() as pw:
         check(f"{i} carries its name", pg.evaluate(LABEL_OF, i) == want,
               str(pg.evaluate(LABEL_OF, i)))
 
+    # The other half of the same rule, and the one that rots first: a dial creeping
+    # back onto the resting form is exactly how the eighteen-control version grew,
+    # and it would pass every check below without this.
+    check("the dials rest behind the disclosure",
+          pg.evaluate("() => document.querySelector('#a-dim') === null"))
+
+    pg.click("#t-toggle-adv")
+    pg.wait_for_timeout(400)
+    for i, want in ADVANCED.items():
+        check(f"{i} carries its name", pg.evaluate(LABEL_OF, i) == want,
+              str(pg.evaluate(LABEL_OF, i)))
+
     # Rank beside alpha: the effective strength is alpha ÷ rank, so they are one
     # decision, and they used to sit four fields apart with the epochs between.
     check("rank is next to alpha", pg.evaluate(
@@ -134,13 +150,7 @@ with sync_playwright() as pw:
         # rejects by name is a run that cold-starts a GPU to die on argparse.
         check(f"#{i} is served by the server", len(opts) >= 3, str(opts[:4]))
 
-    pg.click("#t-toggle-adv")
-    pg.wait_for_timeout(400)
-    for i, want in ADVANCED.items():
-        check(f"{i} carries its name", pg.evaluate(LABEL_OF, i) == want,
-              str(pg.evaluate(LABEL_OF, i)))
-
-    # A run needs a name, a trigger and a set; the button says so by staying
+    # A session needs a name, a trigger and a set; the button says so by staying
     # disabled, and the hint says which of the three is missing.
     check("Start training waits for a name and a set",
           pg.evaluate("() => !!document.querySelector('#go-train')?.disabled"))

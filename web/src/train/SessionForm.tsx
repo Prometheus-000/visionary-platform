@@ -3,17 +3,30 @@ import { useState } from 'react'
 import type { AppState, TrainParams } from '../api/types'
 import type { DatasetRow } from '../datasets/useDatasets'
 import { IconTag, IconTrigger } from '../icons'
+import { ErrorNote } from '../ui/ErrorNote'
 import { Sheet } from '../ui/Sheet'
 import type { Draft } from './useSessions'
 import { paramsToForm } from './useSessions'
 
 /**
- * Setting up a run, in a modal.
+ * Setting up a session, in a modal.
  *
- * The same controls the console had, in the same `.opt` boxes — this is a
- * rehousing rather than a redesign, and deliberately so: what changed is that a
- * run is now a card you make, so the form is the moment you make one instead of
- * a strip that is on screen whether or not you are starting anything.
+ * The same controls the console had, in the same `.opt` boxes — the rehousing
+ * was deliberate: what changed is that a session is now a card you make, so the
+ * form is the moment you make one instead of a strip that is on screen whether
+ * or not you are starting anything.
+ *
+ * **Four fields on open, not eighteen.** Rehousing the strip verbatim also
+ * rehoused its shape, and that shape was `train_defaults`: every key the backend
+ * serialises, rendered as a control, in the order it happens to send them. So
+ * the form's subject was the API schema rather than the task — the README
+ * promises you point the trainer at a folder of images, and the sheet asked you
+ * to have an opinion about `blocks_to_swap` before it would let you past. What
+ * is on open now is what starting a session actually takes: the name, the
+ * trigger, the set, and how long to train for. Nothing was removed and no
+ * default moved — the other ten dials, the three menus and fp8 are all still
+ * here at the same values, one press of More dials away. The difference is only
+ * what you have to walk past to start.
  *
  * **Every numeric field carries its name.** This is the one place the "a
  * control that shows its own value gets no label" rule was pushed past what it
@@ -31,25 +44,39 @@ const DIALS = {
   // alpha ÷ rank, so the two are one decision and were four fields apart.
   network_dim: { label: 'Rank', title: 'Network dimension — how much the LoRA can learn. Higher fits more and overfits sooner.' },
   network_alpha: { label: 'Alpha', title: "Scales the LoRA's contribution: the effective strength is alpha ÷ rank. Equal to rank means no scaling." },
-  max_train_epochs: { label: 'Epochs', title: 'Passes over the set. Checkpoints land on the Save every interval, so this divided by that is how many you get to choose between.' },
+  max_train_epochs: { label: 'Epochs', title: 'Passes over the set. A LoRA is written every “Save every” epochs — under More dials — so this divided by that is how many you get to choose between.' },
   learning_rate: { label: 'Learning rate', title: 'Step size per update. 1e-4 is the usual starting point for a rank-32 LoRA.', step: 0.00001 },
   batch_size: { label: 'Batch size', title: 'Images per update. Higher is steadier and needs more VRAM.' },
   resolution: { label: 'Resolution', title: 'Training pixels per side. Images are bucketed to it; higher costs VRAM quadratically.', step: 64 },
   num_repeats: { label: 'Repeats', title: 'How many times each image is seen per epoch. Raise it for a set too small to fill an epoch.' },
-  seed: { label: 'Seed', title: 'Fixes shuffling and noise so two runs differing in one dial are actually comparable.' },
-  save_every_n_epochs: { label: 'Save every', title: 'Epochs between checkpoints. Every 5 keeps a 30-epoch run to six files instead of thirty; drop to 1 to keep everything a stopped run has written.' },
+  seed: { label: 'Seed', title: 'Fixes shuffling and noise so two sessions differing in one dial are actually comparable.' },
+  save_every_n_epochs: { label: 'Save every', title: 'Epochs between saved LoRAs. Every 5 keeps a 30-epoch session to six files instead of thirty; drop to 1 to keep everything a stopped session has written.' },
   discrete_flow_shift: { label: 'Flow shift', title: 'Weights the flow-matching schedule toward the noisy end. Only the Shift timestep sampling reads it.', step: 0.05 },
   blocks_to_swap: { label: 'Blocks to swap', title: 'Offload this many transformer blocks to CPU. Buys VRAM at the cost of speed; 0 keeps everything on the card.' },
 } as const
 
 type Dial = keyof typeof DIALS
 
-/** The dials that decide whether a run is worth its hours, and the ones you
- *  change once a year. The split is frequency, the same axis the generate
- *  console sorts by — not per-run against per-session. */
-const PRIMARY: Dial[] = ['network_dim', 'network_alpha', 'max_train_epochs',
-                         'learning_rate', 'batch_size', 'resolution']
-const ADVANCED: Dial[] = ['num_repeats', 'seed', 'save_every_n_epochs', 'blocks_to_swap']
+/**
+ * The one dial the task has an opinion about, and the ten the schema has.
+ *
+ * The split used to be frequency: six you change per session against four you
+ * change once a year. That still opened the sheet with rank, alpha, the learning
+ * rate and the resolution in front of someone whose entire question was how long
+ * to train for — four numbers that have a good default and no local answer.
+ * Epochs is the one that has no default worth trusting, because it is the one
+ * that decides what the hours cost; the rest come from the server already set.
+ *
+ * `discrete_flow_shift` is in neither list and that is not an omission: it is
+ * disabled unless the timestep sampling is Shift, so it renders beside that menu
+ * rather than adrift in a row of free-standing numbers. Rank leads ADVANCED with
+ * alpha behind it, because the effective strength is alpha ÷ rank and the two
+ * are one decision — the same adjacency `check_train.py` pins.
+ */
+const PRIMARY: Dial[] = ['max_train_epochs']
+const ADVANCED: Dial[] = ['network_dim', 'network_alpha', 'learning_rate', 'batch_size',
+                          'resolution', 'num_repeats', 'seed', 'save_every_n_epochs',
+                          'blocks_to_swap']
 
 export function SessionForm({
   initial, state, datasets, saving, error, onSave, onClose, onNewDataset,
@@ -86,6 +113,12 @@ export function SessionForm({
   // The three refusals `/api/sessions/{id}/start` makes, said before the press
   // rather than after it. Saving has no such gate: an unfinished card is the
   // normal state of one made on the way to building a set.
+  //
+  // Every field named here is one of the four that are always on screen, and
+  // that has to stay true now that ten dials sit behind More dials: a footer
+  // reading "Pick a set" while the set picker is folded away is a button
+  // explaining itself with a control the reader cannot see. Nothing under the
+  // disclosure can block a start — the server takes all ten as they come.
   const hint = !name.trim() ? 'Name the LoRA'
     : !trig.trim() ? 'Set a trigger word'
     : !dataset ? 'Pick a set'
@@ -124,13 +157,13 @@ export function SessionForm({
         <div className="grow">
           <h3 style={{ margin: 0 }}>{initial.id ? 'Edit session' : 'New training session'}</h3>
           <p className="sub" style={{ margin: '8px 0 0' }}>
-            Krea 2 RAW · bf16. The run gets its own container, so it does not wait
-            on anything else you have going.
+            Krea 2 RAW · bf16. This session gets its own container, so it does not
+            wait on anything else you have going.
           </p>
         </div>
       </div>
 
-      {error && <div className="err-box">{error}</div>}
+      <ErrorNote err={error} />
 
       <div className="opts">
         <div className="opt wide">
@@ -177,25 +210,35 @@ export function SessionForm({
       <div className="opts">{PRIMARY.map(dial)}</div>
 
       <div className="opts">
-        {state && menu('optimizer_type', state.train_optimizers)}
-        {state && menu('lr_scheduler', state.lr_schedulers)}
-        {state && menu('timestep_sampling', state.timestep_samplings)}
-        {dial('discrete_flow_shift')}
-      </div>
-
-      <div className="opts">
         {/* A disclosure, not an action — so it carries no chrome. There is one
-            filled button on this sheet and it is the one that spends a GPU. */}
+            filled button on this sheet and it is the one that spends a GPU.
+            It is also the whole of the schema now, so it is the last thing
+            before the actions rather than a footnote after two rows of dials. */}
         <button className={`t${adv ? ' on' : ''}`} id="t-toggle-adv" type="button"
                 onClick={() => setAdv((v) => !v)}>
           {adv ? 'Fewer dials' : 'More dials'}
         </button>
       </div>
 
+      {/* Closed by default, and closed again on the next open: `adv` is state on
+          a sheet that is unmounted when it closes. Deliberate — a sheet that
+          remembers it was expanded is a sheet that is expanded for everyone who
+          once went looking for the seed. */}
       {adv && (
         <div id="train-adv" className="adv">
           <div className="opts" style={{ marginTop: 0 }}>
             {ADVANCED.map(dial)}
+          </div>
+
+          {/* The three menus and the shift on their own row, as they were when
+              they sat outside the disclosure: each is a word rather than a
+              number, and mixed into the numbers they read as one long line of
+              values with no edges. */}
+          <div className="opts">
+            {state && menu('optimizer_type', state.train_optimizers)}
+            {state && menu('lr_scheduler', state.lr_schedulers)}
+            {state && menu('timestep_sampling', state.timestep_samplings)}
+            {dial('discrete_flow_shift')}
             <label className="row" style={{ gap: 7, margin: 0, color: '#ddd', fontSize: 13 }}>
               <input type="checkbox" id="a-fp8" style={{ width: 'auto' }}
                      checked={!!params.fp8}

@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { failed } from './api/client'
 import { fileUrl, getState, warm } from './api/routes'
 import { Canvas } from './canvas/Canvas'
 import { useGenerate } from './canvas/useGenerate'
 import { Console } from './console/Console'
+import { videoReady } from './console/resolve'
+import { ErrorNote } from './ui/ErrorNote'
 import { Gallery, useGallery } from './gallery/Gallery'
 import { LastShot } from './gallery/LastShot'
 import { MetaSheet } from './gallery/MetaSheet'
@@ -12,7 +14,6 @@ import { Viewer } from './gallery/Viewer'
 import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
 import { IconBack, IconGear, IconPanel, IconPhoto, IconTrain } from './icons'
-import { LORA_MIME, endLoraDrag } from './lora/drag'
 import { fileToB64, toB64 } from './media/files'
 import { Settings } from './settings/Settings'
 import { warmDatasets } from './datasets/useDatasets'
@@ -168,45 +169,35 @@ export function App() {
   useEffect(() => {
     let off: number | undefined
     const over = (e: DragEvent) => {
-      // Files, or a LoRA out of the picker. Not a text selection dragged out of the
-      // prompt field — that must not make the page look like it wants to eat it.
+      // Files only. Not a text selection dragged out of the prompt field — that
+      // must not make the page look like it wants to eat it.
       //
-      // A LoRA counts for the same reason a file does, and it is the same fact that
-      // made it necessary: over a finished render the boxes are at
-      // `pointer-events:none`, so without this a LoRA cannot be dropped on the one
-      // thing it most obviously belongs on. `fileOver` is read by `RegionLayer` to
-      // bring them back.
+      // **It used to be files *or* a LoRA**, because a LoRA was something you
+      // dragged out of the picker at the prompt bar and onto a box. It is picked
+      // from the box's own dropdown now, so the only thing that arrives by drag is
+      // a photograph — which comes from the Finder, where a drag is the only
+      // gesture there is.
       const types = [...(e.dataTransfer?.types ?? [])]
-      const lora = types.includes(LORA_MIME)
-      if (!types.includes('Files') && !lora) return
+      if (!types.includes('Files')) return
       document.body.classList.add('dragging')
-      // Which kind, because the eligible targets are disjoint: a photograph goes to
-      // the plates, the tiles and the contact sheet, none of which take a LoRA, and
-      // lighting all of them for a drag they would refuse is the page promising
-      // something it has to take back.
-      document.body.classList.toggle('dragging-lora', lora)
-      // The same fact in the two places that need it. The stylesheet reads the class to
-      // light every eligible target; `RegionLayer` reads the flag to bring the boxes
-      // back over a finished render, because a drop cannot land on a box that is at
-      // `pointer-events:none` — which is the state the port shipped in, and it made the
-      // one gesture nobody discovers on their own undiscoverable by construction.
+      // `RegionLayer` reads this to bring the boxes back over a finished render:
+      // a drop cannot land on a box that is at `pointer-events:none`, which is
+      // the state the port shipped in and it made the gesture undiscoverable by
+      // construction.
       useStore.getState().setFileOver(true)
       window.clearTimeout(off)
       // `dragend` fires on a drag that started inside the page; `drop` fires on one that
       // came from outside and landed. Neither fires when a drag leaves the window
       // entirely, which is what the timer is for.
       off = window.setTimeout(() => {
-        document.body.classList.remove('dragging', 'dragging-lora')
+        document.body.classList.remove('dragging')
         useStore.getState().setFileOver(false)
       }, 300)
     }
     const stop = () => {
       window.clearTimeout(off)
-      document.body.classList.remove('dragging', 'dragging-lora')
+      document.body.classList.remove('dragging')
       useStore.getState().setFileOver(false)
-      // The in-flight LoRA goes with the same signal that puts the page back —
-      // one lifetime, so a caption can never outlive the drag it names.
-      endLoraDrag()
     }
     window.addEventListener('dragover', over)
     window.addEventListener('drop', stop)
@@ -359,7 +350,12 @@ export function App() {
     async (jobId: string, file: string, as: 'first' | 'reference' | 'refvideo') => {
       const b64 = await fileToB64(fileUrl(jobId, file))
       if (!b64) {
-        alert('Could not read that file.')
+        // A modal, still: this is the whole of what the press was for, so it has
+        // nothing to fall through to and silence would read as a dead button. What
+        // changed is that it names the one thing that can be retried — the bytes are
+        // the server's own file, so the failure is the fetch rather than the file.
+        alert('Could not read that render back off the server — reload the page and'
+              + ' try again.')
         return
       }
       const st = useStore.getState()
@@ -391,6 +387,66 @@ export function App() {
     },
     [],
   )
+
+  /**
+   * **Still → 8s does not throw the picture away.** Picking a duration used to swap the
+   * canvas for an empty video placeholder, and the still you had just made was gone from
+   * the screen with nothing on it pointing anywhere — it survived only in the gallery
+   * drawer, which is closed by default and is the one piece of chrome most people never
+   * open. Two seconds of work, silently filed.
+   *
+   * The row below already has the slot it belongs in, so it goes there rather than into a
+   * message about where it went: the still becomes the clip's first frame, visible in
+   * `#v-drop-first`, clearable with a click, and `VideoNote` says what having one means.
+   * That is also the reading the button on the still itself takes — see `handoff` — so
+   * this is that gesture made the default of the switch rather than a second behaviour.
+   *
+   * Three guards, and each is a way this could have been worse than the blanking:
+   * - Only on the image→video edge. Re-running it on every video render would re-attach
+   *   a still somebody had just cleared.
+   * - Only into an empty row. A keyframe or a reference already there is a choice, and
+   *   `handoff` itself lands here with one attached — stomping either would be this
+   *   feature undoing the very hand-off it copies.
+   * - Only if the clip it implies can still run. A first frame moves the task from t2v to
+   *   i2v, and on a volume without the i2v pair that turns Generate off; a switch that
+   *   disables the button it is walking you toward is worse than one that clears a canvas.
+   */
+  const wasKind = useRef(s.kind)
+  useEffect(() => {
+    const from = wasKind.current
+    wasKind.current = s.kind
+    if (from !== 'image' || s.kind !== 'video') return
+    const jobId = gen.run.jobId
+    const file = gen.run.files[0]
+    if (!jobId || !file) return
+    const st = useStore.getState()
+    if (st.keyframe.first || st.keyframe.last || st.refs.length || st.refVids.length) return
+    // No `alive` flag and no cleanup, which is the opposite of the usual rule and is
+    // what makes this survive StrictMode. The edge is detected off a ref, so the
+    // double-invoke pairs "ref says image, start the fetch" with a cleanup and then a
+    // second pass where the ref already says video — cancel on cleanup and the switch
+    // silently never carries anything in development. Safe to leave running because
+    // every guard below is re-read from the store after the await: a second run finds
+    // the slot filled and writes nothing.
+    void (async () => {
+      // Fetched, not reused: the canvas stills are a streamed `<img src>`, so the base64
+      // the video side needs does not exist client-side. Same as `handoff`.
+      const b64 = await fileToB64(fileUrl(jobId, file))
+      // Silent when the fetch fails, and deliberately: nobody asked for this, they asked
+      // for 8 seconds. A modal explaining that a courtesy did not happen would interrupt
+      // a mode switch to report something that was never promised — and the still is
+      // still in the gallery and still there on switching back to Still.
+      if (!b64) return
+      // Re-read across the await, and re-check every guard against what is true *now*:
+      // the fetch is a round trip, and switching back to Still or dropping a reference
+      // inside it are both things a hand can do in that time.
+      const now = useStore.getState()
+      if (now.kind !== 'video') return
+      if (now.keyframe.first || now.keyframe.last || now.refs.length || now.refVids.length) return
+      if (!videoReady({ ...now, keyframe: { first: b64, last: null } }).ready) return
+      now.setKeyframe('first', b64)
+    })()
+  }, [s.kind, gen.run.jobId, gen.run.files])
 
   const train = s.mode === 'train'
   // Lifted out of Train, because the door reports training from Generate and
@@ -464,11 +520,17 @@ export function App() {
                 onFirstFrame={async (f) => {
                   const b64 = await toB64(f)
                   if (b64) useStore.getState().setKeyframe('first', b64)
-                  else alert('Could not read that image.')
+                  // A file the browser cannot decode is worth interrupting for — the
+                  // drop is over, the canvas took nothing, and there is no quieter
+                  // place on this surface to say so. It names the file and a format
+                  // that works, which is the half "Could not read that image." was
+                  // missing: same words, no next step.
+                  else alert(`The browser could not read ${f.name || 'that image'} —`
+                             + ' save it as a PNG or JPEG and drop it again.')
                 }}
                 onClear={clearCanvas}
                 blank={
-                  s.stateError ? <div className="err-box">{s.stateError}</div>
+                  s.stateError ? <ErrorNote err={s.stateError} />
                     : s.state ? null
                     : 'Loading…'
                 }
@@ -478,6 +540,11 @@ export function App() {
                                            onOpen={(rows, i) => setShown({ rows, i })} />} />
             </div>
 
+            {/* `onReload` returns rather than voids. The gallery awaits it to hold its
+                delete button busy until the refreshed listing lands; voided, the await
+                resolves in the same tick, so the button would go quiet at the reply and
+                the card would sit there until the refetch caught up — which is the half
+                of the wait the finding was about. */}
             <Gallery
               items={items}
               total={total}
@@ -486,7 +553,7 @@ export function App() {
               onClose={() => setGalleryOpen(false)}
               onReload={() => {
                 setGalleryOpen(true)
-                void reload()
+                return reload()
               }}
               onDropped={drop}
               onMeta={setMeta}
@@ -561,7 +628,20 @@ function Door({ running, onOpen }: { running: Session[]; onOpen: () => void }) {
                 strokeDasharray={c.toFixed(2)}
                 strokeDashoffset={(c * (1 - pct / 100)).toFixed(2)} />
       </svg>
-      {running.length > 1 ? `Training · ${running.length} runs` : `Training ${pct}%`}
+      {/* The word is in its own span so the phone can drop it. The header is a fixed
+          56px bar, and "Training 50%" beside the brand, Sets and two icons does not fit
+          375px: it broke onto a second line inside a bar that cannot have one. Setting
+          `nowrap` instead only moves the damage — measured, it pushes the document 10px
+          wider than the viewport, trading a wrapped label for a page that scrolls
+          sideways. What actually goes is the word, because the ring beside it is already
+          saying "training" and a number is what you came to read. Idle says `Train` and
+          fits, so this is the live label's problem alone.
+
+          `sessions`, not `runs`: the board this door opens counts sessions, names them
+          sessions and says "No sessions yet." when it has none, so the door onto it was
+          the one surface calling them something else. */}
+      <span className="door-word">Training{running.length > 1 ? ' · ' : ' '}</span>
+      {running.length > 1 ? `${running.length} sessions` : `${pct}%`}
     </button>
   )
 }

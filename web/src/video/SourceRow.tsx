@@ -70,7 +70,15 @@ export function SourceRow() {
       // with no picture and a base64 of "null" in the request, which fails on the GPU
       // rather than on the file it came from.
       if (b) out.push(b)
-      else alert('Could not read that file.')
+      // Named, and with a way out. "Could not read that file." was the whole
+      // message and it left the person holding a file and no next move — the
+      // browser is the thing that failed to decode it, so the fix is a format it
+      // does decode, and `isImg` already says which list that is.
+      else alert(isImg
+        ? `The browser could not read ${f.name || 'that image'} — save it as a PNG or`
+          + ' JPEG and drop it again.'
+        : `The browser could not read ${f.name || 'that video'} — an MP4 works`
+          + ' everywhere; convert it and drop it again.')
     }
     if (isImg) st.setRefs(out)
     else st.setRefVids(out)

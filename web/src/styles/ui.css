@@ -42,11 +42,15 @@
  * deletion becomes an archaeology question — is this `.14` the same `.14`, or
  * did somebody mean something by it? Named, it is one line. Unnamed, Phase 6 is
  * a rewrite rather than a removal. */
-:root, :host{--bg:#000;--fg:#f5f5f5;--mut:#8a8a8a;--dim:#5a5a5a;
+/* `--dim` is 4.54:1 on `--bg` and cannot go darker: it carries reading text at 11-14px
+   (.muted, .sub, .foot .when, menu hints, control labels), and at #5a5a5a it was 3.04:1
+   on black, 2.82:1 on --wash-2 and 2.74:1 on --lift — under the 4.5:1 floor on every
+   ground it is used on, including the two it is used on most. */
+:root, :host{--bg:#000;--fg:#f5f5f5;--mut:#8a8a8a;--dim:#767676;
       --drawer:320px;--head:56px;
 
       /* Surface ramp, six steps. */
-      --wash-1:var(--wash-1);   /* card ground     */
+      --wash-1:rgba(255,255,255,.03);   /* card ground     */
       --wash-2:rgba(255,255,255,.05);   /* field ground    */
       --wash-3:rgba(255,255,255,.07);   /* hover           */
       --sel:rgba(255,255,255,.14);      /* selected        */
@@ -69,6 +73,19 @@
       --r-card:16px;     /* content card — the latent rule this
                             file already had: content 16, media 14 */
       --r-sheet:20px;    /* modal                               */
+      /* Two steps the ramp was missing, which is why they were being spelled out
+         instead. Fully-round was written three ways — `999px` six times, `99px` four,
+         and `50%` seven — and the first two are the same intent said twice, so a pill
+         and a pill could not be grepped as one thing. `50%` survives on its own and is
+         not this: on a square it is a circle, on anything else it is an ellipse, and
+         two of the icon buttons rely on exactly that.
+         Below `--r-inner` there was a 2-7px band doing one job — a mark, a badge, a
+         meter, a region handle — in five different values, none of which was chosen
+         against the others. `--r-mark` is the plurality of them. 2px and 3px stay
+         literal where they are: on a 6px meter they are the difference between rounded
+         and a capsule, which is a decision rather than drift. */
+      --r-pill:999px;    /* pill: chip, quick action, purge      */
+      --r-mark:5px;      /* a mark on top of something else      */
       --control-h:32px;
       /* A glyph you press, at two sizes. It was nine — five boxes, six radii and
          four glyph sizes for one job — with two of them eight pixels apart on the
@@ -89,7 +106,9 @@
          cannot carry white text, `--crit-solid` is a fill that must. */
       --crit:#f87171;
       --crit-solid:#ef4444;
-      --crit-wash:rgba(248,113,113,.14);
+      --crit-wash:rgba(248,113,113,.14);  /* fill: a danger row under the pointer */
+      --crit-line:rgba(248,113,113,.25);  /* border: the error box's own edge     */
+      --crit-fill:rgba(248,113,113,.10);  /* fill: the error box's ground         */
       --warn:#fbbf24;
       --ok:#4ade80}
 /* No control falls to the browser's default. Four buttons — the source-row drop
@@ -124,9 +143,11 @@ svg{width:100%;height:100%;display:block}
    way back to it is also the readout on it — progress on the control that
    takes you there, rather than in a place you have to go to look. */
 .door{display:inline-flex;align-items:center;gap:8px;border:0;height:32px;
-  background:none;color:var(--fg);border-radius:10px;padding:0 10px;
+  background:none;color:var(--fg);border-radius:var(--r-control);padding:0 10px;
   font-weight:500;font-size:14px;line-height:1;cursor:pointer;transition:background .12s,color .12s}
 .door:hover{background:var(--line);color:var(--fg)}
+/* See `Door` in App.tsx: the word goes on a phone and the ring carries the meaning. */
+@media (max-width:640px){.door .door-word{display:none}}
 .door svg{width:15px;height:15px;flex:none}
 .door .ring circle{fill:none;stroke-width:3}
 .door .ring .bg{stroke:rgba(255,255,255,.2)}
@@ -140,7 +161,7 @@ svg{width:100%;height:100%;display:block}
 
    transform-box:fill-box is what makes scaleY mean "from the baseline": without
    it the origin is the whole SVG viewport and the bars slide instead of grow. */
-.door.live svg path{stroke:#4ade80;transform-box:fill-box;transform-origin:bottom;
+.door.live svg path{stroke:var(--ok);transform-box:fill-box;transform-origin:bottom;
   animation:train-bar .8s ease-in-out infinite alternate}
 .door.live svg path:nth-child(1){animation-duration:.53s;animation-delay:-.31s}
 .door.live svg path:nth-child(2){animation-duration:.79s;animation-delay:-.14s}
@@ -153,8 +174,8 @@ svg{width:100%;height:100%;display:block}
 
 /* The one black-on-white switcher left in the product: Training and Datasets,
    which is the only pair in here that really is two equal halves of one thing. */
-.switch{display:inline-flex;background:var(--wash-2);border-radius:11px;padding:3px;gap:2px}
-.switch button{border:0;background:none;color:var(--mut);padding:6px 15px;border-radius:9px;
+.switch{display:inline-flex;background:var(--wash-2);border-radius:var(--r-control);padding:3px;gap:2px}
+.switch button{border:0;background:none;color:var(--mut);padding:6px 15px;border-radius:var(--r-inner);
   font-weight:500;font-size:13px;line-height:1.35;cursor:pointer;transition:color .12s,background .12s}
 .switch button:hover{color:#ddd}
 .switch button.on{background:#fff;color:#000}
@@ -205,7 +226,7 @@ svg{width:100%;height:100%;display:block}
    scrolling to look for them is exactly when they must not scroll away. */
 /* The open contact sheet takes a drop too, so a second batch lands in the set
    you are looking at instead of starting another one. */
-#ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:8px;border-radius:16px}
+#ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:8px;border-radius:var(--r-card)}
 #ds-sheet .sheet-bar{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
   padding:22px 28px 10px;background:var(--bg)}
 /* The set index. It was a 56px-thumbnail row because it lived in a 320px rail
@@ -238,7 +259,7 @@ svg{width:100%;height:100%;display:block}
    a background with the text flush to its corner, which is the same fault a
    step earlier. One number, applied where the padding belongs. */
 .opt{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 9px;font-size:14px;
-  background:var(--wash-2);border:1px solid var(--line);border-radius:11px}
+  background:var(--wash-2);border:1px solid var(--line);border-radius:var(--r-control)}
 .opt:focus-within{border-color:var(--line-2)}
 
 /* Unbounded ---------------------------------------------------------------
@@ -295,7 +316,7 @@ svg{width:100%;height:100%;display:block}
 /* No padding of their own now that the container carries it — two paddings in a
    row is how a 52px numeric box ends up fitting two digits. */
 .opt select,.opt input{width:auto;border:0;background:none;padding:0;height:30px;
-  border-radius:8px;font-size:14px}
+  border-radius:var(--r-inner);font-size:14px}
 /* The native select chrome was never switched off. On a desktop the macOS arrows
    pass for a chevron; at 42px on a phone they render as a stepper — a control
    that looks like it increments something, next to controls that do. One
@@ -314,6 +335,50 @@ svg{width:100%;height:100%;display:block}
    controls that survive are the ones a render actually varies by. */
 @media (max-width:640px){
     #c-image .opts,#c-video .opts{gap:6px}
+
+    /* One wrap flow instead of two. `Duration` is a child of `.bar2` and everything
+       else is nested two levels down inside `#c-image`, so the strip could never wrap
+       as one thing: `.bar2` stayed a single line with "Still" pinned to its left edge
+       while the block beside it broke into three ragged rows, and the control you
+       change most sat furthest from the ones you change with it. `display:contents`
+       drops the two wrappers out of the box tree so every control wraps against every
+       other, in reading order — duration, size, LoRA, Shot, Enhance.
+
+       `:not(.hide)` is belt to `.hide{display:none !important}`'s braces: the hidden
+       strip is held down by that `!important` today, and an id selector would beat the
+       class without it. Both strips are in the DOM at once, so if this ever flattened
+       the wrong one the page would show two consoles.
+
+       Carrying the id through to `.opts` is not decoration. `.field .bar2 .opts` sets
+       `display:flex` 140 lines below this block, at equal specificity, so the plain
+       three-class selector loses to it and the strip stays two wrap flows — which is
+       exactly the symptom this is here to fix, arriving silently. The id wins wherever
+       the block sits, so the phone rules can stay next to the console rules they bend
+       rather than migrating to the foot of the file. */
+    .field .bar2{flex-wrap:wrap}
+    .field .bar2>#c-image:not(.hide),.field .bar2>#c-video:not(.hide),
+    .field .bar2>#c-image:not(.hide)>.opts,
+    .field .bar2>#c-video:not(.hide)>.opts{display:contents}
+
+    /* The run gets the last line to itself: what it will cost on the left, the button
+       that spends it on the right. `margin-left:auto` did that job while the actions
+       were riding in a shared row; on a row of their own it is the basis that carries
+       it, and the auto margin would only fight the wrap. */
+    .field .bar2 #c-image .actions,.field .bar2 #c-video .actions{flex:1 1 100%;margin-left:0}
+
+    /* The last-generation thumbnail is the gallery's job here. It was landing between
+       the model name and Generate — the one gap on the phone layout where a thumb
+       aiming for the button lands on a picture instead, and the header's Gallery door
+       already opens on the same shot. */
+    .field .bar2 .actions .shot-back{display:none}
+
+    /* The model's *description* goes; its name stays. "Sound and picture in one pass"
+       is 29 characters of standing explanation, and on the run row it wrapped to two
+       lines and made that row taller than the picture controls above it. The name is
+       the half you check before pressing Generate and it rides in `#v-sampling`
+       alongside the sampler, so nothing is lost — the sentence is available the moment
+       the row has width for it again. */
+    #gen-model-line,#v-model-line{display:none}
 }
 .opt input{width:76px}
 /* Named numerics do not need the width an unlabelled one did: the label
@@ -361,7 +426,16 @@ svg{width:100%;height:100%;display:block}
    moves anything. The line-height is pinned so the reserve and the line are
    the same number — a 17px guess against an 18px line still moved Generate by
    the difference. */
-#console-notes{margin:7px 2px 0;line-height:18px;min-height:18px}
+/* One row, and it has to stay one row. The `min-height` reserves the space so an
+   arriving note does not shift the console — but a note longer than the width wrapped to
+   two lines and shifted it anyway, which is the same bug arriving by the other door.
+   The notes that can land here now include transport errors from `client.ts`, and "The
+   server did not answer (502) — it may still be starting up, so give it a moment and try
+   again." is 110 characters: on a narrow window that is two rows, and Generate moves out
+   from under a hand already reaching for it. Clipped rather than wrapped, with the full
+   text on the title attribute the markup already sets. */
+#console-notes{margin:7px 2px 0;line-height:18px;min-height:18px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #console-notes span:not(:empty)~span:not(:empty){margin-left:8px}
 
 /* The prompt field. The textarea and the Image/Video chip are one bordered
@@ -371,7 +445,7 @@ svg{width:100%;height:100%;display:block}
    inside the field you are already typing in, at the smallest size that still
    reads. Everything below the field is options for that choice. */
 .field{position:relative;border:1px solid var(--line);background:var(--wash-2);
-  border-radius:13px;padding:2px 2px 0}
+  border-radius:var(--r-panel);padding:2px 2px 0}
 .field:focus-within{border-color:var(--line-2)}
 /* One row, and it grows into what you type. It was two rows fixed, with the
    native resize grip in the corner — which is a control that asks you to do by
@@ -440,7 +514,7 @@ svg{width:100%;height:100%;display:block}
    in the console. `pointer-events` because the mirror above it has none. */
 .mk-reroll{position:absolute;z-index:2;transform:translate(3px,-1px);
   display:flex;align-items:center;justify-content:center;
-  width:16px;height:16px;padding:0;border:0;border-radius:4px;
+  width:16px;height:16px;padding:0;border:0;border-radius:var(--r-mark);
   background:none;color:var(--mut);cursor:pointer;pointer-events:auto}
 .mk-reroll:hover{background:var(--wash-2);color:var(--fg)}
 /* In flight, and it settles the same way for all three outcomes — a new
@@ -482,7 +556,7 @@ svg{width:100%;height:100%;display:block}
    ambiguous, and the click is discovered once. */
 .neg-t{position:absolute;top:6px;right:8px;z-index:2;border:0;background:none;padding:3px 4px;
   color:var(--dim);font-weight:500;font-size:11px;line-height:1;letter-spacing:.02em;cursor:pointer;
-  border-radius:7px;-webkit-user-select:none;user-select:none}
+  border-radius:var(--r-mark);-webkit-user-select:none;user-select:none}
 .neg-t:hover{color:var(--fg);background:var(--wash-3)}
 .field.on-neg .neg-t{color:#fca5a5}
 /* Reserved only while the toggle is there, so a model that reads no negative
@@ -493,7 +567,7 @@ svg{width:100%;height:100%;display:block}
    from the positive — you would be looking at a prompt that renders differently
    than it reads, with nothing on screen saying why. */
 .neg-t::after{content:'';display:inline-block;width:4px;height:4px;margin-left:5px;
-  border-radius:50%;background:#f87171;vertical-align:1px;opacity:0;transition:opacity .12s}
+  border-radius:50%;background:var(--crit);vertical-align:1px;opacity:0;transition:opacity .12s}
 .neg-t.filled::after{opacity:1}
 .field.on-neg .neg-t::after{opacity:0}
 
@@ -582,7 +656,7 @@ button.t>.lead{font-size:13px;line-height:1;color:inherit;flex:none;white-space:
    half of them actions, had made unreadable. The chosen one is filled rather
    than outlined: an outline is what every neighbour already has. */
 .seg{display:inline-flex;align-items:center;gap:2px;flex:none;padding:2px;
-  background:var(--wash-2);border:1px solid var(--line);border-radius:11px}
+  background:var(--wash-2);border:1px solid var(--line);border-radius:var(--r-control)}
 .seg button.s{border:0;background:none;min-height:26px;padding:0 10px;border-radius:var(--r-inner);
   color:var(--mut);font-size:13px;font-weight:500}
 .seg button.s:hover{background:var(--wash-3);color:var(--fg)}
@@ -590,7 +664,7 @@ button.t>.lead{font-size:13px;line-height:1;color:inherit;flex:none;white-space:
 .seg button.s:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:-2px}
 #ds-density button.s{min-width:26px;padding:0 6px}
 .pill{display:inline-flex;align-items:center;gap:6px;background:var(--wash-2);border:0;
-  border-radius:999px;padding:8px;color:#ddd;font-size:13px;cursor:pointer}
+  border-radius:var(--r-pill);padding:8px;color:#ddd;font-size:13px;cursor:pointer}
 .pill.on{background:#fff;color:#000}
 /* Red and spelled out, because this one is a whole gallery at once. The per-card
    × is the same kind of action at a scale a mis-click can survive; this is the
@@ -598,12 +672,31 @@ button.t>.lead{font-size:13px;line-height:1;color:inherit;flex:none;white-space:
 .pill.danger{background:var(--crit-solid);color:#fff}
 .pill.danger:hover{background:var(--crit)}
 .pill.danger[disabled]{opacity:.35;cursor:default;background:var(--crit-solid)}
-.bar{height:3px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:10px}
-.bar>i{display:block;height:100%;background:#fff;border-radius:99px;transition:width .4s}
+.bar{height:3px;background:var(--line);border-radius:var(--r-pill);overflow:hidden;margin-top:10px}
+.bar>i{display:block;height:100%;background:#fff;border-radius:var(--r-pill);transition:width .4s}
 .muted{color:var(--dim);font-size:12px}
-.ok{color:#4ade80}.warn{color:#fbbf24}.err{color:#f87171}
-.err-box{border:1px solid rgba(248,113,113,.25);background:rgba(248,113,113,.1);color:#fca5a5;
-  border-radius:12px;padding:11px 14px;font-size:13px;margin-bottom:12px}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--crit)}
+/* `--crit-line`, not `--crit-wash`. Both are this red and the substitution looked free,
+   but `--crit-wash` is .14 and is a *fill* — what a danger row goes when you hover it —
+   and this border was .25. Swapping one for the other faded the only edge the error box
+   has by nearly half: invisible in the diff, obvious on screen. A border alpha and a
+   fill alpha are two roles, so they get two names. */
+.err-box{border:1px solid var(--crit-line);background:var(--crit-fill);color:#fca5a5;
+  border-radius:var(--r-panel);padding:11px 14px;font-size:13px;margin-bottom:12px}
+/* Where the traceback went. Closed by default and quiet when closed: the summary is a
+   line of 11px text, not a second red thing competing with the sentence above it. The
+   `<pre>` scrolls in both directions and is capped, because a Modal traceback is 60
+   lines and this box sits inside sheets that are already scrolling. */
+.err-detail{margin-top:8px}
+.err-detail>summary{cursor:pointer;color:var(--dim);font-size:11px;
+  letter-spacing:.02em;list-style:none}
+.err-detail>summary::-webkit-details-marker{display:none}
+.err-detail>summary::before{content:'▸ ';font-size:9px;vertical-align:1px}
+.err-detail[open]>summary::before{content:'▾ '}
+.err-detail>summary:hover{color:var(--mut)}
+.err-detail pre{margin:6px 0 0;max-height:180px;overflow:auto;
+  font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:#bbb;white-space:pre-wrap;overflow-wrap:anywhere}
 code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 
 /* Canvas ---------------------------------------------------------------- */
@@ -659,9 +752,10 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    they were a feature you had to already know about to find — nothing on the
    canvas suggested there was anything under the pointer. A third of an opacity
    is enough to read as "something is here" from across the picture and not
-   enough to compete with it. :focus-within because `.gal .quick` has had it all
-   along and these did not, so the keyboard could reach a control it could never
-   see. */
+   enough to compete with it. :focus-within because the gallery's hover cluster had
+   it all along and these did not, so the keyboard could reach a control it could
+   never see. (That cluster has since been removed as a duplicate pathway — see
+   `.gal .media` below — but the reasoning it set is the reason this is here.) */
 /* Under the picture, not on it. These were two filled buttons floating over the
    bottom-right corner, which is furniture on the one surface this layout exists
    to keep clear — and they were the loudest thing in a dark frame. As words
@@ -687,18 +781,18 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .shot{--acts-h:26px;padding-bottom:var(--acts-h)}
 .shot>#region-layer{bottom:var(--acts-h)}
 .shot .acts button{width:20px;height:20px;flex:none;border:0;background:none;padding:0;
-  border-radius:5px;color:var(--dim);cursor:pointer}
+  border-radius:var(--r-mark);color:var(--dim);cursor:pointer}
 .shot .acts button:hover{color:var(--fg);background:none}
 .shot .acts button svg{width:100%;height:100%;display:block}
 /* Lit, unlike its two neighbours, because it is the only one of the three
    that restores something rather than starting something. */
 #vid-out{position:relative}
-#vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:16px;
+#vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:var(--r-card);
   border:1px solid var(--line);background:#000}
 /* A button rather than a click on the video: the video already owns its own
    click, which is play/pause, and taking that away to open a viewer would
    trade a control people use constantly for one they use occasionally. */
-#vid-out .zoom{position:absolute;top:10px;right:10px;width:var(--ib-sm);height:var(--ib-sm);border:0;border-radius:999px;
+#vid-out .zoom{position:absolute;top:10px;right:10px;width:var(--ib-sm);height:var(--ib-sm);border:0;border-radius:var(--r-pill);
   background:rgba(0,0,0,.66);color:#eee;padding:7px;cursor:pointer;backdrop-filter:blur(8px);
   opacity:0;transition:opacity .12s}
 #vid-out:hover .zoom{opacity:1}
@@ -708,16 +802,30 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    4/3 with contain, so nothing on the volume is shown as a crop it is not. */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:14px}
 .drawer .grid{grid-template-columns:1fr;gap:10px}
+/* The packed grid — see `Masonry`, which owns the column count and the gap
+   because it packs by them. Two rules and no widths: everything that decides
+   the shape of this is a number the layout also has to add up, and a number
+   that lives in both places is a number that will diverge.
+   `align-items:flex-start` is the whole of what keeps it looking packed — as
+   equal-height flex children the short column would stretch to the tall one
+   and space its own cards out to fill it, which reads as the packer failing. */
+.masonry{display:flex;align-items:flex-start}
+.masonry>.mcol{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
 .gal{border:1px solid var(--line);background:var(--wash-1);border-radius:var(--r-panel);overflow:hidden;position:relative}
 .gal:hover{border-color:var(--line-2)}
+/* 4/3 is the fallback, not the rule. A card whose run is on the volume with no
+   sidecar beside it has no recorded size (see `_gallery`, which lists it
+   anyway), so it keeps this box and letterboxes inside it; everything else is
+   given its own shape inline by `aspectOf`. `contain` stays for both — a video
+   whose sidecar disagrees with its container is a picture we would rather see
+   whole than fill the box with. */
 .gal .media{aspect-ratio:4/3;background:var(--wash-2);display:block;width:100%;object-fit:contain;cursor:zoom-in}
-/* Hover cluster on the media: the two verbs worth one click. Everything else
-   is one more click away in the overflow, which is the correct price for it. */
-.gal .quick{position:absolute;top:8px;right:8px;display:flex;gap:6px;opacity:0;transition:opacity .12s}
-.gal:hover .quick,.gal .quick:focus-within{opacity:1}
-.gal .quick button{width:var(--ib-sm);height:var(--ib-sm);flex:none;border:0;border-radius:999px;background:rgba(0,0,0,.66);
-  color:#eee;padding:7px;cursor:pointer;backdrop-filter:blur(8px)}
-.gal .quick button:hover{background:rgba(0,0,0,.9)}
+/* `.gal .quick` was here: a hover cluster carrying Download and Delete on the media,
+   while the card's own ⋯ menu carried Download and Delete as well. Two paths to the
+   same two verbs on the same card, which is a cost paid twice — the hover pair went
+   and the menu kept the actions, because a menu is reachable without a pointer and a
+   hover cluster is not. The rules are gone rather than commented out; `#gal-grid`'s
+   touch block below no longer has anything to reveal. */
 /* The footer is the label. A 24px photo or play glyph says what this is in
    less space and less noise than the word "image" ever did. */
 .foot{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;border-top:1px solid var(--line);min-height:40px}
@@ -781,12 +889,12 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* Why a whole group is out of play. The pills themselves dim, which says that
    they are unavailable; only the heading can say what would make them
    available, and that is a sentence about the model rather than about them. */
-.pal h4 i{font-size:10px;font-weight:400;font-style:normal;line-height:1;
+.pal h4 i{font-size:11px;font-weight:400;font-style:normal;line-height:1;
   letter-spacing:.02em;text-transform:none;color:var(--dim)}
 .pal section+section{margin-top:15px;padding-top:13px;border-top:1px solid var(--wash-3)}
 .pal .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:5px}
 .pal .tl{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 3px 7px;
-  border:1px solid transparent;border-radius:11px;background:none;color:#ddd;cursor:pointer;
+  border:1px solid transparent;border-radius:var(--r-control);background:none;color:#ddd;cursor:pointer;
   font-size:12px;line-height:1.25;text-align:center}
 .pal .tl:hover{background:var(--wash-3);border-color:var(--sel)}
 .pal .tl.on{background:var(--sel);border-color:var(--line-2);color:#fff}
@@ -798,7 +906,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    about *this* frame and a glyph cannot draw one. Rows, not tiles: reading is
    the gesture here, and a grid truncates the one thing worth reading. */
 .pal.motion .sug{display:block;width:100%;text-align:left;padding:7px 9px;margin:0 0 4px;
-  border:1px solid transparent;border-radius:9px;background:none;color:#ddd;cursor:pointer;
+  border:1px solid transparent;border-radius:var(--r-inner);background:none;color:#ddd;cursor:pointer;
   font-size:12.5px;line-height:1.35}
 .pal.motion .sug:hover{background:var(--wash-3);border-color:var(--sel)}
 .pal.motion .sug.on{background:var(--sel);border-color:var(--line-2);color:#fff}
@@ -1014,7 +1122,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #shot-rail>*{flex:none}
 #shot-rail:empty{display:none;margin:0}
 .spill{display:inline-flex;align-items:center;gap:7px;background:var(--wash-3);
-  border:1px solid var(--line);border-radius:999px;padding:3px 5px 3px 7px;
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:3px 5px 3px 7px;
   color:#ddd;font-size:13px;max-width:100%}
 .spill>.gl{width:26px;height:18px;flex:none;opacity:.85}
 /* Frozen in the rail. The tile is the animated version because motion is what
@@ -1039,7 +1147,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .spill input{border:0;background:none;color:#fff;font-size:13px;padding:2px 0;
   flex:1 1 250px;width:auto;min-width:110px;max-width:min(38vw,340px)}
 .spill select{border:0;background:var(--wash-3);color:#ccc;font-size:11px;
-  border-radius:6px;padding:0 3px;height:19px;flex:none;width:auto}
+  border-radius:var(--r-mark);padding:0 3px;height:19px;flex:none;width:auto}
 .spill .x{border:0;background:none;color:var(--mut);cursor:pointer;font-size:13px;
   line-height:1;width:19px;height:19px;border-radius:50%;flex:none}
 .spill .x:hover{background:var(--sel);color:#fff}
@@ -1058,14 +1166,42 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #shot-peek>button::before{content:"";width:0;height:0;border:4px solid transparent;
   border-left-color:currentColor;border-right:0;transition:transform .12s}
 #shot-peek.open>button::before{transform:rotate(90deg) translateX(1px)}
-#shot-peek pre{margin:7px 0 0;padding:10px 12px;border-radius:11px;background:var(--wash-2);
+#shot-peek pre{margin:7px 0 0;padding:10px 12px;border-radius:var(--r-control);background:var(--wash-2);
   border:1px solid var(--line);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;
   color:#c8c8c8;white-space:pre-wrap;word-break:break-word;max-height:184px;overflow:auto}
+
+/* The LoRA box. Deliberately the peek's own shapes — the caret, the wash, the
+   inset border — because it is the same gesture on the same kind of thing, and
+   two drawings for one idea is how a console stops reading as one surface. */
+#lora-box{margin:7px 2px 0}
+#lora-box>button{border:0;background:none;color:var(--dim);font-size:12px;
+  cursor:pointer;padding:2px 0;display:inline-flex;align-items:center;gap:5px}
+#lora-box>button:hover{color:var(--fg)}
+#lora-box>button::before{content:"";width:0;height:0;border:4px solid transparent;
+  border-left-color:currentColor;border-right:0;transition:transform .12s}
+#lora-box.open>button::before{transform:rotate(90deg) translateX(1px)}
+#lora-box .chips{margin:7px 0 0;padding:8px 9px;border-radius:var(--r-control);
+  background:var(--wash-2);border:1px solid var(--line);
+  display:flex;flex-wrap:wrap;gap:7px}
+/* Name, then the value in a circle at the end — the whole shape of the thing.
+   `max-content` on the name rather than a width: a filename is as long as it is,
+   and truncating the one word that says which LoRA this is would undo the reason
+   the box collapses in the first place. */
+.chip{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 4px 0 10px;
+  border-radius:14px;background:var(--wash-3);border:1px solid var(--line);
+  font-size:12px;color:var(--fg);max-width:100%}
+.chip .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .val{width:46px}
+.chip .val input{height:20px;width:46px;text-align:center;font-size:11px;
+  border-radius:10px;background:var(--wash-1);border:1px solid var(--line);padding:0}
+.chip .x{border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
+  line-height:1;padding:0 5px}
+.chip .x:hover{color:var(--fg)}
 
 /* Sheets: settings, metadata, lightbox ---------------------------------- */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:60;display:grid;place-items:center;padding:32px}
 .sheet{width:100%;max-width:720px;max-height:100%;overflow:auto;background:#0b0b0b;
-  border:1px solid var(--line);border-radius:20px;padding:22px 24px 26px}
+  border:1px solid var(--line);border-radius:var(--r-sheet);padding:22px 24px 26px}
 .sheet-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px}
 /* Model families. A rule above each heading rather than a box around each
    group: the cards already have edges, and nesting borders inside borders is
@@ -1097,7 +1233,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    74px label is a hint shaped like a value. */
 .form .frow>i{grid-column:1/-1;font-style:normal;font-size:11px;color:var(--mut);line-height:1.4}
 .form .sz-reset{width:100%;margin-top:2px;padding:7px 0;border:1px solid var(--line);
-  border-radius:9px;background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:11px;line-height:1}
+  border-radius:var(--r-inner);background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:11px;line-height:1}
 .form .sz-reset:hover{color:var(--fg);border-color:var(--line-2)}
 /* A dot, not a colour change: the button's text is the resolved numbers, and
    recolouring those would say "warning" about a value you deliberately chose. */
@@ -1108,16 +1244,22 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .menu.sizer{padding:10px;width:auto;min-width:236px}
 .sizer .ars{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
 .sizer .ar{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
-  gap:5px;height:56px;padding:5px 2px;border:1px solid transparent;border-radius:9px;
-  background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:10px;line-height:1}
+  gap:5px;height:56px;padding:5px 2px;border:1px solid transparent;border-radius:var(--r-inner);
+  background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:11px;line-height:1}
 .sizer .ar i{display:block;border:1.5px solid currentColor;border-radius:2px;opacity:.75}
 .sizer .ar:hover{background:var(--wash-3);color:var(--fg)}
 .sizer .ar.on{background:var(--sel);color:var(--fg);border-color:var(--line-2)}
 /* Scale is a separate row because it is a separate decision: the shape you want
    and how much of it you can afford are not the same question, and the old
-   single select forced them to be answered together. */
-.sizer .scales{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:9px}
-.sizer .sc{padding:7px 0;border:1px solid var(--line);border-radius:9px;background:none;
+   single select forced them to be answered together.
+
+   The column count is whatever the row holds, never a number written here: the
+   image side has four tiers and the video side has however many the chosen model
+   declares. Hardcoded at three it already left the video side's two filling
+   two-thirds of the row, and a fourth image tier would have widened that gap
+   rather than caused it. */
+.sizer .scales{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;margin-top:9px}
+.sizer .sc{padding:7px 0;border:1px solid var(--line);border-radius:var(--r-inner);background:none;
   color:var(--dim);cursor:pointer;font-weight:500;font-size:12px;line-height:1}
 .sizer .sc:hover{color:var(--fg);border-color:var(--line-2)}
 .sizer .sc.on{background:var(--sel);color:var(--fg);border-color:var(--line-2)}
@@ -1148,6 +1290,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   width:var(--ib-sm);height:var(--ib-sm);display:grid;place-items:center;padding:0;
   border-radius:var(--r-inner);flex:none}
 .lora-x:hover{background:var(--crit-wash);color:var(--crit)}
+/* A ✕ that is shut has to look shut. These go disabled while a delete is in flight, and
+   without this they keep lighting up red under the pointer — which reads as "press me"
+   for a control that is refusing presses, and invites the second click the disabling is
+   there to prevent. `:disabled` before `:hover` in the cascade would lose, so the hover
+   is overridden explicitly rather than by ordering. */
+.lora-x:disabled{opacity:.4;cursor:default}
+.lora-x:disabled:hover{background:none;color:var(--dim)}
 .kv{display:grid;grid-template-columns:132px 1fr;gap:5px 14px;font-size:13px}
 .kv dt{color:var(--mut)}
 .kv dd{color:#e8e8e8;word-break:break-word}
@@ -1187,7 +1336,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    where a thumb already is rather than by being visible. */
 .lb .lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:52px;height:78px;
   border:0;background:rgba(0,0,0,.4);color:#e8e8e8;cursor:pointer;padding:22px;
-  border-radius:12px;opacity:.5;transition:opacity .12s}
+  border-radius:var(--r-panel);opacity:.5;transition:opacity .12s}
 .lb .lb-nav:hover{opacity:1;background:rgba(0,0,0,.66)}
 .lb .lb-nav[disabled]{opacity:.12;cursor:default}
 .lb .lb-nav.prev{left:14px}
@@ -1212,13 +1361,19 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    does not get the fix. */
 .shot-back{display:none}
 @media (max-width:1024px){
-  .shot-back{width:36px;height:36px;flex:none;padding:0;overflow:hidden;border-radius:10px;
+  .shot-back{width:36px;height:36px;flex:none;padding:0;overflow:hidden;border-radius:var(--r-control);
     border:1px solid var(--line-2);background:none;cursor:pointer;display:block}
   .shot-back:hover{border-color:rgba(255,255,255,.5)}
   .shot-back img,.shot-back video{width:100%;height:100%;object-fit:cover;display:block}
   .shot-back.hide{display:none}
 }
 @media (hover:none) and (max-width:1024px){ .shot-back{width:44px;height:44px} }
+
+/* The touch-target block that used to sit here now lives at the foot of the file. It has
+   to beat `#canvas-acts .ico` and `.drawer .grid>.gal .foot .more`, both of which are
+   declared below this point and one of which carries an id — and a media query adds no
+   specificity, so from here it silently lost on two of its five selectors while
+   appearing to work on the other three. */
 
 /* Training sessions ------------------------------------------------------ */
 /* A card per run, and the board is what Train opens on. The card is the whole
@@ -1268,8 +1423,15 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .sess-x{width:22px;height:22px;flex:none;border:0;border-radius:50%;
   background:var(--wash-2);color:var(--mut);cursor:pointer;font-size:14px;
   line-height:1;padding:0;opacity:0;transition:opacity .12s,color .12s,background .12s}
-.sess:hover .sess-x,.sess-x:focus-visible{opacity:1}
-.sess-x:hover{background:rgba(248,113,113,.18);color:#f87171}
+/* A delete in flight stays visible after the pointer leaves. The ✕ is revealed by
+   `.sess:hover`, so without this the one control reporting "Deleting…" vanishes the
+   moment the hand moves — which is exactly when someone looks away and then wonders
+   whether the press registered. Keyed off `:disabled` because that is what the button
+   already becomes while its request is out. */
+.sess:hover .sess-x,.sess-x:focus-visible,.sess-x:disabled{opacity:1}
+.sess-x:hover{background:rgba(248,113,113,.18);color:var(--crit)}
+.sess-x:disabled{cursor:default}
+.sess-x:disabled:hover{background:var(--wash-2);color:var(--mut)}
 .sess-prog{margin-top:10px}
 .sess-pct{display:flex;align-items:baseline;gap:8px;margin-top:6px;font-size:12px;
   color:var(--dim)}
@@ -1303,12 +1465,12 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    colour is what makes the word findable across a grid of cards, so every state
    gets its own rather than three of them sharing the default grey. Green is
    reserved for the one that is actually consuming a GPU right now. */
-.chip{flex:none;font-size:10px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;
-  padding:3px 8px;border-radius:999px;background:var(--wash-3);color:var(--dim)}
-.chip.running{background:rgba(74,222,128,.16);color:#4ade80}
+.chip{flex:none;font-size:11px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;
+  padding:3px 8px;border-radius:var(--r-pill);background:var(--wash-3);color:var(--dim)}
+.chip.running{background:rgba(74,222,128,.16);color:var(--ok)}
 .chip.queued{background:rgba(125,211,252,.15);color:#7dd3fc}
 .chip.completed{background:rgba(167,139,250,.16);color:#c4b5fd}
-.chip.failed{background:rgba(248,113,113,.17);color:#f87171}
+.chip.failed{background:rgba(248,113,113,.17);color:var(--crit)}
 .chip.stopped{background:rgba(251,146,60,.16);color:#fb923c}
 .chip.draft,.chip.unknown{background:var(--wash-3);color:var(--mut)}
 /* **The bar is coloured by what it is reporting.** White at 100% across the
@@ -1318,9 +1480,9 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    part-way — which is the case the fraction matters most in, because it is
    where the run got to. A completed run draws no bar at all; see `showBar`. */
 .sess .bar{height:5px;margin-top:0}
-.sess.running .bar>i,.sess.queued .bar>i{background:#4ade80}
-.sess.stopped .bar>i{background:#f87171}
-.sess.failed .bar>i{background:#ef4444}
+.sess.running .bar>i,.sess.queued .bar>i{background:var(--ok)}
+.sess.stopped .bar>i{background:var(--crit)}
+.sess.failed .bar>i{background:var(--crit-solid)}
 /* One column, so nothing to compare against — and the 3:4 is *for* comparing:
    it exists so two cards side by side put the same fact at the same height. In
    a single column it buys none of that and costs 425px of mostly empty card, so
@@ -1376,6 +1538,11 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   color:#eee;cursor:pointer;font-size:13px;line-height:1;padding:0;opacity:0;
   transition:opacity .12s}
 .ds-row:hover .ds-x,.ds-row .ds-x:focus-visible{opacity:1}
+/* Held back from full strength while its delete is out. This has to carry the row-hover
+   selector rather than being written as a plain `.ds-x:disabled` next to `.lora-x`'s:
+   the ✕ is revealed by `.ds-row:hover`, so a one-class rule is outranked exactly when
+   the button is visible, and the dimming would apply only while nobody could see it. */
+.ds-row:hover .ds-x:disabled,.ds-row .ds-x:focus-visible:disabled{opacity:.4;cursor:default}
 /* Which group a card is in, said once above the group rather than on every
    card in it. */
 .ds-group{grid-column:1/-1;margin:14px 2px 2px}
@@ -1398,8 +1565,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    same colour as the page read as a cropped photo rather than a contained one. */
 .tile .ph{position:relative;background:var(--wash-2);aspect-ratio:1}
 .tile .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;cursor:zoom-in}
-.tile .dim{position:absolute;left:6px;bottom:6px;font-size:10px;color:#ddd;background:rgba(0,0,0,.62);
-  padding:2px 6px;border-radius:5px;pointer-events:none}
+.tile .dim{position:absolute;left:6px;bottom:6px;font-size:11px;color:#ddd;background:rgba(0,0,0,.62);
+  padding:2px 6px;border-radius:var(--r-mark);pointer-events:none}
 .tile .rm{position:absolute;top:6px;right:6px;width:24px;height:24px;border:0;border-radius:50%;
   background:rgba(0,0,0,.62);color:#eee;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .12s}
 .tile:hover .rm{opacity:1}
@@ -1418,8 +1585,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .tile .clip{position:absolute;inset:0}
 .tile .clip video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   display:block;cursor:zoom-in;background:#000}
-.tile .clip .kind{position:absolute;top:6px;left:6px;font-size:9px;line-height:1;
-  padding:4px 5px;border-radius:6px;background:rgba(0,0,0,.66);color:#eee}
+.tile .clip .kind{position:absolute;top:6px;left:6px;font-size:11px;line-height:1;
+  padding:4px 5px;border-radius:var(--r-mark);background:rgba(0,0,0,.66);color:#eee}
 .tile textarea{border:0;border-top:1px solid var(--line);border-radius:0;background:none;resize:none;
   font-size:12px;padding:8px 9px;min-height:66px;line-height:1.45}
 .tile textarea.dirty{background:rgba(56,189,248,.08)}
@@ -1438,13 +1605,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* `capitalize` was here for SCREAMING_SNAKE class names lowercased into the
    chip. The chips say sentences now, and title-casing a sentence reads as a
    label for something rather than a count of it. */
-.dupes-summary span{font-size:10px;color:#bbb;background:rgba(74,222,128,.09);
-  border:1px solid rgba(74,222,128,.18);border-radius:99px;padding:3px 7px}
-.dupes-summary span.review{background:rgba(245,158,11,.09);border-color:rgba(245,158,11,.2);color:#fbbf24}
+.dupes-summary span{font-size:11px;color:#bbb;background:rgba(74,222,128,.09);
+  border:1px solid rgba(74,222,128,.18);border-radius:var(--r-pill);padding:3px 7px}
+.dupes-summary span.review{background:rgba(245,158,11,.09);border-color:rgba(245,158,11,.2);color:var(--warn)}
 .dupes-empty{min-height:260px;display:grid;place-content:center;text-align:center;gap:6px}
 .dupes-empty b{font-size:15px}
 .dupes-rail{display:flex;gap:4px;margin:0 0 13px;min-width:0}
-.dupes-rail .seg{height:7px;flex:1;min-width:7px;padding:0;border:0;border-radius:99px;
+.dupes-rail .seg{height:7px;flex:1;min-width:7px;padding:0;border:0;border-radius:var(--r-pill);
   background:var(--line);cursor:pointer}
 .dupes-rail .seg.cuts{background:rgba(248,113,113,.48)}
 .dupes-rail .seg.clean{background:rgba(74,222,128,.35)}
@@ -1474,24 +1641,24 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .dupes-table>.gut:first-child{border-top:0;background:transparent}
 .dupes-table>.cell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#bdbdbd}
 .dupes-table>.cell.best{color:#f5f5f5;font-weight:600}
-.dupes-table .off{font-style:normal;color:var(--dim);font-size:10px;margin-left:4px}
+.dupes-table .off{font-style:normal;color:var(--dim);font-size:11px;margin-left:4px}
 .cand{position:relative;min-width:0;padding:8px 8px 6px;border-left:1px solid var(--wash-3)}
 .cand.cut{background:rgba(239,68,68,.045)}
 .cand.keep{background:rgba(74,222,128,.035)}
-.cand .shot{position:relative;width:100%;aspect-ratio:1;border:1px solid var(--sel);border-radius:9px;
+.cand .shot{position:relative;width:100%;aspect-ratio:1;border:1px solid var(--sel);border-radius:var(--r-inner);
   overflow:hidden;background:var(--wash-2);cursor:pointer;color:#fff}
 .cand.keep .shot{border-color:rgba(74,222,128,.58)}
 .cand.cut .shot{border-color:rgba(248,113,113,.42)}
 .cand .shot img{display:block;width:100%;height:100%;object-fit:contain}
-.cand .mark,.cand .num{position:absolute;background:rgba(0,0,0,.68);border-radius:5px;padding:2px 5px;
-  font-size:10px;line-height:1}
+.cand .mark,.cand .num{position:absolute;background:rgba(0,0,0,.68);border-radius:var(--r-mark);padding:2px 5px;
+  font-size:11px;line-height:1}
 .cand .mark{left:5px;bottom:5px}.cand.keep .mark{color:#86efac}.cand.cut .mark{color:#fca5a5}
 .cand .num{right:5px;top:5px;color:#ddd}
-.cand .peek{position:absolute;right:13px;top:13px;width:25px;height:25px;padding:5px;border:0;border-radius:7px;
+.cand .peek{position:absolute;right:13px;top:13px;width:25px;height:25px;padding:5px;border:0;border-radius:var(--r-mark);
   background:rgba(0,0,0,.68);color:#eee;cursor:pointer;opacity:0;transition:opacity .12s}
 .cand:hover .peek,.cand .peek:focus-visible{opacity:1}
 .cand .fname{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mut);
-  font-size:10px;margin-top:5px}
+  font-size:11px;margin-top:5px}
 .dupes-keys{margin:8px 2px 0;font-size:11px}
 button.b.danger{background:var(--crit-solid);color:#fff}
 button.b.danger:hover:not(:disabled){background:var(--crit)}
@@ -1509,11 +1676,11 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
 .meter{height:5px;border-radius:3px;background:var(--wash-3);overflow:hidden;margin:2px 0 14px}
 .meter i{display:block;height:100%;background:#34d399}
 .meter i.warn{background:#f59e0b}
-.meter i.bad{background:#ef4444}
+.meter i.bad{background:var(--crit-solid)}
 .ph-row{display:flex;align-items:center;gap:8px;margin-bottom:3px;cursor:pointer;border:0;background:none;
   padding:2px 0;width:100%;color:inherit;font:inherit;text-align:left}
 .ph-row:hover .ph-bar{outline:1px solid var(--line-2)}
-.ph-bar{position:relative;flex:1;min-width:0;height:20px;border-radius:5px;background:var(--wash-2);overflow:hidden}
+.ph-bar{position:relative;flex:1;min-width:0;height:20px;border-radius:var(--r-mark);background:var(--wash-2);overflow:hidden}
 /* Proportional fill only. An earlier version turned these red above 60% share,
    which read as "this is wrong" — but a phrase recurring is information about
    the set, not an error. A feature that is present and *not* captioned is the
@@ -1527,10 +1694,10 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
 .ph-bar span{position:absolute;left:7px;top:0;line-height:20px;font-size:11px;color:#e8e8e8;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;right:7px}
 .ph-n{font-size:11px;color:var(--mut);width:26px;text-align:right;flex:none}
-.drop{border:1px dashed var(--line-2);border-radius:16px;text-align:center;cursor:pointer}
+.drop{border:1px dashed var(--line-2);border-radius:var(--r-card);text-align:center;cursor:pointer}
 .drop.hot{border-color:rgba(255,255,255,.45);background:var(--wash-2)}
 .drop>span{display:block;padding:22px 12px;color:var(--dim);font-size:12px}
-.drop img{display:block;width:100%;max-height:150px;object-fit:contain;border-radius:15px}
+.drop img{display:block;width:100%;max-height:150px;object-fit:contain;border-radius:var(--r-panel)}
 /* The strip's version: a dashed outline when empty and the frame itself once
    filled. The thumbnail is the label — a filled first tile says
    "image-to-video" more directly than the words do.
@@ -1545,12 +1712,12 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
 /* The way most sets begin, so it is the size of that fact: the whole canvas
    when nothing is chosen, and a target you can hit without aiming. */
 .drop.hero{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;border-radius:20px;padding:34px}
+  justify-content:center;border-radius:var(--r-sheet);padding:34px}
 .drop.hero .drop-face{text-align:center;pointer-events:none}
 .drop.hero .drop-face input{pointer-events:auto}
 .drop.hero .glyph{width:40px;height:40px;margin:0 auto 16px;opacity:.4}
 .drop.hero b{font-size:15px;font-weight:600}
-.drop.mini{height:32px;flex:none;padding:8px;border-radius:10px;overflow:hidden;
+.drop.mini{height:32px;flex:none;padding:8px;border-radius:var(--r-control);overflow:hidden;
   background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:center;
   gap:7px;color:var(--dim)}
 .drop.mini:hover{border-color:rgba(255,255,255,.4);color:var(--fg)}
@@ -1579,7 +1746,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
   opacity:.32;transition:opacity .12s}
 #canvas:hover #canvas-acts,#canvas-acts:focus-within{opacity:1}
 #canvas-acts .ico{width:30px;height:30px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);
-  border-radius:9px}
+  border-radius:var(--r-inner)}
 #canvas-acts .ico:hover{background:rgba(0,0,0,.78);color:var(--fg)}
 /* No pointer to hover with.
    
@@ -1598,7 +1765,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    exists, not how precise the pointer is: a trackpad-less touchscreen laptop
    fails this test too and has exactly the same problem. */
 @media (hover:none){
-  .gal .quick{opacity:1}
+  /* `.gal .quick{opacity:1}` was here, revealing a cluster that no longer exists. */
   .tile .rm{opacity:1}
   .shot .acts,#canvas-acts,.film-nav{opacity:.85}
   /* Handles ride on .sel already, which a tap sets — so a box you have selected
@@ -1616,11 +1783,11 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
 
 /* Reference chips. Numbered, because the number is the <Picture n> the prompt
    refers to — it is data, not decoration. */
-.ref{position:relative;width:64px;height:64px;border-radius:11px;overflow:hidden;border:1px solid var(--line);
+.ref{position:relative;width:64px;height:64px;border-radius:var(--r-control);overflow:hidden;border:1px solid var(--line);
   background:var(--wash-2)}
 .ref img,.ref video{width:100%;height:100%;object-fit:cover;display:block}
-.ref b{position:absolute;left:4px;top:3px;font-size:10px;font-weight:600;color:#fff;
-  background:rgba(0,0,0,.7);padding:1px 5px;border-radius:4px}
+.ref b{position:absolute;left:4px;top:3px;font-size:11px;font-weight:600;color:#fff;
+  background:rgba(0,0,0,.7);padding:1px 5px;border-radius:var(--r-mark)}
 .ref button.x{position:absolute;top:3px;right:3px;width:19px;height:19px;border:0;border-radius:50%;
   background:rgba(0,0,0,.66);color:#eee;font-size:11px;line-height:1;cursor:pointer}
 /* What this picture is *for*, across the foot of the chip it belongs to.
@@ -1630,7 +1797,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    only appeared once a role was set would be a feature you had to already know
    about to find, which is the state the keyframe pair was rescued from. */
 .ref .role{position:absolute;left:0;right:0;bottom:0;border:0;padding:2px 3px;
-  background:rgba(0,0,0,.72);color:#e8e8e8;font-size:10px;line-height:1.3;text-align:center;
+  background:rgba(0,0,0,.72);color:#e8e8e8;font-size:11px;line-height:1.3;text-align:center;
   cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ref .role:hover{background:rgba(0,0,0,.88)}
 .ref .role.none{color:var(--dim)}
@@ -1661,7 +1828,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    both numbers were going to be measured regardless. */
 .frame{position:relative;align-self:center;flex:none;
   width:var(--frame-w,0);height:var(--frame-h,0);
-  border-radius:16px;border:1px solid var(--line);background:var(--wash-1);
+  border-radius:var(--r-card);border:1px solid var(--line);background:var(--wash-1);
   overflow:hidden;touch-action:none}
 /* Absolute, not a flow child: a child sized height:100% would establish the
    container's height itself and aspect-ratio would never apply — the same trap
@@ -1717,7 +1884,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    the border at -5px, so every handle on every box was a 6px target rather than
    an 11px one. The two children carry their own radius instead, which clips the
    two things that needed clipping and nothing that did not. */
-.rbox{position:absolute;border-radius:5px;cursor:move;touch-action:none;
+.rbox{position:absolute;border-radius:var(--r-mark);cursor:move;touch-action:none;
   background:var(--wash-2);
   box-shadow:inset 0 0 0 1px var(--sel),inset 0 0 0 2px rgba(0,0,0,.18)}
 /* The brackets. Drawn with two gradients per corner so there is no extra
@@ -1740,7 +1907,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
 .rbox.sel{background:var(--wash-3);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.42),inset 0 0 0 2px rgba(0,0,0,.22)}
 .rbox>.face{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.5;
-  border-radius:5px;pointer-events:none}
+  border-radius:var(--r-mark);pointer-events:none}
 .rbox>.tag{position:absolute;left:0;top:0;max-width:100%;padding:3px 7px;
   border-radius:5px 0 6px 0;
   background:rgba(0,0,0,.6);backdrop-filter:blur(8px);color:#fff;
@@ -1822,7 +1989,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    would otherwise run under it. */
 .rins{position:absolute;z-index:8;width:296px;max-width:calc(100% - 52px);
   display:flex;flex-direction:column;gap:5px;padding:8px;
-  border-radius:12px;border:1px solid var(--line-2);background:#101010;
+  border-radius:var(--r-panel);border:1px solid var(--line-2);background:#101010;
   box-shadow:0 16px 44px rgba(0,0,0,.62);
   touch-action:auto;cursor:default}
 /* Out of the way of the gesture, without being taken down and rebuilt around it.
@@ -1849,7 +2016,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    sentence is about a control that is visible and dimmed an inch away. Amber,
    the same ink the LoRA note uses for a name that resolves to no file. */
 .rins-refusal{position:absolute;left:8px;right:44px;bottom:8px;z-index:9;margin:0;
-  padding:7px 10px;border-radius:9px;background:rgba(0,0,0,.86);
+  padding:7px 10px;border-radius:var(--r-inner);background:rgba(0,0,0,.86);
   color:#f3c07a;font-size:12px;line-height:1.35}
 /* The frame is a place too, and this is how you reach it — because a tap on
    bare canvas is already taken, it draws a rectangle. Present only once there
@@ -1882,26 +2049,25 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    under the cursor says what it is. Naming all of them at once would put eight
    captions on a picture at eight boxes, which is the wall of text the region
    rows were deleted for, redrawn on the canvas. */
-/* `:not(.dragging-lora)` on every one of these, because the two drags have disjoint
-   targets. A photograph goes to the plates, the reference tiles, the keyframe slots
-   and the contact sheet; a LoRA goes to a box, the sentence or the bare frame, and
-   none of the first list would accept one. Lighting them anyway is the page
-   promising something it has to take back at the drop — which is the exact failure
-   `NEED_EDIT_LORA` was written to stop being silent about. */
-body.dragging:not(.dragging-lora) .can-drop:not(.hot):not(.locked){border-color:rgba(255,255,255,.34)}
-body.dragging:not(.dragging-lora) .frame.can-drop:not(.hot),
-body.dragging:not(.dragging-lora) .shot.can-drop:not(.hot),
-body.dragging:not(.dragging-lora) #ds-sheet:not(.hot){
+/* One drag now, so no `:not(.dragging-lora)` on any of these. There were two —
+   a photograph to the plates, the tiles, the keyframe slots and the contact
+   sheet, and a LoRA to a box, the sentence or the bare frame — with disjoint
+   targets that had to be told apart or the page lit things it would refuse at
+   the drop. A LoRA is picked from a control on the thing it belongs to now, so
+   everything that arrives by drag is a file. */
+body.dragging .can-drop:not(.hot):not(.locked){border-color:rgba(255,255,255,.34)}
+body.dragging .frame.can-drop:not(.hot),
+body.dragging .shot.can-drop:not(.hot),
+body.dragging #ds-sheet:not(.hot){
   outline:1px dashed var(--line-2);outline-offset:-4px}
 #ds-sheet{position:relative}
 #ds-sheet.hot{outline:1px dashed rgba(255,255,255,.45);outline-offset:-4px}
 /* The caption. Generated content, so at rest it is not an element that exists
    and is hidden — it is an element that was never built. */
 body.dragging .frame.hot::after,body.dragging .shot.hot::after,
-body.dragging .rbox.drop-hit::after,body.dragging #ds-sheet.hot::after,
-body.dragging #region-layer.lora-new::after{
+body.dragging .rbox.drop-hit::after,body.dragging #ds-sheet.hot::after{
   content:attr(data-drop);position:absolute;left:50%;top:50%;
-  transform:translate(-50%,-50%);padding:5px 11px;border-radius:999px;
+  transform:translate(-50%,-50%);padding:5px 11px;border-radius:var(--r-pill);
   background:rgba(0,0,0,.74);backdrop-filter:blur(8px);color:#f5f5f5;
   font-weight:500;font-size:12px;line-height:1;white-space:nowrap;max-width:calc(100% - 12px);
   overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:6}
@@ -1917,28 +2083,6 @@ body.dragging #ds-sheet.hot::after{position:fixed;top:auto;bottom:104px;
    "nothing in this one yet" and illegible as "this is the one you are about to
    drop on". */
 body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
-
-/* A LoRA in flight ------------------------------------------------------- */
-/* The three targets it actually has, and nothing else. Every rule here is inside
-   `.dragging-lora`, so at rest and under a file drag they all match nothing.
-
-   The dashed inset is the same mark the file targets use, deliberately: "you may
-   drop here" is one idea and should not be two drawings. What differs is only which
-   elements it lands on. */
-body.dragging-lora #region-layer{outline:1px dashed var(--line-2);outline-offset:-4px}
-/* Bare frame under the cursor. Suppressed the moment a box takes the caption, so the
-   two never read at once — `lora-new` is already false when `drop-hit` is set. */
-body.dragging-lora #region-layer.lora-new{outline-color:rgba(255,255,255,.42)}
-/* The sentence is a target too, and it is the one that needs saying most: a text
-   field is the last place anyone expects a drag to land, and the caret the browser
-   is already drawing under the cursor is the whole affordance once you know to
-   look. This says look. */
-body.dragging-lora .field{border-color:rgba(255,255,255,.34);background:var(--wash-3)}
-/* A row that can be carried says so under the hand. `grab` and not `move`: the list
-   is not reordered and the source is not consumed — the same LoRA drops into four
-   boxes. */
-.menu button.draggable{cursor:grab}
-.menu button.draggable:active{cursor:grabbing}
 
 .wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
@@ -1974,12 +2118,22 @@ body.dragging-lora .field{border-color:rgba(255,255,255,.34);background:var(--wa
   #gal-grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:2px}
   #gal-grid .gal{border:0;border-radius:0;background:none}
   #gal-grid .media{aspect-ratio:1;width:100%;height:auto;object-fit:cover}
-  /* The card's chrome goes with it. A timestamp and a menu under every square
-     is the furniture this layout exists to remove, and both live in the viewer
-     the square opens. */
-  #gal-grid .foot{display:none}
-  #gal-grid .quick{opacity:0}
-  #gal-grid .gal:focus-within .quick{opacity:1}
+  /* The card's chrome mostly goes: a timestamp under every square is the furniture
+     this layout exists to remove.
+
+     The ⋯ stays, and the old comment here is why it has to. It said the menu "lives
+     in the viewer the square opens" — the viewer has never held Download or Delete,
+     and it does not now. That was survivable only while the hover pair carried those
+     two actions; with the duplicate pathway gone the menu is the sole way to reach
+     them, so `display:none` on the whole foot would have deleted Download and Delete
+     from the full gallery on every touch screen. Removing a redundant path is only
+     safe if the remaining one is actually reachable.
+
+     So the foot loses its box and keeps its button: anchored in the corner of the
+     square, no border, no ground, nothing under the grid's own 2px gap. */
+  #gal-grid .foot{position:absolute;right:0;bottom:0;border-top:0;padding:0;
+    min-height:0;background:none}
+  #gal-grid .foot .kind,#gal-grid .foot .when,#gal-grid .foot .grow{display:none}
 
   /* Stacked, the drawer stops being a column and becomes a strip. Left as a
      wrapping grid it grew downward without limit — at a dozen outputs it was
@@ -2057,3 +2211,32 @@ body.dragging-lora .field{border-color:rgba(255,255,255,.34);background:var(--wa
    and the component returns null with an empty prompt so there is no empty row
    to hide. */
 
+
+/* ── thumb-sized targets ──────────────────────────────────────────────────
+   Last in the file on purpose. Every rule it overrides is declared above it —
+   `#canvas-acts .ico` carries an id, and the drawer's `.foot .more` is four
+   classes deep — and a media query contributes no specificity, so anywhere
+   earlier this block wins some of its selectors and quietly loses others.
+
+   `.shot-back` had the only 44px rule in the stylesheet, so one control was
+   thumb-sized and the eight beside it were 16-30px.
+
+   Two shapes, because the buttons are two kinds. The ones in a row of their own
+   grow: they sit in flex rows with a gap, so a bigger box pushes its neighbours
+   along rather than landing on top of them. The two that float over content
+   cannot grow — a 44px reroll would cover the prompt text it is anchored to, so
+   tapping a word beside it would reroll instead of placing the caret — and for
+   those the *target* grows while the button does not: an unpainted ::after,
+   centred, 32px. That clears the 24px floor without the control swallowing what
+   it sits on, which is the trade a flat 44px cannot make. Neither takes
+   `position`: both are already absolute, and relative would break them. */
+@media (hover:none){
+  .shot .acts button,.film-nav .ico,
+  #canvas-acts .ico,.foot .more,
+  .drawer .grid>.gal .foot .more{width:44px;height:44px}
+  .shot .acts button svg,.foot .more svg{width:20px;height:20px;margin:auto}
+
+  .mk-reroll::after,.ref button.x::after{
+    content:'';position:absolute;left:50%;top:50%;
+    transform:translate(-50%,-50%);width:32px;height:32px}
+}

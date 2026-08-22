@@ -3,10 +3,11 @@ import { useState } from 'react'
 import type { Session } from '../api/types'
 import type { DatasetRow } from '../datasets/useDatasets'
 import { Sheet } from '../ui/Sheet'
+import { useBusy } from '../ui/useBusy'
 import { isActive } from './useSessions'
 
 /**
- * One training run, as a card.
+ * One training session, as a card.
  *
  * The card is what replaced the full-page run console, and the reason is the
  * backend rather than the layout: `train_job` never shared anything between
@@ -45,11 +46,21 @@ export function SessionCard({
    *  out from under the card, which the card says rather than hides. */
   ds?: DatasetRow
   onEdit: () => void
-  onStop: () => void
-  onDelete: () => void
+  /** These two return the board's promise rather than firing and forgetting,
+   *  and the promise is the point: `useSessions.act` awaits the mutation *and*
+   *  the reload behind it, so it does not settle until the card this press is
+   *  about has actually gone or changed state. A handler typed `() => void`
+   *  could only be timed by guessing. */
+  onStop: () => void | Promise<unknown>
+  onDelete: () => void | Promise<unknown>
   onOpenDataset: () => void
 }) {
   const [asking, setAsking] = useState(false)
+  // Delete is a request plus a full board reload, which on a cold API is well
+  // over a second of a card sitting there looking untouched. The ✕ stayed
+  // enabled through all of it, so the second press re-opened the confirm dialog
+  // for a session already on its way out.
+  const { busy, run } = useBusy()
   const active = isActive(s)
   const pct = Math.max(0, Math.min(100, Math.round(Number(s.percent ?? 0))))
 
@@ -101,7 +112,7 @@ export function SessionCard({
           under the content and the content is click-through — see `.sess-hit`
           in the stylesheet for why that is the arrangement rather than a
           wrapper, which cannot contain the buttons that are still on the card. */}
-      <button className="sess-hit" type="button" onClick={onEdit}
+      <button className="sess-hit" type="button" onClick={onEdit} disabled={!!busy}
               aria-label={`Open the settings for ${s.lora_name || 'this session'}`} />
 
       <div className="sess-head">
@@ -112,12 +123,24 @@ export function SessionCard({
           // the one thing on a resting card that is not "open this", so it is
           // the one thing that gets its own target — and it appears on hover,
           // because a board at rest should carry no destructive control.
-          <button className="sess-x" type="button" title="Delete this session"
+          //
+          // It says ✕ at rest and … while the delete and the reload behind it
+          // are in flight. Staying visible through that is the stylesheet's job
+          // now — `.sess-x:disabled` holds it at full opacity, because `.sess-x`
+          // is otherwise opacity:0 until the card is hovered, which is right for
+          // a resting board and wrong for the second or two a delete takes: the
+          // hand leaves the card as soon as the confirm dialog is dismissed and
+          // would take the only sign that anything is happening with it.
+          <button className="sess-x" type="button" disabled={!!busy}
+                  title={busy === 'del' ? 'Deleting…' : 'Delete this session'}
+                  aria-label={busy === 'del' ? 'Deleting this session'
+                    : `Delete the session ${s.lora_name || 'Untitled'}`}
                   onClick={() => {
-                    if (confirm(`Delete the session “${s.lora_name || 'Untitled'}”?\n\n`
-                      + 'The card and its setup go. Any checkpoints it already wrote '
-                      + 'stay in loras/ and are deleted from Settings.')) onDelete()
-                  }}>×</button>
+                    if (!confirm(`Delete the session “${s.lora_name || 'Untitled'}”?\n\n`
+                      + 'The card and its setup go. Any LoRA files it already wrote '
+                      + 'stay in loras/ — delete those from Settings.')) return
+                    void run('del', async () => { await onDelete() })
+                  }}>{busy === 'del' ? '…' : '×'}</button>
         )}
       </div>
 
@@ -158,9 +181,16 @@ export function SessionCard({
         </div>
       )}
 
+      {/* "3 checkpoints" on a finished session named the output after the
+          mechanism that wrote it, and the LoRA picker two screens away calls the
+          same files LoRAs. They are one LoRA saved at three epochs — three files
+          you choose between — so the count is of files and the noun is the one
+          the rest of the app uses. "Checkpoint" is left to the stop dialog,
+          where it means the other thing: an epoch snapshot of a session that
+          never reached its finished LoRA at all. */}
       {s.status === 'completed' && !!s.files?.length && (
         <p className="sess-note muted">
-          {s.files.length} checkpoint{s.files.length === 1 ? '' : 's'}
+          {s.files.length} LoRA file{s.files.length === 1 ? '' : 's'}
           {s.duration_s ? ` · ${Math.round(s.duration_s / 60)} min` : ''}
         </p>
       )}
@@ -177,9 +207,12 @@ export function SessionCard({
 
       <div className="sess-acts">
         {active ? (
+          // "Cancel run" was the board's second noun for the thing every other
+          // line on this card calls a session. It pairs with "Keep training" in
+          // the dialog it opens, which is the sentence it is really half of.
           <button className="t danger" data-act="stop" type="button" disabled={!!s.stopping}
                   onClick={() => setAsking(true)}>
-            {s.stopping ? 'Stopping…' : 'Cancel run'}
+            {s.stopping ? 'Stopping…' : 'Cancel training'}
           </button>
         ) : unfinished ? (
           // Not a button: the card already is one, and a card whose whole face
@@ -189,11 +222,21 @@ export function SessionCard({
         ) : null}
       </div>
 
+      {/* The dialog stays up until the request and the reload behind it have
+          landed, and closes itself after. Closing first left nothing on screen
+          saying anything had happened at all: the card goes on reporting
+          Training until a later poll agrees it stopped, and the button that was
+          pressed went away with the sheet. Keep training is shut for the same
+          window — a stop already sent is not one this dialog can call off. */}
       {asking && (
-        <StopDialog name={s.lora_name || 'this run'}
-                    onStop={() => { setAsking(false); onStop() }}
-                    onDelete={() => { setAsking(false); onDelete() }}
-                    onClose={() => setAsking(false)} />
+        <StopDialog name={s.lora_name || 'this session'} busy={busy}
+                    onStop={() => void run('stop', async () => {
+                      await onStop(); setAsking(false)
+                    })}
+                    onDelete={() => void run('del', async () => {
+                      await onDelete(); setAsking(false)
+                    })}
+                    onClose={() => { if (!busy) setAsking(false) }} />
       )}
     </div>
   )
@@ -221,15 +264,27 @@ function countLine(d: DatasetRow) {
 /**
  * Cancelling is two different acts, and the dialog is where they separate.
  *
- * Stop keeps the card and everything the run wrote: the epochs already saved
- * survive, the bar stays where it got to, and the card can be run again with a
- * dial changed — which is what makes stopping a choice rather than a loss.
+ * Stop keeps the card and everything the session wrote: the epochs already saved
+ * survive, the bar stays where it got to, and the card can be started again with
+ * a dial changed — which is what makes stopping a choice rather than a loss.
  * Delete takes the card away as well. Cancel does nothing at all, which is the
  * one this dialog exists to make available: a stop you cannot take back is a
  * button people learn not to press.
+ *
+ * **This is the one screen that says "checkpoint", and it is the one screen
+ * where the word means something a LoRA does not.** Everywhere else the two were
+ * used for the same file, so "checkpoint" was a second name for the artifact
+ * rather than a name for a different thing. Here it is a different thing: what a
+ * stopped session leaves behind is the LoRA as it stood at some epoch, and never
+ * the finished one — so the sentence below spends a clause teaching exactly that,
+ * which is what earns the word its place on the button under it.
  */
-function StopDialog({ name, onStop, onDelete, onClose }: {
+function StopDialog({ name, busy, onStop, onDelete, onClose }: {
   name: string
+  /** Which of the two outcomes is in flight, or null. The pressed button says
+   *  what it is doing and its neighbours go quiet — including Keep training,
+   *  because a stop already sent is not one this dialog can call off. */
+  busy: string | null
   onStop: () => void
   onDelete: () => void
   onClose: () => void
@@ -242,23 +297,27 @@ function StopDialog({ name, onStop, onDelete, onClose }: {
           <p className="sub" style={{ marginTop: 8, marginBottom: 0 }}>
             {/* No worked example with numbers in it: the card beside this one
                 has its own epoch count, and an illustration using someone
-                else's reads as a statement about this run. */}
-            The GPU stops either way. Every checkpoint written so far stays in
-            <code> loras/</code>, so a run stopped part-way is still the epochs
-            it got through.
+                else's reads as a statement about this session. */}
+            The GPU stops either way. Every epoch saved so far stays in
+            <code> loras/</code> as a checkpoint — the LoRA as it was at that
+            epoch, not the finished one — so a session stopped part-way is still
+            the epochs it got through.
           </p>
         </div>
       </div>
       <div className="sess-acts" style={{ marginTop: 18 }}>
-        <button className="t" id="ask-cancel" type="button" onClick={onClose}>
+        <button className="t" id="ask-cancel" type="button" disabled={!!busy}
+                onClick={onClose}>
           Keep training
         </button>
         <span className="grow" />
-        <button className="t danger" id="ask-delete" type="button" onClick={onDelete}>
-          Stop and delete the session
+        <button className="t danger" id="ask-delete" type="button" disabled={!!busy}
+                onClick={onDelete}>
+          {busy === 'del' ? 'Deleting…' : 'Stop and delete the session'}
         </button>
-        <button className="b" id="ask-stop" type="button" onClick={onStop}>
-          Stop, keep the checkpoints
+        <button className="b" id="ask-stop" type="button" disabled={!!busy}
+                onClick={onStop}>
+          {busy === 'stop' ? 'Stopping…' : 'Stop, keep the checkpoints'}
         </button>
       </div>
     </Sheet>

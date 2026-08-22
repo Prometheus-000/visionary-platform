@@ -1,4 +1,22 @@
 """
+RETIRED. What the note under the prompt used to say about `<lora:…>` tokens.
+
+**Kept, not deleted, because it is the record of three warnings that stopped
+being possible rather than three that stopped being wanted.** A LoRA is a chip
+picked from a list now, so a name cannot resolve to no file and cannot resolve to
+two — `No LoRA named "x"` and `"high" names 2 LoRAs` have no way to occur. The
+third, a missing trigger phrase, still can and is deliberately not said: it is
+managed by hand, and `/api/state` still carries `trigger_word` for anything that
+needs the fact.
+
+The case rule below outlived the note. `resolveLora` still folds case exactly
+this way for `reuse.ts`, which is the one caller that still starts from a name —
+so if that ever needs a test again, the reasoning is here.
+
+Replaced by `check_loras.py`. See `docs/design-notes/loras-are-not-text.md`.
+
+--- the original, verbatim ---
+
 What the note under the prompt says about `<lora:…>` tokens.
 
     python3 tools/ui-checks/probe_lora.py http://localhost:8791

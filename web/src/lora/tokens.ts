@@ -1,22 +1,65 @@
 /**
- * LoRAs are written in the prompt, not stacked under it.
+ * What a LoRA is, once it stops pretending to be text.
  *
- *     a portrait <lora:k3nan:0.4> in soft window light <lora:alxcn:1>
+ * This file used to open by defending `<lora:k3nan:0.4>` in the prompt —
+ * Automatic1111's syntax, the notation anyone who has trained these models
+ * already types — against a row per LoRA that cost 56px plus a wrapped select.
+ * That defence rested on one claim: a row *"could not say the thing that matters
+ * most, which is where in the sentence the LoRA applies."*
  *
- * Automatic1111's syntax, because it is the notation anyone who has trained these
- * models already types. A row per LoRA cost 56px plus a wrapped select — 380px of
- * canvas for four filenames and eight digits — and it still could not say the
- * thing that matters most, which is *where in the sentence* the LoRA applies.
+ * **The claim is true in a region and false in the main prompt**, and this
+ * codebase says so itself, in `useDocument.ts`: *"a token's position in the main
+ * prompt means nothing to the backend, which reads them into a stack."* So the
+ * canvas was paying for a parser, a caret-targeting scheme and a drag subsystem
+ * to buy a property only a box has — and what the position means in a box is
+ * *which box*, which a control living on that box says without any syntax.
  *
- * Strength defaults to 1. A second number is the text encoder weight on the image
- * side and the Wan expert on the video side; both are omitted far more often than
- * not.
+ * What is left here is the index the picker reads, resolution for the one caller
+ * that still starts from a name (Reuse), and the two readers that turn chips
+ * into the stacks `/api/generate` and `/api/video` take.
+ *
+ * See `docs/design-notes/loras-are-not-text.md`.
  */
 import type { AppState, LoraEntry } from '../api/types'
 
-/** One capture and a split, rather than three optional groups: the field count
- *  varies by family, and a regex that encodes that is a regex that has to change
- *  every time a family does. */
+/**
+ * A LoRA plugged into a module.
+ *
+ * **Not text, and never was.** It was written `<lora:name:1>` in the prompt for
+ * exactly one reason — so a strength could be typed beside it — and it paid for
+ * that with a parser, a caret-targeting scheme, a drag subsystem and three
+ * classes of error message. A chip with a value carries the strength better, so
+ * the reason is gone.
+ *
+ * It never reached the encoder in the first place: `stripLoras` deleted it from
+ * the string before `/api/generate` was called and the stack travelled in its
+ * own field. A trigger *phrase* is the opposite — it is words, it does reach the
+ * encoder, and it stays in the prompt where you put it.
+ *
+ * See `docs/design-notes/loras-are-not-text.md`.
+ */
+export type LoraChip = {
+  /** The volume path — the only field of a `LoraFile` that is a key, and what
+   *  `/api/generate` takes. */
+  path: string
+  /** The shortest name that still points at one file. What the chip reads. */
+  rel: string
+  strength: number
+  /** Image side. Null leaves it to the backend, which defaults it to the UNet
+   *  weight — duplicating that here would freeze today's default into every
+   *  chip ever saved. */
+  textEncoder: number | null
+  /** Video side. Null means read it off the filename, which `vidExpert` gets
+   *  right nearly always; this is the override. */
+  expert: 'high' | 'low' | 'both' | null
+}
+
+
+/** The one thing here that still knows the syntax exists, and it only ever
+ *  deletes. `<lora:…>` left in a prompt is now plain text — nothing parses it,
+ *  converts it or migrates it — but text is what the encoder reads, so a reused
+ *  prompt carrying one would render the literal word "lora". Stripped on the way
+ *  out, never reinterpreted in the box. */
 const LORA_RE = /<lora:([^<>]*)>/gi
 
 export type LoraFile = {
@@ -105,72 +148,7 @@ export function resolveLora(index: LoraFile[], name: string): LoraFile | null {
   return byStem.length === 1 ? byStem[0] ?? null : null
 }
 
-/**
- * Why a name did not resolve, which is a different question from whether it did.
- *
- * `<lora:high:1>` against a volume holding both Wan speed pairs is not a missing
- * file — it is two files and no way to tell which — and sending you to look for a
- * LoRA that is sitting right there is the worse of the two wrong answers.
- *
- * This one stays case-insensitive, and that is not an oversight left behind by
- * the fix above: it only ever runs on a name that already failed to resolve, so
- * its job is near-misses. A mistyped `<lora:K3NAN:1>` on a volume holding both
- * casings answers "use K3nan or k3nan", which is the message that makes the
- * difference between the two files visible.
- */
-export function loraAlternatives(index: LoraFile[], name: string): string[] {
-  const n = String(name ?? '').trim().replace(/\.safetensors$/i, '').toLowerCase()
-  return index.filter((l) => l.stem.toLowerCase() === n).map((l) => l.token)
-}
-
-export type Token = {
-  start: number
-  end: number
-  name: string
-  /** The first number: strength. */
-  a: string
-  /** The second: text encoder weight on the image side, expert on the video. */
-  b: string
-  hit: LoraFile | null
-}
-
-/** Every token in the text, with the offsets ⌘↑/⌘↓ needs to rewrite one in
- *  place. Unresolved names are kept rather than dropped: a LoRA that silently
- *  does nothing is indistinguishable from a LoRA with no effect, which is the
- *  failure this whole file is written to avoid. */
-export function parseLoras(index: LoraFile[], text: string): Token[] {
-  const out: Token[] = []
-  LORA_RE.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = LORA_RE.exec(text))) {
-    const parts = (m[1] ?? '').split(':').map((s) => s.trim())
-    out.push({
-      start: m.index,
-      end: m.index + m[0].length,
-      name: parts[0] ?? '',
-      a: parts[1] ?? '',
-      b: parts[2] ?? '',
-      hit: resolveLora(index, parts[0] ?? ''),
-    })
-  }
-  return out
-}
-
-/** What the text encoders see. The tokens are markup for this page, not language
- *  — leaving them in would have the model rendering the word "lora". */
-/**
- * The `<lora:…>` tokens themselves, in the order they appear.
- *
- * The counterpart of `stripLoras`, and here rather than at its caller because
- * this is where the pattern lives — a second regex for the same syntax is a
- * second thing to keep in step with the first. Used when the interpreter's
- * prose replaces what is in the box: the tokens are notation the model never
- * saw and must not lose, so they are lifted off, and re-appended after.
- */
-export function loraSyntax(text: string): string[] {
-  return text.match(LORA_RE) ?? []
-}
-
+/** What the encoders must not see. Send path only — see `LORA_RE`. */
 export function stripLoras(text: string): string {
   return text.replace(LORA_RE, ' ').replace(/\s+/g, ' ').replace(/\s+([,.;:!?])/g, '$1').trim()
 }
@@ -180,211 +158,74 @@ export const loraNum = (v: string, d: number | null): number | null => {
   return Number.isFinite(n) ? n : d
 }
 
-/** The image stack. `text_encoder` is left null when unwritten on purpose: the
- *  backend defaults it to the UNet weight, so omitting it is a decision the
- *  client does not have to duplicate — and duplicating it would freeze today's
- *  default into every prompt ever saved. */
-export function readLoras(index: LoraFile[], text: string, max: number) {
-  return parseLoras(index, text)
-    .filter((t) => t.hit)
-    .slice(0, max)
-    .map((t) => ({
-      path: t.hit!.path,
-      unet: loraNum(t.a, 1),
-      text_encoder: t.b === '' ? null : loraNum(t.b, null),
-    }))
+/** A picked file becomes a chip. The strength is the one the server says this
+ *  LoRA works at — a Krea style LoRA at a generic 1 reads as a faint grade over
+ *  the picture, which is a LoRA that silently did nothing delivered by the
+ *  picker itself. `1.3` in a region, which is the node pack's own guidance for a
+ *  character. */
+export function chipFrom(l: LoraFile, region = false): LoraChip {
+  return {
+    path: l.path,
+    rel: l.token,
+    strength: region ? 1.3 : (l.strength ?? 1),
+    textEncoder: null,
+    expert: null,
+  }
 }
 
 /** The matched speed pairs are named `high` and `low` inside one folder, so the
  *  file already says which expert it belongs to. Reading it beats making you
  *  write the same fact twice, and beats the silent quality loss of crossing
- *  them. */
-export function vidExpert(experts: string[], t: Pick<Token, 'b' | 'hit'>): string {
-  const b = String(t.b ?? '').toLowerCase()
-  if (experts.includes(b)) return b
-  const n = (t.hit?.rel ?? '').toLowerCase()
+ *  them. `chip.expert` is the override; null means read the name. */
+export function vidExpert(experts: string[], chip: LoraChip): string {
+  if (chip.expert && experts.includes(chip.expert)) return chip.expert
+  const n = chip.rel.toLowerCase()
   if (/(^|\/)high|high_noise/.test(n)) return 'high'
   if (/(^|\/)low|low_noise/.test(n)) return 'low'
   return 'both'
 }
 
-export function readVidLoras(index: LoraFile[], text: string, max: number, experts: string[]) {
-  return parseLoras(index, text)
-    .filter((t) => t.hit)
-    .slice(0, max)
-    .map((t) => ({ path: t.hit!.path, unet: loraNum(t.a, 1), expert: vidExpert(experts, t) }))
+/** The image stack. `text_encoder` is left null when unset on purpose: the
+ *  backend defaults it to the UNet weight, so omitting it is a decision the
+ *  client does not have to duplicate — and duplicating it would freeze today's
+ *  default into every chip ever saved. */
+export function readChips(chips: LoraChip[], max: number) {
+  return chips.slice(0, max).map((c) => ({
+    path: c.path, unet: c.strength, text_encoder: c.textEncoder,
+  }))
+}
+
+export function readVidChips(chips: LoraChip[], max: number, experts: string[]) {
+  return chips.slice(0, max).map((c) => ({
+    path: c.path, unet: c.strength, expert: vidExpert(experts, c),
+  }))
 }
 
 /**
- * A stack, written back into the prompt — which is now the only place one lives.
+ * A stack off a gallery sidecar, back into chips.
  *
- * The canonical form goes in, full path when the bare name is ambiguous, so a
- * reused prompt resolves to the same file the original run used. An entry whose
- * file is gone is simply not written rather than becoming an unresolvable token.
+ * The one caller that still starts from a *name* rather than a path, because a
+ * sidecar records what ran rather than where it lived. An entry whose file is
+ * gone is simply dropped — a chip is picked from a list and always resolves, so
+ * there is no such thing as a chip naming nothing.
  */
-export function loraTokens(
+export function loraChips(
   index: LoraFile[],
   list: { name?: string; unet?: number; expert?: string; text_encoder?: number | null }[] | undefined,
   video: boolean,
-  experts: string[] = ['both', 'high', 'low'],
-): string {
-  return (list ?? [])
-    .map((l) => {
-      // Image records the stem, video the filename; both match the way the two
-      // stacks were read back before this.
-      const hit = index.find((x) => (video ? x.file === l.name : x.stem === l.name))
-        ?? resolveLora(index, l.name ?? '')
-      if (!hit) return ''
-      const tail = video
-        ? (l.expert && l.expert !== 'both' && l.expert !== vidExpert(experts, { b: '', hit })
-            ? `:${l.expert}` : '')
-        : (l.text_encoder != null && l.text_encoder !== l.unet ? `:${l.text_encoder}` : '')
-      return `<lora:${hit.token}:${l.unet ?? 1}${tail}>`
-    })
-    .filter(Boolean)
-    .join(' ')
-}
-
-/* ---- the region inspector's Strength cell ------------------------------ */
-/* A *view* of the first number in the box's token, not a second place the number
- * lives — the same relationship the ratio picker has to the width and height
- * boxes. Blank when there is no token to read, because a strength with nothing
- * to apply to is a number that lies. */
-
-export function tokenStrength(index: LoraFile[], text: string): number | null {
-  const t = parseLoras(index, text ?? '').find((x) => x.hit)
-  return t ? loraNum(t.a, 1) : null
-}
-
-export function setTokenStrength(index: LoraFile[], text: string, val: number): string {
-  const t = parseLoras(index, text ?? '').find((x) => x.hit)
-  if (!t) return text
-  const parts = [t.name, String(val)]
-  if (t.b !== '') parts.push(t.b)
-  return `${text.slice(0, t.start)}<lora:${parts.join(':')}>${text.slice(t.end)}`
-}
-
-/* ---- writing one into a field ------------------------------------------ */
-
-export type Written = { value: string; caret: number; select: number }
-
-/**
- * Insert a token at the caret, or take it back out.
- *
- * Picking a LoRA that is already in the prompt removes it rather than writing a
- * second copy: two tokens for one file is not a stack — `apply_stack()` patches
- * both onto the clone chain, so the strengths compound into a number nobody chose
- * and the picker looks like it silently did nothing. There is no prompt that
- * wants the duplicate, so the second pick is free to mean the other thing.
- *
- * The trigger phrase is written beside the token — for a main-prompt insert
- * only, and only when the phrase is known and not already somewhere in the
- * field. The picker used to *prepend* one, and that was retired because the
- * destination stopped being answerable: on the regional path the node encodes
- * the main prompt and nothing else, so a trigger auto-written into a box would
- * silently never reach the encoder, and one prepended to the main prompt was
- * the picker editing a sentence the caret was nowhere near. Neither objection
- * touches this: the phrase lands *at the caret*, glued to the token the same
- * pick just wrote, and `withTrigger` is false on every region path. What
- * brought it back is a measurement — a style LoRA at the generic strength with
- * no phrase renders as a faint grade, which is the "LoRA that silently does
- * nothing" failure this whole module exists to avoid, delivered by the picker
- * itself on every first try. Unpicking removes the token only: the phrase is
- * visible prose in an editable field, and a picker click that deletes words
- * out of a sentence is the worse surprise.
- */
-export function insertLora(
-  index: LoraFile[],
-  value: string,
-  caret: number,
-  l: LoraFile,
-  /** 1.3 in a region, and in the main prompt whatever the server says this
-   *  LoRA works at, falling back to 1. The node pack's guidance for a character
-   *  LoRA is 1.3–1.4, and a picker that writes a known-weak value into a field
-   *  where it is known to be weak is doing the wrong thing quietly. */
-  strength: string,
-  withTrigger = false,
-): Written {
-  const present = parseLoras(index, value).filter((t) => t.hit?.path === l.path)
-  if (present.length) return removeLora(value, caret, present)
-
-  let at = Math.min(caret, value.length)
-  // Never inside another token. A pick deliberately leaves the caret on its own
-  // strength so ⌘↑ can walk it, and clicking + LoRA again does not move it — so
-  // two picks in a row wrote `<lora:alxcn: <lora:my_style:1> 1>`. Nothing on the
-  // page says that is malformed; it silently loads one LoRA where you asked for
-  // two, which is the failure this whole module exists to avoid.
-  const inside = parseLoras(index, value).find((t) => at > t.start && at < t.end)
-  if (inside) at = inside.end
-
-  // Never welded to the neighbouring word: a token glued to the end of a sentence
-  // survives the strip but reads as a typo while you are writing.
-  const before = value.slice(0, at)
-  const after = value.slice(at)
-  // Case-folded because the phrase is prose: someone who already typed "purple
-  // retro anime style" has said it, and writing it again is the picker repeating
-  // them.
-  const phrase = withTrigger && l.trigger
-    && !value.toLowerCase().includes(l.trigger.toLowerCase())
-    ? ` ${l.trigger}` : ''
-  const tok = (before && !/\s$/.test(before) ? ' ' : '')
-    + `<lora:${l.token}:${strength}>` + phrase
-    + (after && !/^\s/.test(after) ? ' ' : '')
-  // Caret onto the strength, selected, so the next thing you can do is ⌘↑ it or
-  // type over it.
-  const cur = before.length + tok.indexOf(`:${strength}>`) + 1
-  return { value: before + tok + after, caret: cur, select: cur + strength.length }
-}
-
-/** Takes the tokens rather than the index, because its caller has already resolved them:
- *  what comes out is decided by the offsets, not by whether the names still name files. */
-export function removeLora(value: string, caret: number, toks: Token[]): Written {
-  let v = value
-  // Back to front, so each splice leaves the earlier offsets valid.
-  for (const t of [...toks].sort((a, b) => b.start - a.start)) {
-    let s = t.start
-    let e = t.end
-    // Take the space the token was welded to as well, or removing it leaves a
-    // double gap mid-sentence. `[^\S\n]` and not `\s`: a prompt written across
-    // several lines should not have its line breaks eaten by a picker click.
-    if (/[^\S\n]/.test(v[e] ?? '')) e++
-    else if (/[^\S\n]/.test(v[s - 1] ?? '')) s--
-    v = v.slice(0, s) + v.slice(e)
-  }
-  // Only the token. The trigger used to be stripped here as well, on the grounds
-  // that this function had put it there — nothing puts it there now, so every
-  // trigger in the field is something you typed, and a picker click that deletes
-  // a word out of your sentence is the worse surprise.
-  const at = Math.min(caret, v.length)
-  return { value: v, caret: at, select: at }
-}
-
-/**
- * ⌘↑ / ⌘↓ on a strength, the way the same chord nudges attention weights in
- * Automatic. Put the caret anywhere inside the brackets — the token under it is
- * the one that moves, and the selection comes back so a run of presses walks the
- * value instead of moving once and losing its place.
- *
- * Clamped, not unbounded: past ±2 a LoRA stops styling the image and starts
- * destroying it, and the clamp is the cheapest place to say so.
- */
-export function nudgeLora(
-  value: string,
-  caret: number,
-  delta: number,
-): Written | null {
-  // Its own regex pass rather than the resolved index: the token under the caret is the one
-  // that moves whether or not it names a file on the volume, and a strength you cannot walk
-  // on a mistyped name is a strength you cannot fix.
-  const t = parseLoras([], value).find((x) => caret >= x.start && caret <= x.end)
-  if (!t) return null
-  const next = Math.max(-2, Math.min(2, Math.round(((loraNum(t.a, 1) ?? 1) + delta) * 100) / 100))
-  const body = [t.name, String(next)].concat(t.b ? [t.b] : []).join(':')
-  const tok = `<lora:${body}>`
-  const at = t.start + tok.indexOf(`:${next}`) + 1
-  return {
-    value: value.slice(0, t.start) + tok + value.slice(t.end),
-    caret: at,
-    select: at + String(next).length,
-  }
+): LoraChip[] {
+  return (list ?? []).flatMap((l) => {
+    // Image records the stem, video the filename; both match the way the two
+    // stacks were read back before this.
+    const hit = index.find((x) => (video ? x.file === l.name : x.stem === l.name))
+      ?? resolveLora(index, l.name ?? '')
+    if (!hit) return []
+    return [{
+      path: hit.path,
+      rel: hit.token,
+      strength: l.unet ?? 1,
+      textEncoder: video ? null : (l.text_encoder ?? null),
+      expert: video ? ((l.expert as LoraChip['expert']) ?? null) : null,
+    }]
+  })
 }

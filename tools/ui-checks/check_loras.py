@@ -1,0 +1,129 @@
+"""
+LoRAs are chips, and the composer is per-kind.
+
+    /opt/homebrew/bin/python3.11 tools/preview_ui.py 8799 &
+    python3.11 tools/ui-checks/check_loras.py http://localhost:8799
+
+Every row here is a rule that used to be carried by `<lora:…>` in the prompt and
+is now carried by structure instead — see `docs/design-notes/loras-are-not-text.md`.
+
+  * **The box costs nothing at rest.** No LoRAs, no element. `#shot-rail:empty`'s
+    rule: a row is affordable when it carries content, never when it carries one
+    control.
+  * **The count is a word.** The regions button failed here once — a count riding
+    half-outside it read as an error pip rather than as "2 regions".
+  * **Nothing writes into the prompt.** Picking used to insert a token, a
+    strength and the trigger phrase — three edits to your sentence from one
+    press. The box must be untouched.
+  * **The composer is per-kind.** A Krea 2 LoRA is not a Wan LoRA. Switching used
+    to carry one across and load it into a run that could not use it, silently.
+"""
+import sys
+import time
+
+from playwright.sync_api import sync_playwright
+
+URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8791"
+fails = []
+
+
+def box(page):
+    return page.eval_on_selector("#prompt", "el => el.value")
+
+
+def pick(page, n=0):
+    page.click("#add-lora")
+    page.wait_for_selector(".menu button")
+    page.locator(".menu button").nth(n).click()
+    time.sleep(0.15)
+
+
+with sync_playwright() as pw:
+    b = pw.chromium.launch()
+    page = b.new_page(viewport={"width": 1512, "height": 982})
+    page.goto(URL, wait_until="networkidle")
+    page.fill("#prompt", "a portrait in soft window light")
+
+    if page.locator("#lora-box").count():
+        fails.append("the box is drawn with no LoRAs on the canvas")
+
+    pick(page, 0)
+    if box(page) != "a portrait in soft window light":
+        fails.append(f"picking wrote into the prompt: {box(page)!r}")
+    if page.locator("#lora-box").count() != 1:
+        fails.append("the box did not appear after a pick")
+    summary = page.locator("#lora-box > button").inner_text().strip()
+    if summary != "1 LoRA":
+        fails.append(f"summary read {summary!r}, wanted '1 LoRA'")
+
+    pick(page, 1)
+    summary = page.locator("#lora-box > button").inner_text().strip()
+    if summary != "2 LoRAs":
+        fails.append(f"summary read {summary!r} with two picked")
+
+    # Collapsed by default; the chips are what the disclosure holds.
+    if page.locator("#lora-box .chip").count():
+        fails.append("the chips are drawn while the box is shut")
+    page.click("#lora-box > button")
+    time.sleep(0.15)
+    if page.locator("#lora-box .chip").count() != 2:
+        fails.append("opening the box did not show two chips")
+
+    # Picking one already picked takes it out — the tick is a state.
+    pick(page, 0)
+    if page.locator("#lora-box .chip").count() != 1:
+        fails.append("picking a ticked row did not remove it")
+
+    # ---- the switch -------------------------------------------------------
+    # The kind switch is the Duration menu — "Still" is an image, any number of
+    # seconds is a clip. There is no image/video chip; see `Duration`.
+    def duration(label):
+        page.click("#g-duration")
+        page.wait_for_selector(".menu button")
+        page.locator(".menu button", has_text=label).first.click()
+        time.sleep(0.35)
+
+    duration("5s")
+    if page.locator("#lora-box").count():
+        fails.append("an image LoRA followed the switch to video")
+    if box(page) != "":
+        fails.append(f"the image prompt followed the switch: {box(page)!r}")
+    page.fill("#prompt", "a slow push in")
+    duration("Still")
+    if box(page) != "a portrait in soft window light":
+        fails.append(f"the image prompt did not come back: {box(page)!r}")
+    if page.locator("#lora-box > button").inner_text().strip() != "1 LoRA":
+        fails.append("the image chips did not come back")
+
+    # ---- what the note still says ----------------------------------------
+    #
+    # Three of its lines are gone because they became impossible: a chip is
+    # picked from a list, so no name resolves to nothing and none resolves to
+    # two. A fourth — a LoRA whose trigger phrase is missing from the prose — is
+    # gone because it is managed by hand. `_retired_probe_lora.py` is the record.
+    #
+    # What survives is the two it cannot see: a stack past the cap, and the same
+    # LoRA on the canvas *and* in a box, which puts the canvas copy on the global
+    # chain and cancels the masking it looks like it is doing.
+    # `#lora-note` and not `#console-notes`: the container holds two spans and is
+    # laid out to reserve its row whether or not either of them says anything, so
+    # reading the container back gives '' even while the note is on screen.
+    def note():
+        el = page.query_selector("#lora-note")
+        return (el.inner_html() if el else "").strip()
+
+    # Index 1 is already on from the toggle above, so it is skipped — picking a
+    # *ticked* row takes it off, which would keep the total under the cap and
+    # make this pass for the wrong reason. Seven more takes it to eight.
+    for n in (0, 2, 3, 4, 5, 6, 7):
+        pick(page, n)
+    n = note()
+    if "6" not in n:
+        fails.append(f"a stack past the cap is not reported: {n!r}")
+
+    b.close()
+
+for f in fails:
+    print(f"  FAIL  {f}")
+print(f"\n{'PASS' if not fails else str(len(fails)) + ' FAILED'}")
+raise SystemExit(1 if fails else 0)

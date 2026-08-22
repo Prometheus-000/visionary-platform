@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-import { failed } from '../api/client'
+import { failed, type ApiError } from '../api/client'
 import {
   addCaptionModel, deleteCaptionModel, deleteLora, downloadFamily, setToken,
   startDownload, startGdrive,
@@ -9,6 +9,8 @@ import type { AppState, GpuChoice, LoraEntry, ModelEntry } from '../api/types'
 import { useStore } from '../store'
 import { fmtBytes } from '../format'
 import { IconClose } from '../icons'
+import { ErrorNote } from '../ui/ErrorNote'
+import { useBusy } from '../ui/useBusy'
 import { useDownload } from './useDownload'
 
 /**
@@ -31,8 +33,15 @@ export function Settings({
   const [tokenNote, setTokenNote] = useState<string | null>(null)
   const [driveUrl, setDriveUrl] = useState('')
   const [driveFolder, setDriveFolder] = useState('')
-  const [loraError, setLoraError] = useState<string | null>(null)
+  // The whole ApiError, not `r.error`: the sentence is what the box shows, but a delete
+  // that failed on a path guard answers with the route's own report behind it, and
+  // widening the state is all it costs to keep that reachable.
+  const [loraError, setLoraError] = useState<string | ApiError | null>(null)
   const dl = useDownload()
+  // Save and every row's ✕ on one keyed flag. `dl.busy` is the uplink, which is a
+  // different thing and already had its own; this is the two mutations on this sheet
+  // that write and then reload, and the key is which of them is in flight.
+  const { busy, run } = useBusy()
 
   // Grouped by family, in catalogue order. Twenty-odd flat cards is a wall you
   // scroll rather than a list you read, and the group is the unit you actually
@@ -49,14 +58,14 @@ export function Settings({
 
   if (!open) return null
 
-  const saveToken = async () => {
+  const saveToken = () => run('token', async () => {
     const r = await setToken(token)
     setTokenNote(failed(r) ? r.error : 'Token saved.')
     setTokenValue('')
     if (!failed(r)) onReload()
-  }
+  })
 
-  const removeLora = async (l: LoraEntry) => {
+  const removeLora = (l: LoraEntry) => {
     // The dialog is the entire safety net: the route unlinks and there is
     // nothing behind it. So it says how much is going, and whether it can come
     // back — two different sentences, because a Wan speed pair is a download
@@ -70,12 +79,16 @@ export function Settings({
         : 'This cannot be undone.'),
     )
     if (!ok) return
-    const r = await deleteLora(l.root)
-    if (failed(r)) return setLoraError(r.error)
-    setLoraError(null)
-    // The whole sheet, not just this list: deleting a catalogue LoRA moves it
-    // back to "missing" in the cards below.
-    onReload()
+    // Keyed by root, so only the row being deleted changes; the confirm stays outside
+    // `run` because nothing should be marked in flight while a dialog is still open.
+    return run(`lora:${l.root}`, async () => {
+      const r = await deleteLora(l.root)
+      if (failed(r)) return setLoraError(r)
+      setLoraError(null)
+      // The whole sheet, not just this list: deleting a catalogue LoRA moves it
+      // back to "missing" in the cards below.
+      onReload()
+    })
   }
 
   const loras = state?.loras ?? []
@@ -111,7 +124,15 @@ export function Settings({
             <input id="tok" type="password" className="grow" placeholder="hf_…"
                    autoComplete="off" value={token}
                    onChange={(e) => setTokenValue(e.target.value)} />
-            <button className="s" type="button" onClick={() => void saveToken()}>Save</button>
+            {/* The note under the field is written *by* the reply, so until the reply
+                landed there was nothing on screen at all — and the only honest read of a
+                save that shows nothing is that Save did not work, which is why it got
+                pressed again. The label carries the state; the guard is `run`'s, because
+                `disabled` is a paint and a queued second click gets past a paint. */}
+            <button className="s" type="button" disabled={!!busy}
+                    onClick={() => void saveToken()}>
+              {busy === 'token' ? 'Saving…' : 'Save'}
+            </button>
           </div>
           <p className="muted" style={{ marginTop: 8 }}>
             Needed for Krea 2 RAW and Turbo, which are gated. Accept the licence at
@@ -134,8 +155,15 @@ export function Settings({
             <input id="gd-url" className="grow" placeholder="Drive link or file id"
                    autoComplete="off" spellCheck={false} value={driveUrl}
                    onChange={(e) => setDriveUrl(e.target.value)} />
+            {/* 158px is what it wants, not what it insists on. This was
+                `width:158;flex:none`, and a `.row` whose items all refuse to shrink can
+                only overflow — the link field, this one and Download ran off the right
+                edge of the sheet on a phone, and Settings has no media query of its own
+                to catch it. `minWidth` has to be spelled out too: a flex item's automatic
+                minimum is its intrinsic width, and for an `<input>` that is the default
+                ~20-character box, which is most of the overflow on its own. */}
             <input id="gd-folder" placeholder="folder (optional)" autoComplete="off"
-                   spellCheck={false} style={{ width: 158, flex: 'none' }}
+                   spellCheck={false} style={{ flex: '1 1 158px', minWidth: 96 }}
                    title="Group the files under loras/{name}/ — for a matched pair that belongs together. Leave blank to drop them in loose."
                    value={driveFolder} onChange={(e) => setDriveFolder(e.target.value)} />
             {/* `.s`, matching Save in the token row above it. This was the only
@@ -174,7 +202,7 @@ export function Settings({
               {loras.length ? `${loras.length} · ${fmtBytes(loraBytes)}` : ''}
             </span>
           </div>
-          {loraError && <div style={{ marginTop: 10 }}><div className="err-box">{loraError}</div></div>}
+          <ErrorNote err={loraError} style={{ marginTop: 10 }} />
           <div id="lora-list">
             {loras.length ? loras.map((l) => (
               <div className="lora-row" key={l.root}>
@@ -186,8 +214,16 @@ export function Settings({
                     {l.catalogue ? ` · ${l.catalogue}` : ''}
                   </div>
                 </div>
-                <button className="lora-x" title="Delete" type="button"
-                        onClick={() => void removeLora(l)}>✕</button>
+                {/* Unlinking the files and reloading the sheet leaves the row sitting
+                    there, still with a ✕ on it, for as long as both take — which reads
+                    as a delete that did not take, and the second press opens the confirm
+                    again for a LoRA already on its way out. The glyph carries it because
+                    `.lora-x` is a fixed square: there is no room in it for a word. */}
+                <button className="lora-x" type="button" disabled={!!busy}
+                        title={busy === `lora:${l.root}` ? 'Deleting…' : 'Delete'}
+                        onClick={() => void removeLora(l)}>
+                  {busy === `lora:${l.root}` ? '…' : '✕'}
+                </button>
               </div>
             )) : (
               // Both ways in are directly above this card, so the empty state
@@ -259,9 +295,19 @@ export function Settings({
                             )}
                           </>
                         )}
-                        <div className={`muted dl-state${p.tone === 'ok' ? ' ok' : p.tone === 'err' ? ' err' : ''}`}>
-                          {p.message}
-                        </div>
+                        {p.tone === 'err' ? (
+                          // Left-aligned and capped by hand: this column is
+                          // `text-align:right` and sized by its own content, so an
+                          // err-box dropped into it would right-align a traceback and
+                          // stretch the card until the label beside it wrapped a word
+                          // per line.
+                          <ErrorNote err={{ error: p.message, detail: p.detail }}
+                                     style={{ textAlign: 'left', maxWidth: 280, margin: '8px 0 0' }} />
+                        ) : (
+                          <div className={`muted dl-state${p.tone === 'ok' ? ' ok' : ''}`}>
+                            {p.message}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )
@@ -291,29 +337,36 @@ function CaptionModels({ state, onReload }: {
 }) {
   const [repo, setRepo] = useState('')
   const [label, setLabel] = useState('')
-  const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ text: string; err?: boolean } | null>(null)
+  // Both paths on one flag. Add had a hand-rolled `busy` boolean and Remove had nothing,
+  // so the same card said "Checking…" for one button and sat silent for the other — and
+  // two mechanisms for one behaviour is how they drift apart.
+  const { busy, run } = useBusy()
   const models = state?.caption_models ?? []
 
-  const add = async () => {
-    if (!repo.trim() || busy) return
-    setBusy(true)
-    setNote(null)
-    const r = await addCaptionModel(repo.trim(), label.trim())
-    setBusy(false)
-    if (failed(r)) return setNote({ text: r.error, err: true })
-    setRepo('')
-    setLabel('')
-    setNote({ text: 'Added. The weights pull into the cache on its first run.' })
-    onReload()
+  const add = () => {
+    // Only the empty-field check is left here: `run` refuses while anything is in
+    // flight, which is the half the old `|| busy` was doing.
+    if (!repo.trim()) return
+    return run('add', async () => {
+      setNote(null)
+      const r = await addCaptionModel(repo.trim(), label.trim())
+      if (failed(r)) return setNote({ text: r.error, err: true })
+      setRepo('')
+      setLabel('')
+      setNote({ text: 'Added. The weights pull into the cache on its first run.' })
+      onReload()
+    })
   }
 
-  const remove = async (key: string, name: string) => {
+  const remove = (key: string, name: string) => {
     if (!confirm(`Remove “${name}” from the captioner menu?\n\n`
       + 'Only the menu entry goes — weights already in the cache stay cached.')) return
-    const r = await deleteCaptionModel(key)
-    if (failed(r)) return setNote({ text: r.error, err: true })
-    onReload()
+    return run(`rm:${key}`, async () => {
+      const r = await deleteCaptionModel(key)
+      if (failed(r)) return setNote({ text: r.error, err: true })
+      onReload()
+    })
   }
 
   return (
@@ -326,8 +379,13 @@ function CaptionModels({ state, onReload }: {
             {m.repo && <div className="muted" style={{ marginTop: 3 }}><code>{m.repo}</code></div>}
           </div>
           {m.custom && (
-            <button className="lora-x" title="Remove from the menu" type="button"
-                    onClick={() => void remove(m.key, m.label)}>✕</button>
+            // Same treatment as the LoRA rows above: the row survives the round trip and
+            // the reload, so without this the press had no answer until the list redrew.
+            <button className="lora-x" type="button" disabled={!!busy}
+                    title={busy === `rm:${m.key}` ? 'Removing…' : 'Remove from the menu'}
+                    onClick={() => void remove(m.key, m.label)}>
+              {busy === `rm:${m.key}` ? '…' : '✕'}
+            </button>
           )}
         </div>
       ))}
@@ -336,12 +394,15 @@ function CaptionModels({ state, onReload }: {
                autoComplete="off" spellCheck={false} value={repo}
                onChange={(e) => setRepo(e.target.value)}
                onKeyDown={(e) => { if (e.key === 'Enter') void add() }} />
+        {/* Same basis and the same explicit minimum as the Drive folder field, for the
+            same reason: this row is repo + label + Add, and a fixed-width middle is what
+            pushed Add off the edge on a narrow screen. */}
         <input id="cm-label" placeholder="label (optional)" autoComplete="off"
-               spellCheck={false} style={{ width: 158, flex: 'none' }} value={label}
+               spellCheck={false} style={{ flex: '1 1 158px', minWidth: 96 }} value={label}
                onChange={(e) => setLabel(e.target.value)} />
-        <button className="s" type="button" disabled={busy || !repo.trim()}
+        <button className="s" type="button" disabled={!!busy || !repo.trim()}
                 onClick={() => void add()}>
-          {busy ? 'Checking…' : 'Add'}
+          {busy === 'add' ? 'Checking…' : 'Add'}
         </button>
       </div>
       {note && (
@@ -392,11 +453,23 @@ function GpuSelect({ id, label, side, spec }: {
 }
 
 function Line({ p, bar, onCancel }: {
-  p: { percent: number; message: string; tone: string; running: boolean }
+  p: { percent: number; message: string; tone: string; running: boolean; detail?: string }
   bar?: boolean
   onCancel: () => void
 }) {
   if (!p.message) return null
+  // A failure gets the box and its disclosure, not a red line of text. A refused start
+  // is the one message here with a server behind it — "could not reach the server" with
+  // the browser's own reason underneath — and a bare `<p className="err">` had nowhere
+  // to put the reason, so it was dropped. Bar and Cancel are both gone by then anyway:
+  // `running` is false on every path that sets this tone.
+  if (p.tone === 'err') {
+    return (
+      <div className="fam-prog">
+        <ErrorNote err={{ error: p.message, detail: p.detail }} style={{ marginBottom: 0 }} />
+      </div>
+    )
+  }
   return (
     <div className="fam-prog">
       {bar && <div className="bar"><i style={{ width: `${p.percent}%` }} /></div>}

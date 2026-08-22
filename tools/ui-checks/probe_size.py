@@ -6,8 +6,8 @@ The ratio picker and the pixel boxes, driven the way a person drives them.
 
 They are one control, so every assertion here is about the two halves agreeing:
 picking a ratio writes the boxes, typing in the boxes selects Custom, the swap
-transposes the *bucket* rather than the pixels, and nothing is snapped while you
-are still typing.
+transposes the *bucket* rather than the pixels, a pinned tier hands over its own
+pixels rather than a multiple, and nothing is snapped while you are still typing.
 
 Driven through real clicks and real keys rather than by calling into the page,
 for the reason the drag test already records: a driver poking at internals is
@@ -80,13 +80,24 @@ with sync_playwright() as pw:
     check("swap lands on the transposed preset", selected(pg) == "9:16", str(selected(pg)))
     check("swap writes the transposed boxes", boxes(pg) == ["768", "1344"], str(boxes(pg)))
 
-    # 4:3 is the ratio the page opens on and the one whose flip used to land on
-    # Custom, which is why 3:4 is on the menu at all.
+    # Three of the eight have no transpose on the menu — 3:4, 9:21 and 5:4 are not
+    # ratios it offers — so 4:3, 21:9 and 4:5 keep the pixels and deselect. Both
+    # halves are asserted because the deselection is the intended answer and not
+    # the cost of one: the flip of a ratio with no counterpart is a custom ratio,
+    # and a tile left lit would be the menu claiming a shape it does not offer.
+    pg.click(".sizer .ars .ar:has(b:text-is('3:2'))")
+    pg.wait_for_timeout(120)
+    pg.click(".sizer .sz-swap")
+    pg.wait_for_timeout(150)
+    check("3:2 flips into its counterpart", selected(pg) == "2:3", str(selected(pg)))
+
     pg.click(".sizer .ars .ar:has(b:text-is('4:3'))")
     pg.wait_for_timeout(120)
     pg.click(".sizer .sz-swap")
     pg.wait_for_timeout(150)
-    check("4:3 flips into 3:4 rather than Custom", selected(pg) == "3:4", str(selected(pg)))
+    check("flipping a ratio with no counterpart deselects, keeping the pixels",
+          selected(pg) is None and boxes(pg) == ["896", "1152"],
+          f"{selected(pg)} {boxes(pg)}")
 
     # ---- the scale multiplies the bucket -------------------------------------
     pg.click(".sizer .ars .ar:has(b:text-is('16:9'))")
@@ -105,6 +116,35 @@ with sync_playwright() as pw:
           boxes(pg) == ["1152", "2016"], str(boxes(pg)))
     check("a scaled preset keeps its name through a swap",
           selected(pg) == "9:16", str(selected(pg)))
+
+    # ---- 1.3K is pinned, not multiplied --------------------------------------
+    # A different trained family — ~1.62 MP on a 32 grid against ~1.03 MP on a 64
+    # one — so the tier carries its own pixels rather than a multiplier. 1.25x the
+    # bucket would say 1680x960 here, which is the whole reason the table exists.
+    pg.click(".sizer .ars .ar:has(b:text-is('16:9'))")
+    pg.wait_for_timeout(120)
+    pg.click(".sizer .scales .sc:text-is('1.3K')")
+    pg.wait_for_timeout(150)
+    check("1.3K pins its own pixels", boxes(pg) == ["1728", "960"], str(boxes(pg)))
+    check("the name survives a pinned scale", selected(pg) == "16:9", str(selected(pg)))
+
+    pg.click(".sizer .ars .ar:has(b:text-is('21:9'))")
+    pg.wait_for_timeout(150)
+    check("21:9 is on the menu", boxes(pg) == ["1952", "832"], str(boxes(pg)))
+
+    # One vocabulary across the tiers: a ratio that only existed at the scale it
+    # was drawn for would be tiles changing under the scale buttons.
+    pg.click(".sizer .scales .sc:text-is('1K')")
+    pg.wait_for_timeout(150)
+    check("21:9 survives the drop to 1K",
+          selected(pg) == "21:9" and boxes(pg) == ["1568", "672"],
+          f"{selected(pg)} {boxes(pg)}")
+
+    pg.click(".sizer .ars .ar:has(b:text-is('4:5'))")
+    pg.wait_for_timeout(150)
+    check("4:5 is on the menu", boxes(pg) == ["896", "1120"], str(boxes(pg)))
+    check("4:5 replaced 3:4 rather than joining it",
+          pg.query_selector(".sizer .ars .ar:has(b:text-is('3:4'))") is None)
 
     # ---- typing selects Custom, and is not snapped mid-word -------------------
     w = pg.query_selector(".sizer .sz-custom input")

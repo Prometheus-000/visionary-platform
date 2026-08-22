@@ -51,9 +51,15 @@ from _from_app import CAPTION, MODULES, MOTION, REWRITE, SHOT, TRAINER, pull
 APP = Path(__file__).resolve().parent.parent / "app.py"
 # Argument first, then $PORT, then a default. The env var is what lets a launcher
 # hand out a free port instead of this file naming one: two of these cannot share
-# 8777, so working on the page from two windows meant the second one refusing to
+# 8791, so working on the page from two windows meant the second one refusing to
 # start against a port the first had taken.
-PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT") or 8777)
+#
+# 8791 and not 8777, because the default has to be the one everything else already
+# assumes: web/vite.config.ts proxies /api there, and every check under
+# tools/ui-checks/ points at it. It defaulted to 8777 while they did not, so the
+# documented loop — this file with no argument, then `npm run dev` — served a page
+# whose every request 502'd, and nothing on either side said which half was wrong.
+PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT") or 8791)
 DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 # The one thing here that is not a stub. The shot palette is eighty-odd tiles
@@ -634,7 +640,7 @@ def train_status(job_id: str, name: str = "probe_lora") -> dict:
         }
     return {
         "status": "completed", "percent": 100,
-        "note": "4 epochs, 4 checkpoints. Pick one in the LoRA picker.",
+        "note": "4 epochs, 4 LoRA files. Pick one in the LoRA picker.",
         "output_dir": out,
         "files": ["%s-%06d.safetensors" % (name, i + 1) for i in range(epochs)],
         "duration_s": 60 * total, "loss": 0.0709,
@@ -650,6 +656,11 @@ def _params(**over) -> dict:
 
 
 SESSIONS: list = []
+# How many rewrites this preview has served, and it rides in the answer so a
+# check can tell "pressed again" from "pressed once". `/api/rewrite` had no stub
+# at all, which made the preview a page whose Enhance button could be seen and
+# not pressed — the same fault as a missing menu, one level down.
+REWRITES = 0
 # The server is threaded and the seed is lazy, so the first two requests race:
 # both find SESSIONS empty, both build the list — paying the cold app.py pull
 # inside _params(), which is the window — and both extend, and every card sits
@@ -1058,6 +1069,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"ok": True, "elements": mods,
                                "prominence": api["_prominence"](mods),
                                "text": api["_compile_image_prompt"]("", [], mods)})
+
+        # The rewrite, stubbed so the button `/api/state` already advertises can
+        # be pressed. It **echoes the prose it received**, which is the whole
+        # point: a check can then prove both halves of the LoRA rule at once —
+        # that no `<lora:` reached the model, and that the tokens came back.
+        if path == "/api/rewrite":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            prose = str(p.get("prose") or "")
+            if not prose:
+                return self.reply({"ok": True, "text": "", "op": p.get("op")})
+            global REWRITES
+            REWRITES += 1
+            # `unchanged` is how a check reaches the case the note line exists
+            # for: Enhance returning its input is a real answer, and it must not
+            # relocate a token to say so.
+            said = prose if "unchanged" in prose else f"[{REWRITES}] {prose}, lit from one side"
+            time.sleep(0.3)
+            return self.reply({"ok": True, "op": p.get("op"), "text": said})
 
         # Half stubbed, like `/api/parse`: **which** motions the model proposes
         # is canned, because there is no model here — but the canned answer is

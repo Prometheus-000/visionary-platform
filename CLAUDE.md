@@ -1532,6 +1532,47 @@ two domains, and the page follows the domains.
   used to close the viewer, so leaving was doing double duty for looking
   closely and every attempt to see a render properly dismissed it.
 
+- **The cell is the picture's shape, not a box the picture is fitted into.**
+  Thumbnails were always `contain` rather than `cover`, because cropping throws
+  away the thing you opened the gallery to see — and `contain` inside a fixed
+  4:3 cell pays for that in bars: a portrait render arrived smaller than the
+  space spent on it, and a set of portraits was two thirds `--wash-2`. The box
+  was the half of that decision that cost. It is gone on desktop, and the cards
+  are packed into columns instead, so nothing is letterboxed and nothing is
+  cropped.
+
+  **It is twenty lines rather than a dependency, and the reason is reading
+  order.** Every cheap way to do this reflows it. CSS `columns` fills a column
+  top to bottom, so a listing that is newest first becomes newest *down the
+  left edge* — and the top-left card being the last thing you made is the
+  gallery's whole contract. The React packages that keep the order distribute
+  by `i % cols` and give up the packing, so the columns end up as uneven as the
+  pictures are. The ones that pack properly measure the DOM, which means
+  reflowing as each image decodes. Native `grid-template-rows:masonry` is still
+  being re-argued as `item-flow` and is not something to ship on yet.
+
+  A greedy shortest-column pack has the property none of those has: with every
+  column starting empty the first row *is* items 1..n left to right, and each
+  item after that lands in the column that is currently shortest, so it reads
+  approximately row-major. It is also stable under paging — greedy over a
+  prefix is the prefix of greedy over the whole list — so appending a page
+  never moves a card already on screen.
+
+  **Nothing is measured, because the server already knows.** `/api/gallery` and
+  `/api/dataset` carry the pixel dimensions of every item, so the layout is
+  decided before a byte of picture is fetched and a card with a slow cover does
+  not move the ones around it. The fallback for a result with no sidecar is the
+  4:3 box it always had, and the fallback is written in both places on purpose:
+  a packer and a stylesheet disagreeing about one card is a gap under it.
+
+  **It stops at 1024px.** Below that the grid still crops to squares — the one
+  place this app trades information for density — and the two layouts are
+  different DOM rather than two stylesheets, because a masonry's column
+  elements would hand that grid its cards in chronological order *down* each
+  column. There is no CSS that unpicks that: `display:contents` on the columns
+  flattens them into the grid in column order, which is the wrong order rather
+  than no order.
+
 - **The small screen is the design tool, not a port of the big one.** Three
   faults this session were live on desktop for months and only became visible
   under a phone or tablet: `appearance` had never been reset on any select, so
@@ -1585,9 +1626,19 @@ two domains, and the page follows the domains.
   door, labelled with where it leads rather than where you are, so two things
   never look equally selected. It carries the training run's progress, because
   a run lasts hours and you are meant to leave and keep working.
-- **Image and video are one workspace.** Shared prompt, canvas and gallery; the
-  switch is a chip inside the prompt field and the prompt survives it. What
-  differs is only the options, which rebuild from `VIDEO_MODELS` — see below.
+- **Image and video share the canvas and the gallery. The composer is
+  per-kind.** This used to say the prompt survives the switch too, because a
+  shot described as a still is the same sentence you would describe as a clip.
+  True of the sentence and false of everything around it: a Krea 2 LoRA is not a
+  Wan LoRA, and carrying one across loaded it into a run that could not use it —
+  silently, because the note warns about names that resolve to nothing and about
+  models that read no LoRAs at all, and a LoRA for the wrong architecture is
+  neither. Prompt, negative, the pill rail and the chips now swap with the kind,
+  and both buffers are kept: switch away and back and everything is as you left
+  it, which is the promise `img`/`vid` already made about model, size and seed.
+  One live set and one dormant, swapped in `setKind` — the invalid state is
+  unreachable because there is only ever one to read. What still differs beyond
+  that is the options, which rebuild from `VIDEO_MODELS` — see below.
 - **Copy is a last resort — but a number is not a value it can show.** Design
   first, then an icon, then words. A control that shows its own value gets no
   label: "Krea 2 Turbo", "16:9", "720p", "5s" name themselves. Twice the icon
@@ -1606,41 +1657,67 @@ two domains, and the page follows the domains.
   its scope corrected: a control that shows its own value gets no label, and a
   bare number is not a value.
 
-- **LoRAs are written in the prompt, not stacked under it.**
-  `<lora:name:0.8>`, Automatic1111's syntax, because it is the notation anyone
-  who has trained these models already types. Strength defaults to 1; a second
-  number is the text encoder weight on the image side and the Wan expert on the
-  video side, and both are omitted far more often than not.
+- **A trigger phrase is text. A LoRA is a file, and it is a chip.** This section
+  used to defend `<lora:name:0.8>` in the prompt — Automatic1111's syntax, the
+  notation anyone who has trained these models already types — against a row per
+  LoRA that cost 56px plus a wrapped select, 380px of canvas for four filenames
+  and eight digits. The row objection was right and is not what changed.
 
-  A row per LoRA cost 56px plus a wrapped select — 380px of canvas for four
-  filenames and eight digits — and it still could not say the thing that
-  matters most, which is where in the sentence the LoRA applies. In the prompt
-  a fifth LoRA costs the canvas nothing, and `+ LoRA` survives as a picker that
-  writes a token at the caret, because you cannot type a syntax you have never
-  seen. What the prompt cannot show — a name that resolves to no file, a stack
-  past `MAX_LORAS`, a model that reads no LoRAs at all — is the only thing the
-  note under the field ever says.
+  **What changed is that the two things in that field were never one thing.** A
+  trigger phrase reaches the encoder, so it belongs in the prompt, positioned
+  where the sentence wants it. A LoRA never reaches the encoder at all —
+  `stripLoras` deleted it from the string before `/api/generate` was called and
+  the stack travelled in its own field. It was inline for exactly one reason: so
+  a number could be typed beside it.
 
-  A region's own field takes the same syntax, and that is the whole reason a
-  region has no LoRA select. The two fields then mean one thing at two scopes —
-  a token in the main prompt is the canvas, a token in a box is that box — so
-  nothing has to explain which is which. One per box, because that is the
-  node's shape; a second is rejected by name rather than quietly ignored. `+
-  LoRA` writes into whichever of the two fields you last had the caret in, so
-  "put this character here" is: draw a rectangle, click `+ LoRA`, pick a name.
-  It writes `:1.3` into a box, because the node pack's guidance for a character
-  is 1.3–1.4. Into the main prompt it writes whatever strength the server says
-  that LoRA works at, falling back to `:1` — and the trigger phrase beside the
-  token, when one is known and not already in the field. Both came out of one
-  first-run render: a Krea style LoRA at the generic `:1` with no phrase reads
-  as a faint grade over the picture, which is a LoRA that silently did nothing
-  delivered by the picker itself. The server knows the phrases — the training
-  sidecar for LoRAs made here, `KREA_STYLE_LORAS` for the catalogue set — so
-  `/api/state` serves `trigger_word` and `strength` per entry, the picker's row
-  shows the phrase before you pick, and the note warns when a token's known
-  phrase is missing from the prose. Phrases are written into the main prompt
-  only: the regional node encodes the main prompt and nothing else, so a
-  trigger in a box would never reach the encoder.
+  **And the argument that kept it there does not hold for the main prompt.** The
+  claim was that a row *could not say where in the sentence the LoRA applies* —
+  true in a region, false on the canvas, and this file says so itself in
+  `useDocument`: *a token's position in the main prompt means nothing to the
+  backend, which reads them into a stack.* So the canvas paid for a parser, a
+  caret-targeting scheme and a drag subsystem to buy a property only a box has,
+  and what the position means in a box is *which box*, which a control living on
+  that box says without any syntax.
+
+  So a chip: the name, then a circle carrying the strength, with the second value
+  — text-encoder weight on image, Wan expert on video — disclosed on a click,
+  because both are omitted far more often than not. They fold behind
+  `▸ 4 LoRAs`, a disclosure built as one more `#shot-peek`: zero pixels at rest,
+  in flow so nothing sits on top of a render, and it does not close on scroll,
+  which `Popover` does and which disqualifies it for a box you type numbers into.
+  The count is a word rather than a pip, for the reason the regions button
+  learned. `+ LoRA` stays exactly what it was — a picker in the strip — and the
+  division is the shot rail's: the door adds, the disclosure shows.
+
+  **A region has a dropdown on its own card**, one per box because that is the
+  node's shape, and picking a second replaces rather than being refused. That is
+  what retired caret-targeting: `+ LoRA` writing into "whichever of the two
+  fields you last had the caret in" was answering *where* with a guess about
+  where you were looking.
+
+  **The picker writes nothing.** No token, no strength, and no trigger phrase —
+  it shows the known phrase as text to read and place yourself. Three of the
+  note's lines went with the syntax and two of them went because they became
+  *impossible*: a chip is picked from a list, so no name resolves to nothing and
+  none resolves to two. The third, a LoRA whose phrase is missing from the prose,
+  can still happen and is deliberately unsaid. The failure it named is real —
+  the weight loads, the render changes a little, and it reads as a LoRA that did
+  nothing — so this is a decision to manage it by hand, not a discovery that the
+  warning was wrong. `/api/state` still serves `trigger_word` per entry, which is
+  where a check or an agent reads the fact.
+
+  **`<lora:…>` left in a prompt is now text.** Nothing parses it, converts it or
+  migrates it. `stripLoras` survives on the send path alone so a reused prompt
+  carrying one does not render the literal word "lora" — it removes text on the
+  way out rather than reinterpreting it in the box.
+
+  **Dragging a LoRA is gone; dragging a file is not.** `lora/drag.ts` and its
+  private MIME type were there to answer *where* — a click inherited the caret, a
+  drag named its own target. Once every target owns a control there is no *where*
+  left, and the gesture was long: open a menu at the prompt bar, at the bottom of
+  the screen, then haul up to a box on the canvas. A reference image comes from
+  the Finder, where a drag is the only gesture there is, so every file drop is
+  untouched. See `docs/design-notes/loras-are-not-text.md`.
 
 - **A region is drawn on the canvas, and so is everything about it.** The boxes
   are the list: drag on the frame to place one, drag it to move it, drag a
@@ -1983,11 +2060,35 @@ two domains, and the page follows the domains.
   of patches. Snapping to the coarser grid was not protecting anything — it was
   refusing every second size the model can render.
 
+  **A tier is a multiplier, except where it is a family.** 1K, 1.5K and 2K are
+  one trained set — ~1.03 MP on a 64 grid — multiplied, because scaling a bucket
+  keeps the shape the model knows while deriving one from the ratio at a new edge
+  length lands on a size nothing was trained on. 1.3K is not that set made bigger:
+  it is ~1.62 MP on a 32 grid, and 1.25x the bucket agrees with it on 1:1 and
+  misses every other row by 32-48px — 1440x1120 where the family's 4:3 is
+  1472x1120. So that tier pins its eight sizes and the multiplier is what a bucket
+  falls back to when it has no pin, which is what keeps adding a ninth ratio one
+  line rather than a column somebody has to remember to fill in.
+
+  The ratio set is one vocabulary across every tier, not a set that changes under
+  the scale buttons — so 21:9 and 4:5 exist at 1K too, and theirs are the only two
+  rows in the table that are derived rather than inherited. Derived to the label
+  *exactly*, 1568x672 being 7:3 and 896x1120 being 4:5, because where the model was
+  never given a bucket there is nothing to be faithful to except the name.
+
   The swap arrow between the two boxes belongs to the same control, which is
   what decides where it lands: transposing a preset re-selects the preset for
-  the transposed pair rather than dropping to Custom, and 3:4 exists on the menu
-  because 4:3 — the ratio the page opens on — was the one landscape entry with
-  no portrait counterpart to flip into. Arrow keys are part of it too: ↑/↓ steps
+  the transposed pair rather than dropping to Custom. Five of the eight transpose
+  within the menu and three do not, so 4:3, 21:9 and 4:5 **deselect** — Custom, at
+  the transposed pixels.
+
+  That is the answer and not the cost of one. 3:4 was on the menu purely to give
+  this button somewhere to land, and it went with the ratio set; the flip of a
+  ratio the menu has no counterpart for *is* a custom ratio, so a tile left lit
+  there would be the picker claiming a shape it does not offer. Re-adding a ratio
+  to keep a tile lit is the tail wagging the dog, and special-casing it in
+  `swapSize` is worse — it lights a tile for a bucket the picker cannot otherwise
+  reach. Arrow keys are part of it too: ↑/↓ steps
   a numeric box by one and ⌘↑/⌘↓ by eight, which on Width and Height is the
   VAE's grid, so the coarse step always lands on a size the model can render.
   Nothing is snapped there, because typing 1153 already shows 1153 until you

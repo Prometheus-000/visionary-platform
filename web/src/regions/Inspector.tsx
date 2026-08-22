@@ -8,7 +8,7 @@ import { DropTile } from '../media/DropTile'
 import { shrinkB64 } from '../media/files'
 import { caretProps, dropCaret } from '../lora/caret'
 import { NEED_EDIT_LORA, regionNote } from '../lora/note'
-import { loraIndex, setTokenStrength, tokenStrength } from '../lora/tokens'
+import { chipFrom, loraIndex } from '../lora/tokens'
 import { attached, regionsLive, useStore, type EditMode, type Region } from '../store'
 import { takeResumeFocus } from './focus'
 import { clamp01, distribute, readRegions } from './geometry'
@@ -102,7 +102,7 @@ function BoxCard(
   const s = useStore()
   const field = useRef<HTMLInputElement>(null)
   const index = loraIndex(s.state)
-  const strength = tokenStrength(index, r.prompt)
+  const pick = usePopover()
 
   // The caret sink is a module-level ref holding one element, so the field has to
   // withdraw when it goes — and this one goes on every change of selection, not just
@@ -152,13 +152,13 @@ function BoxCard(
             performer is standing in, this is what this one is doing, and the box
             already said where.
 
-            The same `<lora:…>` syntax as the main field, which is the whole reason a
-            region has no LoRA select. The two fields mean one thing at two scopes — a
-            token in the prompt is the canvas, a token in a box is that box — so
-            nothing has to explain which is which. */}
+            Words only. This used to take the same `<lora:…>` syntax as the main
+            field, on the argument that one notation at two scopes needs nothing to
+            explain which is which — true, and it made the field do two jobs. The
+            LoRA is the dropdown below, which says *which box* by being on it. */}
         <div className="opt wide">
           <input id="r-prompt" ref={field} value={r.prompt}
-                 placeholder="a man in a denim jacket, laughing <lora:name:1.3>"
+                 placeholder="a man in a denim jacket, laughing"
                  title="This performer only — who they are and what they are doing. The scene, the light and the lens go in the prompt below; where they stand is the box. Do not write a position here, it is already said."
                  onChange={(e) => s.patchRegion(i, { prompt: e.target.value })}
                  {...caretProps('region', (v) => useStore.getState().patchRegion(
@@ -175,19 +175,46 @@ function BoxCard(
                   }}
                   onClear={() => s.attach(i, 'identity', null)} />
 
-        {/* A *view* of the first number in the box's token, not a second place the
-            number lives. Blank and disabled when there is no token to read, because a
-            strength with nothing to apply to is a number that lies. */}
+        {/* One per box — the node's own shape, so a dropdown rather than an
+            add-many, and picking a second *replaces* rather than being refused:
+            choosing a different name for a box that has one is "this character
+            instead", and answering that with an error would send you somewhere
+            else to fix it. */}
+        <div className="opt" data-lb="LoRA">
+          <button id="r-lora" type="button" className="pickish" onClick={pick.toggle}
+                  disabled={!index.length}
+                  title="Which character this box is. One per box — the node takes one.">
+            {r.lora ? r.lora.rel : 'No LoRA'}
+          </button>
+          {pick.open && (
+            <Menu anchor={pick.anchor} onClose={pick.close}
+                  items={[
+                    { label: 'No LoRA', on: !r.lora,
+                      run: () => s.patchRegion(i, { lora: null }) },
+                    { sep: true } as const,
+                    ...index.map((l) => ({
+                      label: l.token,
+                      hint: l.trigger || undefined,
+                      on: r.lora?.path === l.path,
+                      run: () => s.patchRegion(i, { lora: chipFrom(l, true) }),
+                    })),
+                  ]} />
+          )}
+        </div>
+
+        {/* Blank and disabled when the box holds no LoRA, because a strength with
+            nothing to apply to is a number that lies. 1.3–1.4 is the node pack's
+            own guidance for a character, which is what `fine` is sized to. */}
         <div className="opt n" data-lb="Strength">
           <span className="lead">Strength</span>
-          <NumInput id="r-strength" value={strength === null ? '' : String(strength)}
-                    disabled={strength === null} placeholder={strength === null ? '—' : ''}
+          <NumInput id="r-strength" value={r.lora ? String(r.lora.strength) : ''}
+                    disabled={!r.lora} placeholder={r.lora ? '' : '—'}
                     fine={0.05} bigStep={0.25}
-                    title="How hard this box's LoRA is applied. The node pack's guidance is 1.3–1.4 for a character. Writes the number in the token."
+                    title="How hard this box's LoRA is applied. The node pack's guidance is 1.3–1.4 for a character."
                     onValue={(v) => {
                       const n = parseFloat(v)
-                      if (Number.isFinite(n))
-                        s.patchRegion(i, { prompt: setTokenStrength(index, r.prompt, n) })
+                      if (Number.isFinite(n) && r.lora)
+                        s.patchRegion(i, { lora: { ...r.lora, strength: n } })
                     }} />
         </div>
         <span className="grow" />

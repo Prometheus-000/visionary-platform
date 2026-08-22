@@ -12,8 +12,9 @@
  * clears the rail rather than keeping whatever happened to be on it.
  */
 import { BUCKETS, commitBoxes } from '../console/size'
-import { loraIndex, loraTokens, stripLoras } from '../lora/tokens'
+import { chipFrom, loraChips, loraIndex, resolveLora, stripLoras } from '../lora/tokens'
 import { newRegion, shotItem, useStore } from '../store'
+import type { LoraChip } from '../lora/tokens'
 import type { GalleryItem } from './types'
 
 const set = (v: unknown): string => (v == null || v === '' ? '' : String(v))
@@ -32,11 +33,15 @@ const set = (v: unknown): string => (v == null || v === '' ? '' : String(v))
  * `stripLoras`, because that is the form the interpreter was given and the form
  * `/api/generate` receives — the tokens ride in the box and never in the prose.
  */
+/** The prompt and the chips are two fields again, so they are restored as two.
+ *  They were one string while a LoRA was `<lora:…>` in the prose; a chip is not
+ *  text and never belonged in there. */
 function restore(s: ReturnType<typeof useStore.getState>,
-                 typed: string, tokens: string, modules: GalleryItem['modules'],
+                 typed: string, chips: LoraChip[], modules: GalleryItem['modules'],
                  original = ''): void {
-  const written = [typed, tokens].filter(Boolean).join(' ')
+  const written = typed
   s.setPrompt(written)
+  useStore.setState({ loras: chips })
   const prose = stripLoras(written)
   s.setDoc(modules?.length
     ? { for: prose, from: original || prose, elements: modules, text: prose }
@@ -48,17 +53,21 @@ export function reuse(it: GalleryItem): void {
   const index = loraIndex(s.state)
   const vocab = s.state?.shot_vocab ?? []
 
+  // **The kind first, and that ordering is load-bearing.** `setKind` stashes the
+  // composer it is leaving and installs the other one — prompt, negative, pills
+  // and chips together — so anything written before it is written into the buffer
+  // about to be put away.
+  s.setKind(it.kind === 'image' ? 'image' : 'video')
   s.setShot((it.shot ?? []).filter((p) => p && shotItem(vocab, p.key)))
   s.setShotOpen(null)
   s.setRefRoles((it.ref_roles ?? []).slice())
 
   if (it.kind === 'image') {
-    s.setKind('image')
-    // Prompt and stack are one field now, so they are restored as one string. A LoRA
-    // deleted since the run simply does not come back — the same thing the old
-    // row-matching did, minus a row left behind to explain it.
+    // A LoRA deleted since the run simply does not come back — a chip is picked
+    // from a list and always resolves, so there is no such thing as one naming
+    // nothing.
     restore(s, it.prompt_typed || it.prompt || '',
-            loraTokens(index, it.loras, false), it.modules)
+            loraChips(index, it.loras, false), it.modules)
     s.setNegative(it.negative_prompt ?? '')
 
     const size = `${it.width}x${it.height}`
@@ -94,12 +103,11 @@ export function reuse(it: GalleryItem): void {
       // `r.lora` is the path relative to loras/, which is what `resolveLora` matches
       // first — reducing it to a stem here would break exactly the ambiguous names the
       // full path exists to disambiguate.
-      const tok = r.lora && r.lora !== 'None'
-        ? loraTokens(index, [{ name: r.lora, unet: r.strength }], false)
-        : ''
+      const hit = r.lora && r.lora !== 'None' ? resolveLora(index, r.lora) : null
       const box = r.box ?? []
       return newRegion({
-        prompt: [r.prompt, tok].filter(Boolean).join(' '),
+        prompt: r.prompt ?? '',
+        lora: hit ? { ...chipFrom(hit, true), strength: r.strength ?? 1.3 } : null,
         // The sidecar records whether a box had a photo, never the photo — it was
         // uploaded bytes staged into a container that is long gone.
         attachments: [],
@@ -119,7 +127,6 @@ export function reuse(it: GalleryItem): void {
     return
   }
 
-  s.setKind('video')
   // The model first, because it decides which controls exist: restoring a CFG into a
   // panel built for a family that reads none is a value written to a box that is about
   // to be hidden.
@@ -144,8 +151,7 @@ export function reuse(it: GalleryItem): void {
   // filename of both speed pairs, so a stem match would restore the t2v LoRA into an
   // i2v run without a word about it.
   restore(s, it.prompt_typed || it.prompt || '',
-          loraTokens(index, it.loras, true,
-                     s.state?.wan_experts ?? ['both', 'high', 'low']), it.modules)
+          loraChips(index, it.loras, true), it.modules)
   s.setNegative(it.negative_prompt ?? '')
 }
 
