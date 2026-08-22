@@ -38,8 +38,17 @@ DROP = """
   const file = new File([buf], name, {type: mime});
   const dt = new DataTransfer();
   dt.items.add(file);
+  // Aimed as well as targeted. A real drag always carries a position and the region
+  // layer reads one — it has to, because which box a drop lands on cannot be the
+  // topmost one any more (see `boxAt`). Dispatched bare, every drop here arrived at
+  // 0,0, which is outside the layer, so a photo aimed at a box landed as a scene and
+  // the row after it read the wrong card. The element still says *what* is being
+  // tested; the rect says where it is.
+  const r = el.getBoundingClientRect();
   const fire = (type) => {
-    const ev = new DragEvent(type, {bubbles: true, cancelable: true, dataTransfer: dt});
+    const ev = new DragEvent(type, {bubbles: true, cancelable: true, dataTransfer: dt,
+                                    clientX: r.left + r.width / 2,
+                                    clientY: r.top + r.height / 2});
     el.dispatchEvent(ev);
     return ev;
   };

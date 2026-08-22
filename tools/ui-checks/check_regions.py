@@ -105,6 +105,41 @@ FILE_OVER = """
 """
 
 
+# Which box the layer thinks the pointer is over, without pressing anything. The
+# hairline this lights is the only thing standing in for a box that is deliberately
+# not drawn, so it has to name the box a click would open — and it cannot be read
+# off `:hover`, which follows paint order and is the thing under test.
+HOVER = """
+([fx, fy]) => {
+  const layer = document.querySelector('#region-layer');
+  const b = layer.getBoundingClientRect();
+  layer.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, pointerId: 7, pointerType: 'mouse', isPrimary: true,
+    clientX: b.left + b.width * fx, clientY: b.top + b.height * fy}));
+  return true;
+}
+"""
+
+# Read on its own, a paint later. The first version returned the class from inside
+# the dispatch and failed every row while reporting the right answer in its own
+# detail column — the detail called it a second time, by which point React had
+# committed. A synchronous read of a state-driven class is a check that measures the
+# previous gesture.
+HOT = """
+() => {
+  const el = document.querySelector('#region-layer .rbox.under');
+  return el ? Number(el.dataset.i) : -1;
+}
+"""
+
+SELECTED = """
+() => {
+  const el = document.querySelector('#region-layer .rbox.sel');
+  return el ? Number(el.dataset.i) : -1;
+}
+"""
+
+
 def near(a, b, eps=0.004):
     return abs(a - b) < eps
 
@@ -162,6 +197,14 @@ with sync_playwright() as pw:
             pg.keyboard.press("Backspace")
             pg.wait_for_timeout(140)
 
+    def selected():
+        return pg.evaluate(SELECTED)
+
+    def hover(fx, fy):
+        pg.evaluate(HOVER, [fx, fy])
+        pg.wait_for_timeout(120)
+        return pg.evaluate(HOT)
+
     def payload():
         """What `/api/generate` is actually handed. The only assertion here that
         cannot be made from the DOM, and the one that matters most: the boxes are
@@ -200,6 +243,45 @@ with sync_playwright() as pw:
     check("no boxes sends no scene plate", body.get("scene") is None, str(body.get("scene")))
     check("the prompt still goes as typed",
           body.get("prompt") == "a rooftop at golden hour", repr(body.get("prompt")))
+
+    print("\nNO LAYERS")
+    # The canvas has no z-order, so the boxes must not have one — and they had the
+    # worst kind, the kind nobody chose: absolutely-positioned siblings in `regions`
+    # order, so whichever was drawn *last* took every click, hover and drop. A
+    # performer inside a wide background box could be reached and the background box
+    # could not.
+    #
+    # Drawn in the order that fails. The small box first, then a big one over the top
+    # of it, so the DOM's answer and the right answer are different boxes: paint order
+    # says 1 and the rule says 0. A check that drew them the other way round would pass
+    # against the bug.
+    drag(0.40, 0.40, 0.60, 0.60)
+    drag(0.05, 0.05, 0.95, 0.95)
+    check("a box drawn over another still leaves two", len(boxes()) == 2,
+          f"{len(boxes())} boxes")
+    tap(0.50, 0.50)
+    check("the smaller box takes the click", selected() == 0, f"box {selected()}")
+    tap(0.10, 0.10)
+    check("and the larger one takes it where it is alone", selected() == 1,
+          f"box {selected()}")
+    # Hover has to agree with the click or the hairline is a lie, and it is the only
+    # thing naming a box that is not drawn.
+    over = hover(0.50, 0.50)
+    check("hover names the box the click would open", over == 0, f"box {over}")
+    over = hover(0.10, 0.10)
+    check("and follows the pointer back out", over == 1, f"box {over}")
+    # A drop is not a gesture you can take back, so the caption and the landing have
+    # to be the same box. Both come off the same hit test now.
+    # A drop is not a gesture you can take back, so the caption and the landing have to
+    # be the same box. The helper reports what `elementFromPoint` says, which is the
+    # DOM's answer and the wrong one — the assertion is which box ends up holding a
+    # likeness.
+    pg.evaluate(DROP_ON_CANVAS, [PNG, 0.50, 0.50])
+    pg.wait_for_timeout(400)
+    faced = pg.evaluate("""() => [...document.querySelectorAll('#region-layer .rbox')]
+        .filter((b) => b.querySelector('.face')).map((b) => Number(b.dataset.i))""")
+    check("a photo lands on the box hover named", faced == [0], str(faced))
+    clear_boxes()
 
     print("\nDRAWING, MOVING, SNAPPING")
     # Two boxes, drawn — which is the gesture that was always underneath the thing
@@ -381,6 +463,30 @@ with sync_playwright() as pw:
           pg.evaluate("() => document.activeElement?.id"))
     check("and the coordinates stay out of it",
           pg.locator("#region-inspector .nums").count() == 0)
+
+    # An open box is adjustable. Arming geometry was gated because it put *every*
+    # rectangle over a render you were judging — which is an objection about the boxes
+    # you have not touched, and nothing is drawn until you click one. Having clicked,
+    # being asked to press again with a modifier held to move the rectangle in front of
+    # you is friction with nothing behind it.
+    was = boxes()[0]
+    mid = (was["x"] + was["w"] / 2, was["y"] + was["h"] / 2)
+    check("the open box shows its handles",
+          pg.evaluate("""() => {
+            const h = document.querySelector('#region-layer .rbox.sel > i');
+            return !!h && getComputedStyle(h).display !== 'none';
+          }"""))
+    check("and no other box does",
+          pg.evaluate("""() => [...document.querySelectorAll('#region-layer .rbox')]
+            .filter((b) => !b.classList.contains('sel'))
+            .every((b) => [...b.querySelectorAll('i')]
+              .every((h) => getComputedStyle(h).display === 'none'))"""))
+    drag(mid[0], mid[1], mid[0] + 0.125, mid[1] + 0.125)
+    now = boxes()[0]
+    check("dragging it moves it", not near(now["x"], was["x"], 0.02),
+          f"{was['x']:.3f} -> {now['x']:.3f}")
+    check("and the other boxes stay off the render", pg.evaluate(mode) == "content",
+          pg.evaluate(mode))
 
     # The geometry defect, pinned as a number. `.shot` reserves padding under the
     # picture for its two buttons, and an absolutely-positioned child resolves

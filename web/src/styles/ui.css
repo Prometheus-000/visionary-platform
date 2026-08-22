@@ -1918,7 +1918,13 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    at eight boxes is 64 dots on a picture you are trying to look at. */
 .rbox>i{position:absolute;width:11px;height:11px;border-radius:3px;
   background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.5);opacity:0;transition:opacity .12s}
-.rbox:hover>i,.rbox.sel>i{opacity:1}
+/* `.under` rather than `:hover`, and that is not a rename. CSS hover follows paint
+   order, which is the array order the hit test was just taught to ignore — so over two
+   overlapping boxes the lit one and the clicked one would be different boxes.
+   `RegionLayer` decides both. Not `.hot`, which is already this page's word for a drag
+   held over a drop target — `.drop.hot`, `.frame.hot`, `#ds-sheet.hot` — and which
+   `check_drop.py` reads as exactly that. */
+.rbox.under>i,.rbox.sel>i{opacity:1}
 .rbox>i[data-h=nw]{left:-5px;top:-5px;cursor:nwse-resize}
 .rbox>i[data-h=ne]{right:-5px;top:-5px;cursor:nesw-resize}
 .rbox>i[data-h=sw]{left:-5px;bottom:-5px;cursor:nesw-resize}
@@ -1946,12 +1952,19 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    you touch it. A hairline, because it is an answer to "is there something here",
    not a control — and the selected box keeps it while its card is open so the card
    has a visible scope. */
-#region-layer:not(.geometry) .rbox:hover,
+#region-layer:not(.geometry) .rbox.under,
 #region-layer.content .rbox.sel{
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.55),inset 0 0 0 2px rgba(0,0,0,.28)}
-/* No pointer to hover with, so there is nothing to disclose and a sticky :hover from
-   the last tap would be a mark left on the picture. Long press is the way in there. */
-@media (hover:none){#region-layer:not(.geometry) .rbox:hover{box-shadow:none}}
+/* The open box is adjustable, so it says so: its handles come back and the cursor is
+   the one that moves things. Only its own — the other boxes are still undrawn, which
+   is the half of "nothing sits on top of a render" that this mode exists to keep. The
+   rectangles you have not touched cost the picture nothing; the one you opened is
+   already the scope of a card. */
+#region-layer.content .rbox.sel{cursor:move}
+#region-layer.content .rbox.sel>i{display:block}
+/* No pointer to hover with, so there is nothing to disclose and a box left lit from
+   the last tap would be a mark on the picture. Long press is the way in there. */
+@media (hover:none){#region-layer:not(.geometry) .rbox.under{box-shadow:none}}
 
 /* Snap guides: drawn only while a drag is landing on one, so the line is
    feedback rather than furniture. */

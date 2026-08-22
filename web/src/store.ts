@@ -386,12 +386,16 @@ export type Store = {
    *   arriving early rather than a relaxation of "nothing sits on top of a render".
    *   Hover names what you would be touching; a plain click opens it.
    * - `content` — one region's card, for the frequent act: its sentence and its
-   *   photograph. A sentence is not geometry, so this draws no rectangles and no
-   *   handles — only the hairline of the box whose card is open, because a card
-   *   with no scope is a card about nothing in particular.
-   * - `geometry` — the rare act: every box, its handles, the snapping and the
-   *   frame's own card. Reached by ⌘-click, or a long press where there is no
-   *   modifier to hold. Clearing the canvas first was the earlier answer and it was
+   *   photograph. No rectangles and no coordinates: what is drawn is the open box
+   *   alone — its hairline, because a card with no scope is a card about nothing in
+   *   particular, and its handles, because an open box is adjustable. That last part
+   *   is not geometry leaking back in. Arming geometry was gated because it put
+   *   *every* box over a render you were judging, and the box you have already
+   *   clicked is not one of those; asking for a modifier to move the rectangle in
+   *   front of you is friction with nothing behind it.
+   * - `geometry` — the rare act: every box, its handles, the snapping, the four
+   *   coordinates and the frame's own card. Reached by ⌘-click, or a long press
+   *   where there is no modifier to hold. Clearing the canvas first was the earlier answer and it was
    *   invented friction: ⌘ already means "geometry" on the frame, where ⌘-drag is
    *   "a new box, here", so it means the same thing over a render.
    *

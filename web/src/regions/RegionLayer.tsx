@@ -65,6 +65,19 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
    *  control that is visible and dimmed an inch away. Cleared by the next thing you do,
    *  so there is no timer to get wrong and nothing to dismiss. */
   const [refused, setRefused] = useState<string | null>(null)
+  /** Which box the pointer is over, decided by `hitAt` rather than by `:hover`. It has
+   *  to be ours: CSS hover follows paint order, so the hairline that says "this is what
+   *  you would be touching" would name a different box than the click opens — and that
+   *  hairline is the only thing standing in for boxes that are deliberately not drawn.
+   *  The ref is what `hitAt` reads, because it runs inside handlers that were closed
+   *  over on mount. */
+  const [under, setUnder] = useState(-1)
+  const underRef = useRef(-1)
+  const setUnderTo = (i: number) => {
+    if (underRef.current === i) return
+    underRef.current = i
+    setUnder(i)
+  }
   const index = loraIndex(state)
 
   // What this layer *draws*, which is not whether it is listening — over a render it is
@@ -80,14 +93,86 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   // at one — which deletes the only moment anyone discovers that a box takes a
   // photograph at all. `boxDrag` holds geometry up through a gesture that is already
   // under way.
+  // `boxDrag` holds geometry up through a gesture already under way — a render that
+  // lands mid-drag sets `off` underneath it — but it must not *promote* one: a drag
+  // that began in `content` is the open box being adjusted, and flipping the layer to
+  // geometry for its duration would flash every other box onto the render.
   const mode: EditMode =
-    over === 'frame' || fileOver || boxDrag ? 'geometry' : edit
+    over === 'frame' || fileOver || (boxDrag && edit !== 'content') ? 'geometry' : edit
 
   const rectOf = () => layer.current?.getBoundingClientRect()
   const frameXY = (e: PointerEvent | React.PointerEvent | React.DragEvent): [number, number] => {
     const b = rectOf()
     if (!b) return [0, 0]
     return [clamp01((e.clientX - b.left) / b.width), clamp01((e.clientY - b.top) / b.height)]
+  }
+
+  /** Every part of this layer under a point, topmost first. The stack rather than the
+   *  target, because the target is whatever painted last and that is the one fact the
+   *  hit test must not consult. See `hitAt`. */
+  const stackAt = (cx: number, cy: number) => {
+    const out: HTMLElement[] = []
+    const el = layer.current
+    if (!el) return out
+    for (const n of document.elementsFromPoint(cx, cy)) {
+      if (n === el) break
+      out.push(n as HTMLElement)
+    }
+    return out
+  }
+
+  /**
+   * The smallest box under the point, or -1 for bare canvas.
+   *
+   * **The canvas has no layers, so the boxes do not have them either.** They are areas
+   * of one picture, not a stack of cards, and nothing in this feature ever says which
+   * of two overlapping rectangles is on top — but they are absolutely-positioned
+   * siblings, so the DOM had an opinion anyway and it was the worst one available:
+   * whichever was drawn *last* took every click, every hover and every drop. A
+   * performer placed inside a wide background box could be reached and the background
+   * box could not, and the eight handles of anything underneath were simply gone.
+   * Nobody chose that ordering; it fell out of `regions` being an array, which is a
+   * storage detail the picture should never have been able to see.
+   *
+   * What replaces it is the rule Phase 6 already states for exactly this ambiguity —
+   * *resolve toward the smaller object* — because widening a selection is cheap and
+   * obvious while guessing large silently edits the wrong scope. Two boxes of the same
+   * size still need a tiebreak and the array order is as good as any; what matters is
+   * that it is no longer the *first* question.
+   */
+  const boxAt = (stack: HTMLElement[]) => {
+    const live = useStore.getState().regions
+    let best = -1
+    let area = Infinity
+    for (const n of stack) {
+      if (!n.classList.contains('rbox')) continue
+      const r = live[Number(n.dataset.i)]
+      if (!r || r.w * r.h >= area) continue
+      area = r.w * r.h
+      best = Number(n.dataset.i)
+    }
+    return best
+  }
+
+  /**
+   * Which box a point addresses, and which of its handles if any.
+   *
+   * A handle is smaller than any box, so the same rule puts it first — but only where
+   * it is *drawn*. An invisible handle is not an object: letting one win would give
+   * every box four edges of theft over its neighbours, at a target nobody can see.
+   * The drawn set is exactly the pointed-at box's and the selected box's, which is
+   * what the stylesheet lights up, so the two cannot drift.
+   */
+  const hitAt = (cx: number, cy: number): { i: number; h: string | null } => {
+    const sel = useStore.getState().rsel
+    const stack = stackAt(cx, cy)
+    for (const n of stack) {
+      if (!n.dataset.h) continue
+      const box = n.closest<HTMLElement>('.rbox')
+      const i = box ? Number(box.dataset.i) : -1
+      if (i >= 0 && (i === sel || i === underRef.current)) return { i, h: n.dataset.h }
+    }
+    return { i: boxAt(stack), h: null }
   }
 
   const showGuides = (r: Region | null) => {
@@ -113,8 +198,10 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
     // the alternative — move something out of the way, draw, move it back — is three
     // gestures to express one.
     const fresh = e.metaKey || e.ctrlKey
-    const boxEl = fresh ? null : target.closest<HTMLElement>('.rbox')
-    const handle = fresh ? null : (target.dataset.h ?? null)
+    // Not `target.closest('.rbox')`. The target is the topmost thing under the cursor,
+    // which is the array order wearing a costume — see `boxAt`.
+    const hit = fresh ? { i: -1, h: null } : hitAt(e.clientX, e.clientY)
+    const handle = hit.h
     const [px, py] = frameXY(e)
 
     // Over a render, geometry is something you ask for. ⌘ asks for it — the same
@@ -126,7 +213,17 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
     // the next run; what changes is only whether they are drawn.
     const live: EditMode =
       over === 'frame' || st.fileOver ? 'geometry' : st.edit
-    if (live !== 'geometry') {
+    // The one exception, and it is the whole of the second change: **an open box is
+    // adjustable.** Editing what is inside a box and redrawing the box are still two
+    // different acts, and the reason the second one was gated was that arming it used
+    // to put eight rectangles and their handles over a render you were judging. That
+    // objection is about boxes you have *not* touched — and it is already answered,
+    // because nothing is drawn until you click. Having clicked one, being told to press
+    // again with a modifier held to move the rectangle you are looking at is friction
+    // with nothing behind it. So the box whose card is open behaves exactly as it does
+    // in geometry; every other box stays undrawn and stays a tap.
+    const open = live === 'content' && hit.i >= 0 && hit.i === st.rsel
+    if (live !== 'geometry' && !open) {
       if (fresh) {
         // Reveal, and nothing else. ⌘ *inside* geometry means "a new box, here" — so
         // letting this one press do both would answer "show me the boxes" by adding a
@@ -143,7 +240,7 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
         // mouse the release is imperceptible, so the card still feels like it opens on
         // the click.
         const el = layer.current
-        const i = boxEl ? Number(boxEl.dataset.i) : -1
+        const i = hit.i
         let held = false
         const hold = window.setTimeout(() => {
           held = true
@@ -182,8 +279,8 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
     let orig: Region
     let grab: [number, number] = [0, 0]
 
-    if (boxEl) {
-      idx = Number(boxEl.dataset.i)
+    if (hit.i >= 0) {
+      idx = hit.i
       const r = st.regions[idx]
       if (!r) return
       grip = handle ?? 'move'
@@ -317,21 +414,20 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
     setDropHit(null)
     const f = e.dataTransfer.files[0]
     if (!f?.type.startsWith('image/')) return
-    const hit = (e.target as HTMLElement).closest<HTMLElement>('.rbox')
+    const hit = boxAt(stackAt(e.clientX, e.clientY))
     // Said, not swallowed. Without the edit LoRA this used to return in silence, which
     // is indistinguishable from a drop the page never received — and the target is
     // visibly lit, so refusing quietly is a promise made and broken.
-    if (!hit && !state?.edit_lora) {
+    if (hit < 0 && !state?.edit_lora) {
       setRefused(NEED_EDIT_LORA)
       return
     }
     setRefused(null)
     const b64 = await shrinkB64(f)
     if (!b64) return
-    if (hit) {
-      const i = Number(hit.dataset.i)
-      attach(i, 'identity', b64)
-      select(i)
+    if (hit >= 0) {
+      attach(hit, 'identity', b64)
+      select(hit)
     } else {
       attach('frame', 'scene', b64)
       // And show the frame's card, because this drop just moved the run onto the
@@ -359,15 +455,27 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
             under the cursor, so the two captions are never on screen together. */
          className={mode}
          onPointerDown={onPointerDown}
+         /* Hover, resolved by the same rule as the click. Skipped on touch, where a
+            move only happens with a finger already down and a box left lit from the
+            last tap would be a mark on the picture; and skipped mid-drag, where the
+            answer is the box being dragged and nothing else. */
+         onPointerMove={(e) => {
+           if (e.pointerType === 'touch' || useStore.getState().boxDrag) return
+           setUnderTo(hitAt(e.clientX, e.clientY).i)
+         }}
+         onPointerLeave={() => setUnderTo(-1)}
          onDragOver={(e) => {
            e.preventDefault()
            // Re-read on every `dragover` rather than latched on enter: a drag can
            // begin outside the layer, and this is the event that repeats.
-           const hit = (e.target as HTMLElement).closest<HTMLElement>('.rbox')
+           //
            // Only the box under the cursor names itself. Eight captions on eight boxes
            // is the same wall of text the per-region rows were removed for, drawn on
-           // the picture this time.
-           setDropHit(hit ? Number(hit.dataset.i) : null)
+           // the picture this time. Which box that is comes off `boxAt`, so a photo
+           // lands on the one the caption named — over a small box inside a large one
+           // the two used to disagree, and a drop is not a gesture you can take back.
+           const hit = boxAt(stackAt(e.clientX, e.clientY))
+           setDropHit(hit < 0 ? null : hit)
          }}
          onDragLeave={(e) => {
            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropHit(null)
@@ -416,6 +524,7 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
         return (
           <div key={r.id} className={['rbox', regionArmed(index, r) ? 'armed' : '',
                                       i === rsel || i === dropHit ? 'sel' : '',
+                                      i === under ? 'under' : '',
                                       i === dropHit ? 'drop-hit' : ''].filter(Boolean).join(' ')}
                data-i={i} tabIndex={0}
                /* What dropping this would do. One caption now rather than two: a

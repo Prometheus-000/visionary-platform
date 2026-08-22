@@ -1740,12 +1740,32 @@ two domains, and the page follows the domains.
     glyph, because a control that reveals the boxes is a control competing with
     the picture it would reveal them on.
   - `content`, the frequent act: that one box's card, with only its own hairline
-    for scope. No handles, no other rectangles, and **no four coordinates** —
-    they are the escape hatch for the *rectangle*, so putting them over a render
-    you are judging is the other scope leaking back in.
-  - `geometry`, the rare one: every box, its handles, the snapping, the frame's
-    own card. Asked for with **⌘-click**, or a long press where there is no
-    modifier to hold.
+    for scope. No other rectangles, and **no four coordinates** — they are the
+    escape hatch for the *rectangle*, so putting them over a render you are
+    judging is the other scope leaking back in. It does carry that box's
+    handles, and it is worth reading why that is not the same leak.
+  - `geometry`, the rare one: every box, its handles, the snapping, the four
+    coordinates and the frame's own card. Asked for with **⌘-click**, or a long
+    press where there is no modifier to hold.
+
+  **An open box is adjustable, and the gate was never about that box.** This
+  read `no handles` for a version, on the argument above: a sentence is not
+  geometry, so the frequent act needs no rectangles on screen. True of the
+  rectangles you have *not* touched, and the whole force of it comes from there
+  — what geometry cost was eight boxes and sixty-four handles arriving over a
+  render you were judging. Nothing is drawn until you click, so the box whose
+  card is open is not one of those; it is already the scope of a card, already
+  carrying a hairline, and already the thing you are looking at. Being told to
+  press again with a modifier held to move *that* rectangle is friction with
+  nothing behind it — the same invented friction as gating geometry behind
+  clearing the canvas, arrived at from the other direction. So the open box
+  behaves exactly as it does in geometry: handles, drag to move, snapping. Every
+  other box stays undrawn and stays a tap.
+
+  The coordinates stay behind the gate anyway. Dragging is the gesture, they are
+  the escape hatch from it, and a render you are judging is the wrong place for
+  four numeric fields — which is the original sentence, unweakened, because it
+  was about the numbers rather than about the rectangle.
 
   **⌘ means geometry, and it means it in both places.** ⌘-drag on the frame was
   already "a new box, here", so this is the existing meaning extended rather
@@ -1770,6 +1790,36 @@ two domains, and the page follows the domains.
   not. They survive in the card, where they are the escape hatch and, during a
   drag, a readout that moves — dragging teaches the numbers, and the numbers
   never taught the dragging.
+
+  **The canvas has no layers, so the boxes do not have them either — and they
+  had the worst kind, the kind nobody chose.** They are absolutely-positioned
+  siblings in `regions` order, so the DOM supplied a z-order out of an array
+  index and it decided every click, every hover and every drop: whichever box
+  was drawn *last* won. A performer placed inside a wide background box could be
+  reached and the background box could not, and the eight handles of anything
+  underneath were simply unreachable. Nothing in this feature has ever had a
+  front or a back — a box is an area of one picture — so the ordering was a
+  storage detail the picture could see.
+
+  The rule that replaces it is one this file already states, in the Phase 6
+  list, for exactly this ambiguity: **resolve toward the smaller object.**
+  Widening a selection is cheap and obvious; guessing large silently edits the
+  wrong scope. `boxAt` takes the smallest box containing the point, and a handle
+  — smaller than any box — comes first, but only where it is *drawn*. An
+  invisible handle is not an object, and letting one win would give every box
+  four edges of theft over its neighbours at a target nobody can see.
+
+  **Hover had to move with it, and that is the part that looks optional.** CSS
+  `:hover` follows paint order, which is the ordering just deleted, so the
+  hairline saying "this is what you would be touching" would have named a
+  different box than the click opened. It is `.rbox.under`, set by the same hit
+  test — one answer, painted and acted on. Not `.hot`: that is already this
+  page's word for a drag held over a drop target, and `check_drop.py` reads it
+  as exactly that.
+
+  A drop reads the same test, which is the case with no undo. It used to take
+  the topmost box while the caption named the topmost box too — consistent, and
+  both wrong the moment a small box sat inside a large one.
 
   Two arrangements preceded this and each fixed the last one's cost. A row per
   region was a sentence and four numbers that needed a 32px picture of those
