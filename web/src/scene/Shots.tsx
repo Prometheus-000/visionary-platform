@@ -11,16 +11,20 @@ import { handleOf, shares, times, type Shot } from './model'
 /**
  * The timeline, where the video side's prompt box used to be.
  *
- * **One shot is the prompt box.** Same id, same placeholder, same mirror, same
- * chords — because that is the degrade this whole layer rests on: with one shot
- * and nothing else chosen the compiler returns the typed text byte-for-byte, and
- * a surface that looked different while doing exactly the same thing would be
- * announcing a feature it is not yet using.
+ * **It is always drawn as a timeline, including at one shot.** It was not: with
+ * one row the strip and the gutter were suppressed so the surface was
+ * byte-for-byte the prompt box it replaced, on the argument that a feature should
+ * not announce itself before it is being used. The owner's reading of that,
+ * verbatim: *"I don't even see a timeline."* Which is the same fault the icon
+ * rule already names one layer down — a surface indistinguishable from the one it
+ * replaced is a capability nobody can find, and the degrade it was protecting is
+ * a fact about the *compiler*, not about what the page should look like. One shot
+ * still compiles to the typed text byte-for-byte; it simply no longer pretends to
+ * be a text box while doing it.
  *
- * A second shot is what makes it a timeline, and **the rows divide the field's
- * existing allowance rather than adding to it** — one prompt at two lines and
- * two shots at one line each are the same height, so a four-shot scene costs
- * what a long prompt costs. See `growRows`.
+ * **The rows divide the field's existing allowance rather than adding to it** —
+ * one prompt at two lines and two shots at one line each are the same height, so
+ * a four-shot scene costs what a long prompt costs. See `growRows`.
  */
 export function Shots({ consoleEl, hide, onSubmit }: {
   consoleEl: React.RefObject<HTMLDivElement | null>
@@ -33,7 +37,6 @@ export function Shots({ consoleEl, hide, onSubmit }: {
   const s = useStore()
   const box = useRef<HTMLDivElement>(null)
   const shots = s.scene.shots
-  const many = shots.length > 1
   // A string on the composer, because an empty box means "the model's default"
   // — see `ResolvedVid`. The clock needs a number, and the fallback is one
   // second so a model with no length yet still divides rather than dividing by
@@ -46,16 +49,16 @@ export function Shots({ consoleEl, hide, onSubmit }: {
   })
 
   return (
-    <div className={`tline${many ? ' many' : ''}${hide ? ' hide' : ''}`} ref={box}>
+    <div className={`tline${hide ? ' hide' : ''}`} ref={box}>
       {/* A readout, not an input: a shot's share of the clip is the length of
           what you wrote about it, so there is nothing to drag and nothing to
-          miss with a thumb. It only appears once there is a division to show —
-          a single full-width bar is a picture of the fact that there are no
-          cuts. */}
-      {many && <Strip />}
+          miss with a thumb. At one shot it is a full-width bar, which is the
+          honest picture of a clip with no cuts in it — and the thing that makes
+          the second shot dividing it legible when it arrives. */}
+      <Strip />
       {shots.map((shot, i) => (
         <Row key={shot.id} shot={shot} n={i} at={cuts[i]?.[0] ?? 0}
-             many={many} onSubmit={onSubmit} />
+             onSubmit={onSubmit} />
       ))}
     </div>
   )
@@ -82,8 +85,8 @@ const tick = (t: number) => {
   return m ? `${String(m)}:${rest}` : rest
 }
 
-function Row({ shot, n, at, many, onSubmit }: {
-  shot: Shot; n: number; at: number; many: boolean; onSubmit: () => void
+function Row({ shot, n, at, onSubmit }: {
+  shot: Shot; n: number; at: number; onSubmit: () => void
 }) {
   const s = useStore()
   const area = useRef<HTMLTextAreaElement>(null)
@@ -146,7 +149,7 @@ function Row({ shot, n, at, many, onSubmit }: {
     // out of a timeline that does not need a control of its own. The first row
     // is never removable — a scene with no shots is a scene with nowhere to
     // type, and `_validate_scene` reads no shots as no scene at all.
-    if (e.key === 'Backspace' && many && n > 0 && !shot.line && !shot.say.text) {
+    if (e.key === 'Backspace' && n > 0 && !shot.line && !shot.say.text) {
       e.preventDefault()
       s.dropShot(shot.id)
       return
@@ -183,11 +186,9 @@ function Row({ shot, n, at, many, onSubmit }: {
 
   return (
     <div className={`trow${shot.id === s.shotSel ? ' sel' : ''}`}>
-      {many && (
-        <span className="tnum" aria-hidden="true">
-          {n + 1}<em>{tick(at)}</em>
-        </span>
-      )}
+      <span className="tnum" aria-hidden="true">
+        {n + 1}<em>{tick(at)}</em>
+      </span>
       <div className="tbox">
         <div className="mk-mirror" ref={mirror} aria-hidden="true">
           {/* The mirror is a glyph-for-glyph copy of the textarea, so a zero-width

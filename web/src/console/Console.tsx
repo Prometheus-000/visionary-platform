@@ -150,8 +150,7 @@ export function Console({
           under the sentence instead of being the sentence — see `ui/ErrorNote`. */}
       <ErrorNote err={err} />
 
-      <Field consoleEl={box} onPalette={pal.toggle}
-             onSubmit={() => { if (ready && !busy) onGenerate() }}>
+      <Field consoleEl={box} onSubmit={() => { if (ready && !busy) onGenerate() }}>
         <div className={image ? '' : 'hide'} id="c-image">
           <div className="opts">
             <SizeButton />
@@ -200,12 +199,18 @@ export function Console({
           place for the dimming rules to drift. */}
       {pal.open && <Palette anchor={pal.anchor} onClose={pal.close} />}
 
+      {/* **Composition first, then what you can attach to it.** The rail is the
+          composer — its doors make the cast, open the vocabulary and plug in a
+          LoRA — so it reads directly under the timeline it acts on. The source
+          row is a row of pictures rather than a row of controls, and it sat
+          above the doors for a version, which put the three ways into the
+          feature below the tray of things the feature has nothing to do with. */}
+      <Rail onPalette={pal.toggle} />
+
       {/* Every picture the model can be given. Lifted out of the video strip when that
           moved into the field: this is a row of pictures, not a row of controls, and it
           is the one thing that could not follow. */}
       {!image && <SourceRow />}
-
-      <Rail />
       {/* Image only. On the video side a LoRA is a chip on the one rail beside the
           cast and the pills — the disclosure is a fold under a *prompt box*, and
           that side no longer has one. */}

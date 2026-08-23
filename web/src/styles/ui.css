@@ -529,21 +529,23 @@ svg{width:100%;height:100%;display:block}
 .tstrip i:last-child{border-right:0}
 .tstrip i.sel{background:var(--line-2)}
 
-/* The rows only take chrome once there are two of them. The number and the cut
-   time are one gutter because they answer one question — where in the clip is
-   this — and the time is the smaller half because it is derived. */
+/* **Every row takes the chrome, including the only one.** It was gated on there
+   being two, so a fresh scene was a bare textarea and the timeline was a feature
+   you could not see until you had already used it. The number and the cut time
+   are one gutter because they answer one question — where in the clip is this —
+   and the time is the smaller half because it is derived. */
 .trow{display:flex;min-width:0}
-.tline.many .trow{align-items:flex-start;gap:9px;border-radius:var(--r-inner)}
-.tline.many .trow.sel{background:var(--wash-2)}
-.tline.many .tnum{flex:none;min-width:46px;padding:5px 0 0 9px;text-align:right;
+.tline .trow{align-items:flex-start;gap:9px;border-radius:var(--r-inner)}
+.tline .trow.sel{background:var(--wash-2)}
+.tline .tnum{flex:none;min-width:46px;padding:5px 0 0 9px;text-align:right;
   display:flex;flex-direction:column;align-items:flex-end;line-height:1.3;
   font:11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);
   -webkit-user-select:none;user-select:none}
-.tline.many .tnum em{font-style:normal;font-size:10px;color:#5a5a5a}
-.tline.many .mk-mirror,.tline.many textarea{padding:4px 10px 4px 0}
+.tline .tnum em{font-style:normal;font-size:10px;color:#5a5a5a}
+.tline .mk-mirror,.tline textarea{padding:4px 10px 4px 0}
 /* A row is a 44px target on glass, where the pointer that can hit an 18px one
    does not exist. Same rule `.chip` and `.shot-back` already follow. */
-@media (hover:none){.tline.many .trow{min-height:44px;align-items:center}}
+@media (hover:none){.tline .trow{min-height:44px;align-items:center}}
 
 /* Where the caret is, inside a textarea. Zero-width and invisible: the mirror is
    a glyph-for-glyph copy of the box, so a span spliced into it at the caret's
@@ -635,36 +637,39 @@ svg{width:100%;height:100%;display:block}
 .tslot .lb.full{color:var(--fg);background:var(--wash-3);width:100%;height:100%;
   display:grid;place-items:center}
 
-/* ── the field's trailing edge ─────────────────────────────────────────────
-   `.neg-t` has had this corner to itself since it took it from the resize grip.
-   On Wan both it and the doors are present, so they share one row rather than
-   sitting on top of each other; on H3 there is no negative branch and the doors
-   have it; on the image side it is `.neg-t` alone, exactly as it was. */
-.fedge-row{position:absolute;top:5px;right:7px;z-index:2;
-  display:flex;align-items:center;gap:3px}
-.fedge{display:flex;align-items:center;gap:1px}
-.neg-t{position:static;top:auto;right:auto}
-/* **Composition, not settings, and the glyph is affordable because the home is
-   where you already are.** An icon cannot announce a destination — that is why
-   `Shot` carries a word in the settings bar — but on the edge of the box you are
-   typing in, each of these acts on the sentence underneath it, and the first is a
-   gesture you have already made by typing `@`. */
-.fdoor{width:22px;height:20px;display:grid;place-items:center;border:0;
-  background:var(--wash-2);border-radius:var(--r-mark);color:#5a5a5a;
-  font-size:11px;line-height:1;cursor:pointer;padding:0}
-.fdoor:hover:not(:disabled){background:var(--wash-3);color:var(--fg)}
-.fdoor.on{background:var(--wash-3);color:var(--fg)}
-.fdoor:disabled{opacity:.35;cursor:default}
-.fdoor>.gl{width:20px;height:14px;opacity:.9}
-.fdoor .gl *{animation-play-state:paused;animation-delay:-1.2s}
-.fdoor:hover .gl *,.fdoor:focus-visible .gl *{animation-play-state:running}
-/* The gutter the edge needs, on the first row only — it is the only one the
-   corner overlaps. Written twice because the two states are different widths and
-   a single value would either crowd the doors or waste a third of the line. */
-.field .tline .trow:first-child .mk-mirror,
-.field .tline .trow:first-child textarea{padding-right:78px}
+/* The gutter `.neg-t` needs, on the first row only — it is the only one the
+   corner overlaps. The doors were up here too for a version and are not any
+   more: three unlabelled 22px marks in a corner is a destination announced by an
+   icon, which is the one thing an icon cannot do. See `Doors`. */
 .field.has-neg .tline .trow:first-child .mk-mirror,
-.field.has-neg .tline .trow:first-child textarea{padding-right:140px}
+.field.has-neg .tline .trow:first-child textarea{padding-right:66px}
+
+/* ── the rail, and the three doors at its head ─────────────────────────────
+   **A row is affordable when it carries content, and never when it carries one
+   control.** This one carries the doors *and* everything they put on it — the
+   cast, the pills, the LoRAs — which is why it can spend the height the
+   field's trailing edge was chosen to avoid spending. The doors are pinned and
+   the chips scroll past them: a door that scrolls away is a door you have to go
+   looking for. */
+.trail{display:flex;align-items:center;gap:8px;margin:8px 2px 0;min-width:0}
+.trail:not(.has-doors) #shot-rail:empty{display:none}
+.trail:not(.has-doors){margin:0}
+.trail.has-doors #shot-rail{margin:0}
+.tdoors{display:flex;align-items:center;gap:5px;flex:none}
+.tdoor{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px;
+  border:1px solid var(--line);background:var(--wash-2);border-radius:var(--r-pill);
+  color:var(--mut);font-size:12px;cursor:pointer;white-space:nowrap}
+.tdoor:hover:not(:disabled){background:var(--wash-3);color:var(--fg);
+  border-color:var(--line-2)}
+.tdoor.on{color:var(--fg)}
+.tdoor:disabled{opacity:.35;cursor:default}
+/* The tile is the one place in this app where an icon can *teach* — a dolly-out
+   is a thing neither the word nor a static picture shows you. Frozen at rest,
+   because the page at rest runs nothing; hover is the asking. */
+.tdoor>.gl{width:22px;height:15px;flex:none;opacity:.85}
+.tdoor .gl *{animation-play-state:paused;animation-delay:-1.2s}
+.tdoor:hover .gl *,.tdoor:focus-visible .gl *{animation-play-state:running}
+@media (hover:none){.tdoor{height:44px}}
 
 /* ── view source ───────────────────────────────────────────────────────────
    It takes the canvas the way devtools takes the window, which is what keeps it
@@ -1257,7 +1262,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    affordance, and a scrollbar under a single row of chips is chrome announcing
    a gesture the content already implies. scroll-padding keeps a pill from
    landing half-under the fade. */
-#shot-rail{margin:8px 2px 0;gap:6px;flex-wrap:nowrap;overflow-x:auto;
+#shot-rail{margin:8px 2px 0;gap:6px;flex-wrap:nowrap;overflow-x:auto;flex:1;min-width:0;
   scrollbar-width:none;scroll-padding-inline:12px;
   /* The pills are chips, not text: without this they compress to nothing
      rather than running off the end, which is the whole point of scrolling. */

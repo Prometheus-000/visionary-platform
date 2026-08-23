@@ -426,6 +426,8 @@ export type Store = {
   setRefRoles: (r: string[]) => void
 }
 
+const FIRST = emptyScene()
+
 export const useStore = create<Store>((set, get) => ({
   state: null,
   stateError: null,
@@ -545,9 +547,12 @@ export const useStore = create<Store>((set, get) => ({
   setBoxDrag: (boxDrag) => set({ boxDrag }),
   setFileOver: (fileOver) => set({ fileOver }),
 
-  scene: emptyScene(),
+  scene: FIRST,
   pool: {},
-  shotSel: '',
+  // The one row a fresh scene has, selected. The strip is a readout of which
+  // shot you are in, and an unselected one on the first frame is a bar that
+  // means nothing until you click something.
+  shotSel: FIRST.shots[0]?.id ?? '',
   railOpen: null,
   docOpen: false,
   doc: null,

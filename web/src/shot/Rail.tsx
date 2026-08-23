@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 
+import { Doors } from '../scene/Doors'
 import { NumInput } from '../ui/NumInput'
 import { shotGroup, shotItem, useStore } from '../store'
 import { Glyph } from './Glyph'
@@ -25,7 +26,9 @@ import { shotLive } from './vocab'
  * touched. The image side keeps the pills alone, because `#lora-box` is a disclosure
  * under a prompt box and the video side no longer has one.
  */
-export function Rail() {
+export function Rail({ onPalette }: {
+  onPalette: (e: React.MouseEvent<HTMLElement>) => void
+}) {
   const s = useStore()
   const vocab = s.state?.shot_vocab ?? []
   const video = s.kind === 'video'
@@ -46,7 +49,12 @@ export function Rail() {
   }, [s.shotOpen, s])
 
   return (
-    <div className="wrap" id="shot-rail">
+    <div className={`trail${video ? ' has-doors' : ''}`}>
+      {/* Pinned, while the chips scroll past them. A door that scrolls away is a
+          door you have to go looking for, which is most of what was wrong with
+          the version of these that had no words. */}
+      {video && <Doors onPalette={onPalette} />}
+      <div className="wrap" id="shot-rail">
       {video && s.scene.cast.map((c) => (
         <button key={c.id} type="button" data-cast={c.id}
                 className={`chip cast${s.railOpen === c.id ? ' on' : ''}`}
@@ -128,6 +136,7 @@ export function Rail() {
                   onClick={() => { s.dropLora(c.path) }}>×</button>
         </span>
       ))}
+      </div>
     </div>
   )
 }
