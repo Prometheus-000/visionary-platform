@@ -390,7 +390,13 @@ svg{width:100%;height:100%;display:block}
 /* Icon-only controls in the strip: same box, square, no value to show. */
 .opt.ib{padding:0;width:var(--ib);justify-content:center;cursor:pointer;color:var(--mut);
   transition:background .12s,color .12s}
-.opt.ib:hover{background:var(--line);color:var(--fg)}
+.opt.ib:hover:not(:disabled){background:var(--line);color:var(--fg)}
+/* An unbounded control shows its own value and nothing else, so a dead one is
+   indistinguishable from a live one unless it says so — there was no rule here at
+   all, and `#r-lora` with no LoRAs on the volume was a control that answered a
+   click with silence. `:not(:disabled)` on the hover above is the other half: a
+   dead button that still lights under the pointer is a promise it will not keep. */
+.opt:disabled,.opt.ib:disabled{opacity:.38;cursor:not-allowed}
 /* One wash and one hairline for "chosen", everywhere. There were six washes —
    .10 .12 .13 .14 .15 .17 — and four borders — .22 .24 .26 .30 — for one meaning,
    and adjacent controls disagreed: a ratio tile in the size popover sat at .13 and
@@ -2188,6 +2194,12 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
 /* The four coordinates read as one control, so they are spaced tighter than the
    things above them are spaced from each other. */
 .rins-row.nums{gap:1px}
+/* Which character this box is, and it carries the name — so it is one of the
+   text-bearing `.opt.ib` buttons rather than a square glyph, the same override
+   `#g-size` takes. `--mut` while it is a door and `--fg` once it is a value,
+   which is the same distinction the strip draws between `+ LoRA` and the size. */
+#r-lora{width:auto;padding:0 10px;font-size:14px;max-width:100%;overflow:hidden}
+#r-lora.set{color:var(--fg)}
 .rins .opt.wide{flex:1 1 110px;min-width:0}
 .rins .opt.wide input{width:100%;min-width:0}
 .rins .grow{flex:1 1 auto}

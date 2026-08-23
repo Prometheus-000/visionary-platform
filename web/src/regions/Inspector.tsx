@@ -179,28 +179,52 @@ function BoxCard(
             add-many, and picking a second *replaces* rather than being refused:
             choosing a different name for a box that has one is "this character
             instead", and answering that with an error would send you somewhere
-            else to fix it. */}
-        <div className="opt" data-lb="LoRA">
-          <button id="r-lora" type="button" className="pickish" onClick={pick.toggle}
-                  disabled={!index.length}
-                  title="Which character this box is. One per box — the node takes one.">
-            {r.lora ? r.lora.rel : 'No LoRA'}
-          </button>
-          {pick.open && (
-            <Menu anchor={pick.anchor} onClose={pick.close}
-                  items={[
-                    { label: 'No LoRA', on: !r.lora,
-                      run: () => s.patchRegion(i, { lora: null }) },
+            else to fix it.
+
+            `opt ib`, which is the same treatment every other door on this page
+            wears, and it is here because the class it used to carry — `pickish` —
+            was declared in this file and defined in no stylesheet. A button with
+            no rules gets the UA's own: a white fill and an outset border, inside
+            a card that is `#101010`. That was the whole of it visually, and it
+            cost more than a look: there is no `.opt:disabled` either, so with an
+            empty index the control was a dead white box indistinguishable from a
+            live one, which is a click that does nothing and says nothing about
+            why. Both halves are fixed below and in ui.css.
+
+            `+ LoRA` rather than "No LoRA", for the same reason the strip's door
+            says it: an empty control should name the act, not the absence. Word
+            for word what `LoraButton` reads, so one label opens a LoRA picker
+            wherever you are — and it is the *name* that is the value here, so the
+            "a control that shows its own value gets no label" rule is satisfied
+            the moment there is one to show. */}
+        <button id="r-lora" type="button" data-lb="LoRA"
+                className={`opt ib${pick.open ? ' on' : ''}${r.lora ? ' set' : ''}`}
+                onClick={pick.toggle}
+                disabled={!index.length}
+                title={index.length
+                  ? 'Which character this box is. One per box — the node takes one.'
+                  : 'No LoRAs on the volume yet — train one under Train, or drop a '
+                    + '.safetensors into loras/.'}>
+          {r.lora ? r.lora.rel : '+ LoRA'}
+        </button>
+        {pick.open && (
+          <Menu anchor={pick.anchor} onClose={pick.close}
+                items={[
+                  // Only when there is one to take off. Ticked-and-empty is a row
+                  // that says "you have not chosen" to somebody who came here to
+                  // choose, and it put the one inert row at the top of the list.
+                  ...(r.lora ? [
+                    { label: 'No LoRA', run: () => s.patchRegion(i, { lora: null }) },
                     { sep: true } as const,
-                    ...index.map((l) => ({
-                      label: l.token,
-                      hint: l.trigger || undefined,
-                      on: r.lora?.path === l.path,
-                      run: () => s.patchRegion(i, { lora: chipFrom(l, true) }),
-                    })),
-                  ]} />
-          )}
-        </div>
+                  ] : []),
+                  ...index.map((l) => ({
+                    label: l.token,
+                    hint: l.trigger || undefined,
+                    on: r.lora?.path === l.path,
+                    run: () => s.patchRegion(i, { lora: chipFrom(l, true) }),
+                  })),
+                ]} />
+        )}
 
         {/* Blank and disabled when the box holds no LoRA, because a strength with
             nothing to apply to is a number that lies. 1.3–1.4 is the node pack's

@@ -358,6 +358,34 @@ with sync_playwright() as pw:
     after = pg.input_value("#region-inspector .opt.n input >> nth=1")
     check("the card's X follows the drag", before != after, f"{before} -> {after}")
 
+    # Which character the box is, which is the one thing on the card that decides
+    # what comes out of it. There was no row on this at all, and the control had
+    # shipped carrying a class no stylesheet declares — so it drew as the UA's own
+    # white button inside a black card, and with an empty index it was a dead white
+    # button that looked exactly like a live one. Three rows: it is not wearing
+    # browser chrome, the press opens the list, and picking arms the box.
+    fill = pg.eval_on_selector("#r-lora", "e=>getComputedStyle(e).backgroundColor")
+    check("the picker is not a UA button", fill in ("rgba(0, 0, 0, 0)", "transparent"), fill)
+    label = pg.inner_text("#r-lora")
+    check("empty, it names the act", "LoRA" in label and "No" not in label, label)
+    pg.click("#r-lora")
+    pg.wait_for_timeout(200)
+    rows = pg.eval_on_selector_all(".menu button", "els=>els.length")
+    check("the press opens the list", rows > 0, f"{rows} rows")
+    pg.eval_on_selector_all(".menu button", "els=>els[0].click()")
+    pg.wait_for_timeout(250)
+    check("picking one arms the box",
+          pg.inner_text("#r-lora") != label
+          and pg.locator("#region-layer .rbox.armed").count() > 0,
+          pg.inner_text("#r-lora"))
+    # And it comes back off, which is the row the menu only shows once there is
+    # something to take off.
+    pg.click("#r-lora")
+    pg.wait_for_timeout(200)
+    pg.eval_on_selector_all(".menu button", "els=>els[0].click()")
+    pg.wait_for_timeout(250)
+    check("and comes back off", pg.inner_text("#r-lora") == label, pg.inner_text("#r-lora"))
+
     # Frame scope is a different card, reached by a gesture rather than by
     # knowing which of two things the row in front of you was about.
     pg.click(".rframe-btn")
