@@ -2217,6 +2217,23 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
 .rins-refusal{position:absolute;left:8px;right:44px;bottom:8px;z-index:9;margin:0;
   padding:7px 10px;border-radius:var(--r-inner);background:rgba(0,0,0,.86);
   color:#f3c07a;font-size:12px;line-height:1.35}
+/* The coordinates, while the card that holds them is at opacity 0. The gesture is
+   what teaches those numbers and it was the one moment none were on screen — with
+   RegionLayer still writing the store once per animation frame to move them. Top-left
+   is the corner nothing else claims: #canvas-acts is top-right, .rframe-btn is
+   bottom-right, and bottom-left carries the frame card and a refused drop.
+
+   A fixed width per number, not a shrink-wrapped pill: 0.5 and 0.125 are different
+   lengths, so a strip that fits its contents would resize on every frame of the drag
+   it is reporting on. Tabular figures are the same argument one digit down — a 1 and a
+   4 the same width is what stops the numbers shuffling sideways as they count. */
+.rins-readout{position:absolute;left:8px;top:8px;z-index:9;margin:0;
+  display:flex;gap:8px;max-width:calc(100% - 16px);overflow:hidden;
+  padding:6px 9px;border-radius:var(--r-inner);background:rgba(0,0,0,.86);
+  color:var(--fg);font-size:12px;line-height:1;font-variant-numeric:tabular-nums;
+  pointer-events:none}
+.rins-readout>span{display:inline-flex;gap:5px;min-width:52px}
+.rins-readout .lead{color:var(--dim)}
 /* The frame is a place too, and this is how you reach it — because a tap on
    bare canvas is already taken, it draws a rectangle. Present only once there
    is a box, since with none of them there is nothing at frame scope to say. */

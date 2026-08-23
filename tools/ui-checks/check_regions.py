@@ -37,13 +37,13 @@ PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8"
 # A drag on the layer, in the layer's own 0..1 — the same space the boxes and the
 # backend use, so the assertions can be written in it and never touch a pixel.
 DRAG = """
-([x0, y0, x1, y1, alt]) => {
+([x0, y0, x1, y1, alt, meta]) => {
   const layer = document.querySelector('#region-layer');
   if (!layer) return 'MISSING';
   const b = layer.getBoundingClientRect();
   const pt = (fx, fy) => ({clientX: b.left + b.width * fx, clientY: b.top + b.height * fy});
   const opts = (p) => ({bubbles: true, cancelable: true, button: 0, pointerId: 7,
-                        isPrimary: true, altKey: alt, ...p});
+                        isPrimary: true, altKey: alt, metaKey: meta, ...p});
   // Down on whatever is actually under the point. Dispatching at the layer would
   // skip the hit test — `closest('.rbox')` reads the *target* — so every drag
   // would draw a new box and moving one could never be tested at all.
@@ -57,6 +57,49 @@ DRAG = """
   return new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
     layer.dispatchEvent(new PointerEvent('pointerup', opts(pt(x1, y1))));
     res(true);
+  })));
+}
+"""
+
+# The same gesture, stopped in the middle of itself.
+#
+# The card goes to opacity 0 for the length of a drag — a card over the rectangle
+# you are dragging is a card in the way of the thing it describes — and for a
+# while it took the four numbers with it, into the one moment they are worth
+# reading. Nothing dispatched after `pointerup` can see that: the row below it
+# passed throughout, because the card is back by the time it looks. So this one
+# reads while the pointer is still down and lets go afterwards.
+DRAG_MID = """
+([x0, y0, x1, y1]) => {
+  const layer = document.querySelector('#region-layer');
+  if (!layer) return 'MISSING';
+  const b = layer.getBoundingClientRect();
+  const pt = (fx, fy) => ({clientX: b.left + b.width * fx, clientY: b.top + b.height * fy});
+  const opts = (p) => ({bubbles: true, cancelable: true, button: 0, pointerId: 7,
+                        isPrimary: true, ...p});
+  const from = pt(x0, y0);
+  const el = document.elementFromPoint(from.clientX, from.clientY) || layer;
+  el.dispatchEvent(new PointerEvent('pointerdown', opts(from)));
+  layer.dispatchEvent(new PointerEvent('pointermove', opts(pt((x0 + x1) / 2, (y0 + y1) / 2))));
+  layer.dispatchEvent(new PointerEvent('pointermove', opts(pt(x1, y1))));
+  return new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
+    const r = document.querySelector('#region-readout');
+    const box = document.querySelector('#region-layer .rbox.sel');
+    const out = {
+      // Painted, not merely mounted: the fault being pinned here was a live
+      // element at zero opacity, which every `count() === 1` in this file would
+      // have called present.
+      shown: !!r && getComputedStyle(r).opacity !== '0'
+             && r.getBoundingClientRect().width > 0,
+      // The children, not every span under it: each number carries its own label
+      // in a nested one, and `querySelectorAll('span')` reads eight things where
+      // there are four.
+      nums: r ? [...r.children].map(
+        (s) => parseFloat(s.textContent.replace(/[A-Z]/, ''))).filter((n) => !isNaN(n)) : [],
+      x: box ? (box.getBoundingClientRect().left - b.left) / b.width : -1,
+    };
+    layer.dispatchEvent(new PointerEvent('pointerup', opts(pt(x1, y1))));
+    res(out);
   })));
 }
 """
@@ -156,8 +199,8 @@ with sync_playwright() as pw:
             fails.append(label)
         print(f"  {'ok  ' if ok else 'FAIL'} {label:38} {detail}")
 
-    def drag(x0, y0, x1, y1, alt=False):
-        pg.evaluate(DRAG, [x0, y0, x1, y1, alt])
+    def drag(x0, y0, x1, y1, alt=False, meta=False):
+        pg.evaluate(DRAG, [x0, y0, x1, y1, alt, meta])
         pg.wait_for_timeout(140)
 
     def boxes():
@@ -201,6 +244,14 @@ with sync_playwright() as pw:
         pg.wait_for_timeout(40)
         pg.mouse.up()
         pg.wait_for_timeout(250)
+
+    def dblclick(fx, fy):
+        """The second gesture that makes a region, with a real mouse — the double
+        click has to survive the two presses in front of it, and a dispatched
+        `dblclick` would not prove that."""
+        lay = pg.eval_on_selector("#region-layer", "e=>e.getBoundingClientRect().toJSON()")
+        pg.mouse.dblclick(lay["x"] + lay["width"] * fx, lay["y"] + lay["height"] * fy)
+        pg.wait_for_timeout(180)
 
     def drop_last():
         """Delete the most recently drawn box, so the next drag starts from the
@@ -281,8 +332,8 @@ with sync_playwright() as pw:
     # of it, so the DOM's answer and the right answer are different boxes: paint order
     # says 1 and the rule says 0. A check that drew them the other way round would pass
     # against the bug.
-    drag(0.40, 0.40, 0.60, 0.60)
-    drag(0.05, 0.05, 0.95, 0.95)
+    drag(0.40, 0.40, 0.60, 0.60, meta=True)
+    drag(0.05, 0.05, 0.95, 0.95, meta=True)
     check("a box drawn over another still leaves two", len(boxes()) == 2,
           f"{len(boxes())} boxes")
     tap(0.50, 0.50)
@@ -296,6 +347,36 @@ with sync_playwright() as pw:
     check("hover names the box the click would open", over == 0, f"box {over}")
     over = hover(0.10, 0.10)
     check("and follows the pointer back out", over == 1, f"box {over}")
+
+    # Everything above is about *bodies*. A handle is the other half, and it is where
+    # the layers survived longest. A handle was allowed to win only where it was
+    # already lit; lighting is `sel` or `under`; `under` is decided by the bodies — so
+    # the box lying underneath was never the one a hover named, its eight dots never
+    # lit, and a press landing exactly on one of them fell through and *moved the box
+    # on top*. A wide background box with a performer sitting on its right edge could
+    # not be widened at all.
+    #
+    # ⌘ to draw both, because the rows above leave no bare canvas to start a drag on.
+    drag(0.06, 0.28, 0.74, 0.70, meta=True)
+    wide = len(boxes()) - 1
+    drag(0.67, 0.40, 0.83, 0.60, meta=True)
+    small = len(boxes()) - 1
+    check("two more boxes to work with", len(boxes()) == small + 1 and wide != small,
+          f"{len(boxes())} boxes")
+    was = boxes()[wide]
+    sat = boxes()[small]
+    # Its east handle, at the middle of the very edge the small box is sitting on.
+    hx, hy = was["x"] + was["w"], was["y"] + was["h"] / 2
+    check("the small box really is covering that handle",
+          sat["x"] < hx < sat["x"] + sat["w"] and sat["y"] < hy < sat["y"] + sat["h"],
+          f"handle {hx:.3f},{hy:.3f} in {sat['x']:.3f},{sat['y']:.3f}"
+          f"+{sat['w']:.3f}x{sat['h']:.3f}")
+    drag(hx, hy, hx + 0.09, hy)
+    now = boxes()[wide]
+    check("a covered handle still takes the press", now["w"] > was["w"] + 0.04,
+          f"width {was['w']:.3f} -> {now['w']:.3f}")
+    check("and the box on top is not what moved", near(boxes()[small]["x"], sat["x"], 0.02),
+          f"{boxes()[small]['x']:.3f} vs {sat['x']:.3f}")
     # A drop is not a gesture you can take back, so the caption and the landing have
     # to be the same box. Both come off the same hit test now.
     # A drop is not a gesture you can take back, so the caption and the landing have to
@@ -316,8 +397,14 @@ with sync_playwright() as pw:
     # what it advertised was regions at their least legible, permanently, on the
     # largest surface in the app. Drawing one is the arm now, and dropping a LoRA on
     # bare frame is the other.
-    drag(0.02, 0.05, 0.48, 0.95)
-    drag(0.52, 0.05, 0.98, 0.95)
+    #
+    # ⌘ throughout this section, because a plain drag on bare canvas no longer draws.
+    # It could not stay: a card is dismissed by clicking outside it, most of the
+    # canvas is outside every box, and a canvas where putting the card away leaves a
+    # rectangle behind is a canvas you cannot put the card away on. The row below
+    # pins the plain drag doing nothing, so the two halves cannot drift apart.
+    drag(0.02, 0.05, 0.48, 0.95, meta=True)
+    drag(0.52, 0.05, 0.98, 0.95, meta=True)
     seeded = boxes()
     check("two boxes drawn on the frame", len(seeded) == 2, f"{len(seeded)} boxes")
 
@@ -332,9 +419,14 @@ with sync_playwright() as pw:
     # 0.507 is inside SNAP_EPS (0.015) of a half and nowhere near it by eye. The
     # landing is the assertion: halves, thirds and quarters are what make an even
     # split a gesture rather than a menu.
+    # A plain one first, on the same bare canvas, so "⌘ draws" is measured against
+    # "and nothing else does" rather than asserted alone.
     drag(0.02, 0.10, 0.507, 0.90)
+    check("a plain drag on bare canvas draws nothing", boxes() == [],
+          f"{len(boxes())} boxes")
+    drag(0.02, 0.10, 0.507, 0.90, meta=True)
     b = boxes()
-    check("a drag draws one box", len(b) == 1, f"{len(b)} boxes")
+    check("⌘ draws one box", len(b) == 1, f"{len(b)} boxes")
     check("its edge snaps to the half", b and near(b[0]["x"] + b[0]["w"], 0.5),
           f"right edge {b[0]['x'] + b[0]['w']:.4f}" if b else "")
 
@@ -345,13 +437,13 @@ with sync_playwright() as pw:
     # would not have snapped with or without the modifier: it asserted nothing and
     # passed, which is the failure mode a check is supposed to not have.
     THIRDS = 2 / 3
-    drag(0.98, 0.10, 0.6547, 0.90)
+    drag(0.98, 0.10, 0.6547, 0.90, meta=True)
     b = boxes()
     check("a release inside the threshold snaps", len(b) == 2 and near(b[1]["x"], THIRDS),
           f"left edge {b[1]['x']:.4f} vs {THIRDS:.4f}" if len(b) > 1 else f"{len(b)} boxes")
     drop_last()
 
-    drag(0.98, 0.10, 0.6547, 0.90, alt=True)
+    drag(0.98, 0.10, 0.6547, 0.90, alt=True, meta=True)
     b = boxes()
     check("Alt suppresses it", len(b) == 2 and near(b[1]["x"], 0.6547),
           f"left edge {b[1]['x']:.4f} vs 0.6547" if len(b) > 1 else f"{len(b)} boxes")
@@ -359,16 +451,42 @@ with sync_playwright() as pw:
     # And a third box dragged near the first box's edge lands on it. Frame
     # landmarks and box edges are one candidate pool; only the pool proves it.
     edge = b[0]["x"] + b[0]["w"]
-    drag(0.02, 0.02, edge + 0.008, 0.06)
+    drag(0.02, 0.02, edge + 0.008, 0.06, meta=True)
     b = boxes()
     check("a box snaps to another box's edge",
           len(b) == 3 and near(b[2]["x"] + b[2]["w"], edge, 0.006),
           f"{b[2]['x'] + b[2]['w']:.4f} vs {edge:.4f}" if len(b) > 2 else f"{len(b)} boxes")
 
     print("\nTHE CARD")
+    # **A card is a thing you open.** Selection used to be the open state, which put a
+    # 296px panel over the picture on every gesture that touched a box — and the layer
+    # refuses presses inside `.rins`, so a handle or a box lying under it stopped being
+    # adjustable at all. Framing is a run of drags, so the drag row comes first: it is
+    # the one that has to leave the picture alone.
+    cards = lambda: pg.locator("#region-inspector").count()
     b = boxes()
-    tap(b[0]["x"] + b[0]["w"] / 2, b[0]["y"] + b[0]["h"] / 2)
-    check("selecting a box opens its card", pg.locator("#region-inspector").count() == 1)
+    cx, cy = b[0]["x"] + b[0]["w"] / 2, b[0]["y"] + b[0]["h"] / 2
+    drag(cx, cy, cx + 0.05, cy + 0.05)
+    check("a drag on a box opens no card", cards() == 0, f"{cards()} cards")
+    b = boxes()
+    cx, cy = b[0]["x"] + b[0]["w"] / 2, b[0]["y"] + b[0]["h"] / 2
+    tap(cx, cy)
+    check("a click inside one does", cards() == 1, f"{cards()} cards")
+    # The dismissal, and the thing it must not do. These two are one row in spirit:
+    # the card is put away by clicking outside it, most of the canvas is outside every
+    # box, and a canvas where that draws a rectangle is a canvas you cannot put the
+    # card away on.
+    was = len(boxes())
+    tap(0.97, 0.03)
+    check("a click outside it puts it away", cards() == 0, f"{cards()} cards")
+    check("and leaves no new region behind", len(boxes()) == was,
+          f"{was} -> {len(boxes())}")
+    dblclick(0.90, 0.04)
+    check("a double click on bare canvas makes one", len(boxes()) == was + 1,
+          f"{was} -> {len(boxes())}")
+    drop_last()
+    tap(cx, cy)
+    check("and the card comes back on a click", cards() == 1, f"{cards()} cards")
     check("the card is inside the layer",
           pg.evaluate("""() => {
             const c = document.querySelector('#region-inspector').getBoundingClientRect();
@@ -376,13 +494,40 @@ with sync_playwright() as pw:
             return c.left >= l.left - 1 && c.right <= l.right + 1
                 && c.top >= l.top - 1 && c.bottom <= l.bottom + 1;
           }"""))
-    # The numbers are a readout that moves, which is the entire reason they
-    # survived the row they used to live in.
+    # The numbers are the box's, so they have to be the box's *now*. This used to
+    # read them across a drag, back when a drag was something the card sat through;
+    # the press that starts one is a press outside the card and puts it away, so what
+    # is left to pin here is the reopen — the card that comes back has to describe the
+    # rectangle that exists, not the one that was there when it last closed.
     before = pg.input_value("#region-inspector .opt.n input >> nth=1")
     pg.evaluate(DRAG, [0.30, 0.50, 0.44, 0.62])
     pg.wait_for_timeout(200)
+    check("and the drag closes it on its way", cards() == 0, f"{cards()} cards")
+    moved = boxes()[0]
+    tap(moved["x"] + moved["w"] / 2, moved["y"] + moved["h"] / 2)
     after = pg.input_value("#region-inspector .opt.n input >> nth=1")
-    check("the card's X follows the drag", before != after, f"{before} -> {after}")
+    check("the card reopens on the box as it is now", before != after,
+          f"{before} -> {after}")
+
+    # The numbers have to be readable *while* the box moves, which is the one moment
+    # they teach anything and — now that a drag closes the card — the only surface
+    # carrying them. `RegionLayer` writes the store once per animation frame expressly
+    # to keep them moving; for a while that went to a card at opacity 0, and nothing
+    # looking after the release could tell.
+    mid = pg.evaluate(DRAG_MID, [0.44, 0.62, 0.36, 0.44])
+    pg.wait_for_timeout(200)
+    check("and are readable mid-drag",
+          isinstance(mid, dict) and mid["shown"] and len(mid["nums"]) == 4,
+          repr(mid if not isinstance(mid, dict) else mid["nums"]))
+    check("saying where the rectangle is now",
+          isinstance(mid, dict) and len(mid["nums"]) == 4 and near(mid["nums"][0], mid["x"]),
+          f"readout {mid['nums'][0] if isinstance(mid, dict) and mid['nums'] else '?'} "
+          f"vs box {mid['x']:.3f}" if isinstance(mid, dict) else repr(mid))
+
+    # Open it again: the row above ended in a drag, and a drag is a press outside the
+    # card. Everything below reads controls that only exist while one is up.
+    b = boxes()
+    tap(b[0]["x"] + b[0]["w"] / 2, b[0]["y"] + b[0]["h"] / 2)
 
     # Which character the box is, which is the one thing on the card that decides
     # what comes out of it. There was no row on this at all, and the control had
@@ -437,7 +582,8 @@ with sync_playwright() as pw:
     # the left-hand column happened to cover, and set that character's likeness
     # instead — which is the handler working and the check aiming badly.
     clear_boxes()
-    drag(0.05, 0.05, 0.30, 0.30)
+    drag(0.05, 0.05, 0.30, 0.30, meta=True)
+    tap(0.17, 0.17)
     pg.fill("#r-prompt", "a dancer mid-turn")
     pg.wait_for_timeout(200)
     landed = pg.evaluate(DROP_ON_CANVAS, [PNG, 0.75, 0.92])

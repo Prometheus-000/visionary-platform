@@ -328,6 +328,25 @@ export type Store = {
    *  the boxes up through a drag that started before a render was cleared, and
    *  put the inspector away while you are dragging the thing it describes. */
   boxDrag: boolean
+  /**
+   * Is the selected thing's card on screen?
+   *
+   * Selection used to *be* the open state, which meant the card arrived on every
+   * gesture that touched a box — including the ones that were not about what is
+   * inside it. Framing is a run of those: draw, move, reshape, draw again, and a
+   * 296px panel rooted in the last box you touched sat over the picture for all of
+   * it. Worse than sitting there, it *ate presses*: the layer refuses anything
+   * inside `.rins`, so a handle or a box lying under the card was not adjustable at
+   * all, and the frame's card parks in the bottom-left corner whenever nothing is
+   * selected.
+   *
+   * So the card is a thing you open. A click or a tap inside a box opens it; a
+   * press anywhere that is not the card closes it. A *drag* is not a click and
+   * leaves it shut, which is the distinction the whole flag exists for: the same
+   * press on the same rectangle means "show me this one" when it lands and stays,
+   * and "move this one" when it travels.
+   */
+  cardOpen: boolean
   /** A file is somewhere over the window. The one moment "you can drop a photo
    *  on a box" needs saying — and the only way anyone finds that gesture — so
    *  it brings the boxes back even over a finished render. `body.dragging`
@@ -345,6 +364,7 @@ export type Store = {
   attach: (where: number | 'frame', role: Role, image: string | null) => void
   setEdit: (m: EditMode) => void
   setBoxDrag: (on: boolean) => void
+  setCardOpen: (on: boolean) => void
   setFileOver: (on: boolean) => void
 
   /* ---- the scene (video only) ------------------------------------------ */
@@ -525,6 +545,7 @@ export const useStore = create<Store>((set, get) => ({
   frame: { attachments: [] },
   edit: 'geometry',
   boxDrag: false,
+  cardOpen: false,
   fileOver: false,
   setRegions: (regions) => set({ regions }),
   patchRegion: (i, patch) =>
@@ -542,6 +563,7 @@ export const useStore = create<Store>((set, get) => ({
   )),
   setEdit: (edit) => set({ edit }),
   setBoxDrag: (boxDrag) => set({ boxDrag }),
+  setCardOpen: (cardOpen) => set({ cardOpen }),
   setFileOver: (fileOver) => set({ fileOver }),
 
   scene: FIRST,

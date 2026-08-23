@@ -425,11 +425,33 @@ and two domains, and the page follows the domains.
   console at all.
 
 - **A region is drawn on the canvas, and so is everything about it.** The boxes
-  are the list: drag on the frame to place one, drag it to move it, drag a
-  handle to size it. Touch one and it *opens* — a card rooted in the box's own
-  near edge, holding its sentence, its LoRA strength, its photograph and its
-  four coordinates. Selection is the open state; there is no toggle and nothing
-  to dismiss.
+  are the list: ⌘-drag or double-click on the frame to place one, drag it to
+  move it, drag any of its eight handles to size it. Click one and it *opens* —
+  a card rooted in the box's own near edge, holding its sentence, its LoRA
+  strength, its photograph and its four coordinates.
+
+  **A click is not a drag, and the card is what the difference buys.** Selection
+  used to be the open state, and that put a 296px panel over the picture for
+  every gesture that touched a box — including the ones that were not about what
+  is inside it. Framing is a run of those: draw, move, reshape, draw again. Worse
+  than sitting there, it *ate presses*, because the layer refuses anything inside
+  `.rins`: a handle or a whole box lying under the card was not adjustable at
+  all, and the frame's card parks in the bottom-left corner of the picture
+  whenever nothing is selected. So the same press on the same rectangle means
+  two things and the *release* says which — it stayed put, so show me this one;
+  it travelled, so move this one. A press anywhere that is not the card puts the
+  card away, which is one rule rather than a list of places, and it holds off the
+  layer too: the console, the strip and the page are outside the card as much as
+  bare canvas is.
+
+  **That dismissal is what took drawing off the plain drag.** A card you put away
+  by clicking outside it, on a surface where most of the canvas *is* outside every
+  box, cannot also be a surface that draws on a plain press — every dismissal
+  would leave a rectangle behind. Both gestures that make a region are now
+  deliberate: ⌘, which already meant "a new one, here" where there is no bare
+  canvas left to aim at, and a double-click on bare canvas. A ⌘-click that never
+  travels and a double-click land on the same 0.28 × 0.6 rectangle, so the two
+  ways in do not produce two house styles.
 
   **Editing what is inside a box and redrawing the box are two different acts,
   and one control for both taxed the frequent one.** Changing a region's

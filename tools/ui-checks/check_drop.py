@@ -70,8 +70,11 @@ DRAW_BOX = """
   // a check that reaches past the interface can pass while the interface is dead.
   const lay = document.querySelector('#region-layer');
   const b = lay.getBoundingClientRect();
+  // ⌘, because a plain drag on bare canvas draws nothing any more: the card is
+  // dismissed by clicking outside it and most of the canvas is outside every box,
+  // so a canvas that drew on a plain press left a rectangle behind every dismissal.
   const at = (fx, fy) => ({ clientX: b.left + b.width * fx, clientY: b.top + b.height * fy,
-                            bubbles: true, cancelable: true, pointerId: 1,
+                            bubbles: true, cancelable: true, pointerId: 1, metaKey: true,
                             pointerType: 'mouse', button: 0, buttons: 1, isPrimary: true });
   lay.dispatchEvent(new PointerEvent('pointerdown', at(0.08, 0.10)));
   lay.dispatchEvent(new PointerEvent('pointermove', at(0.46, 0.90)));

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { IconRegions } from '../icons'
 import { dataUrl, shrinkB64 } from '../media/files'
@@ -15,6 +15,11 @@ const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const
  *  Apple's own long-press is 500ms and this is the same gesture, so it should not be a
  *  different length — a shorter one starts stealing taps. */
 const LONG_PRESS_MS = 500
+
+/** How far a press may travel and still be a click. Shared by the two questions that
+ *  ask it — *was that a tap or a scroll* over a render, and *was that a click or a
+ *  drag* while framing — because two thresholds for one gesture is two gestures. */
+const CLICK_SLOP = 8
 
 /**
  * The boxes, drawn on whatever they are drawn on — and, since the row and the map were
@@ -103,6 +108,30 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   }
   const index = loraIndex(state)
 
+  // **A press that is not on the card closes the card.** The rule is stated as one
+  // exception rather than as a list of places, because "anywhere outside the card"
+  // does not stop at the edge of the picture — the console, the strip and the page
+  // are outside it too, and a card that survived a press on the prompt field would be
+  // a panel you have to come back and dismiss.
+  //
+  // `.menu` is the second exception and it is not a special case, it is the same one:
+  // `Popover` portals to `<body>`, so the LoRA picker opened *from* the card is a DOM
+  // sibling of it. Closing the card under the row you are pressing takes the row with
+  // it, and the press lands on whatever the menu was covering. The layer's own
+  // handlers already learned this once — see `onLayer`.
+  //
+  // Capture, so it has run before the layer's own `onPointerDown` decides what the
+  // press means. A click that opens a card therefore closes it first, which is what
+  // makes clicking from one box to another swap cards rather than toggle one off.
+  useEffect(() => {
+    const shut = (e: PointerEvent) => {
+      if ((e.target as HTMLElement | null)?.closest('.rins,.menu')) return
+      useStore.getState().setCardOpen(false)
+    }
+    document.addEventListener('pointerdown', shut, true)
+    return () => document.removeEventListener('pointerdown', shut, true)
+  }, [])
+
   // What this layer *draws*, which is not whether it is listening — over a render it is
   // always listening, because a region you cannot touch is not addressable. See the
   // `edit` note in store.ts for the three states.
@@ -124,7 +153,9 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
     over === 'frame' || fileOver || (boxDrag && edit !== 'content') ? 'geometry' : edit
 
   const rectOf = () => layer.current?.getBoundingClientRect()
-  const frameXY = (e: PointerEvent | React.PointerEvent | React.DragEvent): [number, number] => {
+  const frameXY = (
+    e: PointerEvent | React.PointerEvent | React.MouseEvent | React.DragEvent,
+  ): [number, number] => {
     const b = rectOf()
     if (!b) return [0, 0]
     return [clamp01((e.clientX - b.left) / b.width), clamp01((e.clientY - b.top) / b.height)]
@@ -178,24 +209,46 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   }
 
   /**
-   * Which box a point addresses, and which of its handles if any.
+   * The handle under the point, whichever box owns it.
    *
-   * A handle is smaller than any box, so the same rule puts it first — but only where
-   * it is *drawn*. An invisible handle is not an object: letting one win would give
-   * every box four edges of theft over its neighbours, at a target nobody can see.
-   * The drawn set is exactly the pointed-at box's and the selected box's, which is
-   * what the stylesheet lights up, so the two cannot drift.
+   * `boxAt`'s rule, and it has to be the same one: a handle is smaller than any box,
+   * so it resolves first. What this replaces asked a second question after that —
+   * *is this handle already lit* — and the answer put the layers straight back in.
+   * Lighting is `sel` or `under`, `under` is decided by the **bodies**, and a box
+   * lying beneath a smaller one is never what a body-hover names. So its eight dots
+   * never lit, and a press landing exactly on one of them fell through to the box on
+   * top and *moved* it. A wide background box with a performer sitting on its right
+   * edge could not be widened at all: the press that should have taken its east
+   * handle slid the performer sideways instead.
+   *
+   * The objection that gate was there for — *an invisible handle is not an object,
+   * and letting one win gives every box four edges of theft at a target nobody can
+   * see* — is answered by disclosing rather than by refusing. Hover resolves through
+   * this same function, so crossing a handle lights that box's dots before any press,
+   * and the pointer sits on the thing it is about to grab. Outside geometry the
+   * handles are `display:none`, which keeps them out of `elementsFromPoint` entirely,
+   * so this can only ever name a box that is drawn.
    */
-  const hitAt = (cx: number, cy: number): { i: number; h: string | null } => {
-    const sel = useStore.getState().rsel
-    const stack = stackAt(cx, cy)
+  const handleAt = (stack: HTMLElement[]) => {
+    const live = useStore.getState().regions
+    let best: { i: number; h: string } | null = null
+    let area = Infinity
     for (const n of stack) {
       if (!n.dataset.h) continue
-      const box = n.closest<HTMLElement>('.rbox')
-      const i = box ? Number(box.dataset.i) : -1
-      if (i >= 0 && (i === sel || i === underRef.current)) return { i, h: n.dataset.h }
+      const i = Number(n.closest<HTMLElement>('.rbox')?.dataset.i)
+      const r = live[i]
+      if (!r || r.w * r.h >= area) continue
+      area = r.w * r.h
+      best = { i, h: n.dataset.h }
     }
-    return { i: boxAt(stack), h: null }
+    return best
+  }
+
+  /** Which box a point addresses, and which of its handles if any. One `stackAt` for
+   *  both questions: this runs on every pointermove. */
+  const hitAt = (cx: number, cy: number): { i: number; h: string | null } => {
+    const stack = stackAt(cx, cy)
+    return handleAt(stack) ?? { i: boxAt(stack), h: null }
   }
 
   const showGuides = (r: Region | null) => {
@@ -290,6 +343,7 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
           const now = useStore.getState()
           now.select(i)
           now.setEdit('content')
+          now.setCardOpen(true)
         }
         el?.addEventListener('pointerup', done)
         el?.addEventListener('pointercancel', cancel)
@@ -311,15 +365,26 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
       orig = { ...r }
       grab = [px - orig.x, py - orig.y]
       st.select(idx)
-    } else {
-      // A drag on bare canvas draws a new box. Capped, and silently — the cap is the
-      // backend's and there is nothing useful to say about it mid-gesture.
+    } else if (fresh) {
+      // ⌘ is what draws now, and `fresh` is the only way into this branch. A plain
+      // press on bare canvas used to draw, which made the canvas a surface where
+      // *putting the card away* built a rectangle: the dismissal is a click outside
+      // the card, most of the canvas is outside every box, so closing the card left a
+      // box behind almost every time. Two gestures make a region — ⌘ and a
+      // double-click — and both of them are things you go out of your way to do.
+      //
+      // Capped, and silently: the cap is the backend's and there is nothing useful to
+      // say about it mid-gesture.
       if (st.regions.length >= (st.state?.max_regions ?? 8)) return
       const r = newRegion({ x: px, y: py, w: 0, h: 0 })
       idx = st.regions.length
       grip = 'se'
       orig = { ...r }
       useStore.setState({ regions: [...st.regions, r], rsel: idx })
+    } else {
+      // Bare canvas, no modifier: the press has already closed the card and that is
+      // the whole of what it does.
+      return
     }
 
     e.preventDefault()
@@ -401,6 +466,20 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
           })
         }
         useStore.getState().select(idx)
+        // **The press that stayed put was a click, and a click opens the box.**
+        // Nowhere earlier can tell: the same pointerdown on the same rectangle is the
+        // start of a move, of a reshape, and of "show me what is in this one", and
+        // which it was is a fact about the *release*. Resolving it here is what lets
+        // the card be a thing you ask for without taking the gesture away from
+        // framing — press and travel and it never appears, press and let go and it
+        // does.
+        //
+        // Not for a box that was just drawn. ⌘ and a double-click are the two ways to
+        // make one, both of them end without travelling, and neither is a request to
+        // read what is inside a rectangle that is one second old and empty.
+        const drew = grip === 'se' && !orig.w
+        const travelled = Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY)
+        if (!drew && travelled <= CLICK_SLOP) useStore.getState().setCardOpen(true)
         // Selecting is not focusing, and this is the difference between the keyboard
         // working and not. The `preventDefault` above is what owns the drag, and it
         // also suppresses the focus the click would have given the box — so ⌫ and the
@@ -409,18 +488,14 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
         // and pressing delete did nothing at all. It matters more now than it did: Tab
         // between boxes is what replaced the map's `‹ 2/5 ›`.
         //
-        // Which of the two gets it depends on what just happened, and this handler is
-        // the only place that knows: a box you have just *drawn* wants the caret in its
-        // sentence, because the card appearing is only half the instruction and the
-        // other half is that you can start typing. One you merely moved wants the
-        // rectangle, so the next key still reaches it. Deferred a frame for the first,
-        // because the field does not exist until React has painted the card.
-        if (grip === 'se' && !orig.w) {
-          requestAnimationFrame(() =>
-            document.querySelector<HTMLInputElement>('#r-prompt')?.focus())
-        } else {
-          el?.querySelector<HTMLElement>(`.rbox[data-i="${idx}"]`)?.focus()
-        }
+        // The rectangle takes it in every case here, including the click that just
+        // opened a card. It used to hand a newly drawn box's caret to `#r-prompt`, on
+        // the argument that the card appearing is half the instruction and typing is
+        // the other half — but the card no longer appears on its own, so there is no
+        // field to hand it to, and while you are framing ⌫ and the arrows are worth
+        // more than a caret. Over a render the tap path still does the other thing;
+        // that is what `content` is for.
+        el?.querySelector<HTMLElement>(`.rbox[data-i="${idx}"]`)?.focus()
       }
       useStore.getState().setBoxDrag(false)
     }
@@ -454,6 +529,7 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
       select(hit)
     } else {
       attach('frame', 'scene', b64)
+      useStore.getState().setCardOpen(true)
       // And show the frame's card, because this drop just moved the run onto the
       // krea2edit compose — a different engine that regenerates the whole frame and
       // is several times slower. The plate itself becomes visible behind the boxes,
@@ -479,6 +555,31 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
             under the cursor, so the two captions are never on screen together. */
          className={mode}
          onPointerDown={onPointerDown}
+         /* The other way to make one, and the reason a plain press no longer does.
+            Both gestures that build a region are now deliberate — ⌘ and this — because
+            the card's dismissal is "a click anywhere outside it" and most of the canvas
+            *is* outside every box: a surface where putting the card away leaves a
+            rectangle behind is a surface you cannot put the card away on.
+   
+            Bare canvas only. Inside a box a double-click is two clicks on the thing
+            that opens its card, and ⌘ is already the answer to "a new one, here" where
+            there is no bare canvas left to aim at. The press that precedes this one
+            returns before `preventDefault`, which is what leaves the double-click to
+            arrive at all. */
+         onDoubleClick={(e) => {
+           if (!onLayer(e)) return
+           if ((e.target as HTMLElement).closest('.rins,.rframe-btn')) return
+           if (hitAt(e.clientX, e.clientY).i >= 0) return
+           const st = useStore.getState()
+           if (st.regions.length >= (st.state?.max_regions ?? 8)) return
+           const [px, py] = frameXY(e)
+           // The size a ⌘-click that never travels already lands on, so the two ways
+           // in produce the same rectangle rather than two house styles.
+           const [w, h] = [0.28, 0.6]
+           const r = newRegion({ x: clamp01(Math.min(px, 1 - w)),
+                                 y: clamp01(Math.min(py, 1 - h)), w, h })
+           useStore.setState({ regions: [...st.regions, r], rsel: st.regions.length })
+         }}
          /* Hover, resolved by the same rule as the click. Skipped on touch, where a
             move only happens with a finger already down and a box left lit from the
             last tap would be a mark on the picture; and skipped mid-drag, where the
@@ -596,7 +697,14 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
       {!!regions.length && mode === 'geometry' && (
         <button className={`rframe-btn${rsel < 0 ? ' on' : ''}`} type="button" id="g-frame"
                 title="The frame — scene, outfit, and how hard every box pushes"
-                onClick={() => select(rsel < 0 ? 0 : -1)}>
+                onClick={() => {
+                  select(rsel < 0 ? 0 : -1)
+                  // The press that got here closed the card on its way through the
+                  // document listener, so this is an open rather than a toggle: the
+                  // button is how you *reach* a card, and clicking off it is how you
+                  // put it away.
+                  useStore.getState().setCardOpen(true)
+                }}>
           <IconRegions />
         </button>
       )}

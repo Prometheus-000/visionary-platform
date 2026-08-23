@@ -58,8 +58,21 @@ export function Inspector({ mode }: { mode: EditMode }) {
   // The frame's card is a geometry-scope thing — the scene, the outfit and the weight
   // every box is multiplied by are decisions about the whole arrangement, not about the
   // one performer you touched. So `content` shows a box or it shows nothing.
-  if (!r) return mode === 'geometry' ? <FrameCard drag={s.boxDrag} /> : null
-  return <BoxCard r={r} i={s.rsel} drag={s.boxDrag} mode={mode} />
+  if (!r) return mode === 'geometry' && s.cardOpen ? <FrameCard drag={s.boxDrag} /> : null
+  return (
+    <>
+      {/* Open, not selected. See `cardOpen` in store.ts: the card arriving on every
+          gesture that touched a box put a 296px panel over the picture for the whole
+          of a framing session — and the layer refuses presses inside `.rins`, so
+          whatever lay under it was not adjustable at all. */}
+      {s.cardOpen && <BoxCard r={r} i={s.rsel} drag={s.boxDrag} mode={mode} />}
+      {/* The card's numbers, for the length of the gesture that takes the card away —
+          and now for every drag, because a drag is what closes the card in the first
+          place. Gated on geometry, which is the gate the numbers themselves carry: a
+          mode with no coordinates in it does not grow some for a drag. */}
+      {s.boxDrag && mode === 'geometry' && <Readout r={r} />}
+    </>
+  )
 }
 
 /**
@@ -252,10 +265,10 @@ function BoxCard(
         </button>
       </div>
 
-      {/* The escape hatch, and during a drag the readout that teaches what it is an
-          escape from. Dragging is what makes "0.5 0 0.5 1" mean a rectangle; the
+      {/* The escape hatch. Dragging is what makes "0.5 0 0.5 1" mean a rectangle; the
           numbers never taught the dragging, which is why they are the second row here
-          and were the wrong primary in the row this replaced.
+          and were the wrong primary in the row this replaced — and why `Readout` carries
+          them through the one gesture that takes this card off the screen.
 
           Geometry only. They are the *rectangle*, and the card's other rows are what is
           inside it — which is the split this whole mode exists to make: touching a
@@ -270,6 +283,37 @@ function BoxCard(
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The four numbers, for the one gesture that hides the card holding them.
+ *
+ * `.rins.dragging` is opacity 0 for the length of a drag, and it is right — a card over
+ * the rectangle you are dragging is a card in the way of the thing it describes — but it
+ * took the coordinates with it, and three separate comments in this feature still said
+ * the numbers are "a readout that moves while you drag". They were describing the console
+ * row this card replaced, where the numbers sat below the canvas and could not be in the
+ * way of anything. `RegionLayer` is still paying one store write per animation frame to
+ * keep them moving, expressly so, into a surface at zero opacity. Dragging is what
+ * teaches the numbers; a drag that shows none teaches nothing.
+ *
+ * Fixed in a corner rather than following the box, because a readout that moves with the
+ * gesture is a second thing to track while you are already tracking the first — and
+ * because staying put is what the row it is restoring did. Top-left is the corner nothing
+ * else claims: `#canvas-acts` is top-right, the frame button is bottom-right, and
+ * bottom-left is the frame card's, with a refused drop that sits there until the next
+ * one.
+ */
+function Readout({ r }: { r: Region }) {
+  return (
+    <p className="rins-readout" id="region-readout">
+      {([['x', 'X'], ['y', 'Y'], ['w', 'W'], ['h', 'H']] as const).map(([key, label]) => (
+        // `fmt`, the same one the boxes print, so the readout and the card cannot
+        // disagree about a rectangle they are both describing.
+        <span key={key}><span className="lead">{label}</span>{fmt(r[key])}</span>
+      ))}
+    </p>
   )
 }
 
