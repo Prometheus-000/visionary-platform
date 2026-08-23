@@ -66,3 +66,31 @@ Visionary Surface Audit_files/
 # screenshots have real names (generate.png, regional.png) and live in docs/, so
 # anchoring to the root keeps those while ignoring the scratch ones.
 /Screenshot*.png
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+web/dist-ds/
+.design-sync/upload-manifest.txt
+
+# Upstream clones, read rather than built against — MiniMax-H3 for the prompt
+# guides `_compile_h3_scene` is checked against, ai-toolkit for the trainer
+# recipe Phase 5 needs. Both have their own remotes, so committing them would
+# nest a repo inside this one and cost a clone 334MB to read two documents.
+# The facts taken out of them live in CLAUDE.md and tools/vendor/.
+MiniMax-H3/
+ai-toolkit/
+
+# Papers. 63MB of other people's PDFs, ignored for the reason the styling
+# screenshots are — the synthesis beside them is the part that informed
+# anything, and that is a 28K markdown file which is committed.
+research/*.pdf
+
+# Film. Enter the Void's death scene is the reference the blocking derivation
+# was measured against and every number it produced is in the history; the
+# clip itself is somebody's film and 20MB besides.
+*.mp4
+*.webp
+A0000268.jpg
+void.jpg

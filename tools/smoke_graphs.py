@@ -151,6 +151,8 @@ def _variants() -> list[tuple[str, dict]]:
     n = _h3_frames(5)
     base = dict(prompt="a smoke test", width=w, height=h, frames=n,
                 seed=seed, steps=steps, sampler="res_multistep", scheduler="simple")
+    h3_stack = [{"name": "one.safetensors", "unet": 0.9},
+                {"name": "two.safetensors", "unet": 0.6}]
     out += [
         ("h3 t2v", _h3_graph(**base)),
         ("h3 i2v (first)", _h3_graph(**base, first_frame="a.png")),
@@ -160,6 +162,25 @@ def _variants() -> list[tuple[str, dict]]:
         # place in either builder where the input name is computed.
         ("h3 ref2va", _h3_graph(**base, references=["r0.png", "r1.png"],
                                 ref_videos=["v0.mp4"], ref_size="match")),
+        # H3 has one expert, so the stack is one chain rather than two — and
+        # both the guider and the scheduler have to be moved onto its end, which
+        # is the link this case exists to check. A LoRA reaching the sampler
+        # while the schedule still reads the bare DiT validates perfectly.
+        ("h3 t2v + loras", _h3_graph(**base, loras=h3_stack)),
+        ("h3 ref2va + loras", _h3_graph(**base, references=["r0.png"],
+                                        ref_size="match", loras=h3_stack)),
+        # The shift node exists to be moved off the model's own 12.0/3.0 for a
+        # distilled LoRA, and it has to sit *after* the stack. Absent otherwise,
+        # so the plain cases above are also the check that it stays absent.
+        ("h3 + loras + shift", _h3_graph(**base, loras=h3_stack,
+                                         shift_video=5.0, shift_audio=2.0)),
+        ("h3 + shift only", _h3_graph(**base, shift_video=5.0)),
+        # `<Audio N>` is its own autogrow group, and a scene whose only
+        # reference is a voice still has to reach the reference transformer.
+        ("h3 ref2va + audio", _h3_graph(**base, references=["r0.png"],
+                                        ref_audios=["a0.wav"], ref_size="match")),
+        ("h3 audio only", _h3_graph(**base, ref_audios=["a0.wav"],
+                                    ref_size="match")),
     ]
 
     # ── Wan 2.2 ───────────────────────────────────────────────────────────

@@ -187,7 +187,32 @@ VIDEO_GPUS = ("H100", "H200")
 # kernels — for 42.5 GB and int8 tensor-core matmuls instead of bf16 ones. On
 # one card that is the difference between offloading every request and holding
 # the model resident, on top of roughly 2x on the denoise loop itself.
-COMFY_SHA = "16e3f3034f2bba1fff6c70cbd759339778555cd6"  # 2026-08-03, H3 VAE fix
+# Pinned — and not for reproducibility, which is the reason that usually gets
+# given and the one that matters least here. GenAI work is iterative; nobody
+# needs this month's render back pixel-for-pixel in three.
+#
+# It is pinned because **a pin is the only thing that pulls upstream in.**
+# Unpinning sounds like tracking latest and is the opposite: Modal's layer cache
+# key is the command string, not the world, so `git clone --depth 1 <branch>` is
+# a constant and that layer caches until something *above* it changes. Unpinned,
+# the build sits on whatever HEAD was current the last time torch moved, with
+# nothing recording which. Bumping a SHA is deliberate, guaranteed, and says
+# what you got.
+#
+# Neither arrangement rebuilds when upstream churns — the cache key is the same
+# either way — so the pin costs nothing for the hundred commits a week that
+# never reach a render. What it lacks is a reason to look, and that is
+# `tools/upstream.py`: it buckets what changed by the paths this app's behaviour
+# rides on, so 168 files touched reads as "17 of them matter" rather than as a
+# number to feel behind about.
+#
+# What upstream guarantees on its own, and what it does not: node ids, input
+# ids, output slot indices and new required inputs are all migrated server-side
+# on `POST /prompt` by `NodeReplace` — they maintain one for a node id with a
+# *trailing space*. What has no migration is the arithmetic. In the range this
+# bump crossed, `comfy/ldm/minimax/model.py` moved +150/-64 with every name
+# intact.
+COMFY_SHA = "783545f689a0af730065994b46b382ae24844c99"  # 2026-08-22, +110
 COMFY = Path("/opt/comfyui")
 COMFY_PORT = 8188
 
@@ -198,9 +223,19 @@ COMFY_PORT = 8188
 # Its whole surface on ComfyUI is public: it wraps the diffusion model through
 # comfy.patcher_extension, swaps attention through the transformer_options
 # `optimized_attention_override` hook, and loads LoRAs with
-# comfy.sd.load_lora_for_models. All three exist at COMFY_SHA, which is what
+# comfy.sd.load_lora_for_models. All of it exists at COMFY_SHA, which is what
 # makes this an install rather than a vendor — nothing here is patched, so
 # forge/VENDOR.md has no successor.
+#
+# Re-checked across the 2026-08-03 -> 2026-08-22 bump, because a pinned pack
+# against a moved host is the one place this arrangement could rot quietly: all
+# **12** symbols it names survive, and `patcher_extension.py` is byte-identical.
+# The one thing that did move is instructive rather than alarming —
+# `optimized_attention_override` grew an optional `container_function` branch
+# and kept `override(func, *args, **kwargs)` as the fallback, so a pack passing
+# a plain callable takes the same path it always did. That is the shape of
+# nearly every ComfyUI change in the range: additive, because breaking a node
+# id or a hook breaks thousands of installs at once.
 #
 # One node out of the pack's six is wired up: V12. It subclasses V9, so V9's
 # engine ships whether or not it is reachable, and exposing both would mean two
@@ -834,6 +869,69 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "gated": False,
         "approx_gb": 1.4,
     },
+    # ── MiniMax-H3 speed LoRAs ─────────────────────────────────────────────
+    #
+    # MiniMax's own Lightning distillations, in the repo the H3 weights already
+    # come from — 20 steps down to 8 or 4. They are the answer to the line this
+    # file used to carry, that H3 had "no ecosystem for the int8 repackage":
+    # there is one, it is first-party, and it was two directories from the
+    # transformer we were already downloading.
+    #
+    # They load through `LoraLoaderModelOnly` like anything else, and the
+    # `turbo_mode` toggle ComfyUI's tutorial describes is that node with a
+    # switch in front of it. Worth writing down, because grepping
+    # `comfy_extras/nodes_minimax_h3.py` for "turbo" returns nothing at either
+    # COMFY_SHA or master and reads as proof the feature does not exist. It
+    # does: the t2v and i2v templates wrap it in a *subgraph* and promote
+    # `turbo_mode`, `turbo_model_strength` and `turbo_steps` as widgets, and
+    # `video_minimax_h3_r2v.json` — which is not a subgraph — shows the parts
+    # unwrapped: a `PrimitiveBoolean`, two `ComfySwitchNode`s choosing between
+    # the bare DiT and `LoraLoaderModelOnly(DiT)` and between two step counts.
+    #
+    # So there is nothing to add here. That switch exists because a template is
+    # a fixed graph and needs a way to turn a node off; this console has a LoRA
+    # picker and a steps control, so the toggle is two controls it already has.
+    #
+    # One provenance note the templates carry and the repo does not: the 8-step
+    # file is `lightx2v/Minimax-h3-Turbo` upstream and is *mirrored* into
+    # Comfy-Org/MiniMax-H3. Pulled from the mirror so the whole family is one
+    # repo id and one token.
+    #
+    # Paired to a transformer rather than to an expert: fl2v is the t2v/i2v
+    # DiT, ref2v is the reference one. Crossing them is not something this
+    # picker can prevent — see the note on `vidExpert` — so the labels say
+    # which is which.
+    "h3_speed_fl2v_8": {
+        "label": "H3 speed · 8-step",
+        "note": "Lightning turbo LoRA — t2v and i2v",
+        "family": "MiniMax-H3 speed LoRAs",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        "dest": LORAS / "h3-speed" / "fl2v-8step.safetensors",
+        "gated": False,
+        "approx_gb": 2.0,
+    },
+    "h3_speed_fl2v_4": {
+        "label": "H3 speed · 4-step 768p",
+        "note": "Lightning turbo LoRA — t2v and i2v, 768p",
+        "family": "MiniMax-H3 speed LoRAs",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+        "dest": LORAS / "h3-speed" / "fl2v-4step-768p.safetensors",
+        "gated": False,
+        "approx_gb": 2.0,
+    },
+    "h3_speed_ref2v_4": {
+        "label": "H3 speed · 4-step reference",
+        "note": "Lightning turbo LoRA — ref2va only",
+        "family": "MiniMax-H3 speed LoRAs",
+        "repo_id": "Comfy-Org/MiniMax-H3",
+        "filename": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "dest": LORAS / "h3-speed" / "ref2v-4step.safetensors",
+        "gated": False,
+        "approx_gb": 2.0,
+    },
+
     # ── Wan 2.2 speed LoRAs ────────────────────────────────────────────────
     #
     # These land in loras/, not models/, because that is what they are: they
@@ -3121,6 +3219,27 @@ COMFY_RESET_TRIES = 5
 # tip is a constant in `execution.py`, so it is the stable half.
 COMFY_OOM_MARK = "ran out of memory on your GPU"
 
+# What ComfyUI prints, once per key, when a LoRA carries weights the loaded
+# model has no parameter for — `comfy/sd.py`'s `load_lora_for_models`. It is a
+# warning rather than an error there, and rightly so: a partial match is a real
+# thing. Ours is the count, not the verdict.
+COMFY_LORA_MISS = "NOT LOADED"
+
+# H3's flow shifts, and the reason `MiniMaxH3SigmaShift` is normally absent from
+# our graph: these are the *model's own* defaults — `MiniMaxH3.forward` reads
+# `transformer_options.get("minimax_h3_sigma_shift_video", self.sigma_shift_video)`
+# with `sigma_shift_video=12.0, sigma_shift_audio=3.0`, and
+# `supported_models.MiniMaxH3.sampling_settings` says `shift: 12.0` besides. So
+# the node at its defaults is exactly equivalent to no node, and adding one
+# unconditionally would be chrome on the graph.
+#
+# It stops being equivalent the moment a distilled LoRA is loaded: 20 steps down
+# to 4 wants a different curve, and this is the only lever for one. Same rule
+# the Wan builder already records — the shift is the last word on the sampling
+# curve, so it goes *after* the LoRAs, never before.
+H3_SHIFT_VIDEO = 12.0
+H3_SHIFT_AUDIO = 3.0
+
 
 class _Comfy:
     """
@@ -3145,6 +3264,12 @@ class _Comfy:
         # stream, where they interleave. See `_drain`.
         self.tag = tag
         self.job_id: str | None = None
+        # Keys a LoRA carried that this DiT has no home for. Counted rather than
+        # logged-and-forgotten because it is the one LoRA failure with no
+        # symptom: the graph runs, the clip arrives, and nothing anywhere says
+        # the weights did nothing. See `_drain`.
+        self._unmatched = 0
+        self._told = False
         self._log: deque[str] = deque(maxlen=200)
         self._proc: subprocess.Popen | None = None
 
@@ -3237,6 +3362,13 @@ class _Comfy:
             # are already shown under the panel they belong to.
             print(f"[{self.tag}] {line}", flush=True)
             self._log.append(line)
+            # ComfyUI prints one of these per key it could not place, which on a
+            # LoRA for the wrong architecture is hundreds. Counted here and
+            # published once below, because `_publish` is a round trip to a
+            # network Dict and doing it per key would cost more than the render.
+            if COMFY_LORA_MISS in line:
+                self._unmatched += 1
+                continue
             m = TQDM_RE.search(line)
             if m and self.job_id:
                 fields: dict[str, Any] = {
@@ -3245,6 +3377,15 @@ class _Comfy:
                     "total_steps": int(m.group("total")),
                     "percent": int(m.group("pct")),
                 }
+                # The first progress line is the moment every LoRA has finished
+                # loading, so it is the earliest the count is final and the
+                # cheapest place to say so — it rides a publish already going.
+                if self._unmatched and not self._told:
+                    self._told = True
+                    fields["lora_note"] = (
+                        f"{self._unmatched} LoRA weights did not match this "
+                        f"model and were skipped — check the LoRA was trained "
+                        f"for this architecture.")
                 if m.group("eta"):
                     fields["eta"] = m.group("eta")
                     fields["rate"] = f"{m.group('rate')}{m.group('unit')}"
@@ -3481,6 +3622,7 @@ class _Comfy:
         """
         self._revive()
         self.job_id = job_id
+        self._unmatched, self._told = 0, False
         try:
             self._note_headroom()
             prompt_id = self.post("/prompt", {"prompt": graph})["prompt_id"]
@@ -5948,6 +6090,9 @@ H3_TIERS = {"full": 768, "draft": 544}
 # here because it is packed as that video's, not as its own <Audio n>.
 MAX_H3_REFS = 9
 MAX_H3_REF_VIDEOS = 3
+# `<Audio N>`. Three, from the node's own `ref_audios` autogrow template, and it
+# counts toward the same 12 as pictures and videos.
+MAX_H3_REF_AUDIOS = 3
 MAX_H3_REF_TOTAL = 12
 
 # Reference tokens ride through every sampling step, so their size is a per-step
@@ -6110,7 +6255,11 @@ def _h3_graph(
     last_frame: str | None = None,
     references: list[str] | None = None,
     ref_videos: list[str] | None = None,
+    ref_audios: list[str] | None = None,
     ref_size: str = "match",
+    loras: list[dict[str, Any]] | None = None,
+    shift_video: float | None = None,
+    shift_audio: float | None = None,
 ) -> dict[str, Any]:
     """
     Build ComfyUI's API-format graph for one H3 clip.
@@ -6125,7 +6274,7 @@ def _h3_graph(
     Note both decoders read SamplerCustomAdvanced slot 0 (`output`), not slot 1
     (`denoised_output`) — video and audio come out of the same latent.
     """
-    ref_mode = bool(references or ref_videos)
+    ref_mode = bool(references or ref_videos or ref_audios)
     dit = MODEL_CATALOGUE["h3_ref_dit" if ref_mode else "h3_dit"]["dest"].name
     te = MODEL_CATALOGUE["h3_te"]["dest"].name
     vae = MODEL_CATALOGUE["h3_vae"]["dest"].name
@@ -6175,6 +6324,47 @@ def _h3_graph(
                             "format": "auto", "codec": "auto"}},
     }
 
+    # The LoRA stack, chained onto the DiT exactly as the Wan graph does it —
+    # `LoraLoaderModelOnly` is architecture-agnostic weight patching, so what
+    # decides whether a given file does anything is whether its keys map onto
+    # this DiT, not whether ComfyUI knows the family. That is why an unmatched
+    # LoRA is *reported* (see `_drain`) rather than assumed to have worked: a
+    # file whose keys miss loads nothing, changes nothing, and looks exactly
+    # like a LoRA that was simply subtle.
+    #
+    # H3 has one expert, so there is no high/low branch to target and the stack
+    # is one chain. `/api/video` already refuses an expert-tagged LoRA for any
+    # model whose `supports.experts` is false, which is this one.
+    src = "dit"
+    for i, lora in enumerate(loras or []):
+        graph[f"lora{i}"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"model": [src, 0], "lora_name": lora["name"],
+                       "strength_model": lora["unet"]},
+        }
+        src = f"lora{i}"
+    # After the stack, because a distilled LoRA changes the schedule it wants and
+    # the shift has to be the last word on the sampling curve. Absent unless
+    # asked for: at the defaults above it is a no-op, and a node that does
+    # nothing is a node somebody has to work out is doing nothing.
+    if shift_video is not None or shift_audio is not None:
+        graph["shift"] = {
+            "class_type": "MiniMaxH3SigmaShift",
+            "inputs": {
+                "model": [src, 0],
+                "shift_video": H3_SHIFT_VIDEO if shift_video is None else float(shift_video),
+                "shift_audio": H3_SHIFT_AUDIO if shift_audio is None else float(shift_audio),
+            },
+        }
+        src = "shift"
+    if src != "dit":
+        # Both, not just the guider. A LoRA that patches model sampling would
+        # otherwise have the sampler reading it and the schedule ignoring it,
+        # which is a disagreement no error reports — and `MiniMaxH3SigmaShift`
+        # is precisely a node that patches model sampling.
+        graph["guider"]["inputs"]["model"] = [src, 0]
+        graph["sigmas"]["inputs"]["model"] = [src, 0]
+
     # A keyframe is stretched to the canvas when it is the first frame (it
     # anchors the geometry) and cover-cropped when it is the last — that is
     # MiniMaxH3ImageToVideo's own behaviour, not something to reimplement here.
@@ -6210,6 +6400,16 @@ def _h3_graph(
                                     "inputs": {"video": [f"refvid{i}", 0]}}
         cond[f"ref_videos.ref_video_{i}"] = [f"refvidparts{i}", 0]
         cond[f"ref_video_audios.ref_video_audio_{i}"] = [f"refvidparts{i}", 1]
+
+    # A standalone `<Audio N>` — a voice to clone the timbre of, a track to
+    # reuse, a texture to reference. Its own autogrow group, and deliberately
+    # *not* the one above: `ref_video_audios` means "this is that clip's
+    # soundtrack", which is a claim about a video. An audio dropped on a
+    # character is a claim about a person, and putting it in the video group
+    # would be telling the model it belongs to a clip nobody attached.
+    for i, name in enumerate(ref_audios or []):
+        graph[f"refaud{i}"] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+        cond[f"ref_audios.ref_audio_{i}"] = [f"refaud{i}", 0]
     return graph
 
 
@@ -6221,10 +6421,14 @@ def _h3_graph(
 # which is the whole reason the backend was a driven ComfyUI rather than ported
 # model code: adding a family is a graph and a table, not an image.
 #
-# What Wan is *for*, next to H3: it takes LoRAs. H3's repackage is int8-convrot
-# quantized and has no LoRA ecosystem to speak of; Wan 2.2 has both, and phase 4
-# trains against it. It also reads CFG and a negative prompt, which H3 —
-# guidance-distilled — does not. Silent video is the cost.
+# What Wan is *for*, next to H3: it reads CFG and a negative prompt, which H3 —
+# guidance-distilled — does not, and phase 4 trains against it. Silent video is
+# the cost.
+#
+# This used to say Wan was the one that took LoRAs, on the grounds that H3's
+# int8-convrot repackage had "no LoRA ecosystem to speak of". Both halves were
+# wrong: `LoraLoaderModelOnly` patches any MODEL, and MiniMax ship their own
+# Lightning distillations in the repo the H3 weights already come from.
 # --------------------------------------------------------------------------
 
 # Two families under one name. `14b` is the A14B mixture of experts, two 14 GB
@@ -6292,7 +6496,12 @@ VIDEO_MODELS: dict[str, dict[str, Any]] = {
         "schedulers": ["simple", "normal", "beta"],
         "defaults": {"steps": 20, "sampler": "res_multistep", "scheduler": "simple",
                      "tier": "full", "seconds": 5},
-        "supports": {"loras": False, "experts": False, "cfg": False,
+        # `loras: True` because `LoraLoaderModelOnly` patches any MODEL and this
+        # platform's other half is a trainer — the ecosystem objection this
+        # entry used to encode ("no ecosystem for the int8 repackage") is an
+        # argument about what other people publish, not about what the graph can
+        # load, and it is the wrong reason to refuse somebody their own weights.
+        "supports": {"loras": True, "experts": False, "cfg": False,
                      "negative": False, "references": True, "last_frame": True,
                      "audio": True},
     },
@@ -7290,8 +7499,15 @@ Follow these rules strictly:
 REWRITE_OPS: dict[str, dict[str, str]] = {
     "enhance": {
         "label": "Enhance",
-        "note": "Restructures your prompt the way Krea 2 reads best, and "
-                "fills it out only where it is thin.",
+        # No model name in here. `/api/state` is fetched once and is kind-blind, so this
+        # one string is read by the image strip and the video strip alike — and it said
+        # "the way Krea 2 reads best" while MiniMax-H3 was the model on screen and the
+        # one about to be handed the prompt. The rewrite does run on Krea 2's own text
+        # encoder, which is why it was written that way, but that is a fact about our
+        # plumbing rather than about the button, and it is wrong in half the places the
+        # button appears.
+        "note": "Restructures your prompt the way the model you are running reads "
+                "best, and fills it out only where it is thin.",
         "instruction": KREA_EXPANSION,
     },
 }
@@ -8359,7 +8575,7 @@ def _validate_ref_roles(raw: Any, count: int) -> list[str]:
 
 
 def _h3_task(first_frame: Any, last_frame: Any,
-             references: Any, ref_videos: Any) -> str:
+             references: Any, ref_videos: Any, ref_audios: Any = None) -> str:
     """
     Which of the guide's four tasks a request is.
 
@@ -8370,7 +8586,7 @@ def _h3_task(first_frame: Any, last_frame: Any,
     different sentences and getting it wrong tells the model a picture sits at a
     timestamp it does not.
     """
-    if references or ref_videos:
+    if references or ref_videos or ref_audios:
         return "ref2va"
     if first_frame and last_frame:
         return "fl2va"
@@ -8556,10 +8772,1517 @@ def _shot_audio(buckets: dict[tuple[int, str, str], list[str]],
     return lead + ", ".join(parts) + "."
 
 
+# ── the scene ───────────────────────────────────────────────────────────────
+#
+# What the composer sends instead of a sentence.
+#
+# The reason it exists is that MiniMax's own guides — `skills/h3-prompt-writing`
+# in the model repo, vendored the way `KREA_EXPANSION` is — document a grammar
+# far larger than a text field can hold, and every part of it that is missing
+# here is missing for the same reason: `_compile_h3_prompt` could not emit it
+# because the composer never collected it.
+#
+#   [Shot N] markers, and cut times that strictly increase
+#   speaker IDs assigned by order of vocal event and held across shots
+#   <scenetrans> at *both* connecting points when a line crosses a cut
+#   a bracketed task-type prefix on `summary`, from a closed table
+#   `retention_analysis` as one line per label with a fixed relationship marker
+#
+# None of those is a sentence anybody could be expected to write. All of them
+# are facts an interface knows: a cut time is a boundary between two rows, a
+# speaker ID is a cast member with a line, a retention line is the set of shots
+# a handle appears in.
+#
+# **The scene is the input; the document is a receipt.** Same relationship this
+# file already draws between `prompt_typed` and the compiled `prompt`, and the
+# reason the job record carries the scene as well as the string it produced.
+
+MAX_CAST = 8
+MAX_SCENE_SHOTS = 8
+MAX_SCENE_LINE = 600
+
+# H3's own limit on the prompt field: 7,000 characters including whitespace.
+# It is in neither writing guide — it surfaced in the format scorer vendored
+# under `tools/vendor/minimax_score/`, which is the argument for having taken a
+# second reading of this format from somebody who trained on it.
+#
+# Checked after compiling rather than by bounding the inputs, because the
+# document is several times what was typed and no bound on a shot line predicts
+# it. A refusal naming the overflow beats a truncation nobody sees: the fields
+# at the end are `overall_soundscape` and `non_diegetic_music`, so a document
+# cut to length loses its audio and still looks well-formed.
+MAX_H3_PROMPT = 7000
+
+# The guide's relationship markers, which are *fixed English values in the
+# output format* rather than prose we choose — ref-en §4.1 and §4.2 say so in
+# those words. Two tables because visual content and audio do not share a
+# vocabulary: `fully_copy` is meaningless about a photograph and
+# `fully_preserved` is meaningless about a signal.
+H3_RETENTION = ("fully_preserved", "partially_preserved",
+                "attribute_transfer", "weak_reference")
+H3_AUDIO_RETENTION = ("fully_copy", "partially_copy", "reference",
+                      "weak_reference")
+
+# `summary` opens with a bracketed task type and the set is closed (ref-en §3).
+# Order is the guide's own table order, because several are joined with " + "
+# and a stable order is what makes one scene compile to one document twice.
+H3_TASK_TYPES = ("keyframe completion", "reference generation",
+                 "video editing", "video continuation",
+                 "audio reuse", "audio reference")
+
+# What a reference *video* is doing, which is the only thing that can promote a
+# task type past `reference generation`. The guide is explicit that the mere
+# presence of a video does not create a type: "If a reference video provides
+# only camera movement, cuts, or rhythm, it normally belongs to reference
+# generation."
+H3_VIDEO_ROLES = {"reference": "reference generation",
+                  "edit": "video editing",
+                  "continue": "video continuation"}
+
+# And what an `<Audio N>` is doing. The guide draws the same line here that it
+# draws for video: copying the signal and referencing its character are two
+# different task types, and it says which marker goes with which — `fully_copy`
+# for a reuse, `reference` for a timbre. So the role decides both.
+H3_AUDIO_ROLES = {"reference": ("audio reference", "reference"),
+                  "reuse": ("audio reuse", "fully_copy")}
+
+# A slot is a role, and the role is decided by where the file was dropped.
+# `noun` builds the guide's own construction — `<Subject N> is the {noun} in
+# <Picture M>` — and `retain` builds the clause after the relationship marker.
+# This is `SHOT_REF_ROLES` with a kind above it, because a place has no face
+# and a character has no architecture, and a flat role list cannot say so.
+H3_CAST_KINDS = {
+    "character": {"noun": "person", "slots": {
+        "face": "facial structure, hair and build",
+        "wardrobe": "garments, their cut and colour",
+        "body": "build and posture",
+        "voice": "vocal timbre and delivery",
+        "motion": "the motion and its timing",
+    }},
+    "place": {"noun": "location", "slots": {
+        "establishing": "architecture, materials and layout",
+        "style": "palette, contrast and grain",
+    }},
+    "thing": {"noun": "object", "slots": {
+        "object": "shape, material and markings",
+        "style": "palette, contrast and grain",
+    }},
+}
+
+# Which channel a slot's file has to arrive on. The page expresses this as "the
+# slot does not highlight"; it is asserted again here because a stale tab is a
+# client that can send anything, and a voice dropped into a face slot is a
+# picture the model is told to read as a timbre.
+H3_SLOT_MEDIA = {"voice": "audio", "motion": "video"}
+
+# An audio reference is a *sibling* of the subject, not a property of it. The
+# guide's own construction is `<Audio 1> is the voice-timbre reference for
+# <Subject 1> (S1)` — its own line in `subject_definitions`, its own line in
+# `retention_analysis` with an audio marker, and the speaker ID reused rather
+# than assigned. So a voice file does not fold into the subject's definition
+# the way a second photograph does; it gets a line of its own.
+H3_AUDIO_NOUN = "voice-timbre reference"
+
+# Clip-level sources — the three the composer had no way to say.
+#
+# They are **not cast references**, which is why they were unreachable: a video
+# you are continuing from is not a subject's likeness, it is a property of the
+# clip. `H3_VIDEO_ROLES` and three of `H3_TASK_TYPES` were live in the compiler
+# with nothing able to populate them.
+#
+# `noun` is the guide's own definition wording, `retain` the parenthetical its
+# `retention_analysis` entry carries, and `mark` the relationship marker — a
+# structural reference is `weak_reference` because only the pacing survives,
+# while a source being edited is `partially_preserved` because most of it does.
+H3_SOURCES = {
+    "keyframe": {"kind": "image", "task": "keyframe completion",
+                 "noun": "keyframe anchor for the target video",
+                 "retain": "keyframe anchor", "mark": "fully_preserved"},
+    "continue": {"kind": "video", "task": "video continuation",
+                 "noun": "source video the target video continues from",
+                 "retain": "continuation source", "mark": "weak_reference"},
+    "edit": {"kind": "video", "task": "video editing",
+             "noun": "source video for the target video edit",
+             "retain": "cut and pacing structure", "mark": "partially_preserved"},
+}
+
+
+def _shot_groups(pills: list[dict[str, Any]], *,
+                 side: str) -> dict[str, list[str]]:
+    """
+    The chosen pills by vocabulary *group*, rather than by slot.
+
+    `_shot_phrases` buckets by slot because prose has one axis and the slot is
+    the position along it. A shot does not: framing opens it, the camera move is
+    its own sentence after the action, and the sound folds into a different
+    field entirely. Grouping by slot to get those apart means reading
+    `(40, "list", "visual")` and hoping nobody renumbers the table — so this
+    asks the question it means.
+    """
+    chosen = {p["key"]: p for p in pills}
+    out: dict[str, list[str]] = {}
+    for group in SHOT_VOCAB:
+        if side == "image" and not group["image"]:
+            continue
+        for item in group["items"]:
+            pill = chosen.get(f"{group['key']}.{item['key']}")
+            if pill is None:
+                continue
+            text = _shot_text(group, item, pill)
+            if text:
+                out.setdefault(group["key"], []).append(text)
+    return out
+
+
+def _h3_clock(seconds: float) -> str:
+    """`MM:SS.mmm`, which is the cut-time format and not negotiable."""
+    minutes, rest = divmod(max(0.0, float(seconds)), 60.0)
+    return f"{int(minutes):02d}:{rest:06.3f}"
+
+
+def _validate_scene(raw: Any, *, n_refs: int, n_vids: int, n_auds: int = 0,
+                    seconds: float) -> dict[str, Any] | None:
+    """
+    Normalise the composer's scene, or say exactly what is wrong with it.
+
+    Importable from the CPU web container for the same reason `_validate_shot`
+    is. What it adds over that one is the class of error a pill rail cannot
+    have: a cast member pointing at a picture nobody uploaded, a handle used in
+    a shot that names nobody, a voice file dropped on a face. Every one of those
+    compiles to a *valid* document that quietly says the wrong thing, which is
+    the failure this whole layer exists to remove.
+
+    Returns None for "no scene", which is not an error — it is the degrade, and
+    the flat typed+pills path stays exactly as it was.
+    """
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"Not a scene: {raw!r}")
+
+    shots_in = list(raw.get("shots") or [])
+    cast_in = list(raw.get("cast") or [])
+    if not shots_in:
+        return None
+    if len(shots_in) > MAX_SCENE_SHOTS:
+        raise ValueError(f"{len(shots_in)} shots; at most {MAX_SCENE_SHOTS}.")
+    if len(cast_in) > MAX_CAST:
+        raise ValueError(f"{len(cast_in)} in the cast; at most {MAX_CAST}.")
+
+    # ── the cast ────────────────────────────────────────────────────────────
+    cast: list[dict[str, Any]] = []
+    handles: dict[str, str] = {}
+    for entry in cast_in:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Not a cast member: {entry!r}")
+        kind = str(entry.get("kind") or "character")
+        if kind not in H3_CAST_KINDS:
+            raise ValueError(f"No such cast kind: {kind!r}. "
+                             f"One of: {', '.join(H3_CAST_KINDS)}")
+        handle = _h3_handle(str(entry.get("name") or ""))
+        if not handle:
+            raise ValueError("A cast member needs a name — it is the @handle "
+                             "the shots refer to it by.")
+        if handle in handles:
+            raise ValueError(f"Two in the cast are called @{handle}. A handle "
+                             f"is how a shot names somebody, so it has to pick "
+                             f"one of them.")
+        cid = str(entry.get("id") or handle)
+        handles[handle] = cid
+
+        marker = str(entry.get("retention") or "fully_preserved")
+        if marker not in H3_RETENTION:
+            raise ValueError(f"No such retention marker: {marker!r}. "
+                             f"One of: {', '.join(H3_RETENTION)}")
+
+        refs: list[dict[str, Any]] = []
+        for ref in list(entry.get("refs") or []):
+            if not isinstance(ref, dict):
+                raise ValueError(f"Not a reference: {ref!r}")
+            media = str(ref.get("kind") or "image")
+            slots = [str(s) for s in (ref.get("slots") or []) if s]
+            if not slots:
+                raise ValueError(f"@{handle} has a file with no slot. The slot "
+                                 f"is the role — a file with none is a picture "
+                                 f"the model is not told what to do with.")
+            for slot in slots:
+                if slot not in H3_CAST_KINDS[kind]["slots"]:
+                    raise ValueError(
+                        f"@{handle} is a {kind} and has no {slot!r} slot. "
+                        f"One of: {', '.join(H3_CAST_KINDS[kind]['slots'])}")
+                want = H3_SLOT_MEDIA.get(slot, "image")
+                if want != media:
+                    raise ValueError(
+                        f"@{handle}'s {slot} slot takes {want}, not {media}.")
+            index = int(ref.get("index") or 0)
+            have = {"video": n_vids, "audio": n_auds}.get(media, n_refs)
+            if not 0 <= index < have:
+                raise ValueError(
+                    f"@{handle} points at {media} {index + 1} and "
+                    f"{have} {'was' if have == 1 else 'were'} uploaded.")
+            role = str(ref.get("role") or "reference")
+            if media == "video" and role not in H3_VIDEO_ROLES:
+                raise ValueError(f"No such video role: {role!r}. "
+                                 f"One of: {', '.join(H3_VIDEO_ROLES)}")
+            if media == "audio" and role not in H3_AUDIO_ROLES:
+                raise ValueError(f"No such audio role: {role!r}. "
+                                 f"One of: {', '.join(H3_AUDIO_ROLES)}")
+            refs.append({"kind": media, "index": index, "slots": slots,
+                         "role": role})
+        cast.append({"id": cid, "kind": kind, "handle": handle,
+                     "note": _oneline(str(entry.get("note") or "")),
+                     "retention": marker, "refs": refs})
+
+    # ── the shots ───────────────────────────────────────────────────────────
+    shots: list[dict[str, Any]] = []
+    for i, entry in enumerate(shots_in):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Not a shot: {entry!r}")
+        line = _oneline(str(entry.get("line") or ""))
+        # An empty row used to compile to "the shot cuts to the scene" — a
+        # sentence describing nothing, traceable to nothing anybody placed.
+        # The row is the control; an empty one is a row you have not written
+        # yet, and the honest answer is to say so rather than to invent a shot.
+        if not line and not (entry.get("say") or {}).get("text"):
+            raise ValueError(f"Shot {i + 1} is empty. Write what happens in it, "
+                             f"or remove it.")
+        if len(line) > MAX_SCENE_LINE:
+            raise ValueError(f"Shot {i + 1} is {len(line)} characters; "
+                             f"at most {MAX_SCENE_LINE}.")
+        pills = _validate_shot(entry.get("pills"))
+        for pill in pills:
+            group, item = SHOT_ITEMS[pill["key"]]
+            if item.get("valued") == "dialogue":
+                raise ValueError(
+                    "A scene's dialogue belongs to a speaker in the shot, not "
+                    "to a pill — the pill has no way to say who is talking, "
+                    "and the speaker ID is what H3 reads.")
+        try:
+            beats = float(entry.get("beats") or 1.0)
+        except (TypeError, ValueError):
+            raise ValueError(f"Shot {i + 1}'s length is not a number.")
+        if beats <= 0:
+            raise ValueError(f"Shot {i + 1} has no length.")
+
+        say = entry.get("say") or {}
+        if not isinstance(say, dict):
+            raise ValueError(f"Not a line of dialogue: {say!r}")
+        text = _oneline(str(say.get("text") or ""))
+        who = say.get("who")
+        who = [who] if isinstance(who, str) else [str(w) for w in (who or [])]
+        if text:
+            if len(text) > SHOT_VALUE_MAX:
+                raise ValueError(f"Shot {i + 1}'s line is {len(text)} "
+                                 f"characters; at most {SHOT_VALUE_MAX}.")
+            known = {c["id"] for c in cast}
+            for w in who:
+                if w not in known:
+                    raise ValueError(f"Shot {i + 1} is spoken by somebody who "
+                                     f"is not in the cast: {w!r}")
+            if not who and not say.get("voice"):
+                raise ValueError(
+                    f"Shot {i + 1} has a line and nobody to say it. Pick a "
+                    f"speaker, or describe the voice for an unseen one.")
+        lang = str(say.get("lang") or "English")
+        if lang not in H3_LANGUAGES:
+            raise ValueError(f"No such dialogue language: {lang!r}. "
+                             f"One of: {', '.join(H3_LANGUAGES)}")
+        stage = _validate_stage(entry.get("stage"),
+                                cast_ids={c["id"] for c in cast},
+                                kinds={c["id"]: c["kind"] for c in cast})
+        shots.append({
+            "line": line, "pills": pills, "beats": beats, "stage": stage,
+            "say": {"who": who, "text": text, "lang": lang,
+                    "voice": _oneline(str(say.get("voice") or "")),
+                    "carry": bool(say.get("carry")),
+                    "cutoff": bool(say.get("cutoff")),
+                    "offscreen": bool(say.get("offscreen"))},
+        })
+
+    # ── clip-level sources ──────────────────────────────────────────────────
+    raw_src = raw.get("sources") or {}
+    if not isinstance(raw_src, dict):
+        raise ValueError(f"Not a sources block: {raw_src!r}")
+    sources: dict[str, list[int]] = {}
+    for key, spec in H3_SOURCES.items():
+        got = raw_src.get(key)
+        if got in (None, "", []):
+            continue
+        idx = [got] if isinstance(got, int) else list(got)
+        have = n_vids if spec["kind"] == "video" else n_refs
+        for i in idx:
+            if not isinstance(i, int) or not 0 <= i < have:
+                raise ValueError(
+                    f"The {key} source points at {spec['kind']} "
+                    f"{(i + 1) if isinstance(i, int) else i!r} and "
+                    f"{have} {'was' if have == 1 else 'were'} uploaded.")
+        if key != "edit" and len(idx) > 1:
+            raise ValueError(f"There is one {key} source, not {len(idx)}.")
+        sources[key] = idx
+    # The guide's own precedence, and the reason it is a refusal here rather
+    # than a ranking: continuing a clip and editing it are different task types
+    # and different documents, and picking one for somebody silently is the
+    # class of guess this compiler does not make.
+    if "continue" in sources and "edit" in sources:
+        raise ValueError("A clip is either continued from or edited, not both — "
+                         "they are different tasks and different documents.")
+
+    # A handle nobody defined is the one failure that reads as the model
+    # ignoring you: it compiles to the literal characters "@ava", which the
+    # encoder renders as nothing at all.
+    for i, s in enumerate(shots):
+        for handle in _h3_handles(s["line"]):
+            if handle not in handles:
+                raise ValueError(
+                    f"Shot {i + 1} mentions @{handle} and nobody in the cast "
+                    f"is called that.")
+
+    # The last shot's dialogue is the only one that can be cut off by the end
+    # of the clip, and only the last one may carry — there is nothing after it.
+    if shots[-1]["say"]["carry"]:
+        raise ValueError("The last shot's line cannot carry across a cut; "
+                         "there is no shot after it.")
+    return {"cast": cast, "shots": shots, "sources": sources,
+            "seconds": float(seconds),
+            "style": _oneline(str(raw.get("style") or "")),
+            "grade": _oneline(str(raw.get("grade") or "")),
+            "handles": handles}
+
+
+_H3_HANDLE = re.compile(r"@([a-z0-9_]+)", re.I)
+
+
+def _h3_handle(name: str) -> str:
+    """A name reduced to the characters a mention can be written in."""
+    return re.sub(r"^_+|_+$", "", re.sub(r"[^a-z0-9_]+", "_", name.lower()))
+
+
+def _h3_handles(line: str) -> list[str]:
+    """The handles a shot mentions, in order, once each."""
+    out: list[str] = []
+    for m in _H3_HANDLE.finditer(line):
+        h = m.group(1).lower()
+        if h not in out:
+            out.append(h)
+    return out
+
+
+# `overall_soundscape` has no safe empty value, which is the opposite of
+# `non_diegetic_music` and the reason they are not one rule. The guide is
+# explicit that `N/A` there means *complete silence, requested* — so emitting it
+# because nobody picked a sound pill tells the model every ordinary clip is
+# silent. It also warns that a blank field lets ambience creep in on its own.
+# This is the one sentence that is true of every scene and specific about none.
+H3_SOUNDSCAPE_DEFAULT = ("Ambient sound consistent with the scene continues "
+                         "throughout the video.")
+
+
+def _h3_subjects(cast: list[dict[str, Any]]) -> dict[str, int]:
+    """
+    `<Subject N>` by cast id — and only for cast that carry a reference.
+
+    A subject label is a claim that something in the target video comes from an
+    uploaded asset. Somebody described in the prose and nowhere else is not one,
+    and giving them a label points the model at a picture that does not exist.
+    """
+    visible = [c for c in cast
+               if any(r["kind"] != "audio" for r in c["refs"])]
+    return {c["id"]: i + 1 for i, c in enumerate(visible)}
+
+
+def _h3_label(member: dict[str, Any], subjects: dict[str, int]) -> str:
+    """
+    How a cast member is written in the body.
+
+    A subject gets its label. Anybody else gets what the person typed — their
+    note if they wrote one, and otherwise their name — because inventing "the
+    young woman" for a name we were given is the compiler writing prose, and
+    upper-casing `ava` into `Ava` is the same edit `_shot_join` refuses to make.
+    """
+    n = subjects.get(member["id"])
+    return f"<Subject {n}>" if n else (member["note"] or member["handle"])
+
+
+def _h3_speakers(shots: list[dict[str, Any]]) -> dict[str, str]:
+    """
+    `(Sx)` by cast id, assigned once by order of actual vocal event.
+
+    The guide's rule exactly: a speaker keeps the same ID across shots, and
+    **characters who never vocalise receive no speaker ID at all**. That last
+    clause is the one worth guarding — a scene bucket or a prop with an `(S)`
+    on it is a speaker H3 will look for and never find.
+    """
+    out: dict[str, str] = {}
+    for shot in shots:
+        if not shot["say"]["text"]:
+            continue
+        for who in shot["say"]["who"]:
+            if who not in out:
+                out[who] = f"S{len(out) + 1}"
+    return out
+
+
+def _h3_resolve(line: str, cast: list[dict[str, Any]],
+                subjects: dict[str, int]) -> str:
+    """
+    Mentions swapped for what the encoder should read, and nothing else touched.
+
+    The article in front of a mention is absorbed when it resolves to a
+    `<Subject N>`, which is already definite — otherwise "in the @diner"
+    compiles to "in the <Subject 2>". No case is changed anywhere: the rest of
+    the line is the person's sentence and rewriting it is not something a
+    compiler gets to do.
+    """
+    by_handle = {c["handle"]: c for c in cast}
+
+    def swap(m: "re.Match[str]") -> str:
+        member = by_handle.get(m.group(2).lower())
+        if not member:
+            return m.group(0)
+        label = _h3_label(member, subjects)
+        article = m.group(1) or ""
+        return label if (article and label.startswith("<Subject")) \
+            else article + label
+
+    return re.sub(r"(\b(?:the|a|an)\s+)?@([a-z0-9_]+)", swap, line, flags=re.I)
+
+
+def _h3_task_types(scene: dict[str, Any], task: str) -> str:
+    """
+    The bracketed prefix `summary` opens with, from the guide's closed table.
+
+    Derived rather than asked for, because every input to it is already a fact
+    of the request: a keyframe is a keyframe, and what a reference video is
+    *doing* is the one thing that can promote past `reference generation`. The
+    guide's own warning is the rule encoded here — the mere presence of a video
+    does not create a type.
+    """
+    kinds: set[str] = set()
+    if task in ("i2va", "fl2va", "l2va"):
+        kinds.add("keyframe completion")
+    for key in scene.get("sources") or {}:
+        kinds.add(H3_SOURCES[key]["task"])
+    for member in scene["cast"]:
+        for ref in member["refs"]:
+            if ref["kind"] == "video":
+                kinds.add(H3_VIDEO_ROLES[ref["role"]])
+            elif ref["kind"] == "audio":
+                kinds.add(H3_AUDIO_ROLES[ref["role"]][0])
+            else:
+                kinds.add("reference generation")
+    ordered = [t for t in H3_TASK_TYPES if t in kinds]
+    return f"[{' + '.join(ordered)}] " if ordered else ""
+
+
+# ── blocking ────────────────────────────────────────────────────────────────
+#
+# Marks on a floor and a camera looking at them, and the sentences that fall
+# out. This is the one thing in the composer that is *not* a vocabulary: no
+# pill can say `she stands behind him, turned three-quarters away from the
+# lens`, and across all 77 items in SHOT_VOCAB there is no way to say a subject
+# is behind, beside, facing away, or screen left. The only place a subject is
+# ever named in output is the hardcoded `<Subject 1>` in `_shot_text`.
+#
+# **Blocking does not add a vocabulary. It drives the one that exists.**
+# Framing, angle and the camera move are *derived* here and fold through
+# `_shot_phrases` exactly as a clicked pill would — an explicitly chosen pill
+# still wins, because a person overriding a derivation is a person who has
+# looked at it. What is genuinely new is only what geometry alone can say:
+# where in the frame, how far back, which way they face, and how they stand to
+# each other.
+#
+# The precedent is already shipping on the image side — `_compose_caption`
+# turns rectangles into prose, and `_box_framing` already treats box height as
+# a depth proxy. That is an approximated pinhole camera in production; this is
+# the real relation.
+#
+# Coordinates: metres on a ground plane. `x` lateral (right positive), `z` away
+# from the origin, `y` height. `yaw` in degrees, 0 looking along +z, clockwise
+# seen from above. A 36x24mm sensor, so `lens` is the millimetre number
+# everybody already thinks in.
+
+STAGE_SENSOR_W = 36.0
+STAGE_SENSOR_H = 24.0
+STAGE_LENS = 35.0
+# A standing adult and their eyeline. The whole size ladder is a ratio against
+# frame height, so these two numbers set where every band falls — they are the
+# closest thing this file has to a magic constant and they are worth naming
+# rather than inlining.
+STAGE_FIGURE_H = 1.7
+STAGE_FIGURE_W = 0.5
+STAGE_EYE_H = 1.6
+STAGE_EYE_RATIO = STAGE_EYE_H / STAGE_FIGURE_H
+STAGE_MAX_MARKS = 8
+
+# Frame-height fractions. A person 2.4x the frame's height is a close-up
+# because their head fills it; at 0.45 they are a figure in a landscape.
+# Checked against a 35mm lens: 1m -> close-up, 2m -> medium, 3m -> wide,
+# 6m -> extreme wide, which is what those distances look like through one.
+STAGE_SIZE = ((4.0, "xcu"), (2.4, "cu"), (1.5, "mcu"),
+              (1.0, "medium"), (0.45, "wide"), (0.0, "xwide"))
+
+# Camera pitch onto the subject's eyeline, in degrees. The dead band is wide
+# because a camera 10cm off eyeline at three metres is eye level to anybody
+# watching, and calling it a low angle would be the arithmetic overruling the
+# picture.
+STAGE_ANGLE = ((45.0, "bird"), (7.0, "high"), (-7.0, "eye"),
+               (-45.0, "low"), (-181.0, "worm"))
+
+# How a subject stands to the lens, by the angle between where they face and
+# where the camera is. This is the band that earns the whole feature: "I
+# couldn't see his face at all" is the fact CLAUDE.md records the old parse
+# dropping, and it is `back to the lens` here.
+# Descending, like every other band table here, and it is worth saying why
+# rather than leaving it as house style: `_stage_band` returns the first row
+# whose edge the value clears, so an *ascending* table never matches and
+# silently returns its last row. Written ascending, this one reported a subject
+# looking straight down the barrel as having their back to the lens — the
+# arithmetic was right and the lookup was inverted, which is the shape of bug
+# that survives review and dies the moment somebody prints it.
+STAGE_FACING = ((155.0, "with their back to the lens"),
+                (115.0, "turned three-quarters away from the lens"),
+                (65.0, "in profile to the lens"),
+                (25.0, "turned three-quarters toward the lens"),
+                (0.0, "facing the lens"))
+
+# Tilt below which the camera sees the body it is riding. Anatomy rather than
+# taste: eyes sit above and in front of the chest, so a level or raised gaze
+# contains none of you and a lowered one picks up torso, then hands, then feet.
+#
+# It is here because a video model read this scene's POV act as a free camera
+# move — correctly, on the pixels. **POV is legible only when your own limbs
+# are in frame**, and Enter the Void's is legible to a person because they
+# watched him get shot, which is context no encoder has. So a shot that rides a
+# body and looks away from it renders as a camera that happens to be there, and
+# the word "point-of-view" in the prompt is carrying weight it cannot hold.
+STAGE_OWN_BODY = -25.0
+
+# Metres between two people, as a body would read it rather than as a number.
+STAGE_NEAR = ((3.0, "across the space from {other}"),
+              (1.2, "a few steps from {other}"),
+              (0.6, "within arm's reach of {other}"),
+              (0.0, "close enough that their shoulders overlap"))
+
+
+def _stage_norm(deg: float) -> float:
+    """An angle folded into (-180, 180], where the bands are written."""
+    d = (float(deg) + 180.0) % 360.0 - 180.0
+    return d + 360.0 if d <= -180.0 else d
+
+
+def _stage_band(value: float, table) -> str:
+    for edge, name in table:
+        if value >= edge:
+            return name
+    return table[-1][1]
+
+
+def _stage_fov(lens: float, sensor: float) -> float:
+    """Half-angle, in radians — every projection below wants the half."""
+    return math.atan(sensor / (2.0 * max(1.0, float(lens))))
+
+
+def _stage_dims(mark: dict[str, Any]) -> tuple[float, float, float, float]:
+    """
+    How big a mark is, how far off the floor it starts, and where it is aimed.
+
+    A mark used to *be* a standing adult: `STAGE_FIGURE_H` and `STAGE_EYE_H`
+    were read straight out of the projection, so every subject was 1.7m tall
+    with its eyeline at 1.6 whatever it was. That is the one assumption this
+    feature could not keep. A subject is whatever the shot is about — the
+    reference that broke it has a body lying on tiles and a ceiling light
+    fixture in the same frame, and the light is what the camera is looking at.
+    So the figure constants are defaults now and the dimensions ride on the
+    mark: a standing adult is 1.7 x 0.5 at base 0, a body on the floor is
+    0.4 x 1.8 at base 0, a fixture is 0.4 x 0.4 at base 2.7.
+
+    The aim point is the eyeline for a person; the same ratio on anything else
+    lands just above centre, which is inside the dead band of every angle
+    reading and does not need a rule of its own.
+    """
+    h = float(mark.get("h") or STAGE_FIGURE_H)
+    w = float(mark.get("w") or STAGE_FIGURE_W)
+    base = float(mark.get("base") or 0.0)
+    return h, w, base, base + h * STAGE_EYE_RATIO
+
+
+def _stage_see(cam: dict[str, Any], mark: dict[str, Any]) -> dict[str, Any]:
+    """
+    One mark through the camera: how far, how big, where in frame, facing what.
+
+    Everything downstream reads this dict, so the trigonometry happens once and
+    the sentence writers stay readable.
+    """
+    h, w, base, aim = _stage_dims(mark)
+    dx = float(mark["x"]) - float(cam["x"])
+    dz = float(mark["z"]) - float(cam["z"])
+    # Two distances, and conflating them cost a whole shot. `flat` is the plan
+    # view and is what bearing and pitch are measured against; `dist` is the
+    # real one. Size used to read `flat`, so a camera craned three metres
+    # straight up over somebody had not moved at all as far as the framing was
+    # concerned — the derivation reported the same close-up from the floor and
+    # from the ceiling.
+    flat = math.hypot(dx, dz)
+    dist = math.hypot(flat, aim - float(cam["y"]))
+    # Bearing off the camera's own forward, not off world north.
+    bearing = _stage_norm(math.degrees(math.atan2(dx, dz)) - float(cam["yaw"]))
+
+    half_h = _stage_fov(cam["lens"], STAGE_SENSOR_W)
+    half_v = _stage_fov(cam["lens"], STAGE_SENSOR_H)
+    # -1 is the left edge of frame, +1 the right. Behind the camera reads as
+    # off-frame rather than as a wrapped angle, which `tan` would otherwise do
+    # silently and put somebody back in shot facing the wrong way.
+    behind = abs(bearing) >= 90.0
+    sx = 9.9 if behind else math.tan(math.radians(bearing)) / math.tan(half_h)
+
+    # What fraction of the frame the thing spans, on whichever axis it spans
+    # most. Height alone was right while every mark was a standing figure and
+    # reads a body lying down as a wide shot from a metre away.
+    d = max(0.05, dist)
+    fw = w / (2.0 * d * math.tan(half_h))
+    fh = h / (2.0 * d * math.tan(half_v))
+    fill = max(fh, fw)
+    # Vertical screen position, measured off the camera's own axis. -1 is the
+    # top edge, +1 the bottom, exactly as `sx` runs left to right. There was no
+    # `sy` while every lens pointed at the horizon and every mark was the same
+    # height — and the two frame tests that grew up in its absence disagreed the
+    # moment either changed: the projection culled a ceiling fixture above the
+    # top edge while `in_frame`, horizontal alone, had the clause calling it
+    # centre frame.
+    rise = math.atan2(base + h / 2.0 - float(cam["y"]), max(0.05, flat))
+    sy = -(math.tan(rise - math.radians(float(cam.get("tilt") or 0.0)))
+           / math.tan(half_v))
+    pitch = math.degrees(math.atan2(float(cam["y"]) - aim, max(0.05, flat)))
+    # Where the mark faces, measured against where the camera is standing.
+    to_cam = math.degrees(math.atan2(-dx, -dz))
+    facing = abs(_stage_norm(float(mark["yaw"]) - to_cam))
+
+    # In frame if any of it is, on both axes — the object's own extent counts.
+    # A centre-based test is right for neither: a close-up puts a standing
+    # figure's midpoint below the bottom edge while their head and shoulders
+    # fill the shot.
+    # **Behind is behind, whatever the arithmetic says.** `sx` carries 9.9 as a
+    # sentinel rather than a coordinate, and allowing an object its own width
+    # either side of the edge is what let that sentinel through: something close
+    # enough subtends more than 8.9 frames, so a body the camera was standing
+    # inside came back in frame and in extreme close-up.
+    return {"dist": dist, "flat": flat, "sx": sx, "sy": sy, "fill": fill,
+            "fw": fw, "fh": fh, "pitch": pitch, "behind": behind,
+            "facing": facing,
+            "in_frame": (not behind and abs(sx) <= 1.0 + fw
+                         and abs(sy) <= 1.0 + fh),
+            "h": h, "w": w, "base": base, "aim": aim,
+            "size": _stage_band(fill, STAGE_SIZE),
+            "angle": _stage_band(pitch, STAGE_ANGLE)}
+
+
+def _stage_where(seen: dict[str, Any]) -> str:
+    """Where in frame, and how far back — the two a pill cannot say."""
+    sx = seen["sx"]
+    if not seen["in_frame"]:
+        # Which way out, now that there are two ways. Left and right were the
+        # only answers while `in_frame` was a horizontal test, so a ceiling
+        # fixture above the top edge was reported as off to one side.
+        if abs(sx) > 1.0 + seen["fw"]:
+            return "just off-frame left" if sx < 0 else "just off-frame right"
+        return ("just above the frame" if seen["sy"] < 0
+                else "just below the frame")
+    side = ("screen left" if sx < -0.33
+            else "screen right" if sx > 0.33 else "centre frame")
+    depth = ("in the foreground" if seen["fill"] >= 1.5
+             else "in the background" if seen["fill"] < 0.45 else "")
+    return f"{side}, {depth}" if depth else side
+
+
+def _stage_pills(stage: dict[str, Any], seconds: float,
+                 chosen: set[str]) -> list[dict[str, Any]]:
+    """
+    Framing, angle and the camera move, read off the arrangement.
+
+    Emitted as ordinary pills so they fold through `_shot_phrases` at their
+    usual slots and nothing downstream learns a new shape. **A pill the person
+    picked is never overwritten** — `chosen` is checked per group, because
+    overriding a derivation is a decision and the arithmetic does not get to
+    take it back.
+    """
+    marks = stage["marks"]
+    out: list[dict[str, Any]] = []
+    if not marks:
+        return out
+    a = _stage_read(stage["camera"], marks)
+    b = _stage_read(_stage_end(stage["camera"], stage.get("path")), marks)
+    # **Only when the two ends agree.** A pill is a steady state, so a shot
+    # whose framing or angle changes has no pill that is true of it, and
+    # emitting the opening one was the derivation describing the first frame
+    # and calling it the shot. `_stage_arc` says the transition instead.
+    if "framing" not in chosen and a[0] and a[0] == b[0]:
+        out.append({"key": f"framing.{a[0]}"})
+    if "angle" not in chosen and a[1] and a[1] == b[1]:
+        out.append({"key": f"angle.{a[1]}"})
+    return out
+
+
+def _stage_others(cam: dict[str, Any],
+                  marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    The marks the camera can see, which is every mark except the one it *is*.
+
+    `camera.on` binds the camera to a body, and the body then stops being a
+    subject: you cannot see yourself, and asking `_stage_see` anyway returns
+    `behind`, `sx = 9.9` and a distance of zero, which the lead picker reads as
+    the nearest thing in the room and describes in extreme close-up.
+    """
+    rider = cam.get("on")
+    return [m for m in marks if m.get("castId") != rider] if rider else marks
+
+
+def _stage_lead(cam: dict[str, Any],
+                marks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """
+    The subject the shot is about: whatever fills most of the frame.
+
+    Nearest was the rule while every mark was a person, and it inverts the
+    moment they are not the same size. A bare bulb half a metre off the lens is
+    nearer than the body on the floor three metres below it, so "nearest"
+    called an overhead shot of a dying man an extreme wide shot of a light
+    fixture. Prominence is the question a shot size is an answer to.
+
+    **Nothing in frame means no lead, and no lead means no framing.** This used
+    to fall back to the nearest mark overall, on the reasoning that a camera
+    looking slightly away is still a shot of somebody — survivable while
+    `in_frame` was a horizontal test and every mark stood on one floor. Once it
+    was true on both axes the fallback started answering with whoever was
+    *behind the lens*: stepping out of a body leaves the camera standing inside
+    it, and the shot came back "nobody in frame. In an extreme close-up". A
+    shot with no subject has no shot size, and stating one is worse than
+    stating nothing.
+    """
+    framed = [s for s in (_stage_see(cam, m) for m in _stage_others(cam, marks))
+              if s["in_frame"]]
+    return max(framed, key=lambda s: s["fill"]) if framed else None
+
+
+def _stage_read(cam: dict[str, Any],
+                marks: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """
+    Framing and angle from one camera position.
+
+    POV is a framing value like any other, which is what lets a shot open in
+    one and end out of it. The angle still comes off the lead, and that is the
+    point rather than an oversight: a camera lying on a bathroom floor looking
+    up at a light fixture is a point-of-view shot *and* a worm's-eye view, and
+    the second half is only knowable because the fixture is a mark.
+    """
+    lead = _stage_lead(cam, marks)
+    angle = lead["angle"] if lead else None
+    if cam.get("on"):
+        return "pov", angle
+    return (lead["size"] if lead else None), angle
+
+
+def _stage_end(cam: dict[str, Any],
+               path: dict[str, Any] | None) -> dict[str, Any]:
+    """The camera where the path leaves it, in the same shape as the start."""
+    if not path:
+        return cam
+    out = dict(cam)
+    for k in ("x", "z", "y", "lens"):
+        if path.get(k) is not None:
+            out[k] = float(path[k])
+    for k in ("yaw", "tilt"):
+        if path.get(k) is not None:
+            out[k] = _stage_norm(float(path[k]))
+    # Present-and-null is the whole gesture. The reference this came from is
+    # one continuous take that is a man's point of view until his soul leaves
+    # the body — a camera detaching from a mark, not a cut, and not something
+    # any pill can say.
+    if "on" in path:
+        out["on"] = path["on"] or None
+    return out
+
+
+def _stage_phrase(group: str, key: str | None) -> str:
+    """A vocabulary phrase by key, so a derived sentence and a clicked pill
+    say the same words."""
+    if not key:
+        return ""
+    for g in SHOT_VOCAB:
+        if g["key"] == group:
+            for item in g["items"]:
+                if item["key"] == key:
+                    return item["phrase"]
+    return ""
+
+
+def _stage_arc(stage: dict[str, Any], chosen: set[str]) -> str:
+    """
+    What the shot becomes, when the move changes it.
+
+    The guide asks for "continuous development -> result" and the derivation
+    was reading `camera` and never `path`, so it stated the opening framing and
+    stopped. Silent when nothing changes — a shot that holds its framing is
+    described by its pills, and a sentence saying so twice is the enrichment
+    this compiler exists not to do.
+    """
+    marks = stage.get("marks") or []
+    if not marks or not stage.get("path"):
+        return ""
+    a = _stage_read(stage["camera"], marks)
+    b = _stage_read(_stage_end(stage["camera"], stage["path"]), marks)
+    moved = [i for i in (0, 1) if a[i] and b[i] and a[i] != b[i]]
+    # A group the person set by hand is theirs, and a derived sentence that
+    # contradicts their pill is worse than one that never ran.
+    moved = [i for i in moved if ("framing", "angle")[i] not in chosen]
+    if not moved:
+        return ""
+
+    def side(read, which):
+        # Comma, not `_shot_join`: these are clauses inside one sentence, and
+        # joining them as sentences ran "in a first-person point-of-view shot
+        # shot from ground level" with nothing between them.
+        return ", ".join(p for p in (
+            _stage_phrase("framing", read[0]) if 0 in which else "",
+            _stage_phrase("angle", read[1]) if 1 in which else "") if p)
+
+    return _close(f"The shot opens {side(a, moved)} and ends "
+                  f"{side(b, moved)}")
+
+
+def _stage_move(cam: dict[str, Any], path: dict[str, Any],
+                dist: float, seconds: float) -> str:
+    """
+    Which camera move a path *is*.
+
+    Read as displacement in the camera's own frame rather than the world's: a
+    metre along its forward axis is a push, a metre across it is a truck, and
+    turning on the spot is a pan. That decomposition is why this can answer
+    amplitude and speed at all — **8 of the 21 hand-written camera pills state
+    neither**, and `trackside`/`trackrear` state nothing but a direction.
+    """
+    dx = float(path.get("x", cam["x"])) - float(cam["x"])
+    dz = float(path.get("z", cam["z"])) - float(cam["z"])
+    dy = float(path.get("y", cam["y"])) - float(cam["y"])
+    dyaw = _stage_norm(float(path.get("yaw", cam["yaw"])) - float(cam["yaw"]))
+    dtilt = _stage_norm(float(path.get("tilt", cam.get("tilt") or 0.0))
+                        - float(cam.get("tilt") or 0.0))
+
+    yaw = math.radians(float(cam["yaw"]))
+    tilt = math.radians(float(cam.get("tilt") or 0.0))
+    plan = dx * math.sin(yaw) + dz * math.cos(yaw)
+    lateral = dx * math.cos(yaw) - dz * math.sin(yaw)
+    # **In the camera's own frame, all three axes of it.** This function's own
+    # docstring has always claimed that and did it in two dimensions: vertical
+    # was compared against the *world's* up, which is the same thing only while
+    # the lens points at the horizon. Once a camera can tilt, a camera aimed at
+    # the floor and dropping toward a body on it is travelling along its own
+    # forward axis — a push in — and the world-axis test called it a crane
+    # down. Enter the Void's overhead is exactly that shot, and a video model
+    # asked to describe it independently said "closer framing without a major
+    # change in vertical viewpoint", which is the push and not the crane.
+    forward = plan * math.cos(tilt) + dy * math.sin(tilt)
+    rise = dy * math.cos(tilt) - plan * math.sin(tilt)
+    travel = math.hypot(math.hypot(dx, dz), dy)
+
+    # Nothing moved and nothing turned. `static` is a real answer, not a
+    # fallthrough — a locked-off camera is a choice H3 reads.
+    if travel < 0.05 and abs(dyaw) < 3.0 and abs(dtilt) < 3.0:
+        return "static"
+    # Turning on the spot, on whichever axis turned further. `tiltu`/`tiltd`
+    # were in the vocabulary from the start and unreachable: this read yaw and
+    # nothing else, so for as long as the camera could not tilt that was the
+    # whole truth, and the moment it could, a tilt-only shot came back locked
+    # off.
+    if travel < 0.05:
+        if abs(dtilt) > abs(dyaw):
+            return "tiltu" if dtilt > 0 else "tiltd"
+        return "panr" if dyaw > 0 else "panl"
+    if abs(rise) > max(abs(forward), abs(lateral)):
+        return "craneu" if rise > 0 else "craned"
+    # An arc is a truck that keeps the subject centred, so the yaw has to have
+    # turned *with* the move rather than against it.
+    if abs(lateral) > abs(forward) and abs(dyaw) > 12.0:
+        return "arc"
+    if abs(lateral) > abs(forward):
+        return "truckr" if lateral > 0 else "truckl"
+    return "pushin" if forward > 0 else "pullout"
+
+
+# The verb for each move. The pills' own phrases already carry an amplitude and
+# a speed baked in ("pushes in slowly, a small and steady move"), so a blocked
+# shot cannot reuse them — appending a measured amplitude produced "pushes in
+# slowly, a small and steady move, a medium-amplitude move, quickly", which
+# contradicts itself twice in one sentence. Blocking states all three
+# dimensions itself, in the guide's own construction.
+STAGE_VERB = {"pushin": "pushes in", "pullout": "pulls out",
+              "panl": "pans left", "panr": "pans right",
+              "tiltu": "tilts up", "tiltd": "tilts down",
+              "truckl": "trucks left", "truckr": "trucks right",
+              "craneu": "cranes up", "craned": "cranes down",
+              "arc": "arcs around the subject", "static": "holds a static shot"}
+
+
+def _stage_move_sentence(cam: dict[str, Any], path: dict[str, Any],
+                         dist: "float | None", seconds: float) -> str:
+    """The camera move with motion type, amplitude and speed — all three."""
+    key = _stage_move(cam, path, dist, seconds)
+    verb = STAGE_VERB.get(key, "moves")
+    if key == "static":
+        return "The camera holds a static shot."
+    note = _stage_move_note(cam, path, dist, seconds)
+    return f"The camera {verb}{(' ' + note) if note else ''}."
+
+
+def _stage_move_note(cam: dict[str, Any], path: dict[str, Any],
+                     dist: "float | None", seconds: float) -> str:
+    """
+    The amplitude and speed the pill's own phrase cannot carry.
+
+    Amplitude is relative to how far away the subject is, because a metre is a
+    large move at two metres and nothing at twenty. Speed is metres per second
+    over the shot, which is the one place `seconds` is load-bearing.
+
+    **With nobody in frame there is no amplitude**, only a speed. `dist` used to
+    be a float that fell back to zero, which `max(0.5, dist)` then turned into
+    "large amplitude" for any move over a quarter of a metre — an amplitude
+    measured against a subject that is not there.
+    """
+    dx = float(path.get("x", cam["x"])) - float(cam["x"])
+    dz = float(path.get("z", cam["z"])) - float(cam["z"])
+    dy = float(path.get("y", cam["y"])) - float(cam["y"])
+    travel = math.hypot(math.hypot(dx, dz), dy)
+    if travel < 0.05:
+        return ""
+    rate = travel / max(0.5, float(seconds))
+    speed = "fast" if rate > 0.8 else "slow" if rate < 0.25 else "moderate"
+    if dist is None:
+        return f"at {speed} speed"
+    ratio = travel / max(0.5, float(dist))
+    amp = ("large" if ratio > 0.5 else "small" if ratio < 0.18 else "medium")
+    # The guide's own construction, verbatim: "with small amplitude at slow
+    # speed". Not phrasing we chose.
+    return f"with {amp} amplitude at {speed} speed"
+
+
+def _stage_clauses(stage: dict[str, Any], label) -> list[str]:
+    """
+    One clause per body — where they are, which way they face, how they stand
+    to whoever is nearest.
+
+    **Ordered by screen position, left to right.** `_shot_body` already
+    records that subjects come out of the model in the order they are
+    described, and until now that order was whatever the person happened to
+    type. An arrangement knows the real one.
+
+    The relation **trails**, which is CLAUDE.md's rule: the subject opens the
+    clause and how they stand to the others closes it, so the last thing read
+    before the encoder moves on is what binds them.
+
+    Naming the other subject is safe *here* specifically because it is a
+    `<Subject N>` label rather than a fresh noun phrase — the guide's own
+    examples do it (`<Subject 4> … enters holding the leash of <Subject 2>`),
+    and a label is a reference, not a second attention site.
+    """
+    cam, marks = stage["camera"], _stage_others(stage["camera"], stage["marks"])
+    seen = [(m, _stage_see(cam, m)) for m in marks]
+    on = [(m, s) for m, s in seen if s["in_frame"]]
+    on.sort(key=lambda ms: ms[1]["sx"])
+
+    out: list[str] = []
+    # The rider's own body, and it leads because it is the nearest thing in the
+    # shot and the only thing that says whose eyes these are. Excluding the
+    # rider outright was right about their face and wrong about the rest of
+    # them — see `STAGE_OWN_BODY`.
+    rider = cam.get("on")
+    if rider and float(cam.get("tilt") or 0.0) < STAGE_OWN_BODY:
+        out.append(f"{label(rider)}'s own arms and torso across the bottom of "
+                   f"the frame, seen from their own eyes")
+    if not on:
+        return out
+    for mark, s in on:
+        who = label(mark["castId"])
+        bits = [f"{who} {_stage_where(s)}"]
+        if mark.get("faces", True):
+            bits.append(_stage_band(s["facing"], STAGE_FACING))
+        # Nearest *other* body, if there is one. One relation per subject —
+        # a clause that relates everybody to everybody is a paragraph.
+        others = [(o, os_) for o, os_ in seen if o is not mark]
+        if others:
+            # **In three dimensions.** Two people stand on the same floor, so
+            # the plan distance was the whole answer for as long as every mark
+            # was a person — and a bare bulb on the ceiling is 1.1m away across
+            # the floor and 2.6m straight up, which came out as "within arm's
+            # reach of the bulb".
+            def gap_to(other: dict[str, Any]) -> float:
+                return math.hypot(
+                    math.hypot(float(other["x"]) - float(mark["x"]),
+                               float(other["z"]) - float(mark["z"])),
+                    _stage_dims(other)[3] - _stage_dims(mark)[3])
+            near = min(others, key=lambda oo: gap_to(oo[0]))
+            bits.append(_stage_band(gap_to(near[0]), STAGE_NEAR)
+                        .format(other=label(near[0]["castId"])))
+        out.append(", ".join(b for b in bits if b))
+    return out
+
+
+def _stage_boxes(stage: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Marks projected onto the image plane, as the rectangles regions already are.
+
+    **This is the same arrangement the prose comes from, seen the other way.**
+    A region is a normalised 0..1 frame-space box paired positionally to a LoRA
+    — exactly what a mark becomes once you look through the camera at it — so
+    blocking reaches Krea 2 as a projection rather than as a second feature.
+
+    Clamped rather than rejected, the way `_validate_regions` clamps: a body
+    half out of frame is a real shot, and the visible half is the right box for
+    it. A mark entirely outside the frustum yields nothing at all, because a
+    zero-area region is an error downstream and an off-screen body is not a
+    request for one.
+    """
+    cam = stage["camera"]
+    half_h = _stage_fov(cam["lens"], STAGE_SENSOR_W)
+    half_v = _stage_fov(cam["lens"], STAGE_SENSOR_H)
+    out: list[dict[str, Any]] = []
+    for mark in _stage_others(cam, stage["marks"]):
+        seen = _stage_see(cam, mark)
+        # **The frame test lives in `_stage_see` and nowhere else.** This
+        # function used to carry its own — horizontal in one place, horizontal
+        # and vertical in the other — and two tests for one question are two
+        # answers waiting to differ, which is what a camera that can tilt made
+        # them do.
+        if not seen["in_frame"]:
+            continue
+        w, h = seen["fw"], seen["fh"]
+        cx = (seen["sx"] + 1.0) / 2.0
+        cy = (seen["sy"] + 1.0) / 2.0
+        x = min(max(cx - w / 2.0, 0.0), 1.0)
+        y = min(max(cy - h / 2.0, 0.0), 1.0)
+        # The mark's own fields ride along, because a projected box *is* the
+        # region for that body and pairing them back up afterwards would be an
+        # index dance over a list this function already filters.
+        box = {"castId": mark["castId"], "x": x, "y": y,
+               "width": min(w, 1.0 - x), "height": min(h, 1.0 - y),
+               "prompt": mark.get("prompt") or "",
+               "lora": mark.get("lora"), "strength": mark.get("strength")}
+        if box["width"] > 0.0 and box["height"] > 0.0:
+            out.append(box)
+    return out
+
+
+def _validate_stage(raw: Any, *, cast_ids: "set[str] | None",
+                    kinds: "dict[str, str] | None" = None) -> dict[str, Any] | None:
+    """
+    A shot's blocking, or the reason it is not one.
+
+    Returns None for "not blocked", which is not an error — it is the degrade,
+    and a shot without a stage compiles exactly as it did before.
+    """
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"Not a stage: {raw!r}")
+
+    def num(d: Any, key: str, default: float) -> float:
+        try:
+            return float(d.get(key, default))
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} is not a number: {d.get(key)!r}")
+
+    raw_cam = raw.get("camera") or {}
+    if not isinstance(raw_cam, dict):
+        raise ValueError(f"Not a camera: {raw_cam!r}")
+    lens = num(raw_cam, "lens", STAGE_LENS)
+    if not 8.0 <= lens <= 300.0:
+        raise ValueError(f"A {lens:g}mm lens is outside 8-300mm.")
+    cam = {"x": num(raw_cam, "x", 0.0), "z": num(raw_cam, "z", 0.0),
+           "y": num(raw_cam, "y", STAGE_EYE_H),
+           "yaw": _stage_norm(num(raw_cam, "yaw", 0.0)), "lens": lens,
+           "tilt": _stage_norm(num(raw_cam, "tilt", 0.0)),
+           "on": str(raw_cam.get("on") or "") or None}
+
+    marks: list[dict[str, Any]] = []
+    for entry in list(raw.get("marks") or [])[:STAGE_MAX_MARKS + 1]:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Not a mark: {entry!r}")
+        who = str(entry.get("castId") or "")
+        # A mark is a *body*, so it belongs to somebody — on the video side to
+        # a cast member, because an unbound one would compile to a clause about
+        # a person the document never defines. The image side has no cast and
+        # passes `cast_ids=None`: there a mark carries its own sentence, the
+        # way a region always has.
+        if cast_ids is not None and who not in cast_ids:
+            raise ValueError(f"A mark stands on the floor for somebody who is "
+                             f"not in the cast: {who!r}")
+        if who and any(m["castId"] == who for m in marks):
+            raise ValueError(f"{who!r} has two marks in one shot. A body is in "
+                             f"one place at a time.")
+        # Size is the mark's, not the projection's. Bounded because these are
+        # metres and a typo is a subject that fills every frame it is in or
+        # none of them; 12m is a bus, 0.02m is a coin.
+        dims = {}
+        for key, default in (("h", STAGE_FIGURE_H), ("w", STAGE_FIGURE_W)):
+            dims[key] = num(entry, key, default)
+            if not 0.02 <= dims[key] <= 12.0:
+                raise ValueError(f"{who or 'A mark'} is {dims[key]:g}m {key}, "
+                                 f"which is outside 0.02-12m.")
+        base = num(entry, "base", 0.0)
+        if not -2.0 <= base <= 12.0:
+            raise ValueError(f"{who or 'A mark'} stands {base:g}m off the "
+                             f"floor, which is outside -2-12m.")
+        marks.append({"castId": who, "x": num(entry, "x", 0.0),
+                      "z": num(entry, "z", 3.0),
+                      "yaw": _stage_norm(num(entry, "yaw", 180.0)),
+                      "h": dims["h"], "w": dims["w"], "base": base,
+                      # Only a person has a front. `STAGE_FACING` is the band
+                      # that earns this whole feature and it is nonsense on a
+                      # light fixture — "the bulb, facing the lens" is the
+                      # arithmetic answering a question nobody asked of it.
+                      "faces": True if kinds is None
+                      else kinds.get(who) == "character",
+                      "prompt": _oneline(str(entry.get("prompt") or "")),
+                      "lora": entry.get("lora") or None,
+                      "strength": entry.get("strength")})
+    if len(marks) > STAGE_MAX_MARKS:
+        raise ValueError(f"{len(marks)} marks; at most {STAGE_MAX_MARKS}.")
+    if not marks:
+        return None
+
+    # A camera riding a body has to be riding one that is on the floor,
+    # because the whole of what `on` does downstream is take that mark out of
+    # the frame. Bound to nobody, it silently describes the shot as a point of
+    # view belonging to no one and still puts the rider in his own close-up.
+    if cam["on"] and not any(m["castId"] == cam["on"] for m in marks):
+        raise ValueError(f"The camera is riding {cam['on']!r}, who has no mark "
+                         f"in this shot.")
+
+    path = raw.get("path") or None
+    if path is not None and not isinstance(path, dict):
+        raise ValueError(f"Not a camera path: {path!r}")
+    if path is not None:
+        path = dict(path)
+        if path.get("lens") is not None:
+            end_lens = num(path, "lens", lens)
+            if not 8.0 <= end_lens <= 300.0:
+                raise ValueError(f"The path ends on a {end_lens:g}mm lens, "
+                                 f"outside 8-300mm.")
+        if path.get("on"):
+            rider = str(path["on"])
+            if not any(m["castId"] == rider for m in marks):
+                raise ValueError(f"The camera path ends riding {rider!r}, who "
+                                 f"has no mark in this shot.")
+            path["on"] = rider
+    return {"camera": cam, "marks": marks, "path": path}
+
+
+def _h3_shot_text(shot: dict[str, Any], i: int, *, at: float, secs: float,
+                  cast: list[dict[str, Any]], subjects: dict[str, int],
+                  speakers: dict[str, str], carried: str, lead: str) -> str:
+    """
+    One `[Shot N]` block, in the guide's own shape.
+
+    `[Shot 1]` takes no timestamp and every later shot opens with a strictly
+    increasing cut time — which is why the times come off the strip rather than
+    being typed: two rows cannot be out of order, and a cut cannot land outside
+    the clip.
+    """
+    # The pills fold exactly as they do everywhere else — `_shot_body` at the
+    # vocabulary's own slots. The first version placed framing at the head of
+    # the shot, because the guide opens Shot 1 with the composition, and it came
+    # back as "[Shot 1] in a medium shot, shot at eye level, <Subject 1> sits
+    # alone". The phrases are prepositional *by design*: they were written to
+    # trail the sentence, and a compiler that repositions them is reinterpreting
+    # a table it does not own. The composition still arrives inside Shot 1,
+    # which is what the guide asks for; it arrives where the vocabulary puts it.
+    # The camera comes out of the fold and is placed by hand, for one reason:
+    # `<scenetrans>` has to sit at the *connecting point*, and with the camera
+    # sentence folded in, the carry-in marker landed at the end of the shot —
+    # after the move, several clauses downstream of the cut it is marking.
+    # Everything else still folds at the vocabulary's own slots.
+    # Blocking, folded in before anything else reads the pills. The derived
+    # ones are *added* to what was clicked and never over it, so a person who
+    # picked a close-up keeps it however the marks move.
+    pills = list(shot["pills"])
+    extra: list[str] = []
+    if shot.get("stage"):
+        chosen = {p["key"].split(".", 1)[0] for p in pills}
+        pills += _stage_pills(shot["stage"], secs, chosen)
+        extra = _stage_clauses(
+            shot["stage"],
+            lambda cid: _h3_label(next(c for c in cast if c["id"] == cid),
+                                  subjects))
+
+    groups = _shot_groups(pills, side="video")
+    buckets = _shot_phrases([p for p in pills
+                             if not p["key"].startswith("camera.")],
+                            side="video")
+    line = _h3_resolve(shot["line"], cast, subjects)
+    # The clauses land with the prose rather than after the pills, because they
+    # are about the subjects and the pills are about the lens.
+    body_in = [line] + extra if line else extra
+    visual = _shot_body(body_in, buckets) if (body_in or buckets) else ""
+
+    parts: list[str] = []
+    if i == 0:
+        parts.append(_shot_join([p for p in (_close(lead), visual) if p]))
+    else:
+        # `the shot cuts to` is one of the guide's five listed cut verbs, and a
+        # cut is required to introduce new information — which the body does,
+        # rather than the clause announcing it.
+        cut = f"At {_h3_clock(at)}, the shot cuts to"
+        parts.append(f"{cut} {visual}" if visual else _close(f"{cut} the scene"))
+    if carried:
+        parts.append(f"<scenetrans> {carried}")
+    st = shot.get("stage")
+    if st and st.get("path") and st["marks"] and "camera" not in {
+            p["key"].split(".", 1)[0] for p in shot["pills"]}:
+        lead = _stage_lead(st["camera"], st["marks"])
+        parts.append(_stage_move_sentence(
+            st["camera"], st["path"],
+            lead["dist"] if lead else None, secs))
+        arc = _stage_arc(st, {p["key"].split(".", 1)[0]
+                              for p in shot["pills"]})
+        if arc:
+            parts.append(arc)
+    parts.extend(groups.get("camera", []))
+
+    say = shot["say"]
+    if say["text"]:
+        ids = [speakers[w] for w in say["who"] if w in speakers]
+        by_id = {c["id"]: c for c in cast}
+        names = [_h3_label(by_id[w], subjects) for w in say["who"] if w in by_id]
+        # A speaker who is not a defined subject is written as a stable voice
+        # description followed by the ID, which is the guide's own provision for
+        # a narrator or anyone off-screen.
+        who = ", ".join(names) or say["voice"] or "An unseen voice"
+        sid = f" ({','.join(ids)})" if ids else ""
+        verb = ("says in an off-screen voiceover" if say["offscreen"]
+                else "says")
+        line = (f"{who}{sid} {verb}: "
+                f"<d>[{say['lang']}] {say['text']}</d>")
+        if say["offscreen"]:
+            line += " while their lips remain completely closed."
+        parts.append(line)
+        if say["cutoff"]:
+            parts.append("<cutoff> The line is truncated by the end of the "
+                         "video.")
+        elif say["carry"]:
+            # Both connecting points, which is what the guide asks for and what
+            # a single marker at the cut cannot express: the model has to know
+            # the audio continues *into* the next shot as well as *out of* this
+            # one.
+            parts.append("<scenetrans> The line continues seamlessly across "
+                         "the cut.")
+    return f"[Shot {i + 1}] " + " ".join(p for p in parts if p)
+
+
+def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
+    """
+    The document H3 reads, assembled from a cast and a timeline.
+
+    Six fields in ref mode and three in base mode, each on its own line with its
+    content following — the shape both of MiniMax's guides demonstrate. The
+    order is theirs and is not ours to change: `subject_definitions` has to
+    define a label before `summary` uses it, and `retention_analysis` has to
+    come before the body that spends it.
+    """
+    cast, shots = scene["cast"], scene["shots"]
+    subjects = _h3_subjects(cast)
+    speakers = spk = _h3_speakers(shots)
+
+    # Spans, not starts. A camera move needs the shot's *duration* to state a
+    # speed, and the beat weight is not one — passing `beats` made a 0.9m push
+    # over six seconds read as "fast".
+    total = sum(s["beats"] for s in shots) or 1.0
+    at, times = 0.0, []
+    for shot in shots:
+        span = shot["beats"] / total * scene["seconds"]
+        times.append((at, at + span))
+        at += span
+
+    # ── the body ────────────────────────────────────────────────────────────
+    sources = scene.get("sources") or {}
+    ref_mode = (bool(subjects) or bool(sources)
+                or any(r["kind"] == "audio" for c in cast for r in c["refs"]))
+    style = scene["style"] or "Live-action, cinematic"
+    grade = scene["grade"]
+    # The one place the two guides genuinely disagree, and it is deliberate:
+    # base mode states the style *after* `[Shot 1]`, full-reference mode
+    # establishes it in a sentence *before* it (ref-en §5.2).
+    lead = "" if ref_mode else ", ".join([p for p in (style, grade) if p])
+
+    blocks, carried = [], ""
+    for i, shot in enumerate(shots):
+        blocks.append(_h3_shot_text(
+            shot, i, at=times[i][0], secs=max(0.1, times[i][1] - times[i][0]),
+            cast=cast, subjects=subjects,
+            speakers=speakers, carried=carried, lead=lead))
+        carried = ("The line from the previous shot carries over across the "
+                   "transition." if shot["say"]["carry"] else "")
+    body = "\n".join(blocks)
+    if ref_mode:
+        opener = f"The target video is in a {style.lower()} style"
+        opener += f" with {grade}." if grade else "."
+        body = f"{opener}\n{body}"
+
+    lines: list[str] = []
+    if ref_mode:
+        # ── subject_definitions ─────────────────────────────────────────────
+        defs: list[str] = []
+        for member in cast:
+            n = subjects.get(member["id"])
+            if not n:
+                continue
+            # One entry per subject listing every asset it is built from —
+            # `<Subject 2> is the Samoyed in <Picture 2>, <Picture 3> and
+            # <Picture 4>` — rather than one entry per asset. A subject is a
+            # content unit; the files are where it came from.
+            labels = _h3_list([_h3_asset(r) for r in member["refs"]
+                               if r["kind"] != "audio"])
+            defs.append(f"<Subject {n}> is the {H3_CAST_KINDS[member['kind']]['noun']}"
+                        + (f" in {labels}" if labels else "")
+                        + (f", {member['note']}" if member["note"] else "") + ".")
+        for member in cast:
+            n = subjects.get(member["id"])
+            for ref in member["refs"]:
+                if ref["kind"] != "audio":
+                    continue
+                who = f"<Subject {n}>" if n else (member["note"] or member["handle"])
+                sid = spk.get(member["id"])
+                defs.append(f"{_h3_asset(ref)} is the {H3_AUDIO_NOUN} for "
+                            f"{who}{f' ({sid})' if sid else ''}.")
+        # A source is its own label, never folded into a subject: the guide's
+        # own line is `<Video 1> is the source video for the target video edit.`
+        for key, idx in sources.items():
+            spec = H3_SOURCES[key]
+            for i in idx:
+                defs.append(f"{_h3_asset({'kind': spec['kind'], 'index': i})} "
+                            f"is the {spec['noun']}.")
+        lines += ["subject_definitions:", "\n".join(defs)]
+
+        # ── summary ─────────────────────────────────────────────────────────
+        first = _first_sentence(_close(_h3_resolve(
+            shots[0]["line"], cast, subjects))) or _first_sentence(body)
+        # ref-en §3: "For video-editing tasks, begin the summary after the
+        # task-type prefix with: The target video is an edited version of
+        # <Video 1>." Not phrasing we chose — a required opening.
+        lead_in = ""
+        if "edit" in sources:
+            lead_in = (f"The target video is an edited version of "
+                       f"{_h3_asset({'kind': 'video', 'index': sources['edit'][0]})}. ")
+        lines += ["summary:", _h3_task_types(scene, task) + lead_in + first]
+
+        # ── retention_analysis ──────────────────────────────────────────────
+        # One line per label, `(appears in …)`, then the fixed relationship
+        # marker, then what has to survive. `(Sx)` never appears here — the
+        # guide says so outright, and it is easy to leak in from the body.
+        keep: list[str] = []
+        for member in cast:
+            n = subjects.get(member["id"])
+            if not n:
+                continue
+            # Standing on the floor is appearing. Blocking a subject into a
+            # shot without naming them in the prose is the ordinary case, and
+            # reading only the line reported them as appearing nowhere.
+            where = [f"[Shot {i + 1}]" for i, s in enumerate(shots)
+                     if member["handle"] in _h3_handles(s["line"])
+                     or any(m["castId"] == member["id"]
+                            for m in ((s.get("stage") or {}).get("marks") or []))]
+            slots = H3_CAST_KINDS[member["kind"]]["slots"]
+            # Visual slots only. A `voice` slot's retain clause belongs to the
+            # `<Audio N>` line, which says it with an audio marker; claiming it
+            # here as well makes the subject retain a timbre a picture does not
+            # carry, and says the same thing twice under two different markers.
+            what = [slots[s] for r in member["refs"] if r["kind"] != "audio"
+                    for s in r["slots"]]
+            what = list(dict.fromkeys(what)) or ["appearance"]
+            keep.append(
+                f"<Subject {n}>"
+                + (f" (appears in {', '.join(where)})" if where else "")
+                + f": {member['retention']} - its "
+                + "; ".join(what) + " are retained.")
+        # `(Sx)` is deliberately absent from every line here — the guide says so
+        # outright, and the audio lines are where it would leak in, because the
+        # definition above legitimately carries one.
+        for member in cast:
+            for ref in member["refs"]:
+                if ref["kind"] != "audio":
+                    continue
+                task, marker = H3_AUDIO_ROLES[ref["role"]]
+                keep.append(
+                    f"{_h3_asset(ref)}: {marker} - "
+                    + ("it is reused as the target video's audio."
+                       if marker == "fully_copy" else
+                       "the target speaker follows its voice timbre and "
+                       "delivery without copying the original signal."))
+        for key, idx in sources.items():
+            spec = H3_SOURCES[key]
+            for i in idx:
+                keep.append(
+                    f"{_h3_asset({'kind': spec['kind'], 'index': i})} "
+                    f"({spec['retain']}): {spec['mark']} - it is used as the "
+                    f"{spec['retain']} of the target video.")
+        lines += ["retention_analysis:", "\n".join(keep)]
+        lines += ["detailed_description:", body]
+    else:
+        align = H3_ALIGN[task].format(s=f"{scene['seconds']:.2f}")
+        if align:
+            lines += [align, ""]
+        lines += ["integrated_multimodal_description:", body]
+
+    sound = _h3_across(shots, "sound")
+    lines += ["overall_soundscape:",
+              _h3_cap(", ".join(sound))
+              + (" continues" if len(sound) == 1 else " continue")
+              + " throughout the video." if sound else H3_SOUNDSCAPE_DEFAULT]
+    score = _h3_across(shots, "score")
+    lines += ["non_diegetic_music:",
+              f"{_h3_cap(', '.join(score))}." if score else "N/A"]
+    return "\n".join(lines)
+
+
+def _h3_across(shots: list[dict[str, Any]], group: str) -> list[str]:
+    """One field's pills over every shot, in order, once each.
+
+    Both audio fields are summaries of the *whole* clip — the guide keeps
+    shot-synchronised sound in the body and puts only the continuous layer here
+    — so a pill picked on three shots is one line in the soundscape.
+    """
+    return list(dict.fromkeys(
+        p for s in shots
+        for p in _shot_groups(s["pills"], side="video").get(group, [])))
+
+
+def _h3_list(parts: list[str]) -> str:
+    """A comma list with `and` before the last, which is how the guide writes."""
+    parts = [p for p in parts if p]
+    if len(parts) < 2:
+        return parts[0] if parts else ""
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def _h3_asset(ref: dict[str, Any]) -> str:
+    """`<Picture N>` / `<Video N>` — numbered per category, and 1-based.
+
+    The index is the file's position in `references[]` or `ref_videos[]`, not
+    its order of first appearance in the cast, because those lists are what the
+    generator uploads and H3 numbers them as it receives them. A compiler that
+    numbered by cast order would label the right picture with the wrong number,
+    which is a valid document that points at somebody else's face.
+    """
+    kind = {"video": "Video", "audio": "Audio"}.get(ref["kind"], "Picture")
+    return f"<{kind} {ref['index'] + 1}>"
+
+
+def _h3_cap(text: str) -> str:
+    """First letter up, for a field that is a sentence of our own making."""
+    return text[0].upper() + text[1:] if text else text
+
+
 def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
                        task: str, seconds: float,
                        roles: list[str] | None = None,
-                       modules: list[dict[str, Any]] | None = None) -> str:
+                       modules: list[dict[str, Any]] | None = None,
+                       scene: dict[str, Any] | None = None) -> str:
     """
     The document H3 actually reads, assembled from a sentence and some pills.
 
@@ -8569,6 +10292,13 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
     wrapped in field labels is a different input to the encoder than the bare
     sentence.
     """
+    if scene:
+        doc = _compile_h3_scene(scene, task=task)
+        if len(doc) > MAX_H3_PROMPT:
+            raise ValueError(
+                f"The document is {len(doc)} characters and H3's prompt field "
+                f"holds {MAX_H3_PROMPT}. Shorten a shot, or use fewer.")
+        return doc
     roles = [r for r in (roles or [])]
     if not pills and not any(roles) and not modules:
         return typed
@@ -8604,7 +10334,7 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
             picture = ", ".join(f"<Picture {i + 1}>" for i in range(n))
             subjects = [f"The reference pictures are {picture}."] if n else []
             retain = [f"Retain the appearance of {picture}."] if n else []
-        body = _shot_body(body_in, buckets)
+        body = f"[Shot 1] {_shot_body(body_in, buckets)}"
         # The typed line is the summary — it is the one sentence in the document
         # that says what happens. Taking the description's first sentence
         # instead, which is what this did first, summarised a shot as "A
@@ -8622,10 +10352,16 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
         if align:
             lines.append(align)
         lines.append(f"integrated_multimodal_description: "
-                     f"{_shot_body(body_in, buckets)}")
+                     f"[Shot 1] {_shot_body(body_in, buckets)}")
 
+    # `N/A` here used to be the default and it was a bug with no symptom: the
+    # guide reserves it for *complete silence, requested*, so every clip nobody
+    # picked a sound pill on was telling H3 it was silent. It also warns that a
+    # blank field lets ambience creep in on its own, so there is no empty answer
+    # — see `H3_SOUNDSCAPE_DEFAULT`. `non_diegetic_music` below keeps `N/A`,
+    # because there the guide's rule is the opposite one.
     lines.append(f"overall_soundscape: "
-                 f"{_shot_audio(buckets, 'sound') or 'N/A'}")
+                 f"{_shot_audio(buckets, 'sound') or H3_SOUNDSCAPE_DEFAULT}")
     # The default, and the line worth the whole feature: with no score pill the
     # document says there is no score, which is the one thing free prose could
     # never say and the reason every clip came back scored.
@@ -9109,7 +10845,9 @@ class VideoGenerator:
         """Graph and shot description for a MiniMax-H3 take."""
         refs_b64 = list(params.get("references") or [])[:MAX_H3_REFS]
         vids_b64 = list(params.get("ref_videos") or [])[:MAX_H3_REF_VIDEOS]
-        _require_models(*(VIDEO_REF_MODEL_KEYS if (refs_b64 or vids_b64)
+        auds_b64 = list(params.get("ref_audios") or [])[:MAX_H3_REF_AUDIOS]
+        _require_models(*(VIDEO_REF_MODEL_KEYS
+                          if (refs_b64 or vids_b64 or auds_b64)
                           else VIDEO_MODEL_KEYS))
 
         width, height = _h3_canvas(params["aspect"], params["tier"])
@@ -9129,8 +10867,11 @@ class VideoGenerator:
         # LoadVideo lists the input directory and filters it by content
         # type, so the extension is load-bearing, not cosmetic.
         ref_videos = [stage(b, f"refvid{i}", "mp4") for i, b in enumerate(vids_b64)]
+        # `LoadAudio` lists the input directory and filters by content type the
+        # way `LoadVideo` does, so the extension is load-bearing here too.
+        ref_audios = [stage(b, f"refaud{i}", "wav") for i, b in enumerate(auds_b64)]
         keyframes: dict[str, str] = {}
-        if not (references or ref_videos):
+        if not (references or ref_videos or ref_audios):
             for slot in ("first_frame", "last_frame"):
                 if params.get(slot):
                     keyframes[slot] = stage(params[slot], slot)
@@ -9147,16 +10888,34 @@ class VideoGenerator:
             )
 
         ref_size = params.get("ref_size") or "match"
+        loras = _validate_video_loras(params.get("loras"))
         graph = _h3_graph(
             prompt=params["prompt"], width=width, height=height, frames=frames,
             seed=seed, steps=steps,
             sampler=params["sampler"], scheduler=params["scheduler"],
-            references=references, ref_videos=ref_videos, ref_size=ref_size,
+            references=references, ref_videos=ref_videos,
+            ref_audios=ref_audios, ref_size=ref_size,
+            loras=loras,
+            shift_video=params.get("shift_video"),
+            shift_audio=params.get("shift_audio"),
             **keyframes,
         )
-        meta = {"mode": "ref2va" if (references or ref_videos) else "fl2va",
+        meta = {"mode": ("ref2va" if (references or ref_videos or ref_audios)
+                         else "fl2va"),
                 "sampler": params["sampler"], "scheduler": params["scheduler"],
-                "references": len(references), "ref_videos": len(ref_videos)}
+                "references": len(references), "ref_videos": len(ref_videos),
+                "ref_audios": len(ref_audios),
+                # No `expert`: H3 has one, so recording a field whose only value
+                # is "both" would be a sidecar implying a choice nobody had.
+                "loras": [{"name": l["name"], "unet": l["unet"]}
+                          for l in loras]}
+        # Only where somebody moved it, for the reason `ref_size` is conditional:
+        # a sidecar that records the model's own default on every take is a
+        # sidecar you have to know the default to read.
+        if params.get("shift_video") is not None:
+            meta["shift_video"] = float(params["shift_video"])
+        if params.get("shift_audio") is not None:
+            meta["shift_audio"] = float(params["shift_audio"])
         # Only where it meant something. It is the one input on this path that
         # changes what a take costs without changing anything the sidecar
         # already records — two takes at the same canvas, frames and steps can
@@ -9432,6 +11191,7 @@ def web():
                 "video": {"options": list(VIDEO_GPUS), "default": VIDEO_GPU},
             },
             "max_refs": MAX_H3_REFS,
+            "max_ref_audios": MAX_H3_REF_AUDIOS,
             "max_ref_videos": MAX_H3_REF_VIDEOS,
             # Same reason as gpus: which controls each video model reads, and
             # what is on the volume for each of its tasks, are properties of
@@ -10726,6 +12486,7 @@ def web():
             modules = _validate_modules(payload.get("modules"))
             n_refs = max(0, min(MAX_H3_REFS, int(payload.get("references") or 0)))
             n_vids = max(0, min(MAX_H3_REF_VIDEOS, int(payload.get("ref_videos") or 0)))
+            n_auds = max(0, min(MAX_H3_REF_AUDIOS, int(payload.get("ref_audios") or 0)))
             roles = _validate_ref_roles(payload.get("ref_roles"), n_refs)
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
@@ -10746,11 +12507,21 @@ def web():
             seconds = float(payload.get("seconds") or d["seconds"])
         except (TypeError, ValueError):
             seconds = float(d["seconds"])
+        # The scene is validated here rather than only on the way to the GPU,
+        # because this route is what the composer polls on every keystroke: a
+        # handle nobody defined should be a sentence under the timeline the
+        # moment it is typed, not a refusal discovered at Generate.
+        try:
+            scene = _validate_scene(payload.get("scene"), n_refs=n_refs,
+                                    n_vids=n_vids, n_auds=n_auds,
+                                    seconds=seconds)
+        except (TypeError, ValueError) as exc:
+            return {"error": str(exc)}
         return {"prompt": _compile_h3_prompt(
             typed=typed, pills=shot, seconds=seconds, roles=roles,
-            modules=modules,
+            modules=modules, scene=scene,
             task=_h3_task(payload.get("first_frame"), payload.get("last_frame"),
-                          n_refs, n_vids),
+                          n_refs, n_vids, n_auds),
         ), **share}
 
     @api.post("/api/generate")
@@ -10787,6 +12558,22 @@ def web():
         _reload_volume()
         try:
             stack = _validate_loras(stack)
+            # Blocking, projected. **The same arrangement the video side turns
+            # into prose, seen through the camera instead of described by it**
+            # — a mark becomes the normalised 0..1 rectangle a region already
+            # is, so this reaches Krea 2 as a projection rather than as a
+            # second feature.
+            #
+            # Only when nothing was drawn. A hand-drawn box is somebody looking
+            # at the frame and deciding, and an arrangement does not get to
+            # overrule that any more than it overrules a chosen pill.
+            stage = _validate_stage(payload.get("stage"), cast_ids=None)
+            if stage and not regions:
+                regions = [
+                    {k: v for k, v in b.items()
+                     if k != "castId" and v is not None}
+                    for b in _stage_boxes(stage)
+                ]
             regions = _validate_regions(regions)
             shot = _validate_shot(payload.get("shot"))
             # Beside the pill rail, and rejected the same way: an unknown role
@@ -10893,11 +12680,17 @@ def web():
 
         refs = [r for r in (payload.get("references") or []) if r][:MAX_H3_REFS]
         vids = [v for v in (payload.get("ref_videos") or []) if v][:MAX_H3_REF_VIDEOS]
-        if (refs or vids) and not supports["references"]:
+        auds = [a for a in (payload.get("ref_audios") or []) if a][:MAX_H3_REF_AUDIOS]
+        if (refs or vids or auds) and not supports["references"]:
             return {"error": f"{spec['label']} does not take references."}
-        if len(refs) + len(vids) > MAX_H3_REF_TOTAL:
+        # Audio counts toward the same twelve. It was left out of this sum when
+        # the audio channel landed, so 9 images + 3 videos + 3 audio passed a
+        # check whose message says the limit is 12 — and the refusal would then
+        # come from the node, mid-run, on a warm H100.
+        if len(refs) + len(vids) + len(auds) > MAX_H3_REF_TOTAL:
             return {"error": f"{MAX_H3_REF_TOTAL} references in total is the "
-                             f"model's limit ({len(refs)} images + {len(vids)} videos)."}
+                             f"model's limit ({len(refs)} images + "
+                             f"{len(vids)} videos + {len(auds)} audio)."}
 
         # The pill rail, checked before anything is rented. A pill the backend
         # does not know is a stale tab, and the answer to it is a form error
@@ -10941,7 +12734,7 @@ def web():
         tier = str(payload.get("tier") or spec["defaults"]["tier"])
         try:
             if model == "h3":
-                task = "ref2va" if (refs or vids) else "fl2va"
+                task = "ref2va" if (refs or vids or auds) else "fl2va"
                 _h3_canvas(aspect, tier)  # raises with the valid set named
             else:
                 task = _wan_task(first, last)
@@ -10966,6 +12759,19 @@ def web():
         d = spec["defaults"]
         seconds = num("seconds", float(d["seconds"]), float)
 
+        # The composer's timeline. Note that `scene` means something else one
+        # route up: on `/api/generate` it is a base64 *plate* — a picture of a
+        # place, frame-scope, beside `outfit`. Here it is the cast and the
+        # shots. Two routes, two schemas, and the collision is written down
+        # rather than renamed away because "scene" is the accurate word in both
+        # and a reader who meets the second one cold should be told.
+        try:
+            scene = _validate_scene(payload.get("scene"), n_refs=len(refs),
+                                    n_vids=len(vids), n_auds=len(auds),
+                                    seconds=seconds)
+        except (TypeError, ValueError) as exc:
+            return {"error": str(exc)}
+
         # Compiled here rather than in the client, so there is one
         # implementation of the format, an unknown pill is a form error, and the
         # sidecar records exactly what the encoder was given.
@@ -10977,8 +12783,8 @@ def web():
         if model == "h3":
             compiled = _compile_h3_prompt(
                 typed=prompt, pills=shot, seconds=seconds, roles=roles,
-                modules=modules,
-                task=_h3_task(first, last, refs, vids),
+                modules=modules, scene=scene,
+                task=_h3_task(first, last, refs, vids, auds),
             )
         else:
             compiled = _compile_wan_prompt(prompt, shot, modules)
@@ -10996,6 +12802,7 @@ def web():
             "prompt_original": str(payload.get("prompt_original") or ""),
             "shot": shot,
             "modules": modules,
+            "scene": scene,
             "ref_roles": roles,
             # Dropped rather than passed through for a model that cannot read
             # it: a negative prompt that reaches a guidance-distilled checkpoint
@@ -11011,6 +12818,12 @@ def web():
             "shift": num("shift", d.get("shift", WAN_DEFAULT_SHIFT), float),
             "switch_at": num("switch_at", None, int),
             "seed": num("seed", None, int),
+            # H3's flow shifts, deliberately *not* read off the shared `shift`
+            # key above: that one falls back to WAN_DEFAULT_SHIFT, so reading it
+            # would put 8.0 on every H3 take against the model's own 12.0.
+            # None means "the model's default", which is the honest empty value.
+            "shift_video": num("shift_video", None, float),
+            "shift_audio": num("shift_audio", None, float),
             "sampler": str(payload.get("sampler") or d["sampler"]),
             "scheduler": str(payload.get("scheduler") or d["scheduler"]),
             "loras": stack,
@@ -11021,6 +12834,7 @@ def web():
             # than a validation error about a combination it cannot express.
             "references": refs,
             "ref_videos": vids,
+            "ref_audios": auds,
             "ref_size": ref_size,
             "first_frame": first,
             "last_frame": last,

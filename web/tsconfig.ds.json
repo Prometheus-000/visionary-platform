@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "dist-ds/types",
+    "rootDir": "src",
+    "composite": false,
+    "incremental": false
+  },
+  "include": ["src/ds", "src/ui", "src/api/client.ts"]
+}

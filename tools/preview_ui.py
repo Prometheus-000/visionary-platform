@@ -46,7 +46,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from _from_app import CAPTION, MODULES, MOTION, REWRITE, SHOT, TRAINER, pull
+from _from_app import (CAPTION, MODULES, MOTION, REWRITE, SHOT, TRAINER,
+                       VIDEO, pull)
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
 # Argument first, then $PORT, then a default. The env var is what lets a launcher
@@ -315,6 +316,9 @@ STATE = {
     # One of each shape the composer has to redraw for: audio + references and
     # no CFG (H3), the two-expert pair (A14B), and the single-expert 5B. A stub
     # with only one of them cannot catch a control that fails to appear.
+    # `supports` is filled from app.py below rather than written here — see the
+    # VIDEO set in `_from_app.py`. What stays hand-written is what the stub is
+    # *for*: which tasks are ready, and which weights are pretend-downloaded.
     "video_models": [
         {"key": "h3", "label": "MiniMax-H3",
          "note": "Sound and picture in one pass",
@@ -324,9 +328,6 @@ STATE = {
          "schedulers": ["simple", "normal", "beta"],
          "defaults": {"steps": 20, "sampler": "res_multistep",
                       "scheduler": "simple", "tier": "full", "seconds": 5},
-         "supports": {"loras": False, "experts": False, "cfg": False,
-                      "negative": False, "references": True,
-                      "last_frame": True, "audio": True},
          "tasks": {"fl2va": {"ready": True, "missing": []},
                    "ref2va": {"ready": True, "missing": []}},
          "ready": True},
@@ -338,9 +339,6 @@ STATE = {
          "schedulers": ["simple", "normal", "beta"],
          "defaults": {"steps": 20, "cfg": 3.5, "shift": 8.0, "sampler": "euler",
                       "scheduler": "simple", "tier": "full", "seconds": 5},
-         "supports": {"loras": True, "experts": True, "cfg": True,
-                      "negative": True, "references": False,
-                      "last_frame": True, "audio": False},
          # i2v deliberately not downloaded: attaching a first frame here should
          # disable Generate and name the missing pair, which is the state most
          # worth being able to look at.
@@ -357,9 +355,6 @@ STATE = {
          "schedulers": ["simple", "normal", "beta"],
          "defaults": {"steps": 30, "cfg": 5.0, "shift": 8.0, "sampler": "euler",
                       "scheduler": "simple", "tier": "full", "seconds": 5},
-         "supports": {"loras": True, "experts": False, "cfg": True,
-                      "negative": True, "references": False,
-                      "last_frame": False, "audio": False},
          "tasks": {"t2v": {"ready": True, "missing": []},
                    "i2v": {"ready": True, "missing": []}},
          "ready": True},
@@ -387,6 +382,15 @@ STATE = {
     "gpus": {"image": {"options": ["H100", "H200"], "default": "H100"},
              "video": {"options": ["H100", "H200"], "default": "H100"}},
 }
+
+# One of each shape the composer redraws for — H3, the A14B pair, the 5B — with
+# their capabilities taken from the deployment rather than remembered. This ran
+# as a hand-written table until H3 grew LoRAs and the preview kept rendering the
+# composer without the button.
+_VIDEO = pull(VIDEO)["VIDEO_MODELS"]
+for _m in STATE["video_models"]:
+    _m["supports"] = dict(_VIDEO[_m["key"]]["supports"])
+
 
 # Which Drive outcome the next poll reports. Mutable module state, like
 # DATASETS above and for the same reason: this flow is judged by what the card

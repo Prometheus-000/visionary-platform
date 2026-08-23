@@ -1,0 +1,361 @@
+<title>Blocking Probe</title>
+<style>
+:root{--bg:#000;--fg:#f5f5f5;--mut:#8a8a8a;--dim:#767676;
+ --w1:rgba(255,255,255,.03);--w2:rgba(255,255,255,.05);--w3:rgba(255,255,255,.07);
+ --sel:rgba(255,255,255,.14);--line:rgba(255,255,255,.10);--line2:rgba(255,255,255,.24);
+ --lift:#111;--warn:#fbbf24;--ok:#4ade80;
+ --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);
+ font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+ -webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
+.head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+ padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:16px}
+h1{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.sub{color:var(--dim);font-size:13px}
+.hint{color:#5a5a5a;font-size:12.5px;line-height:1.7;margin-bottom:16px;max-width:74ch}
+.hint b{color:var(--mut);font-weight:500}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+.pane{background:var(--w1);border:1px solid var(--line);border-radius:16px;
+ overflow:hidden;display:flex;flex-direction:column}
+.pane h2{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+ font-weight:600;padding:9px 12px;border-bottom:1px solid var(--line);
+ display:flex;justify-content:space-between;align-items:center}
+.pane h2 span{font-family:var(--mono);font-size:10px;color:#5a5a5a;letter-spacing:0;
+ text-transform:none}
+canvas{display:block;width:100%;touch-action:none;cursor:grab}
+canvas:active{cursor:grabbing}
+.out{margin-top:14px;background:var(--w1);border:1px solid var(--line);
+ border-radius:16px;overflow:hidden}
+.out h2{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+ font-weight:600;padding:9px 12px;border-bottom:1px solid var(--line)}
+pre{font-family:var(--mono);font-size:12px;line-height:1.75;color:#c8c8c8;
+ padding:11px 13px;white-space:pre-wrap;word-break:break-word;margin:0}
+pre b{color:var(--fg);font-weight:400}
+.dim{color:#5a5a5a}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 0}
+.bar label{font-size:11.5px;color:var(--dim);display:inline-flex;align-items:center;gap:7px}
+input[type=range]{accent-color:#f5f5f5;width:132px}
+button{background:var(--w2);border:1px solid transparent;border-radius:999px;
+ padding:5px 12px;color:var(--mut);font-size:12px;cursor:pointer;min-height:32px}
+button:hover{background:var(--w3);color:var(--fg)}
+button.on{background:var(--sel);color:var(--fg);border-color:var(--line2)}
+.tag{font-family:var(--mono);font-size:11px;color:var(--dim);background:var(--w2);
+ border-radius:5px;padding:2px 7px}
+</style>
+
+<div class="wrap">
+ <div class="head">
+  <h1>Blocking Probe</h1><span class="sub">marks on a floor &rarr; the sentence H3 reads</span>
+ </div>
+ <p class="hint">
+  <b>Drag anything.</b> Bodies and the camera move on the plan; drag a body in the
+  frame and it slides across the floor at its own depth. The camera wedge has a
+  handle on its nose to turn it. Everything below updates as you drag &mdash;
+  that is the whole point: <b>you are not composing a frame, you are moving the
+  world</b>, and the prompt is what falls out.
+ </p>
+
+ <div class="grid">
+  <div class="pane"><h2>Through the lens <span id="lensLbl">40mm</span></h2>
+   <canvas id="fr" height="420"></canvas></div>
+  <div class="pane"><h2>The floor <span>plan view</span></h2>
+   <canvas id="pl" height="420"></canvas></div>
+ </div>
+
+ <div class="bar">
+  <label>lens <input id="lens" type="range" min="14" max="135" value="40"></label>
+  <label>height <input id="ch" type="range" min="20" max="300" value="150"></label>
+  <label>shot <input id="secs" type="range" min="2" max="15" value="6"></label>
+  <span class="tag" id="secsLbl">6s</span>
+  <button id="addBtn">+ body</button>
+  <button id="pathBtn">camera move: off</button>
+  <button id="reset">reset</button>
+ </div>
+
+ <div class="out"><h2>what the compiler writes</h2><pre id="out"></pre></div>
+ <div class="out" style="margin-top:12px"><h2>and what Krea 2 gets &mdash; the same arrangement, projected</h2>
+  <pre id="boxes"></pre></div>
+</div>
+
+<script>
+"use strict";
+/* Mirrors `_stage_*` in app.py — the tables are copied from it verbatim, and
+   `/api/compile` is the authority. This exists so a drag can answer at 60fps
+   instead of over the network; if the two ever disagree, this one is wrong.
+   Same relationship `storyline/model.ts` already has with the real compiler. */
+const SENSOR_W=36, SENSOR_H=24, FIG_H=1.7, FIG_W=0.5, EYE_H=1.6;
+const SIZE=[[4,"in an extreme close-up"],[2.4,"in a close-up"],[1.5,"in a medium close-up"],
+            [1,"in a medium shot"],[.45,"in a wide shot"],[0,"in an extreme wide shot"]];
+const ANGLE=[[45,"shot from directly overhead, a bird's-eye view"],[7,"shot from a high angle"],
+             [-7,"shot at eye level"],[-45,"shot from a low angle"],
+             [-181,"shot from ground level looking up, a worm's-eye view"]];
+const FACING=[[155,"with their back to the lens"],[115,"turned three-quarters away from the lens"],
+              [65,"in profile to the lens"],[25,"turned three-quarters toward the lens"],
+              [0,"facing the lens"]];
+const NEAR=[[3,"across the space from {other}"],[1.2,"a few steps from {other}"],
+            [.6,"within arm's reach of {other}"],[0,"close enough that their shoulders overlap"]];
+const VERB={pushin:"pushes in",pullout:"pulls out",panl:"pans left",panr:"pans right",
+            truckl:"trucks left",truckr:"trucks right",craneu:"cranes up",craned:"cranes down",
+            arc:"arcs around the subject",static:"holds a static shot"};
+
+const D=Math.PI/180, deg=r=>r/D;
+const norm=d=>{d=((+d+180)%360+360)%360-180; return d<=-180?d+360:d};
+const band=(v,t)=>{for(const[e,n]of t)if(v>=e)return n; return t[t.length-1][1]};
+const fov=(lens,sensor)=>Math.atan(sensor/(2*Math.max(1,lens)));
+
+function see(cam,m){
+ const dx=m.x-cam.x, dz=m.z-cam.z, dist=Math.hypot(dx,dz);
+ const bearing=norm(deg(Math.atan2(dx,dz))-cam.yaw);
+ const hh=fov(cam.lens,SENSOR_W), hv=fov(cam.lens,SENSOR_H);
+ const behind=Math.abs(bearing)>=90;
+ const sx=behind?9.9:Math.tan(bearing*D)/Math.tan(hh);
+ const fill=FIG_H/(2*Math.max(.05,dist)*Math.tan(hv));
+ const pitch=deg(Math.atan2(cam.y-EYE_H,Math.max(.05,dist)));
+ const toCam=deg(Math.atan2(-dx,-dz));
+ return {dist,sx,fill,pitch,facing:Math.abs(norm(m.yaw-toCam)),
+         inFrame:Math.abs(sx)<=1,size:band(fill,SIZE),angle:band(pitch,ANGLE)};
+}
+function boxOf(cam,m){
+ const s=see(cam,m), d=Math.max(.05,s.dist);
+ const hh=fov(cam.lens,SENSOR_W), hv=fov(cam.lens,SENSOR_H);
+ const w=FIG_W/(2*d*Math.tan(hh)), h=FIG_H/(2*d*Math.tan(hv));
+ if(Math.abs(s.sx)>1+w) return null;
+ const rise=Math.atan2(FIG_H/2-cam.y,d);
+ const cy=(-Math.tan(rise)/Math.tan(hv)+1)/2, cx=(s.sx+1)/2;
+ const x=Math.min(Math.max(cx-w/2,0),1), y=Math.min(Math.max(cy-h/2,0),1);
+ const bw=Math.min(w,1-x), bh=Math.min(h,1-y);
+ return bw>0&&bh>0?{x,y,w:bw,h:bh,s}:null;
+}
+function where(s){
+ if(!s.inFrame) return s.sx<0?"just off-frame left":"just off-frame right";
+ const side=s.sx<-.33?"screen left":s.sx>.33?"screen right":"centre frame";
+ const depth=s.fill>=1.5?"in the foreground":s.fill<.45?"in the background":"";
+ return depth?`${side}, ${depth}`:side;
+}
+function moveKey(cam,p){
+ const dx=p.x-cam.x, dz=p.z-cam.z, dy=(p.y??cam.y)-cam.y, dyaw=norm((p.yaw??cam.yaw)-cam.yaw);
+ const yaw=cam.yaw*D, fwd=dx*Math.sin(yaw)+dz*Math.cos(yaw), lat=dx*Math.cos(yaw)-dz*Math.sin(yaw);
+ const travel=Math.hypot(Math.hypot(dx,dz),dy);
+ if(travel<.05&&Math.abs(dyaw)<3) return "static";
+ if(travel<.05) return dyaw>0?"panr":"panl";
+ if(Math.abs(dy)>Math.max(Math.abs(fwd),Math.abs(lat))) return dy>0?"craneu":"craned";
+ if(Math.abs(lat)>Math.abs(fwd)&&Math.abs(dyaw)>12) return "arc";
+ if(Math.abs(lat)>Math.abs(fwd)) return lat>0?"truckr":"truckl";
+ return fwd>0?"pushin":"pullout";
+}
+function moveNote(cam,p,dist,secs){
+ const dx=p.x-cam.x, dz=p.z-cam.z, dy=(p.y??cam.y)-cam.y;
+ const travel=Math.hypot(Math.hypot(dx,dz),dy);
+ if(travel<.05) return "";
+ const r=travel/Math.max(.5,dist);
+ const amp=r>.5?"large":r<.18?"small":"medium";
+ const rate=travel/Math.max(.5,secs);
+ const sp=rate>.8?"fast":rate<.25?"slow":"moderate";
+ return `with ${amp} amplitude at ${sp} speed`;
+}
+
+/* ── state ─────────────────────────────────────────────────────────────── */
+const START=()=>({cam:{x:0,z:0,y:1.5,yaw:0,lens:40},
+ path:null, secs:6,
+ marks:[{id:1,x:-.9,z:3.0,yaw:170,label:"a woman in a red coat"},
+        {id:2,x:.9,z:4.5,yaw:200,label:"a man at the counter"}]});
+let S=START(), seq=2, drag=null;
+
+const fr=document.getElementById('fr'), pl=document.getElementById('pl');
+const fc=fr.getContext('2d'), pc=pl.getContext('2d');
+const SCALE=42, PAD=0;              // plan: pixels per metre
+
+function fit(c){const r=c.getBoundingClientRect();
+ const dpr=devicePixelRatio||1; c.width=r.width*dpr; c.height=420*dpr;
+ c.style.height='420px'; c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
+ return {w:r.width,h:420}}
+
+/* plan <-> world. Camera sits low-centre, +z runs up the screen. */
+const p2w=(px,py,g)=>({x:(px-g.w/2)/SCALE, z:(g.h-40-py)/SCALE});
+const w2p=(x,z,g)=>({px:g.w/2+x*SCALE, py:g.h-40-z*SCALE});
+
+function drawPlan(){
+ const g=fit(pl);
+ pc.clearRect(0,0,g.w,g.h);
+ // floor grid, one line per metre
+ pc.strokeStyle='rgba(255,255,255,.05)'; pc.lineWidth=1;
+ for(let m=-8;m<=8;m++){const a=w2p(m,0,g),b=w2p(m,12,g);
+  pc.beginPath();pc.moveTo(a.px,a.py);pc.lineTo(b.px,b.py);pc.stroke();}
+ for(let m=0;m<=12;m++){const a=w2p(-8,m,g),b=w2p(8,m,g);
+  pc.beginPath();pc.moveTo(a.px,a.py);pc.lineTo(b.px,b.py);pc.stroke();}
+ // lens cone
+ const c=w2p(S.cam.x,S.cam.z,g), hh=fov(S.cam.lens,SENSOR_W);
+ pc.fillStyle='rgba(255,255,255,.055)'; pc.beginPath(); pc.moveTo(c.px,c.py);
+ for(const s of [-1,1]){const a=(S.cam.yaw*D)+s*hh;
+  const e=w2p(S.cam.x+Math.sin(a)*14,S.cam.z+Math.cos(a)*14,g); pc.lineTo(e.px,e.py);}
+ pc.closePath(); pc.fill();
+ // the 180 line, when there are two bodies
+ if(S.marks.length>=2){const a=w2p(S.marks[0].x,S.marks[0].z,g),b=w2p(S.marks[1].x,S.marks[1].z,g);
+  const dx=b.px-a.px,dy=b.py-a.py,L=Math.hypot(dx,dy)||1;
+  pc.strokeStyle='rgba(251,191,36,.34)'; pc.setLineDash([5,5]); pc.beginPath();
+  pc.moveTo(a.px-dx/L*400,a.py-dy/L*400); pc.lineTo(b.px+dx/L*400,b.py+dy/L*400);
+  pc.stroke(); pc.setLineDash([]);}
+ // camera path
+ if(S.path){const e=w2p(S.path.x,S.path.z,g);
+  pc.strokeStyle='rgba(255,255,255,.4)'; pc.setLineDash([3,3]);
+  pc.beginPath();pc.moveTo(c.px,c.py);pc.lineTo(e.px,e.py);pc.stroke();pc.setLineDash([]);
+  pc.fillStyle='rgba(255,255,255,.5)';pc.beginPath();pc.arc(e.px,e.py,5,0,7);pc.fill();}
+ // bodies
+ S.marks.forEach((m,i)=>{const q=w2p(m.x,m.z,g);
+  pc.strokeStyle='#f5f5f5';pc.lineWidth=1.4;
+  pc.beginPath();pc.arc(q.px,q.py,9,0,7);pc.stroke();
+  const a=m.yaw*D, n={px:q.px+Math.sin(a)*17,py:q.py-Math.cos(a)*17};
+  pc.beginPath();pc.moveTo(q.px,q.py);pc.lineTo(n.px,n.py);pc.stroke();
+  pc.fillStyle='#f5f5f5';pc.beginPath();pc.arc(n.px,n.py,3.5,0,7);pc.fill();
+  pc.fillStyle='#8a8a8a';pc.font='11px ui-monospace,Menlo,monospace';
+  pc.fillText(`S${i+1}`,q.px+13,q.py+4);});
+ // camera body
+ pc.save(); pc.translate(c.px,c.py); pc.rotate(-S.cam.yaw*D);
+ pc.fillStyle='#f5f5f5'; pc.beginPath();
+ pc.moveTo(0,-11);pc.lineTo(8,7);pc.lineTo(-8,7);pc.closePath();pc.fill();
+ pc.restore();
+ const nose=w2p(S.cam.x+Math.sin(S.cam.yaw*D)*1.6,S.cam.z+Math.cos(S.cam.yaw*D)*1.6,g);
+ pc.strokeStyle='rgba(255,255,255,.45)';pc.beginPath();pc.arc(nose.px,nose.py,5,0,7);pc.stroke();
+}
+
+function drawFrame(){
+ const g=fit(fr);
+ fc.clearRect(0,0,g.w,g.h);
+ fc.fillStyle='#0b0d10'; fc.fillRect(0,0,g.w,g.h);
+ // horizon at the camera's own height
+ const hv=fov(S.cam.lens,SENSOR_H);
+ const hy=(-Math.tan(Math.atan2(0-S.cam.y,1e6))/Math.tan(hv)+1)/2;
+ fc.strokeStyle='rgba(255,255,255,.09)';fc.beginPath();
+ fc.moveTo(0,hy*g.h);fc.lineTo(g.w,hy*g.h);fc.stroke();
+ fc.strokeStyle='rgba(255,255,255,.05)';
+ [1/3,2/3].forEach(t=>{fc.beginPath();fc.moveTo(t*g.w,0);fc.lineTo(t*g.w,g.h);fc.stroke();});
+ // bodies, far to near so the near ones overlap
+ S.marks.map((m,i)=>({m,i,b:boxOf(S.cam,m)})).filter(o=>o.b)
+  .sort((a,b)=>b.b.s.dist-a.b.s.dist)
+  .forEach(({m,i,b})=>{
+   const x=b.x*g.w,y=b.y*g.h,w=b.w*g.w,h=b.h*g.h;
+   fc.fillStyle='rgba(255,255,255,.10)'; fc.fillRect(x,y,w,h);
+   fc.strokeStyle='rgba(255,255,255,.45)'; fc.lineWidth=1; fc.strokeRect(x+.5,y+.5,w-1,h-1);
+   // a nub showing which way they face
+   const rel=norm(m.yaw-deg(Math.atan2(-(m.x-S.cam.x),-(m.z-S.cam.z))));
+   fc.fillStyle='#f5f5f5';
+   fc.beginPath();fc.arc(x+w/2-Math.sin(rel*D)*w*.28,y+h*.09,Math.max(2.5,w*.09),0,7);fc.fill();
+   fc.fillStyle='#8a8a8a';fc.font='11px ui-monospace,Menlo,monospace';
+   fc.fillText(`S${i+1}`,x,y-5);
+  });
+}
+
+function label(i){return `&lt;Subject ${i+1}&gt;`}
+function compile(){
+ const seen=S.marks.map(m=>({m,s:see(S.cam,m)}));
+ const on=seen.filter(o=>o.s.inFrame).sort((a,b)=>a.s.sx-b.s.sx);
+ const clauses=on.map(({m,s})=>{
+  const bits=[`&lt;Subject ${S.marks.indexOf(m)+1}&gt; ${where(s)}`, band(s.facing,FACING)];
+  const others=seen.filter(o=>o.m!==m);
+  if(others.length){
+   const near=others.reduce((a,o)=>Math.hypot(o.m.x-m.x,o.m.z-m.z)<Math.hypot(a.m.x-m.x,a.m.z-m.z)?o:a);
+   const gap=Math.hypot(near.m.x-m.x,near.m.z-m.z);
+   bits.push(band(gap,NEAR).replace("{other}",`&lt;Subject ${S.marks.indexOf(near.m)+1}&gt;`));
+  }
+  return bits.join(", ")+".";
+ });
+ const framed=on.length?on:seen;
+ const lead=framed.reduce((a,o)=>o.s.dist<a.s.dist?o:a,framed[0]);
+ const tail=[];
+ if(lead){tail.push(`${lead.s.size}, ${lead.s.angle}.`.replace(/^./,c=>c.toUpperCase()));}
+ if(S.path&&lead){
+  const k=moveKey(S.cam,S.path), n=moveNote(S.cam,S.path,lead.s.dist,S.secs);
+  tail.push(k==="static"?"The camera holds a static shot."
+                        :`The camera ${VERB[k]}${n?" "+n:""}.`);
+ }
+ return {clauses,tail};
+}
+function render(){
+ drawPlan(); drawFrame();
+ const {clauses,tail}=compile();
+ document.getElementById('out').innerHTML =
+  `<span class="dim">[Shot 1]</span> <b>${clauses.join(" ")}</b> ${tail.join(" ")}`
+  || '<span class="dim">nobody in frame</span>';
+ const rows=S.marks.map((m,i)=>({i,b:boxOf(S.cam,m)})).filter(o=>o.b);
+ document.getElementById('boxes').innerHTML = rows.length
+  ? rows.map(({i,b})=>`<span class="dim">S${i+1}</span>  x=${b.x.toFixed(3)}  y=${b.y.toFixed(3)}`
+      +`  w=${b.w.toFixed(3)}  h=${b.h.toFixed(3)}   <span class="dim">${S.marks[i].label}</span>`).join("\n")
+  : '<span class="dim">nobody in frame — no boxes, which is the right answer rather than a zero-area one</span>';
+ document.getElementById('lensLbl').textContent=`${S.cam.lens|0}mm · ${(S.cam.y).toFixed(2)}m`;
+ document.getElementById('secsLbl').textContent=`${S.secs}s`;
+}
+
+/* ── dragging ──────────────────────────────────────────────────────────── */
+function planHit(px,py,g){
+ const c=w2p(S.cam.x,S.cam.z,g);
+ const nose=w2p(S.cam.x+Math.sin(S.cam.yaw*D)*1.6,S.cam.z+Math.cos(S.cam.yaw*D)*1.6,g);
+ if(Math.hypot(px-nose.px,py-nose.py)<13) return {t:'yaw'};
+ if(S.path){const e=w2p(S.path.x,S.path.z,g);
+  if(Math.hypot(px-e.px,py-e.py)<14) return {t:'path'};}
+ if(Math.hypot(px-c.px,py-c.py)<15) return {t:'cam'};
+ for(let i=S.marks.length-1;i>=0;i--){const q=w2p(S.marks[i].x,S.marks[i].z,g);
+  const a=S.marks[i].yaw*D, n={px:q.px+Math.sin(a)*17,py:q.py-Math.cos(a)*17};
+  if(Math.hypot(px-n.px,py-n.py)<11) return {t:'markyaw',i};
+  if(Math.hypot(px-q.px,py-q.py)<15) return {t:'mark',i};}
+ return null;
+}
+pl.addEventListener('pointerdown',e=>{
+ const g=fit(pl), r=pl.getBoundingClientRect();
+ drag=planHit(e.clientX-r.left,e.clientY-r.top,g);
+ if(drag){pl.setPointerCapture(e.pointerId); e.preventDefault();}
+});
+pl.addEventListener('pointermove',e=>{
+ if(!drag)return; const g=fit(pl), r=pl.getBoundingClientRect();
+ const px=e.clientX-r.left, py=e.clientY-r.top, w=p2w(px,py,g);
+ if(drag.t==='mark'){Object.assign(S.marks[drag.i],{x:w.x,z:w.z});}
+ else if(drag.t==='cam'){Object.assign(S.cam,{x:w.x,z:w.z});}
+ else if(drag.t==='path'){S.path={x:w.x,z:w.z,yaw:S.cam.yaw};}
+ else if(drag.t==='yaw'){S.cam.yaw=norm(deg(Math.atan2(w.x-S.cam.x,w.z-S.cam.z)));}
+ else if(drag.t==='markyaw'){const m=S.marks[drag.i];
+  m.yaw=norm(deg(Math.atan2(w.x-m.x,w.z-m.z)));}
+ render();
+});
+/* In the frame, a horizontal drag slides a body across the floor **at its own
+   depth** — which is the honest mapping: you are moving them in the world, and
+   the frame changes because the camera now sees them differently. */
+fr.addEventListener('pointerdown',e=>{
+ const g=fit(fr), r=fr.getBoundingClientRect();
+ const px=(e.clientX-r.left)/g.w, py=(e.clientY-r.top)/g.h;
+ const hits=S.marks.map((m,i)=>({i,b:boxOf(S.cam,m)})).filter(o=>o.b
+   && px>=o.b.x && px<=o.b.x+o.b.w && py>=o.b.y && py<=o.b.y+o.b.h);
+ if(!hits.length)return;
+ hits.sort((a,b)=>a.b.w*a.b.h-b.b.w*b.b.h);   // resolve toward the smaller
+ drag={t:'frame',i:hits[0].i}; fr.setPointerCapture(e.pointerId); e.preventDefault();
+});
+fr.addEventListener('pointermove',e=>{
+ if(!drag||drag.t!=='frame')return;
+ const g=fit(fr), r=fr.getBoundingClientRect();
+ const sx=((e.clientX-r.left)/g.w)*2-1;
+ const m=S.marks[drag.i], s=see(S.cam,m);
+ const hh=fov(S.cam.lens,SENSOR_W), bearing=Math.atan(sx*Math.tan(hh));
+ const a=S.cam.yaw*D+bearing;
+ m.x=S.cam.x+Math.sin(a)*s.dist; m.z=S.cam.z+Math.cos(a)*s.dist;
+ render();
+});
+addEventListener('pointerup',()=>{drag=null});
+
+document.getElementById('lens').oninput=e=>{S.cam.lens=+e.target.value;render()};
+document.getElementById('ch').oninput=e=>{S.cam.y=+e.target.value/100;render()};
+document.getElementById('secs').oninput=e=>{S.secs=+e.target.value;render()};
+document.getElementById('addBtn').onclick=()=>{
+ if(S.marks.length>=8)return;
+ S.marks.push({id:++seq,x:(Math.random()-.5)*3,z:2+Math.random()*4,yaw:180,
+               label:`a body (${S.marks.length+1})`}); render();};
+document.getElementById('pathBtn').onclick=e=>{
+ S.path=S.path?null:{x:S.cam.x,z:S.cam.z+1.2,yaw:S.cam.yaw};
+ e.target.classList.toggle('on',!!S.path);
+ e.target.textContent=`camera move: ${S.path?'drag the dot':'off'}`; render();};
+document.getElementById('reset').onclick=()=>{S=START();seq=2;
+ document.getElementById('pathBtn').classList.remove('on');
+ document.getElementById('pathBtn').textContent='camera move: off';render();};
+addEventListener('resize',render);
+render();
+</script>

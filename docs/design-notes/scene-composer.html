@@ -1,0 +1,980 @@
+<title>Scene Composer</title>
+<style>
+:root{
+  --bg:#000;--fg:#f5f5f5;--mut:#8a8a8a;--dim:#767676;
+  --wash-1:rgba(255,255,255,.03);--wash-2:rgba(255,255,255,.05);--wash-3:rgba(255,255,255,.07);
+  --sel:rgba(255,255,255,.14);--line:rgba(255,255,255,.10);--line-2:rgba(255,255,255,.24);
+  --lift:#111;--lift-line:rgba(255,255,255,.14);--lift-cast:0 18px 48px rgba(0,0,0,.6);
+  --r-inner:9px;--r-control:11px;--r-panel:14px;--r-card:16px;--r-sheet:20px;
+  --r-pill:999px;--r-mark:5px;--control-h:32px;
+  --ok:#4ade80;--warn:#fbbf24;--crit:#f87171;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+  -webkit-font-smoothing:antialiased}
+button,input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--line-2);outline-offset:2px}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 24px 72px}
+
+/* ── page furniture ─────────────────────────────────────────────── */
+.head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+  padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:22px}
+.head h1{font-size:19px;font-weight:600;letter-spacing:-.01em}
+.head .sub{color:var(--dim);font-size:13px}
+.head .spacer{flex:1}
+.legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--dim);font-size:12px;margin-bottom:22px}
+.legend b{color:var(--mut);font-weight:500}
+
+/* the stage stands in for the canvas — it exists to show the console budget */
+.stage{height:132px;border:1px dashed var(--line);border-radius:var(--r-card);
+  display:grid;place-items:center;color:#4a4a4a;font-size:12px;
+  letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px}
+
+.sec{display:flex;flex-direction:column;gap:10px;margin-bottom:22px}
+.sec>h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+  font-weight:600;display:flex;align-items:center;gap:10px}
+.sec>h2 .hint{text-transform:none;letter-spacing:0;font-weight:400;color:#5a5a5a}
+
+/* ── cast ───────────────────────────────────────────────────────── */
+.cast{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}
+.bucket{background:var(--wash-1);border:1px solid var(--line);border-radius:var(--r-card);
+  padding:10px;width:236px;display:flex;flex-direction:column;gap:9px}
+.bucket.on{border-color:var(--line-2)}
+.bkhead{display:flex;align-items:center;gap:7px}
+.kind{width:20px;height:20px;flex:none;display:grid;place-items:center;color:var(--dim)}
+.kind svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;
+  stroke-linecap:round;stroke-linejoin:round}
+.handle{flex:1;min-width:0;background:none;border:0;padding:2px 0;font-weight:600;
+  letter-spacing:-.01em}
+.handle::placeholder{color:#5a5a5a;font-weight:400}
+.at{color:var(--dim);font-weight:400}
+.bkx{width:22px;height:22px;flex:none;border-radius:var(--r-mark);color:#5a5a5a;
+  display:grid;place-items:center;font-size:15px;line-height:1}
+.bkx:hover{background:var(--wash-3);color:var(--fg)}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+.slot{aspect-ratio:1;border:1px dashed var(--line);border-radius:var(--r-control);
+  background:var(--wash-2);position:relative;overflow:hidden;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  cursor:pointer;transition:border-color .12s,background .12s}
+.slot:hover{background:var(--wash-3)}
+.slot.hot{border-style:solid;border-color:rgba(255,255,255,.45);background:var(--wash-3)}
+.slot.no{border-color:rgba(248,113,113,.5)}
+.slot .nm{font-size:10px;color:var(--dim);letter-spacing:.04em}
+.slot svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.4;
+  stroke-linecap:round;stroke-linejoin:round;color:#5a5a5a}
+.slot.full{border-style:solid;border-color:var(--line)}
+.slot .thumb{position:absolute;inset:0}
+.slot .cap{position:absolute;left:0;right:0;bottom:0;padding:3px 5px;font-size:9px;
+  background:linear-gradient(transparent,rgba(0,0,0,.85));color:#e0e0e0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.03em}
+.slot .pic{position:absolute;top:3px;left:3px;font-size:9px;font-family:var(--mono);
+  background:rgba(0,0,0,.7);border-radius:var(--r-mark);padding:1px 4px;color:#c8c8c8}
+.note{width:100%;background:var(--wash-2);border:1px solid var(--line);
+  border-radius:var(--r-control);padding:6px 8px;font-size:12px;color:var(--fg);resize:none}
+.note::placeholder{color:#5a5a5a}
+.addcast{display:flex;flex-direction:column;gap:6px;width:150px}
+.addcast button{border:1px dashed var(--line);border-radius:var(--r-control);
+  padding:9px 10px;color:var(--mut);text-align:left;display:flex;align-items:center;gap:8px;
+  font-size:13px}
+.addcast button:hover{border-color:var(--line-2);color:var(--fg);background:var(--wash-1)}
+
+/* ── the shelf of droppable files ───────────────────────────────── */
+.shelf{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.file{display:flex;align-items:center;gap:7px;background:var(--wash-2);
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:4px 11px 4px 4px;
+  cursor:grab;font-size:12px;color:var(--mut)}
+.file:active{cursor:grabbing}
+.file .sw{width:20px;height:20px;border-radius:var(--r-mark);flex:none}
+.file .ext{font-family:var(--mono);color:#5a5a5a;font-size:10px}
+
+/* ── timeline ───────────────────────────────────────────────────── */
+.strip{display:flex;height:26px;border-radius:var(--r-control);overflow:hidden;
+  border:1px solid var(--line);background:var(--wash-1);user-select:none}
+.seg{position:relative;display:grid;place-items:center;font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--mut);background:var(--wash-2);min-width:0}
+.seg.sel{background:var(--sel);color:var(--fg)}
+.grip{position:absolute;right:-4px;top:0;bottom:0;width:9px;cursor:col-resize;z-index:2}
+.grip::after{content:"";position:absolute;left:4px;top:0;bottom:0;width:1px;
+  background:var(--line-2)}
+.rows{display:flex;flex-direction:column;gap:8px}
+.row{background:var(--wash-1);border:1px solid var(--line);border-radius:var(--r-card);
+  padding:9px 10px;display:flex;flex-direction:column;gap:8px}
+.row.sel{border-color:var(--line-2);background:var(--wash-2)}
+.rowtop{display:flex;align-items:flex-start;gap:9px}
+.no{font-family:var(--mono);font-size:11px;color:var(--dim);padding-top:9px;
+  min-width:52px;flex:none;font-variant-numeric:tabular-nums}
+.no b{color:var(--mut);font-weight:600}
+.editor{position:relative;flex:1;min-width:0}
+.mirror,.ta{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+  padding:8px 10px;border:1px solid transparent;border-radius:var(--r-control);
+  white-space:pre-wrap;word-break:break-word}
+.mirror{position:absolute;inset:0;z-index:0;pointer-events:none;color:var(--fg)}
+.ta{position:relative;z-index:1;display:block;width:100%;background:var(--wash-2);
+  border-color:var(--line);color:transparent;caret-color:var(--fg);resize:none;overflow:hidden}
+.ta::placeholder{color:#5a5a5a}
+.ta:focus{border-color:var(--line-2);outline:none}
+.men{background:var(--sel);border-radius:var(--r-mark);
+  box-shadow:0 0 0 1px var(--line-2) inset;padding:1px 3px;margin:0 -1px}
+.men.miss{background:rgba(248,113,113,.16);box-shadow:0 0 0 1px rgba(248,113,113,.4) inset}
+.rowx{width:26px;height:26px;flex:none;border-radius:var(--r-mark);color:#5a5a5a;
+  display:grid;place-items:center;font-size:16px;margin-top:5px}
+.rowx:hover{background:var(--wash-3);color:var(--fg)}
+.rowbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding-left:61px}
+
+.pal{position:absolute;z-index:50;background:var(--lift);border:1px solid var(--lift-line);
+  border-radius:var(--r-panel);box-shadow:var(--lift-cast);padding:11px 12px;
+  display:flex;flex-direction:column;gap:7px;max-width:min(520px,92vw)}
+.pal .lb{min-width:56px}
+
+/* mention menu */
+.mm{position:absolute;z-index:40;background:var(--lift);border:1px solid var(--lift-line);
+  border-radius:var(--r-panel);box-shadow:var(--lift-cast);padding:4px;min-width:184px}
+.mm button{display:flex;width:100%;align-items:center;gap:8px;padding:6px 8px;
+  border-radius:var(--r-inner);color:#e6e6e6;text-align:left;font-size:13px}
+.mm button[aria-selected=true]{background:var(--wash-3);color:var(--fg)}
+.mm .k{color:#5a5a5a;font-size:11px;margin-left:auto}
+.mm .none{padding:7px 9px;color:var(--dim);font-size:12px}
+
+/* pills */
+.pill{display:inline-flex;align-items:center;gap:6px;background:var(--wash-2);
+  border:1px solid transparent;border-radius:var(--r-pill);padding:3px 10px;
+  font-size:12px;color:var(--mut);white-space:nowrap}
+.pill:hover{background:var(--wash-3);color:var(--fg)}
+.pill.on{background:var(--sel);color:var(--fg);border-color:var(--line-2)}
+.pill.add{border:1px dashed var(--line);background:none}
+.pill.add:hover{border-color:var(--line-2)}
+.pill .x{color:#6a6a6a;font-size:13px;line-height:1;margin:-2px -3px -2px 0}
+.pill .x:hover{color:var(--fg)}
+.grp{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.grp .lb{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#5a5a5a;
+  min-width:64px}
+
+/* dialogue */
+.dlg{display:flex;gap:6px;align-items:center;padding-left:61px}
+.dlg select,.dlg input{background:var(--wash-2);border:1px solid var(--line);
+  border-radius:var(--r-control);padding:5px 8px;font-size:12px}
+.dlg select{flex:none;color:var(--mut)}
+.dlg input{flex:1;min-width:0}
+.dlg .sid{font-family:var(--mono);font-size:11px;color:var(--dim);flex:none}
+
+.addrow{border:1px dashed var(--line);border-radius:var(--r-card);padding:9px;
+  color:var(--mut);font-size:13px;text-align:center}
+.addrow:hover{border-color:var(--line-2);color:var(--fg)}
+
+/* ── document sheet ─────────────────────────────────────────────── */
+.disc{border-top:1px solid var(--line);padding-top:14px}
+.disctop{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.disctop button.tog{display:flex;align-items:center;gap:7px;color:var(--mut);font-size:13px}
+.disctop button.tog:hover{color:var(--fg)}
+.disctop .caret{transition:transform .15s}
+.disc.open .caret{transform:rotate(90deg)}
+.tag{font-family:var(--mono);font-size:11px;color:var(--dim);background:var(--wash-2);
+  border-radius:var(--r-mark);padding:2px 7px}
+.tag.warn{color:var(--warn)}
+.doc{display:none;margin-top:12px;flex-direction:column;gap:2px}
+.disc.open .doc{display:flex}
+.fld{display:grid;grid-template-columns:196px 1fr;gap:12px;padding:9px 10px;
+  border-radius:var(--r-control);align-items:start}
+.fld:hover{background:var(--wash-1)}
+.fld.pinned{background:var(--wash-2)}
+.fld .k{font-family:var(--mono);font-size:11.5px;color:var(--dim);padding-top:5px;
+  display:flex;align-items:center;gap:6px}
+.fld.pinned .k{color:var(--warn)}
+.fld .v{font-family:var(--mono);font-size:12px;line-height:1.65;color:#c8c8c8;
+  background:none;border:1px solid transparent;border-radius:var(--r-control);
+  padding:4px 7px;width:100%;resize:none;overflow:hidden;white-space:pre-wrap}
+.fld .v:hover{border-color:var(--line)}
+.fld .v:focus{border-color:var(--line-2);background:var(--wash-2);outline:none;color:var(--fg)}
+.unpin{font-size:11px;color:var(--warn);border:1px solid rgba(251,191,36,.3);
+  border-radius:var(--r-pill);padding:1px 7px}
+.unpin:hover{background:rgba(251,191,36,.12)}
+.plain{font-family:var(--mono);font-size:12px;line-height:1.65;color:#c8c8c8;
+  padding:9px 10px;white-space:pre-wrap}
+.foot{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);
+  color:#5a5a5a;font-size:12px;line-height:1.7}
+.foot code{font-family:var(--mono);color:var(--mut)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@media (max-width:760px){.wrap{padding:20px 14px 56px}.bucket{width:100%}
+  .fld{grid-template-columns:1fr;gap:2px}.no{min-width:44px}
+  .rowbar,.dlg{padding-left:0}}
+</style>
+
+<div class="wrap">
+  <div class="head">
+    <h1>Scene Composer</h1>
+    <span class="sub">what replaces the prompt box on the video side</span>
+    <span class="spacer"></span>
+    <button class="pill" id="reset">Reset to empty</button>
+    <button class="pill" id="demo">Load the example</button>
+  </div>
+
+  <div class="legend">
+    <span><b>Drag</b> a file from the shelf onto a slot — the slot is the role.</span>
+    <span><b>Type @</b> in a shot to put someone in it.</span>
+    <span><b>Drag</b> a divider on the strip to move a cut.</span>
+  </div>
+
+  <div class="stage">canvas</div>
+
+  <div class="sec">
+    <h2>Files <span class="hint">one pool, keyed by content — the same picture in two buckets is one upload</span></h2>
+    <div class="shelf" id="shelf"></div>
+  </div>
+
+  <div class="sec">
+    <h2>Cast <span class="hint">who and what is in the piece</span></h2>
+    <div class="cast" id="cast"></div>
+  </div>
+
+  <div class="sec">
+    <h2>Shots <span class="hint" id="clkhint"></span></h2>
+    <div class="strip" id="strip"></div>
+    <div class="rows" id="rows"></div>
+    <button class="addrow" id="addshot">Add a shot</button>
+  </div>
+
+  <div class="sec">
+    <h2>The whole clip</h2>
+    <div class="grp"><span class="lb">Style</span><span id="g-style"></span></div>
+    <div class="grp"><span class="lb">Grade</span><span id="g-tone"></span></div>
+    <div class="grp"><span class="lb">Score</span><span id="g-score"></span></div>
+    <div class="grp"><span class="lb">Length</span>
+      <input id="secs" type="range" min="4" max="15" step="1" style="width:180px;accent-color:#f5f5f5">
+      <span class="tag" id="secslb"></span></div>
+  </div>
+
+  <div class="disc" id="disc">
+    <div class="disctop">
+      <button class="tog" id="tog">
+        <svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none"
+             stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+             stroke-linejoin="round"><path d="M3.5 1.5 L7 5 L3.5 8.5"/></svg>
+        <span id="togl">Check the prompt</span>
+      </button>
+      <span class="tag" id="mode"></span>
+      <span class="tag" id="pins" hidden></span>
+    </div>
+    <div class="doc" id="doc"></div>
+  </div>
+
+  <div class="foot">
+    Fields are derived from the scene above. Edit one and it <b>pins</b> — that field
+    stops recomputing, the rest keep tracking, and the pin is one click from gone.
+    With no cast, no pills and one shot, <code>detailed_description</code> is the typed
+    sentence byte-for-byte and no document is sent.
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ══ vocabulary ═══════════════════════════════════════════════════════════
+   Mirrors SHOT_VOCAB's shape: a key, a label, and the exact phrase that gets
+   written, so a pill teaches the phrasing it produces rather than standing
+   in for it. Camera phrases carry the guide's three required dimensions —
+   motion type, amplitude, speed — because a bare "push in" is the half of a
+   camera instruction H3 reads worst. */
+const V = {
+  framing:[["cu","Close-up","a close-up"],["mcu","Medium close-up","a medium close-up"],
+           ["mw","Medium wide","a medium-wide shot"],["wide","Wide","a wide shot"]],
+  angle:[["low","Low","from a low angle"],["high","High","from a high angle"],
+         ["eye","Eye level","at eye level"]],
+  camera:[["push","Push in","pushes in with small amplitude at slow speed"],
+          ["pull","Pull out","pulls out with small amplitude at slow speed"],
+          ["track","Track","tracks the subject with steady amplitude at moderate speed"],
+          ["arc","Arc","arcs around the subject with wide amplitude at slow speed"],
+          ["static","Static","holds a static shot"]],
+  light:[["window","Window","in soft window light"],["prac","Practicals","lit by warm practical lamps"],
+         ["hard","Hard key","under a single hard key"],["flat","Overcast","under flat overcast daylight"]],
+  sound:[["room","Room tone","a low room tone"],["rain","Rain","rain against the glass"],
+         ["traffic","Traffic","distant traffic"],["steps","Footsteps","footsteps on a hard floor"]],
+};
+const STYLES = ["Live-action, cinematic","2D-animated","3D CG","Claymation","Vintage film"];
+const TONE = [["warm","Warm","a warm, amber-leaning grade"],["cool","Cool","a cool, desaturated grade"],
+              ["con","High contrast","a high-contrast grade"]];
+const SCORE = [["sparse","Sparse piano","a sparse solo piano line, low in the mix"],
+               ["drone","Low drone","a low sustained synth drone"],
+               ["strings","Strings","a slow string swell"]];
+/* Slot table. This is the file validation, declared once rather than branched:
+   a file over a slot that cannot take it does not highlight. */
+const SLOTS = {
+  character:[["face","Face","image"],["wardrobe","Wardrobe","image"],["body","Body","image"],
+             ["voice","Voice","audio"],["motion","Motion","video"]],
+  place:[["establishing","Establishing","image"],["style","Style","image"]],
+  thing:[["object","Object","image"],["style","Style","image"]],
+};
+/* subject_definitions builds the guide's own construction:
+   `<Subject N> is the {noun} in <Picture M>` + a retention sentence. */
+const NOUN = {character:"person",place:"location",thing:"object"};
+const RETAIN = {
+  face:"facial structure, hair and build", wardrobe:"garments, their cut and colour",
+  body:"build and posture", motion:"the motion and its timing",
+  establishing:"architecture, materials and layout", style:"palette, contrast and grain",
+  object:"shape, material and markings",
+};
+const KGLYPH = {
+  character:'<path d="M8 8.5a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2Z"/><path d="M2.6 14c0-2.6 2.4-4.2 5.4-4.2s5.4 1.6 5.4 4.2"/>',
+  place:'<path d="M8 14s5-4.2 5-7.6A5 5 0 0 0 3 6.4C3 9.8 8 14 8 14Z"/><circle cx="8" cy="6.4" r="1.8"/>',
+  thing:'<path d="M8 1.8 14 5v6l-6 3.2L2 11V5Z"/><path d="M2 5l6 3.2L14 5"/><path d="M8 8.2V14"/>',
+};
+
+/* ══ state ════════════════════════════════════════════════════════════════ */
+let seq = 0; const uid = p => p + (++seq);
+const POOL = {};                       // fileId -> {id,name,kind,swatch}
+let S = null;                          // the scene
+
+const FILES = [
+  ["ava_headshot.jpg","image","linear-gradient(150deg,#3b2f2a,#8a6a55 55%,#c4a68e)"],
+  ["ava_wool_coat.jpg","image","linear-gradient(150deg,#20262c,#3f5a6b 60%,#7d99a8)"],
+  ["diner_wide.jpg","image","linear-gradient(150deg,#171a17,#3d4a3a 55%,#8a9a6d)"],
+  ["ava_voice.wav","audio","linear-gradient(150deg,#2a2333,#5a4a72 60%,#9b86c4)"],
+  ["walk_cycle.mp4","video","linear-gradient(150deg,#2c1f1f,#6b3f3f 60%,#b07d7d)"],
+];
+FILES.forEach(([name,kind,swatch]) => {
+  // Keyed by content in the real thing; a name stands in for the hash here.
+  POOL["f_"+name.replace(/\W/g,"_")] = {id:"f_"+name.replace(/\W/g,"_"),name,kind,swatch};
+});
+
+const emptyScene = () => ({
+  cast:[], shots:[shot()], seconds:8, style:0, tone:[], score:[], sel:0, pins:{},
+});
+const shot = (line="") => ({id:uid("s"), line, beats:1, pills:{}, say:{who:null,text:""}});
+const cast = (kind) => ({id:uid("c"), kind, name:"", refs:[]});
+
+const demoScene = () => {
+  const ava = cast("character");
+  ava.name = "ava";
+  ava.refs = [{fileId:"f_ava_headshot_jpg",slots:["face"]},
+              {fileId:"f_ava_wool_coat_jpg",slots:["wardrobe"]}];
+  const diner = cast("place");
+  diner.name = "diner";
+  diner.refs = [{fileId:"f_diner_wide_jpg",slots:["establishing"]}];
+  const a = shot("@ava sits alone in the @diner, both hands around a cold mug, watching the door");
+  a.beats = 1.6; a.pills = {framing:"mw",angle:"eye",camera:"push",light:"prac",sound:"room"};
+  a.say = {who:ava.id, text:"He's not coming."};
+  const b = shot("her hands, and the ring she has not taken off");
+  b.beats = 1; b.pills = {framing:"cu",camera:"static"};
+  return {cast:[ava,diner], shots:[a,b], seconds:8, style:0, tone:["cool"], score:["sparse"],
+          sel:0, pins:{}};
+};
+
+/* ══ derivations ══════════════════════════════════════════════════════════ */
+const handleOf = c => c.name.trim().toLowerCase().replace(/[^a-z0-9_]+/g,"_").replace(/^_+|_+$/g,"");
+const named = () => S.cast.filter(c => handleOf(c));
+
+/** Every distinct file id the cast points at, in cast order then slot order.
+ *  This is <Picture N>: derived, never authored, so removing a bucket
+ *  renumbers correctly and there is no second array to keep in step. */
+function pictures(){
+  const seen = [];
+  for (const c of S.cast) for (const r of c.refs)
+    if (POOL[r.fileId] && POOL[r.fileId].kind === "image" && !seen.includes(r.fileId))
+      seen.push(r.fileId);
+  return seen;
+}
+const picIndex = id => pictures().indexOf(id) + 1;
+
+/** Mentions in a line, as handles, in order of appearance. */
+const mentions = line => (line.match(/@[a-z0-9_]+/gi) || []).map(m => m.slice(1).toLowerCase());
+const shotsWith = h => S.shots.map((s,i) => mentions(s.line).includes(h) ? i+1 : 0).filter(Boolean);
+
+/** Subjects: cast that carry at least one reference, in cast order. */
+const subjects = () => named().filter(c => c.refs.length);
+const subjIndex = c => subjects().findIndex(x => x.id === c.id) + 1;
+
+/** Speaker IDs, assigned in order of first vocalisation and stable across shots.
+ *  Characters who never vocalise receive no ID — the guide is explicit. */
+function speakers(){
+  const out = {};
+  for (const s of S.shots)
+    if (s.say.who && s.say.text.trim() && !(s.say.who in out))
+      out[s.say.who] = "S" + (Object.keys(out).length + 1);
+  return out;
+}
+
+const secondsOf = () => {
+  const total = S.shots.reduce((a,s) => a + s.beats, 0) || 1;
+  let t = 0;
+  return S.shots.map(s => { const at = t; t += s.beats / total * S.seconds; return [at, t]; });
+};
+const clock = t => {
+  const m = Math.floor(t/60), s = t - m*60;
+  return String(m).padStart(2,"0") + ":" + s.toFixed(3).padStart(6,"0");
+};
+
+/** A mention resolved to what the encoder should read. */
+function resolve(h){
+  const c = named().find(x => handleOf(x) === h);
+  if (!c) return "@" + h;
+  const n = subjIndex(c);
+  if (n) return "<Subject " + n + ">";
+  return (c.kind === "character" ? "the " : "the ") + (c.name.trim() || NOUN[c.kind]);
+}
+/** A mention swapped for what the encoder should read.
+ *  The article in front of it is absorbed when the mention resolves to a
+ *  <Subject N> label, which is already definite — otherwise "in the @diner"
+ *  compiles to "in the <Subject 2>". Nothing else in the sentence is touched:
+ *  no case is changed, because the compiler never rewrites your sentence. */
+const body = line => line.replace(/(\b(?:the|a|an)\s+)?@([a-z0-9_]+)/gi,
+  (m, art, h) => {
+    const r = resolve(h.toLowerCase());
+    return (art && /^<Subject/.test(r)) ? r : (art || "") + r;
+  });
+const phrase = (g,k) => (V[g].find(x => x[0] === k) || [])[2] || "";
+
+const isBare = () =>
+  S.shots.length === 1 && !S.cast.length && !S.tone.length && !S.score.length &&
+  !Object.keys(S.shots[0].pills).length && !S.shots[0].say.text.trim();
+
+/* ── the compiler ────────────────────────────────────────────────────────
+   The client half. /api/compile is the authority; this exists so the page
+   can answer a keystroke without a round trip. If the two diverge, this
+   one is wrong. */
+function compile(){
+  if (isBare()) return {bare:true, text:S.shots[0].line.trim()};
+  const spk = speakers(), times = secondsOf(), pics = pictures();
+
+  // subject_definitions + retention_analysis
+  const defs = [], ret = [];
+  subjects().forEach(c => {
+    const n = subjIndex(c);
+    const srcs = c.refs.filter(r => POOL[r.fileId] && POOL[r.fileId].kind === "image");
+    const label = srcs.map(r => "<Picture " + picIndex(r.fileId) + ">").join(" and ");
+    defs.push("<Subject " + n + "> is the " + NOUN[c.kind] +
+              (label ? " in " + label : "") + ".");
+    const keep = [...new Set(c.refs.flatMap(r => r.slots.map(s => RETAIN[s])).filter(Boolean))];
+    const where = shotsWith(handleOf(c)).map(i => "[Shot " + i + "]");
+    // The sentence the guide asks for and that nothing in this app has ever
+    // known: where the subject appears, not merely that it must be retained.
+    // Several retention aspects are semicolon-joined: each is already a comma
+    // list, and "hair and build and garments, their cut" is the collision.
+    const what = keep.length ? keep.join("; ") : "appearance";
+    ret.push("<Subject " + n + ">" +
+      (where.length ? " appears in " + list(where) + " and" : "") +
+      " must retain its " + what + ".");
+  });
+
+  // detailed_description
+  const shots = S.shots.map((s,i) => {
+    const p = s.pills, lead = [];
+    // The guide asks for style and initial composition at the head of Shot 1,
+    // and nowhere else.
+    if (i === 0){
+      lead.push(STYLES[S.style]);
+      if (S.tone.length) lead.push(TONE.find(t => t[0]===S.tone[0])[2]);
+    }
+    const frame = [p.framing && phrase("framing",p.framing), p.angle && phrase("angle",p.angle)]
+      .filter(Boolean).join(" ");
+    let line = body(s.line.trim()).replace(/\.$/,"");
+    if (p.light) line += ", " + phrase("light",p.light);
+    let core;
+    if (i === 0){
+      if (frame) lead.push(frame);
+      core = lead.join(", ") + ", " + line;
+    } else {
+      // The cut time is the boundary the strip already drew, and the verb is
+      // the guide's own.
+      core = "At " + clock(times[i][0]) + ", the camera cuts to " +
+             (frame ? frame + " of " : "") + line;
+    }
+    let out = "[Shot " + (i+1) + "] " + core + ".";
+    if (p.camera) out += " The camera " + phrase("camera",p.camera) + ".";
+    if (s.say.who && s.say.text.trim()){
+      const c = S.cast.find(x => x.id === s.say.who);
+      const who = c ? (subjIndex(c) ? "<Subject " + subjIndex(c) + ">" : c.name) : "";
+      out += " " + who + " (" + spk[s.say.who] + ") says: <d>[English] " +
+             s.say.text.trim() + "</d>";
+    }
+    return out;
+  });
+
+  const amb = [...new Set(S.shots.map(s => s.pills.sound && phrase("sound",s.pills.sound))
+    .filter(Boolean))];
+  const doc = {};
+  if (pics.length){
+    doc.subject_definitions = defs.join(" ") || "The reference pictures are " +
+      list(pics.map((_,i) => "<Picture " + (i+1) + ">")) + ".";
+    doc.summary = firstSentence(body(S.shots[0].line.trim()));
+    doc.retention_analysis = ret.join(" ");
+  }
+  doc.detailed_description = shots.join(" ");
+  doc.overall_soundscape = amb.length ? cap(list(amb)) + " throughout." : "N/A";
+  doc.non_diegetic_music = S.score.length
+    ? cap((SCORE.find(x => x[0]===S.score[0])||[])[2] || "N/A") + "." : "N/A";
+  return {bare:false, doc, ref:!!pics.length};
+}
+const list = a => a.length < 2 ? (a[0]||"") : a.slice(0,-1).join(", ") + " and " + a.slice(-1);
+const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+const firstSentence = t => { const m = t.match(/^[^.!?]*[.!?]?/); return (m?m[0]:t).trim()
+  .replace(/[.!?]?$/,".") };
+
+/* Field order is the guide's, and it is not ours to reorder. */
+const ORDER = ["subject_definitions","summary","retention_analysis",
+               "detailed_description","overall_soundscape","non_diegetic_music"];
+
+/* ══ render ═══════════════════════════════════════════════════════════════ */
+const $ = s => document.querySelector(s);
+const el = (t,c,x) => { const n = document.createElement(t); if(c) n.className = c;
+  if(x !== undefined) n.textContent = x; return n; };
+
+/* Both floating things are children of a subtree these rebuild, so a render
+   that does not shut them leaves an orphan node still held by PAL/MM — and the
+   next click spends itself closing a ghost. */
+function render(){ shut(); close();
+  shelf(); castView(); stripView(); rowsView(); clipView(); docView(); }
+
+function shelf(){
+  const h = $("#shelf"); h.innerHTML = "";
+  Object.values(POOL).forEach(f => {
+    const n = el("div","file"); n.draggable = true;
+    const sw = el("i","sw"); sw.style.background = f.swatch; n.appendChild(sw);
+    n.appendChild(el("span","",f.name));
+    n.appendChild(el("span","ext",f.kind));
+    n.addEventListener("dragstart", e => {
+      e.dataTransfer.setData("text/x-visionary-file", f.id);
+      e.dataTransfer.effectAllowed = "copy";
+    });
+    h.appendChild(n);
+  });
+}
+
+function castView(){
+  const h = $("#cast"); h.innerHTML = "";
+  S.cast.forEach(c => h.appendChild(bucket(c)));
+  const add = el("div","addcast");
+  [["character","Character"],["place","Place"],["thing","Thing"]].forEach(([k,l]) => {
+    const b = el("button");
+    b.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" ' +
+      'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ' +
+      'stroke-linejoin="round">' + KGLYPH[k] + '</svg>';
+    b.appendChild(el("span","","Add " + l.toLowerCase()));
+    b.onclick = () => { S.cast.push(cast(k)); render();
+      const inputs = document.querySelectorAll(".handle");
+      inputs[inputs.length-1].focus(); };
+    add.appendChild(b);
+  });
+  h.appendChild(add);
+}
+
+function bucket(c){
+  const n = el("div","bucket");
+  const top = el("div","bkhead");
+  const g = el("span","kind");
+  g.innerHTML = '<svg viewBox="0 0 16 16">' + KGLYPH[c.kind] + '</svg>';
+  top.appendChild(g);
+  top.appendChild(el("span","at","@"));
+  const inp = el("input","handle");
+  inp.value = c.name; inp.placeholder = "name"; inp.spellcheck = false;
+  inp.addEventListener("input", () => {
+    const was = handleOf(c);
+    c.name = inp.value;
+    const now = handleOf(c);
+    // Renaming rewrites the handle across every row, as a visible
+    // find-and-replace. The alternative is storing @{id} and showing the
+    // person a string they cannot safely edit.
+    if (was && now && was !== now)
+      S.shots.forEach(s => s.line = s.line.replace(
+        new RegExp("@" + was + "\\b","gi"), "@" + now));
+    stripView(); rowsView(); docView();
+  });
+  top.appendChild(inp);
+  const x = el("button","bkx","×");
+  x.title = "Remove"; x.onclick = () => {
+    S.cast = S.cast.filter(v => v.id !== c.id);
+    S.shots.forEach(s => { if (s.say.who === c.id) s.say = {who:null,text:""}; });
+    render();
+  };
+  top.appendChild(x);
+  n.appendChild(top);
+
+  const grid = el("div","slots");
+  SLOTS[c.kind].forEach(([key,label,accepts]) => grid.appendChild(slot(c,key,label,accepts)));
+  n.appendChild(grid);
+
+  return n;
+}
+
+function slot(c,key,label,accepts){
+  const ref = c.refs.find(r => r.slots.includes(key));
+  const f = ref && POOL[ref.fileId];
+  const n = el("div","slot" + (f ? " full" : ""));
+  n.title = label + " · " + accepts;
+  if (f){
+    const t = el("i","thumb"); t.style.background = f.swatch; n.appendChild(t);
+    if (f.kind === "image"){
+      n.appendChild(el("span","pic","P" + picIndex(f.id)));
+    }
+    n.appendChild(el("span","cap",f.name));
+    n.onclick = () => { detach(c,key); render(); };
+  } else {
+    const ic = el("span"); ic.innerHTML =
+      '<svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>';
+    n.appendChild(ic);
+    n.appendChild(el("span","nm",label));
+  }
+  n.addEventListener("dragover", e => {
+    const id = dragId(e);
+    if (!id) return;
+    // The rejection is the absence of the invitation.
+    if (POOL[id].kind !== accepts){ n.classList.add("no"); return; }
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy"; n.classList.add("hot");
+  });
+  n.addEventListener("dragleave", () => n.classList.remove("hot","no"));
+  n.addEventListener("drop", e => {
+    e.preventDefault(); n.classList.remove("hot","no");
+    const id = dragId(e); if (!id || POOL[id].kind !== accepts) return;
+    attach(c,key,id); render();
+  });
+  return n;
+}
+/* The dragged id has to be readable during dragover, where dataTransfer is
+   protected — so it is carried in the type list as well as the payload. */
+function dragId(e){
+  const t = [...e.dataTransfer.types];
+  if (!t.includes("text/x-visionary-file")) return null;
+  return e.dataTransfer.getData("text/x-visionary-file") || DRAG;
+}
+let DRAG = null;
+document.addEventListener("dragstart", e => {
+  const t = e.dataTransfer && [...e.dataTransfer.types];
+  DRAG = t && t.includes("text/x-visionary-file")
+    ? e.dataTransfer.getData("text/x-visionary-file") : null;
+});
+document.addEventListener("dragend", () => DRAG = null);
+
+/** One entry per file in a bucket; a second slot on the same file adds a role
+ *  rather than a second entry. That is the flat pool doing its job. */
+function attach(c,key,fileId){
+  detach(c,key);
+  const has = c.refs.find(r => r.fileId === fileId);
+  if (has){ if (!has.slots.includes(key)) has.slots.push(key); }
+  else c.refs.push({fileId, slots:[key]});
+}
+function detach(c,key){
+  c.refs.forEach(r => r.slots = r.slots.filter(s => s !== key));
+  c.refs = c.refs.filter(r => r.slots.length);
+}
+
+/* ── the strip: duration is allocated, never typed ─────────────────────── */
+function stripView(){
+  const h = $("#strip"); h.innerHTML = "";
+  const t = secondsOf(), total = S.shots.reduce((a,s) => a + s.beats, 0) || 1;
+  S.shots.forEach((s,i) => {
+    const seg = el("div","seg" + (S.sel === i ? " sel" : ""));
+    seg.style.flex = s.beats + " 1 0";
+    seg.textContent = (t[i][1] - t[i][0]).toFixed(2) + "s";
+    seg.onclick = () => { S.sel = i; stripView(); rowsView(); };
+    if (i < S.shots.length - 1){
+      const g = el("div","grip");
+      g.addEventListener("pointerdown", e => drag(e,i,h,total));
+      seg.appendChild(g);
+    }
+    h.appendChild(seg);
+  });
+  $("#clkhint").textContent = S.shots.length > 1
+    ? "cut times come off the strip — " +
+      S.shots.slice(1).map((_,i) => clock(t[i+1][0])).join(", ")
+    : "one shot, no cut";
+}
+function drag(e,i,strip,total){
+  e.preventDefault();
+  const w = strip.getBoundingClientRect().width;
+  const x0 = e.clientX, a = S.shots[i].beats, b = S.shots[i+1].beats;
+  const move = ev => {
+    const d = (ev.clientX - x0) / w * total;
+    const na = Math.max(.25, a + d), nb = Math.max(.25, b - d);
+    if (na + nb > (a + b) + .001) return;
+    S.shots[i].beats = na; S.shots[i+1].beats = nb;
+    stripView(); rowsView(); docView();
+  };
+  const up = () => { removeEventListener("pointermove",move); removeEventListener("pointerup",up); };
+  addEventListener("pointermove",move); addEventListener("pointerup",up);
+}
+
+/* ── the rows ───────────────────────────────────────────────────────────── */
+function rowsView(){
+  shut(); close();
+  const h = $("#rows"); h.innerHTML = "";
+  const t = secondsOf();
+  S.shots.forEach((s,i) => h.appendChild(row(s,i,t[i])));
+}
+
+function row(s,i,t){
+  const n = el("div","row" + (S.sel === i ? " sel" : ""));
+  n.addEventListener("pointerdown", () => { if (S.sel !== i){ S.sel = i; stripView();
+    n.classList.add("sel"); document.querySelectorAll(".row").forEach((r,j) =>
+      r.classList.toggle("sel", j === i)); } });
+
+  const top = el("div","rowtop");
+  const no = el("div","no");
+  no.innerHTML = "<b>Shot " + (i+1) + "</b><br>" + (i ? clock(t[0]) : "0.00");
+  top.appendChild(no);
+
+  const ed = el("div","editor");
+  const mir = el("div","mirror");
+  const ta = el("textarea","ta");
+  ta.value = s.line; ta.rows = 1; ta.spellcheck = false;
+  ta.placeholder = i ? "what changes" : "who is in it, and what happens";
+  ed.appendChild(mir); ed.appendChild(ta);
+  const paint = () => {
+    mir.innerHTML = markup(ta.value);
+    ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px";
+  };
+  ta.addEventListener("input", () => {
+    s.line = ta.value; paint(); menu(ta,ed,s); stripView(); docView();
+  });
+  ta.addEventListener("keydown", e => keys(e,ta,ed,s));
+  ta.addEventListener("blur", () => setTimeout(close, 120));
+  ta.addEventListener("click", () => menu(ta,ed,s));
+  requestAnimationFrame(paint); paint();
+  top.appendChild(ed);
+
+  const x = el("button","rowx","×");
+  x.title = "Remove shot";
+  x.onclick = () => { if (S.shots.length < 2) return;
+    S.shots.splice(i,1); S.sel = Math.min(S.sel, S.shots.length-1); render(); };
+  top.appendChild(x);
+  n.appendChild(top);
+
+  // The rail shows what is chosen; the door adds. Twenty always-visible pills
+  // per row is the console-budget failure this app already has a rule against —
+  // a row is affordable when it carries content, never when it carries the
+  // whole vocabulary.
+  const bar = el("div","rowbar");
+  const GROUPS = ["framing","angle","camera","light","sound"];
+  GROUPS.forEach(g => {
+    const k = s.pills[g]; if (!k) return;
+    const p = el("div","pill on");
+    p.appendChild(el("span","", (V[g].find(x => x[0]===k)||[])[1] || k));
+    const x = el("button","x","×");
+    x.title = "Remove";
+    x.onclick = () => { delete s.pills[g]; rowsView(); docView(); };
+    p.appendChild(x);
+    bar.appendChild(p);
+  });
+  const door = el("button","pill add","Shot");
+  door.onclick = e => { e.stopPropagation(); palette(door,s); };
+  bar.appendChild(door);
+  n.appendChild(bar);
+
+  const d = el("div","dlg");
+  const sel = el("select");
+  const none = el("option","","— nobody speaks"); none.value = ""; sel.appendChild(none);
+  named().filter(c => c.kind === "character").forEach(c => {
+    const o = el("option","","@" + handleOf(c)); o.value = c.id;
+    if (s.say.who === c.id) o.selected = true; sel.appendChild(o);
+  });
+  sel.onchange = () => { s.say.who = sel.value || null; rowsView(); docView(); };
+  d.appendChild(sel);
+  const line = el("input");
+  line.placeholder = "what they say"; line.value = s.say.text;
+  line.disabled = !s.say.who;
+  line.oninput = () => { s.say.text = line.value; docView(); };
+  d.appendChild(line);
+  const sid = speakers()[s.say.who];
+  if (sid) d.appendChild(el("span","sid","(" + sid + ")"));
+  n.appendChild(d);
+  return n;
+}
+
+/** The mirror. A mention is the literal text `@ava`, painted as a chip —
+ *  edit the handle and it stops being a mention, which is the same rule the
+ *  prompt field's marks already keep. */
+function markup(v){
+  const known = new Set(named().map(handleOf));
+  return v.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))
+    .replace(/@([a-z0-9_]+)/gi, (m,h) =>
+      '<span class="men' + (known.has(h.toLowerCase()) ? "" : " miss") + '">' + m + "</span>")
+    + "​";
+}
+
+let PAL = null;
+
+/* ── the shot palette ───────────────────────────────────────────────────
+   One popover, grouped, with the group's own pick rule enforced: framing and
+   angle are single-valued by physics, and the guide is explicit that a clip
+   gets one camera move unless the timing is spelled out. */
+function shut(){ if (PAL){ PAL.remove(); PAL = null; } }
+function palette(anchor, s){
+  if (PAL){ shut(); return; }
+  PAL = el("div","pal");
+  ["framing","angle","camera","light","sound"].forEach(g => {
+    const row = el("div","grp");
+    row.appendChild(el("span","lb",g));
+    V[g].forEach(([k,l]) => {
+      const p = el("button","pill" + (s.pills[g] === k ? " on" : ""), l);
+      p.onclick = () => {
+        if (s.pills[g] === k) delete s.pills[g]; else s.pills[g] = k;
+        shut(); rowsView(); docView();
+      };
+      row.appendChild(p);
+    });
+    PAL.appendChild(row);
+  });
+  document.body.appendChild(PAL);
+  const r = anchor.getBoundingClientRect();
+  PAL.style.left = Math.max(10, Math.min(r.left + scrollX,
+    document.documentElement.clientWidth - PAL.offsetWidth - 10)) + "px";
+  PAL.style.top = (r.bottom + scrollY + 6) + "px";
+  setTimeout(() => document.addEventListener("pointerdown", away), 0);
+}
+function away(e){
+  if (PAL && !PAL.contains(e.target)){
+    document.removeEventListener("pointerdown", away); shut();
+  }
+}
+
+/* ── the @ menu ─────────────────────────────────────────────────────────── */
+let MM = null, MMi = 0, MMon = null;
+function close(){ if (MM){ MM.remove(); MM = null; MMon = null; } }
+function menu(ta,ed,s){
+  const before = ta.value.slice(0, ta.selectionStart);
+  const m = before.match(/@([a-z0-9_]*)$/i);
+  if (!m || ta.selectionStart !== ta.selectionEnd) return close();
+  const q = m[1].toLowerCase();
+  const hits = named().filter(c => handleOf(c).startsWith(q));
+  close();
+  MM = el("div","mm"); MMi = 0; MMon = {ta,s,start:ta.selectionStart - m[0].length};
+  if (!hits.length){
+    MM.appendChild(el("div","none", S.cast.length
+      ? "no cast matches " + m[0] : "add someone to the cast first"));
+  }
+  hits.forEach((c,i) => {
+    const b = el("button");
+    b.setAttribute("aria-selected", i === 0);
+    b.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" ' +
+      'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ' +
+      'stroke-linejoin="round">' + KGLYPH[c.kind] + '</svg>';
+    b.appendChild(el("span","","@" + handleOf(c)));
+    b.appendChild(el("span","k", subjIndex(c) ? "Subject " + subjIndex(c) : c.kind));
+    b.onmousedown = e => { e.preventDefault(); pick(c); };
+    MM.appendChild(b);
+  });
+  ed.appendChild(MM);
+  const r = caret(ta,ed);
+  MM.style.left = Math.max(0, Math.min(r.x, ed.clientWidth - 190)) + "px";
+  MM.style.top = (r.y + 4) + "px";
+}
+function pick(c){
+  if (!MMon) return;
+  const {ta,s,start} = MMon;
+  const h = "@" + handleOf(c) + " ";
+  ta.value = ta.value.slice(0,start) + h + ta.value.slice(ta.selectionStart);
+  const at = start + h.length;
+  s.line = ta.value; close();
+  ta.focus(); ta.setSelectionRange(at,at);
+  ta.dispatchEvent(new Event("input"));
+}
+function keys(e,ta,ed,s){
+  if (!MM) return;
+  const opts = [...MM.querySelectorAll("button")];
+  if (!opts.length) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp"){
+    e.preventDefault();
+    MMi = (MMi + (e.key === "ArrowDown" ? 1 : opts.length - 1)) % opts.length;
+    opts.forEach((b,i) => b.setAttribute("aria-selected", i === MMi));
+  } else if (e.key === "Enter" || e.key === "Tab"){
+    e.preventDefault(); opts[MMi].dispatchEvent(new MouseEvent("mousedown"));
+  } else if (e.key === "Escape"){ e.preventDefault(); close(); }
+}
+/** Caret position, measured off a clone of the text up to it — the same
+ *  trick the prompt mirror uses, and the reason both stay a textarea. */
+function caret(ta,ed){
+  const d = el("div","mirror");
+  d.style.visibility = "hidden"; d.style.position = "absolute";
+  d.style.width = ta.clientWidth + "px";
+  const head = document.createTextNode(ta.value.slice(0, ta.selectionStart));
+  const mark = el("span","","​");
+  d.appendChild(head); d.appendChild(mark);
+  ed.appendChild(d);
+  const a = mark.getBoundingClientRect(), b = ed.getBoundingClientRect();
+  d.remove();
+  return {x: a.left - b.left, y: a.bottom - b.top};
+}
+
+/* ── clip scope ─────────────────────────────────────────────────────────── */
+function clipView(){
+  const st = $("#g-style"); st.innerHTML = "";
+  STYLES.forEach((l,i) => {
+    const p = el("button","pill" + (S.style === i ? " on" : ""), l);
+    p.onclick = () => { S.style = i; clipView(); docView(); };
+    st.appendChild(p);
+  });
+  one($("#g-tone"), TONE, S.tone, v => { S.tone = v; clipView(); docView(); });
+  one($("#g-score"), SCORE, S.score, v => { S.score = v; clipView(); docView(); });
+  $("#secs").value = S.seconds;
+  $("#secslb").textContent = S.seconds + "s";
+}
+function one(host, table, cur, set){
+  host.innerHTML = "";
+  table.forEach(([k,l]) => {
+    const p = el("button","pill" + (cur[0] === k ? " on" : ""), l);
+    p.onclick = () => set(cur[0] === k ? [] : [k]);
+    host.appendChild(p);
+  });
+}
+$("#secs").addEventListener("input", e => { S.seconds = +e.target.value;
+  clipView(); stripView(); rowsView(); docView(); });
+
+/* ── the document ───────────────────────────────────────────────────────── */
+function docView(){
+  const h = $("#doc"); h.innerHTML = "";
+  const r = compile();
+  const pinned = Object.keys(S.pins);
+  $("#pins").hidden = !pinned.length;
+  $("#pins").textContent = pinned.length + " pinned";
+  $("#pins").className = "tag warn";
+
+  if (r.bare){
+    $("#mode").textContent = "no document — the sentence runs as typed";
+    h.appendChild(Object.assign(el("div","plain"),
+      {textContent: r.text || "(nothing typed yet)"}));
+    return;
+  }
+  $("#mode").textContent = r.ref ? "ref2va · six fields" : "t2va · three fields";
+  ORDER.filter(k => k in r.doc).forEach(k => {
+    const isPin = k in S.pins;
+    const f = el("div","fld" + (isPin ? " pinned" : ""));
+    const key = el("div","k"); key.appendChild(el("span","",k));
+    if (isPin){
+      const u = el("button","unpin","unpin");
+      u.onclick = () => { delete S.pins[k]; docView(); };
+      key.appendChild(u);
+    }
+    f.appendChild(key);
+    const v = el("textarea","v");
+    v.value = isPin ? S.pins[k] : r.doc[k];
+    v.rows = 1; v.spellcheck = false;
+    const fit = () => { v.style.height = "auto"; v.style.height = v.scrollHeight + "px"; };
+    v.addEventListener("input", () => { S.pins[k] = v.value; fit();
+      $("#pins").hidden = false;
+      $("#pins").textContent = Object.keys(S.pins).length + " pinned";
+      f.classList.add("pinned");
+      if (!key.querySelector(".unpin")){
+        const u = el("button","unpin","unpin");
+        u.onclick = () => { delete S.pins[k]; docView(); };
+        key.appendChild(u);
+      }
+    });
+    f.appendChild(v);
+    h.appendChild(f);
+    requestAnimationFrame(fit);
+  });
+}
+
+$("#tog").onclick = () => {
+  const d = $("#disc"); d.classList.toggle("open");
+  $("#togl").textContent = d.classList.contains("open")
+    ? "Hide the prompt" : "Check the prompt";
+};
+$("#addshot").onclick = () => { S.shots.push(shot()); S.sel = S.shots.length - 1; render(); };
+$("#reset").onclick = () => { S = emptyScene(); render(); };
+$("#demo").onclick = () => { S = demoScene(); render(); };
+
+S = demoScene();
+render();
+$("#disc").classList.add("open");
+$("#togl").textContent = "Hide the prompt";
+</script>

@@ -69,6 +69,29 @@ SHOT = {
     "_shot_join",
     "_first_sentence", "_shot_audio", "_shot_body",
     "_compile_h3_prompt", "_compile_image_prompt", "_compile_wan_prompt",
+    # The scene. Pulled with the rest of the compiler rather than as its own
+    # set, because `_compile_h3_prompt` delegates to it — a subset that had one
+    # and not the other would be a compiler that raises `NameError` on the only
+    # input this feature exists for.
+    "MAX_CAST", "MAX_SCENE_SHOTS", "MAX_SCENE_LINE",
+    "H3_RETENTION", "H3_AUDIO_RETENTION", "H3_TASK_TYPES", "H3_VIDEO_ROLES",
+    "H3_AUDIO_ROLES", "H3_AUDIO_NOUN", "H3_SOURCES", "MAX_H3_PROMPT",
+    # Blocking. Pulled with the compiler because `_h3_shot_text` calls into
+    # it — the rule the MODULES comment records, one edit or a NameError.
+    "STAGE_SENSOR_W", "STAGE_SENSOR_H", "STAGE_LENS", "STAGE_FIGURE_H",
+    "STAGE_EYE_H", "STAGE_EYE_RATIO", "STAGE_MAX_MARKS", "STAGE_SIZE",
+    "STAGE_ANGLE",
+    "STAGE_FACING", "STAGE_NEAR", "STAGE_OWN_BODY", "_stage_norm", "_stage_band", "_stage_fov",
+    "_stage_dims", "_stage_see", "_stage_where", "_stage_pills", "_stage_move",
+    "_stage_others", "_stage_lead", "_stage_read", "_stage_end",
+    "_stage_phrase", "_stage_arc",
+    "_stage_move_note", "_stage_move_sentence", "STAGE_VERB",
+    "_stage_clauses", "_validate_stage", "_stage_boxes", "STAGE_FIGURE_W",
+    "H3_CAST_KINDS", "H3_SLOT_MEDIA", "H3_SOUNDSCAPE_DEFAULT", "_H3_HANDLE",
+    "_shot_groups", "_h3_clock", "_validate_scene", "_h3_handle",
+    "_h3_handles", "_h3_subjects", "_h3_label", "_h3_speakers",
+    "_h3_resolve", "_h3_task_types", "_h3_shot_text", "_compile_h3_scene",
+    "_h3_list", "_h3_asset", "_h3_cap", "_h3_across",
 }
 
 # The captioner's two menus, for the same reason the vocabulary is here: the
@@ -99,6 +122,21 @@ MOTION = {
     "MOTION_GROUPS", "MOTION_MAX_PER", "MOTION_PHRASE_MAX", "MOTION_TOKENS",
     "_MOTION_HEAD_IMAGE", "_MOTION_HEAD_TEXT", "_MOTION_LINE",
     "_motion_instruction", "_parse_motion", "_THINK", "_oneline",
+}
+
+# What each video model can be asked for. Pulled rather than transcribed for
+# the reason every other set here is, and because this one has already drifted
+# once: `preview_ui.py` hand-wrote `supports` and went on rendering H3 with no
+# LoRA button for a release after the backend grew one. A stub that omits a
+# control is a preview of a control that does not exist.
+#
+# `requires` and `defaults` name six other constants, and they come too — the
+# rule the REWRITE set records: a constant a pulled definition names has to be
+# pulled in the same edit, or app.py raises NameError from inside the subset.
+VIDEO = {
+    "VIDEO_MODELS", "VIDEO_MODEL_KEYS", "VIDEO_REF_MODEL_KEYS",
+    "WAN_MODEL_KEYS", "WAN_DEFAULT_STEPS", "WAN_DEFAULT_CFG",
+    "WAN_DEFAULT_SHIFT",
 }
 
 # The trainer's three menus and its dial defaults, for the same reason again:

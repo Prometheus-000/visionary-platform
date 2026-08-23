@@ -2,16 +2,22 @@
   "name": "visionary-web",
   "private": true,
   "type": "module",
+  "module": "./dist-ds/index.js",
+  "types": "./dist-ds/index.d.ts",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "build:ds": "node build-ds.mjs"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
     "motion": "^12.23.12",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "three": "^0.185.1",
     "zustand": "^5.0.8"
   },
   "devDependencies": {

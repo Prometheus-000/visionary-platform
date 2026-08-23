@@ -284,6 +284,29 @@ check("and so does a pasted line break inside a valued pill",
 check("every word and mark is still there",
       "ice tapping crystal" in multi, True)
 
+# Two things that were shipped wrong for as long as this file has existed, and
+# went unnoticed for one reason: nothing here pinned them. Both are one line in
+# the guide and neither has a symptom you could see without reading the output.
+print("\nwhat the guide requires and nothing asserted", flush=True)
+base = G["_compile_h3_prompt"](
+    typed="a woman at a window", task="t2va", seconds=5,
+    pills=G["_validate_shot"](["framing.cu"]))
+ref = G["_compile_h3_prompt"](typed="a woman at a window", pills=[],
+                              task="ref2va", seconds=5, roles=["identity"])
+check("the body opens with [Shot 1] — base-en §2.2 requires the marker",
+      base.split("integrated_multimodal_description: ")[1].startswith("[Shot 1] "),
+      True)
+check("and so does the reference form's",
+      "detailed_description: [Shot 1] " in ref, True)
+# `N/A` in overall_soundscape means *complete silence, requested*. Emitting it
+# because nobody picked a sound pill told every ordinary clip it was silent —
+# and the guide separately warns that leaving the field blank lets ambience
+# creep in, so there is no empty answer to fall back to either.
+check("overall_soundscape is not N/A just because no sound pill was picked",
+      "overall_soundscape: N/A" in base, False)
+check("non_diegetic_music still is, which is the opposite rule and the point",
+      "non_diegetic_music: N/A" in base, True)
+
 if FAIL:
     print("\n" + "\n".join("  " + f for f in FAIL), flush=True)
     raise SystemExit(f"\n{len(FAIL)} disagreement(s) with the published format.")

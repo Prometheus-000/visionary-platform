@@ -1,0 +1,41 @@
+{
+  "projectId": "b40dc9d6-f43f-4457-8a02-92e11158eab5",
+  "shape": "package",
+  "pkg": "visionary-web",
+  "globalName": "Visionary",
+  "buildCmd": "npm --prefix web run build:ds",
+  "srcDir": "src",
+  "cssEntry": "dist-ds/visionary-ui.css",
+  "dtsPropsFor": {
+    "Popover": "/** The element the popover hangs off. `null` is the closed state \u2014 `usePopover()` returns exactly this union. */\n  anchor: HTMLElement | null;\n  /** `menu`, `menu sizer`, `menu form` or `pal` \u2014 the stylesheet selects on these. */\n  className: string;\n  onClose: () => void;\n  children: React.ReactNode;",
+    "Menu": "/** The element the menu hangs off. `null` is the closed state. */\n  anchor: HTMLElement | null;\n  /** A separator, or a command. `on` draws a tick, `danger` colours it, `hint` adds a dim clause after the label. */\n  items: Array<\n    | { sep: true }\n    | {\n        label: string;\n        run: () => void;\n        on?: boolean;\n        danger?: boolean;\n        sep?: false;\n        hint?: string;\n        drag?: (e: React.DragEvent) => void;\n      }\n  >;\n  onClose: () => void;",
+    "NumInput": "value: string;\n  onValue: (v: string) => void;\n  /** The \u2191/\u2193 step. Defaults to 1. */\n  fine?: number;\n  /** The \u2318\u2191/\u2318\u2193 step. Defaults to 8x `fine`. */\n  bigStep?: number;\n  /** What an empty box counts from \u2014 the checkpoint's own number. */\n  base?: number;\n  onEnter?: () => void;\n  /** Blur and Enter, for the boxes that snap on the way out. */\n  onCommit?: () => void;\n  placeholder?: string;\n  disabled?: boolean;\n  inputMode?: 'decimal' | 'numeric' | 'text';\n  'aria-label'?: string;\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;",
+    "ErrorNote": "/** A bare sentence, or the API's split form: `error` is what a person reads, `detail` is what the server said. Renders nothing when falsy. */\n  err: string | { error: string; detail?: string } | null | undefined;\n  style?: React.CSSProperties;"
+  },
+  "overrides": {
+    "Menu": {
+      "cardMode": "single",
+      "viewport": "440x300",
+      "primaryStory": "WithTicksAndHints"
+    },
+    "Popover": {
+      "cardMode": "single",
+      "viewport": "480x320",
+      "primaryStory": "FormVariant"
+    },
+    "Sheet": {
+      "cardMode": "single",
+      "viewport": "780x420",
+      "primaryStory": "StopTrainingConfirm"
+    },
+    "NumInput": {
+      "cardMode": "column",
+      "primaryStory": "SamplingFields"
+    },
+    "ErrorNote": {
+      "cardMode": "column",
+      "primaryStory": "WithServerDetail"
+    }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

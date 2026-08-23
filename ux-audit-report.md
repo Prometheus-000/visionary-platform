@@ -1,275 +1,270 @@
 # UX Audit — Visionary
 
-*Audited 2026-08-20 · mode: **live + static** — live against `tools/preview_ui.py` (stub API,
-real compilers/vocabulary, no Modal deploy) + vite dev at :5173; static over `web/src`
-(~11.6k lines). GPU jobs were stubbed, so generation quality and real latency were out of
-scope; everything about layout, flows, states, and copy was exercised for real.*
+*2026-08-20 · live + static — stub API (`tools/preview_ui.py`) + vite dev at :5173, static
+over `web/src` (~11.6k lines). GPU jobs stubbed, so output quality and real latency were
+out of scope.*
+
+> **Status: 20 of 21 findings fixed** (2026-08-20). F7 was declined and left in place;
+> G7's spacing clause was deliberately left undone. Typecheck and production build both
+> pass. See [What changed](#what-changed) at the foot.
 
 ## Macro read
 
-Visionary's interaction design is unusually deliberate — wait states on the expensive paths
-are exemplary, destructive actions state their exact blast radius, and the disabled
-Start-training button that explains itself step-by-step is a pattern most products never
-reach. The gap is between the paths someone clearly polished (generate, download, caption)
-and everything around them: a one-line CSS token bug is silently deleting the card
-background across nine surfaces, eight smaller mutations give no feedback at all between
-click and reply, dim text sits below accessibility contrast on every ground it's used on,
-and the style system the code defines is bypassed more often than used. The product's own
-philosophy — "errors diagnose themselves," "the dialog has to say what is going" — is the
-right yardstick, and the P1s below are simply the places the implementation doesn't yet
-meet it.
+Visionary's expensive paths are carefully designed — generate, download and caption all
+show real progress, and destructive dialogs state their exact blast radius. The polish
+stops at the edges: a one-line CSS bug is erasing card backgrounds app-wide, eight smaller
+mutations give no feedback at all, and secondary text sits under the contrast floor on
+every ground it uses. The product's own philosophy is the right yardstick; these are the
+places the implementation hasn't reached it yet.
 
-## Flow inventory
+## Flows
 
-| Flow | Steps to goal | Notes |
+| Flow | Steps | Notes |
 |---|---|---|
-| Generate a still | 3 (type → Generate → view) | No dead ends; strong wait state |
-| Still → video | 1 (duration menu) | Controls swap correctly; canvas still vanishes (see finding) |
-| Enhance a fragment | 1 | Silent when it fails (see finding) |
-| Train a LoRA | ~5 (create → name → trigger → set → start) | Guided by self-explaining disabled button |
-| Prepare a dataset | 3–4 (drop → caption → trigger → save) | Filters good; two disagreeing tallies (see finding) |
-| Download weights / settings | 2–3 | Honest cost copy; several silent mutations |
+| Generate a still | 3 | No dead ends; strong wait state |
+| Still → video | 1 | Controls swap correctly; the still vanishes (F1) |
+| Enhance a fragment | 1 | Silent when it fails (F2) |
+| Train a LoRA | ~5 | Guided by a self-explaining disabled button |
+| Prepare a dataset | 3–4 | Good filters; two disagreeing tallies (F8) |
+| Download weights | 2–3 | Honest cost copy; silent mutations (G3) |
 
-No flow forces a detour into an adjacent workflow — cross-links (gallery → "Animate from
-this frame", training card → LoRA picker) hand results forward instead. That's the right
-shape.
+No flow detours into an adjacent workflow to finish — cross-links hand results forward.
+
+## How to read this
+
+Two tiers, **Global** then **By feature**, each sorted P1 → P2 → P3.
+
+| Priority | Meaning | Count |
+|---|---|---|
+| **P1** | Blocks or misleads the user | 1 |
+| **P2** | Visible friction | 11 |
+| **P3** | Hygiene | 9 |
+
+*Excluded: `web/storyline.html` and `src/storyline/` are a dev-only sandbox, absent from
+the vite build input and from `dist/`, so no finding is filed against them.*
 
 ---
 
-## Findings
+# Global (platform)
 
-### Visual system (all screens)
+### G1 · P1 — Card backgrounds render transparent app-wide
 
-**P1 — Card backgrounds are transparent everywhere: `--wash-1` is defined as itself**
-- Evidence: `web/src/styles/ui.css:49` — `--wash-1:var(--wash-1)`. A self-referencing
-  custom property is invalid at computed-value time, so `background:var(--wash-1)`
-  resolves to nothing. Confirmed live: `.gal` computes `background-color: rgba(0,0,0,0)`,
-  and `getComputedStyle(root).getPropertyValue('--wash-1')` returns empty. Nine consumers
-  lose their ground: `.card` (521), `.shot` (648), `.gal` (711), `.sess` (1230),
-  `.ds-card` (1341), `.tile` (1378), `.dupes-tableWrap` (1450), and ui.css:1652.
-- Fix: `--wash-1: rgba(255,255,255,.03);` (the ramp's own comment implies a six-step
-  scale under `--wash-2:.05` / `--wash-3:.07`). One line restores the intended card
-  hierarchy across the app.
+- **Evidence:** `ui.css:49` sets `--wash-1:var(--wash-1)`, a self-reference that computes
+  to nothing, stripping the ground from all nine consumers (`.card` 521, `.shot` 648,
+  `.gal` 711, `.sess` 1230, `.ds-card` 1341, `.tile` 1378, `.dupes-tableWrap` 1450, 1652).
+- **Fix:** set `--wash-1: rgba(255,255,255,.03)`, matching the ramp under `--wash-2:.05`.
+- **Confirmed live:** `.gal` computes `background-color: rgba(0,0,0,0)`.
 
-**P2 — `--dim` text fails contrast on every background it's used on**
-- Evidence: `--dim:#5a5a5a` (ui.css:47). Computed ratios: **3.04:1** on `#000`,
-  **2.82:1** on the `--wash-2` field ground, **2.74:1** on `#111` menus — all below the
-  4.5:1 AA floor for normal text. It's used for real reading content at small sizes:
-  `.muted` 12px (603), `.sub` 13px (520), `.foot .when` 11px (725), menu hints 11px on
-  `#111` (758), control labels 14px (293), storyline labels 10.5–11.5px
-  (`storyline/storyline.css:35,40,49,68`).
-- Fix: raise `--dim` to `#767676` (4.54:1 on black), or split it: keep `#5a5a5a` strictly
-  for disabled states and introduce a `--quiet` ≥ 4.5:1 for secondary text.
+### G2 · P2 — Secondary text fails contrast on every background it uses
 
-**P2 — Touch targets far below minimum, with only one touch-mode exception**
-- Evidence: `.mk-reroll` **16×16px** (ui.css:441-443), `.ref button.x` 19×19 (1612),
-  `.shot .acts button` 20×20 (689), drawer-strip `.foot .more` 20×20 (2038), seg buttons
-  min-height 26px (586). Exactly one control is bumped to 44px under
-  `@media (hover:none)`: `.shot-back` (1209).
-- Fix: extend the existing `hover:none` bump into a general rule — minimum 44px hit area
-  (padding or `::after` expansion, not necessarily visual size) for all interactive
-  elements in touch mode.
+- **Evidence:** `--dim:#5a5a5a` (ui.css:47) computes to 3.04:1 on `#000`, 2.82:1 on the
+  `--wash-2` field ground and 2.74:1 on `#111` menus, all under the 4.5:1 AA floor.
+- **Scope:** it carries real reading text at 11–14px (`.muted` 603, `.sub` 520,
+  `.foot .when` 725, menu hints 758, control labels 293).
+- **Fix:** raise `--dim` to `#767676` (4.54:1) and reserve `#5a5a5a` for disabled states.
 
-**P3 — The token system exists and is routinely bypassed**
-- Evidence (tallies over all CSS + inline styles): **border-radius: ~24 distinct values
-  across 96 declarations, 21% tokenized** — and `--r-sheet:20px` (ui.css:71) is defined
-  but never used; both sheets hardcode `20px` (1056, 1536). **Font sizes: 12 distinct px
-  values, one single use of `--label-size`.** **Colors: 100 distinct literals** — 26
-  white-alphas (.012–.92), three near-identical scrims (`rgba(0,0,0,.6/.62/.66)` ×5
-  each), and 9 alphas of the semantic red; `#f87171`/`#4ade80`/`#fbbf24` appear as raw
-  hex 6/5/3 times despite `--crit`/`--ok`/`--warn` existing (e.g. 496, 604, 143).
-  **Spacing: 33 distinct values, zero tokens; the 5/6/7/8/9px band alone is 142 uses.**
-- Fix: mechanical migration pass — radii to the four existing tokens, semantic hex to the
-  three existing tokens, collapse the 5–9px band onto a 4/8 step. No new system needed;
-  use the one already declared.
+### G3 · P2 — Eight mutations show nothing between click and reply
 
-**P3 — 34 font-size declarations below 12px**
-- Evidence: 9px (`.tile .clip .kind`, ui.css:1409), 10px ×10, 10.5px ×3, 11px ×15,
-  11.5px ×5 (full list in ui.css/storyline.css/sandbox.css census).
-- Fix: floor at 11px, and pair anything under 12px with a ≥4.5:1 color (compounds with
-  the `--dim` finding — most sub-12px text is also dim).
+- **Evidence:** save token (`Settings.tsx:52`), delete LoRA (:59), remove caption model
+  (:311), delete set (`useDatasets.ts:166`), save set (`Editor.tsx:218`), prepend trigger
+  (`Editor.tsx:564`), delete session (`useSessions.ts:101`), gallery delete/purge
+  (`Gallery.tsx:171`).
+- **Fix:** apply one shared busy-button treatment across all eight.
+- **Note:** the codebase already has the pattern four ways (`dl.busy`, `s.rewriting`,
+  `saving`, `deleting`).
 
-### Generate flow
+### G4 · P2 — Error copy dead-ends, and raw tracebacks reach the screen
 
-**P2 — Switching Still → video silently discards the canvas result**
-- Evidence: observed live — generated a still, chose "8s" from the duration menu, canvas
-  replaced by an empty video placeholder with no trace of the image or pointer to it (it
-  survives only in the gallery panel, which was closed at the time).
-- Fix: keep the last still visible as the default "first frame" candidate when switching
-  to video (the First-frame slot already exists in the source row), or at minimum a
-  transient "your still is in the gallery" affordance.
+- **Evidence:** `'Generation failed'` (`useGenerate.ts:189`), `'Download failed'`
+  (`useDownload.ts:69`) and `'Could not read that file.'` (`App.tsx:361`) offer no next
+  step.
+- **Evidence:** `api/client.ts:37` pipes 400 chars of raw response body into every
+  err-box and `alert()`.
+- **Fix:** give each fallback a next step and move the raw body behind a details toggle.
 
-**P2 — A failed Enhance is indistinguishable from a no-op Enhance**
-- Evidence: observed live — POST `/api/rewrite` returned 200 without a `text` field; the
-  UI did nothing at all. Deliberate: `console/Rewrite.tsx:35-40` applies the result only
-  `if (!failed(r) && r.ok && r.text)`, with the comment "the worst case here is the box
-  unchanged." From the user's seat, press → flash → nothing could mean "my prompt was
-  already good" or "the call died."
-- Fix: on failure or empty result, show a transient note near the button ("Couldn't
-  rewrite — try again"), keeping the box-unchanged behavior.
+### G5 · P2 — Touch targets sit far below the 44px minimum
 
-**P2 — Enhance's explanation names the wrong model in video mode**
-- Evidence: observed live — in MiniMax-H3 video mode the button's tooltip/accessible name
-  still reads "Restructures your prompt the way **Krea 2** reads best…". The note comes
-  from server state and is rendered unconditionally (`console/Rewrite.tsx:52`,
-  `title={o.note}`).
-- Fix: either serve a mode-aware note, or make the copy model-neutral ("…the way the
-  model reads best") — one word per concept includes model names.
+- **Evidence:** `.mk-reroll` is 16×16px (ui.css:441), `.ref button.x` 19×19 (1612),
+  `.shot .acts button` 20×20 (689), `.foot .more` 20×20 (2038).
+- **Fix:** extend the existing `@media (hover:none)` bump — today it lifts only
+  `.shot-back` to 44px (1209) — into a blanket touch rule.
 
-**P3 — LoRA skip warning gives a diagnosis but no action**
-- Evidence: canvas warning "not applied: gone (no matching keys)"
-  (`canvas/Canvas.tsx:282`, reason attached at `canvas/useGenerate.ts:118`). "No matching
-  keys" is accurate and unactionable; with a LoRA whose name reads as English ("gone")
-  the whole line parses as gibberish.
-- Fix: quote the name (`not applied: "gone" — its keys don't match this model; it was
-  likely trained for a different base`), which names the cause *and* the likely fix.
+### G6 · P2 — `npm run dev` starts against a dead API
 
-### Errors & feedback (cross-cutting)
+- **Evidence:** vite proxies `/api` to `:8791` (`vite.config.ts:14`) while the stub binds
+  `:8777` (`tools/preview_ui.py:56`).
+- **Fix:** align the two defaults.
 
-**P1 — A failed trigger-word save reports nothing at all**
-- Evidence: `datasets/useDatasets.ts:184-187` — `commitTrigger` awaits `setDatasetMeta`
-  and never checks `failed(r)`. The trigger word is what makes a LoRA invocable; a user
-  who saw their trigger "stick" locally and then trains has spent real GPU money on a
-  set without it. Misleads with cost attached.
-- Fix: check the reply like every sibling call does and surface the existing err-box.
+### G7 · P3 — The declared token system is bypassed more than used
 
-**P2 — Eight mutations have no pending state between click and reply**
-- Evidence (handler locations): save HF token (`settings/Settings.tsx:52-57`, button
-  :114), delete LoRA (:59-79, :189-190), remove caption model (:311-317 — while the *add*
-  path right beside it does show `'Checking…'`, :294), delete set
-  (`datasets/useDatasets.ts:166-181`), save set (`datasets/Editor.tsx:218-221` — Save
-  stays enabled; double-submit possible), Fix/prepend trigger (`Editor.tsx:564-571`),
-  delete session (`train/useSessions.ts:101-108`; ✕ stays enabled,
-  `train/SessionCard.tsx:115-119`), gallery delete/purge (`gallery/Gallery.tsx:171-210`).
-- Fix: one shared busy-button affordance (the codebase already has the pattern four ways:
-  `dl.busy`, `s.rewriting`, `saving`, `deleting` — pick one and apply it to all eight).
+- **Evidence:** 96 border-radius declarations span ~24 values with 21% tokenized, and
+  `--r-sheet` is defined but never used (hardcoded at 1056, 1536).
+- **Evidence:** colors span 100 literals including 26 white-alphas; spacing spans 33
+  values with no token at all.
+- **Fix:** migrate radii and semantic colors onto the existing tokens, and collapse the
+  5–9px band (142 uses) onto a 4/8 step.
 
-**P2 — Fallback error strings are dead ends, and raw server bodies leak into the UI**
-- Evidence: `'Generation failed'` (`canvas/useGenerate.ts:189`, `video/useVideo.ts:141`),
-  `'Download failed'` (`settings/useDownload.ts:69`), `'Could not read that file.'`
-  (`App.tsx:361`, `video/SourceRow.tsx:73`), `'Could not read that image.'`
-  (`App.tsx:466`) — none offer a next step. Meanwhile `api/client.ts:37` builds
-  `` `${status} ${statusText} ${body.slice(0,400)}` `` — up to 400 chars of what the
-  comment itself calls "a plain-text traceback" — flowing verbatim into every err-box and
-  `alert(r.error)` (`gallery/Gallery.tsx:179,207`); `datasets/Editor.tsx:108-109` leaks
-  300 chars the same way.
-- Fix: fallbacks name the action and a step ("Generation failed — the job log is in the
-  Training panel"; "Could not read that file — is it an image or clip?"). Keep the
-  traceback, but behind a "details" disclosure instead of the headline.
+### G8 · P3 — 26 font sizes fall below 12px
 
-### Dataset editor
+- **Evidence:** shipped CSS carries 9px ×1 (ui.css:1409), 10px ×10 and 11px ×15,
+  including the `--label-size` token itself (ui.css:83).
+- **Fix:** floor at 11px and pair anything under 12px with a ≥4.5:1 color.
 
-**P2 — Two disagreeing progress tallies sit side by side in the toolbar**
-- Evidence: observed live — "12 images · 5 captioned" next to "14/19 trigger · 19/24
-  captioned". They are different sources of truth rendered adjacently: a live client
-  count (`datasets/Editor.tsx:178`, rendered :227) vs the server-computed `ds.insight`
-  (:279-281), which lags until re-analysis.
-- Fix: derive both from one source, or label the insight pair with its scope and
-  staleness ("last analysis: 19/24") so the disagreement reads as freshness, not error.
+### G9 · P3 — Two nouns each for "session" and "LoRA"
 
-**P3 — Unlabeled − / + control pair in the toolbar**
-- Evidence: observed live — icon-only −/+ between the filters and the tallies with no
-  visible label (thumbnail density, per `Editor.tsx:270-274`).
-- Fix: a `title`/aria-label ("Smaller/larger tiles") — or fold into the existing seg
-  control style with a tiny grid glyph.
+- **Evidence:** the board says "sessions" (`Train.tsx:153`) where the header says "runs"
+  (`App.tsx:563`), and one dialog says "checkpoints" (`SessionCard.tsx:117`) where
+  Settings says "LoRAs" (`Settings.tsx:172`).
+- **Fix:** standardise on "session" for the record and "LoRA" for the artifact.
 
-### Training
+---
 
-**P2 — The session form mirrors the backend's TrainParams one-to-one**
-- Evidence: 11 numeric dials from the `DIALS` map (`train/SessionForm.tsx:32-42`) + 3
-  selects + fp8 checkbox + name/trigger/set ≈ **18 always-visible controls**, spread
-  verbatim from `state.train_defaults` (`train/useSessions.ts:112-119`). A "More dials"
-  expander exists, but Rank/Alpha/optimizer/scheduler/Flow shift sit outside it — the
-  README's promise is "point the trainer at a folder," and the form's shape is the
-  schema's, not that task's.
-- Fix: front page = name, trigger, set, epochs; everything else behind More dials with
-  the current defaults. The self-explaining footer already guides the four that matter.
+# By feature
 
-### Responsiveness
+## Generate & console
 
-**P2 — The mobile console wrap is unowned**
-- Evidence: observed at 375px — the strip wraps into three ragged rows, "Still" orphaned
-  on its own line, the last-shot thumbnail floating between the model name and Generate.
-  The stylesheet knows: "Ten controls wrapping into four ragged rows" (ui.css:306-311);
-  the only ≤640px accommodation is `gap:6px` (315-317). No horizontal overflow, so it
-  functions — it just isn't designed.
-- Fix: an explicit ≤640 order — row 1: prompt; row 2: duration · size · Shot · Enhance;
-  row 3: model + Generate; thumbnail into the gallery door.
-- Related hygiene (P3): Settings inputs `width:158, flex:'none'`
-  (`settings/Settings.tsx:138, :340`) can't shrink and Settings has no media query;
-  `storyline.css`/`sandbox.css` have zero media queries; `.shot img` has no reserved
-  aspect box (ui.css:656) so a landing render reflows the canvas column.
+### F1 · P2 — Switching Still → video discards the canvas result
 
-### Gallery
+- **Evidence:** observed live — choosing "8s" after a generation replaced the image with
+  an empty video placeholder, leaving no trace or pointer to it.
+- **Fix:** carry the last still into the existing First-frame slot instead of clearing it.
 
-**P3 — Download/Delete exist twice per card**
-- Evidence: hover quick-actions (`gallery/Card.tsx:85`) and the same two entries again in
-  each card's More menu (`gallery/Gallery.tsx:212-223`).
-- Fix: quick actions on hover *or* in the menu, not both; the menu is the discoverable
-  home, hover is the shortcut — if both stay, that's a defensible convention, but it's
-  the only duplicated pathway in the app, so decide it deliberately.
+### F2 · P2 — A failed Enhance looks identical to one that changed nothing
 
-### Terminology (one word per concept)
+- **Evidence:** observed live — `/api/rewrite` returned 200 with no `text`, and
+  `Rewrite.tsx:35-40` applies a result only when `r.ok && r.text`.
+- **Fix:** show a transient "Couldn't rewrite — try again" on empty or failed replies.
 
-**P3 — "session" vs "run", and "LoRA" vs "checkpoint", for the same things**
-- Evidence: the board says "N sessions" / "+ Create session" / "No sessions yet."
-  (`train/Train.tsx:153, :169, :179`) while the header door for the same records says
-  "Training · N **runs**" (`App.tsx:563`), and the board's own empty-state copy switches
-  mid-paragraph (Train.tsx:181-183). One dialog uses both artifact nouns at once: "Any
-  **checkpoints** it already wrote stay in **loras/**…" (`train/SessionCard.tsx:117-119`)
-  while Settings manages the same files as "LoRAs" (`settings/Settings.tsx:172`).
-- Fix: pick "session" for the record and "LoRA" for the artifact, everywhere; "run" and
-  "checkpoint" survive only if given distinct meanings the UI actually teaches.
+### F3 · P2 — Enhance names the wrong model in video mode
 
-### Dev tooling (first-run experience of the repo itself)
+- **Evidence:** observed live — the tooltip reads "the way Krea 2 reads best" while
+  MiniMax-H3 is active, because the note renders unconditionally (`Rewrite.tsx:52`).
+- **Fix:** serve a mode-aware note, or drop the model name from the copy.
 
-**P2 — `npm run dev` gets a dead API out of the box: port defaults disagree**
-- Evidence: hit live — vite proxies `/api` to `:8791` by default (`web/vite.config.ts:14`)
-  but the stub binds `:8777` (`tools/preview_ui.py:56`). A fresh contributor following
-  the documented loop gets proxy errors with no hint which side is wrong.
-- Fix: make the two defaults equal (one-character change on either side).
+### F4 · P2 — The mobile console wrap is undesigned
+
+- **Evidence:** observed at 375px — ten controls wrap into three ragged rows with "Still"
+  orphaned and the thumbnail stranded between the model name and Generate.
+- **Fix:** define an explicit ≤640 row order and move the thumbnail into the gallery door.
+- **Note:** the only current accommodation is `gap:6px` (ui.css:315).
+
+### F5 · P3 — The LoRA skip warning diagnoses without advising
+
+- **Evidence:** the canvas prints "not applied: gone (no matching keys)"
+  (`Canvas.tsx:282`), which parses as gibberish when the LoRA name is an English word.
+- **Fix:** quote the name and give the cause — `not applied: "gone" — trained for a
+  different base model`.
+
+### F6 · P3 — Canvas results reserve no space before they land
+
+- **Evidence:** `.shot img` (ui.css:656) and `#vid-out video` (696) set no
+  `aspect-ratio`, so a finished render reflows the canvas column.
+- **Fix:** set `aspect-ratio` from the requested dimensions, as `.gal .media` (713) does.
+
+## Sets (dataset editor)
+
+### F7 · P3 — The trigger-word save ignores its reply
+
+- **Evidence:** `useDatasets.ts:184-187` awaits `setDatasetMeta` without checking
+  `failed(r)`, so a rejected save leaves the typed word on screen.
+- **Fix:** check the reply and surface the existing err-box, as every sibling call does.
+- **Status:** left as-is by request — training without a trigger word is a supported
+  choice, so this is an unhandled reply rather than the P1 data-loss risk first filed.
+
+### F8 · P2 — Two disagreeing tallies sit side by side
+
+- **Evidence:** observed live — "12 images · 5 captioned" (client count,
+  `Editor.tsx:178`) renders beside "19/24 captioned" (server insight, :279).
+- **Fix:** derive both from one source, or timestamp the insight so the gap reads as
+  staleness.
+
+### F9 · P3 — The density control is unlabeled
+
+- **Evidence:** observed live — an icon-only −/+ pair sits between the filters and
+  tallies with no title or aria-label (`Editor.tsx:270-274`).
+- **Fix:** give it the accessible name "Smaller/larger tiles".
+
+## Training
+
+### F10 · P2 — The training form mirrors the backend schema
+
+- **Evidence:** 18 always-visible controls render from the `DIALS` map
+  (`SessionForm.tsx:32-42`), spread verbatim from `train_defaults`
+  (`useSessions.ts:112-119`).
+- **Fix:** surface name, trigger, set and epochs, and move the rest behind the existing
+  More dials.
+
+## Gallery
+
+### F11 · P3 — Download and Delete appear twice per card
+
+- **Evidence:** both render as hover quick-actions (`Card.tsx:85`) and again in the same
+  card's More menu (`Gallery.tsx:212-223`).
+- **Fix:** keep them in the menu and drop the hover pair.
+
+## Settings
+
+### F12 · P3 — Settings inputs can't shrink
+
+- **Evidence:** two inputs hardcode `width:158, flex:'none'` (`Settings.tsx:138`, `:340`)
+  in a sheet with no media query.
+- **Fix:** change to `flex: 1 1 158px` with a `min-width`.
 
 ---
 
 ## What's already right
 
-- **Wait states on the paths that cost money are exemplary.** Generate flips to Stop with
-  a canvas progress line and "H100 · Step 3/8"; downloads and captioning show live
-  progress; stop-training disables itself (`canvas/useGenerate.ts:169`,
-  `console/Console.tsx:244`, `settings/Settings.tsx:147`, `datasets/Editor.tsx:615`).
-- **Progressive disclosure via the duration switch is the real thing.** Still ↔ video
-  swaps the model, the placeholder copy, the source row, and drops +LoRA when the model
-  can't take one — controls follow relevance, observed live.
-- **Destructive dialogs state the blast radius**, including what's *excluded*: "The N
-  older than these are not included." (`gallery/Gallery.tsx:187-210`). This is the
-  standard the error copy should be held to.
-- **The disabled Start button explains itself stepwise** — "Name the LoRA" → "Set a
-  trigger word", updating live as the form fills (observed).
-- **Task-verb menus**: "Reuse prompt & settings", "Animate from this frame", "Use as
-  reference" — user tasks, not CRUD.
-- **Honest state copy**: "UNSAVED · cleared when you close the app"; GPU picker: "Changing
-  a card costs one cold start… Runs after it are warm."
-- **Actionable errors exist as a house style to copy from**: "References need MiniMax-H3 —
-  download it under Settings." (`App.tsx:371`), "Give the set a name to save it."
-- **The IA is task-shaped, not route-shaped**: 33 API routes funnel into four surfaces;
-  "Generate is the page, not a destination" (`App.tsx:33`).
-- Media boxes mostly reserve aspect-ratio; `prefers-reduced-motion` is respected;
-  `aria-busy` is used where busy states exist.
+- Wait states on the paths that cost money are exemplary — Generate flips to Stop with a
+  live step counter (`useGenerate.ts:169`).
+- The duration switch is real progressive disclosure, swapping model, copy and source row
+  and dropping +LoRA when the model can't take one.
+- Destructive dialogs state the blast radius including exclusions — "The N older than
+  these are not included." (`Gallery.tsx:187`).
+- The disabled Start button explains itself stepwise, from "Name the LoRA" to "Set a
+  trigger word".
+- Menus use task verbs — "Reuse prompt & settings", "Animate from this frame" — not CRUD.
+- State copy is honest about cost and persistence — "UNSAVED · cleared when you close the
+  app".
+- Actionable errors already exist as a house style — "References need MiniMax-H3 —
+  download it under Settings." (`App.tsx:371`).
+- The IA is task-shaped, funnelling 33 API routes into four surfaces (`App.tsx:33`).
 
-## Fix plan (by leverage)
+## What changed
 
-1. **`--wash-1` one-liner** (S) — restores the card ground on nine surfaces. Resolves the
-   P1 visual bug.
-2. **`commitTrigger` failure check** (S) — the other P1; wire it to the existing err-box.
-3. **Raise `--dim` to ≥ 4.5:1** (S) — clears the contrast failure across every screen at
-   once; revisit the sub-12px sizes in the same pass.
-4. **Shared busy-button treatment on the eight silent mutations** (M) — the pattern
-   already exists four times in the codebase; unify and apply.
-5. **Error-copy pass** (M) — fallback strings name action + next step; raw bodies behind a
-   "details" disclosure; fix the stale Krea 2 note and the LoRA-skip wording.
-6. **Mobile console layout at ≤640** (M) — own the wrap order; move the thumbnail.
-7. **Vocabulary pass: session/LoRA everywhere** (S).
-8. **SessionForm: four fields up front, dials behind More dials** (M).
-9. **Port-default fix in dev tooling** (S).
-10. **Token migration** (M/L) — radii/colors/spacing onto the declared tokens; delete or
-    use `--r-sheet`.
+| ID | What was done | Where |
+|---|---|---|
+| G1 | `--wash-1` given a real value, restoring the card ground on nine surfaces | `ui.css:49` |
+| G2 | `--dim` raised to `#767676` — 4.54:1 on `--bg` | `ui.css:45` |
+| G3 | New shared `useBusy` hook applied to all eight mutations | `ui/useBusy.ts` + 8 call sites |
+| G4 | `ApiError` split into a sentence plus `detail`; new `ErrorNote` folds the traceback into a disclosure | `api/client.ts`, `ui/ErrorNote.tsx` |
+| G5 | Touch block moved to the foot of the file so it wins, and extended to every glyph button | `ui.css` (end) |
+| G6 | Stub default moved to 8791 to match vite and every check script | `preview_ui.py:56` |
+| G7 | Radii 24 values → 6 tokens (93% tokenized); semantic hex → `--crit`/`--ok`/`--warn`; `--r-pill`, `--r-mark`, `--crit-line`, `--crit-fill` added | `ui.css` |
+| G8 | Every sub-11px size raised; nothing below 11px remains | `ui.css` (11 sites) |
+| G9 | "session" for the record, "LoRA" for the artifact, app-wide | `App.tsx`, `train/*`, `README.md` |
+| F1 | The last still now lands in the video First-frame slot instead of vanishing | `App.tsx:402-464` |
+| F2 | A failed or empty Enhance says so in the reserved note row | `Rewrite.tsx`, `Console.tsx` |
+| F3 | Model name removed from the served copy at its source | `app.py:7293` |
+| F4 | `≤640` flattens the strip into one wrap flow; run row on its own line; thumbnail dropped | `ui.css:319-360` |
+| F5 | Skip warning quotes the LoRA and gives the likely cause | `useGenerate.ts:52-77` |
+| F6 | `width`/`height` on the canvas `<img>` reserve the box before it lands | `useGenerate.ts`, `Canvas.tsx:215` |
+| F7 | **Declined** — left exactly as it was | — |
+| F8 | The contradicting server tally replaced by trigger coverage; one source per fact | `Editor.tsx:200-218` |
+| F9 | Density control given a visible "Size" label and accessible names | `Editor.tsx:325-345` |
+| F10 | Form opens on four fields; nine dials moved behind the existing More dials | `SessionForm.tsx` |
+| F11 | Hover Download/Delete removed; menu keeps them and now survives `≤1024` | `Card.tsx`, `ui.css:2062` |
+| F12 | Settings inputs given a flexible basis so the row reflows | `Settings.tsx:165, 400` |
+
+Two things found while fixing, both handled: `#gal-grid .foot{display:none}` at `≤1024`
+would have made Download and Delete unreachable on touch once F11 removed the hover pair,
+and `tools/ui-checks/check_train.py` asserted the old form layout and was updated to
+assert the new one instead.
+
+### Deliberately not done
+
+- **G7's spacing clause.** Collapsing the 5–9px band onto a 4/8 step means changing 71
+  declarations (and 25 distinct values across 261 uses) that this stylesheet's own
+  comments describe as pixel-tuned. That is a design decision with a visible result on
+  every screen, not a mechanical migration, so it is left for a deliberate pass.
+- **F7.** Training without a trigger word is a supported choice, so the unchecked reply
+  is an unhandled error path rather than the data-loss risk first filed.

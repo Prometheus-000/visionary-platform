@@ -1,0 +1,508 @@
+<title>Console Disclosure Ladder</title>
+<style>
+:root{
+  --bg:#000;--fg:#f5f5f5;--mut:#8a8a8a;--dim:#767676;
+  --wash-1:rgba(255,255,255,.03);--wash-2:rgba(255,255,255,.05);--wash-3:rgba(255,255,255,.07);
+  --sel:rgba(255,255,255,.14);--line:rgba(255,255,255,.10);--line-2:rgba(255,255,255,.24);
+  --lift:#111;--lift-line:rgba(255,255,255,.14);--lift-cast:0 18px 48px rgba(0,0,0,.6);
+  --r-inner:9px;--r-control:11px;--r-panel:14px;--r-card:16px;--r-pill:999px;--r-mark:5px;
+  --warn:#fbbf24;--ok:#4ade80;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1240px;margin:0 auto;padding:26px 22px 64px}
+
+.head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.head h1{font-size:19px;font-weight:600;letter-spacing:-.01em}
+.head .sub{color:var(--dim);font-size:13px}
+.rule{color:var(--dim);font-size:12.5px;line-height:1.7;margin:14px 0 26px;max-width:74ch}
+.rule b{color:var(--mut);font-weight:500}
+.rule code{font-family:var(--mono);color:var(--mut);font-size:11.5px}
+
+.steps{display:flex;flex-direction:column;gap:30px}
+.step{display:grid;grid-template-columns:1fr 300px;gap:22px;align-items:start}
+
+/* the viewport, at 1512x982 scaled to 1:2.6 */
+.vp{position:relative;aspect-ratio:1512/982;border:1px solid var(--line);
+  border-radius:var(--r-card);overflow:hidden;display:flex;flex-direction:column;
+  background:#050505}
+.canvas{flex:1;min-height:0;display:grid;place-items:center;color:#3a3a3a;
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase}
+.canvas.has{background:
+  repeating-linear-gradient(115deg,#0d1014 0 14px,#101418 14px 28px)}
+.con{flex:none;border-top:1px solid var(--line);background:#080808;
+  padding:7px 9px;display:flex;flex-direction:column;gap:5px;position:relative}
+
+/* console parts, at the scale the real ones occupy */
+.fld{border:1px solid var(--line);background:var(--wash-2);border-radius:6px;
+  padding:5px 6px;font-size:8.5px;color:var(--mut);line-height:1.45}
+.fld.tall{min-height:34px}
+.rows{display:flex;flex-direction:column;gap:3px}
+.rw{display:flex;gap:5px;align-items:center;border:1px solid var(--line);
+  background:var(--wash-2);border-radius:5px;padding:3px 5px;font-size:8px;color:var(--mut)}
+.rw .n{font-family:var(--mono);font-size:7px;color:#5a5a5a;flex:none;min-width:26px}
+.rw.sel{border-color:var(--line-2);background:var(--wash-3)}
+.strip{display:flex;height:9px;border-radius:4px;overflow:hidden;border:1px solid var(--line)}
+.strip i{background:var(--wash-2);border-right:1px solid var(--line)}
+.strip i:last-child{border-right:0}
+.strip i.sel{background:var(--sel)}
+/* Horizontally scrolling, never wrapping — `#shot-rail` already does this, and
+   it is what keeps a nine-chip scene one row tall on a phone. */
+.rail{display:flex;gap:4px;flex-wrap:nowrap;overflow:hidden;
+  -webkit-mask-image:linear-gradient(90deg,#000 88%,transparent)}
+/* On the field's trailing edge, not in the bar — `.neg-t` is already this
+   shape, and a control that rides the field costs the console no height. */
+.doors{position:absolute;top:4px;right:5px;display:flex;gap:1px;z-index:2}
+.doors i{width:13px;height:13px;display:grid;place-items:center;border-radius:3px;
+  font-style:normal;font-size:8px;color:#5a5a5a;background:var(--wash-2)}
+.doors i:first-child{color:var(--mut);background:var(--wash-3)}
+.fld{position:relative}
+.chip.k-shot{border-color:var(--line);border-style:dashed}
+.chip.k-lora{font-family:var(--mono);font-size:7.5px}
+.chip{display:inline-flex;align-items:center;gap:3px;background:var(--wash-2);
+  border:1px solid transparent;border-radius:var(--r-pill);padding:1.5px 6px;
+  font-size:8px;color:var(--mut);white-space:nowrap}
+.chip.on{background:var(--sel);color:var(--fg);border-color:var(--line-2)}
+.chip .d{width:4px;height:4px;border-radius:50%;background:#5a5a5a;flex:none}
+.chip.on .d{background:var(--fg)}
+.bar{display:flex;gap:5px;align-items:center}
+.bar .b{background:var(--wash-2);border-radius:var(--r-pill);padding:2px 7px;
+  font-size:8px;color:var(--mut)}
+.bar .sp{flex:1}
+.bar .go{background:#e8e8e8;color:#000;font-weight:600;border-radius:var(--r-pill);
+  padding:2px 10px;font-size:8px}
+/* Bounded by what it replaces and scrolling inside that, which is
+   `#shot-peek pre`'s own rule. A disclosure that costs more than the thing it
+   discloses over is a disclosure that pushed the canvas. */
+.doc{font-family:var(--mono);font-size:7px;line-height:1.6;color:#9a9a9a;
+  background:var(--wash-2);border-radius:5px;padding:5px 6px;white-space:pre-wrap;
+  border:1px solid var(--line);max-height:46px;overflow:auto}
+
+/* the floating card — the thing that costs the console nothing */
+.card{position:absolute;left:8px;bottom:calc(100% + 5px);z-index:5;
+  background:var(--lift);border:1px solid var(--lift-line);border-radius:var(--r-panel);
+  box-shadow:var(--lift-cast);padding:6px;width:186px}
+.card .ct{font-size:8px;color:var(--dim);margin-bottom:5px;letter-spacing:.04em}
+.slots{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.sl{aspect-ratio:1;border:1px dashed var(--line);border-radius:4px;background:var(--wash-2);
+  display:grid;place-items:center;font-size:6px;color:#5a5a5a;text-align:center;
+  line-height:1.15;padding:1px}
+.sl.full{border-style:solid;border-color:var(--line)}
+.sl.full i{display:block;width:100%;height:100%;border-radius:3px;
+  background:linear-gradient(150deg,#3b2f2a,#8a6a55 60%,#c4a68e)}
+.sl.two i{background:linear-gradient(150deg,#20262c,#3f5a6b 60%,#7d99a8)}
+.menu{position:absolute;left:14px;bottom:calc(100% + 4px);z-index:5;background:var(--lift);
+  border:1px solid var(--lift-line);border-radius:var(--r-panel);box-shadow:var(--lift-cast);
+  padding:3px;width:150px}
+.menu b{display:block;padding:3px 6px;font-size:8px;font-weight:400;color:#e6e6e6;
+  border-radius:5px}
+.menu b.on{background:var(--wash-3)}
+.menu b.new{color:var(--mut)}
+
+/* the annotation column */
+.note h3{font-size:12.5px;font-weight:600;letter-spacing:-.005em;margin-bottom:3px;
+  display:flex;align-items:baseline;gap:7px}
+.note h3 span{font-family:var(--mono);font-size:10px;color:#5a5a5a;font-weight:400}
+.note p{font-size:12px;color:var(--dim);line-height:1.62}
+.note p+p{margin-top:7px}
+.note b{color:var(--mut);font-weight:500}
+.note code{font-family:var(--mono);font-size:11px;color:var(--mut)}
+.meter{display:flex;align-items:center;gap:7px;margin:9px 0 8px;
+  font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums}
+.meter .track{flex:1;height:5px;border-radius:3px;background:var(--wash-2);
+  overflow:hidden;position:relative}
+.meter .track i{display:block;height:100%;background:var(--mut)}
+.meter .track u{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--warn);
+  left:30%;text-decoration:none}
+.meter .v{color:var(--mut);min-width:74px}
+.meter.over .track i{background:var(--warn)}
+.meter.over .v{color:var(--warn)}
+
+.foot{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);
+  color:#5a5a5a;font-size:12px;line-height:1.75;max-width:76ch}
+.foot code{font-family:var(--mono);color:var(--mut)}
+.foot b{color:var(--mut);font-weight:500}
+.mob{margin-top:38px;padding-top:22px;border-top:1px solid var(--line)}
+.mob h2{font-size:15px;font-weight:600;letter-spacing:-.008em;margin-bottom:4px}
+.canvas.insp-open{align-items:stretch;justify-items:stretch;padding:0}
+.pane{width:100%;display:flex;flex-direction:column;background:#070707;
+  border-bottom:1px solid var(--line)}
+.pane-h{display:flex;align-items:center;justify-content:space-between;
+  padding:4px 8px;border-bottom:1px solid var(--line);font-size:8px;color:var(--dim);
+  letter-spacing:.05em}
+.pane-h .ed{color:var(--warn);font-size:7.5px}
+.pane-h .ed u{text-decoration:none;border-bottom:1px solid rgba(251,191,36,.45)}
+.pane-b{caret-color:var(--fg)}
+.car{color:var(--fg);opacity:.85}
+.pane{outline:1px solid var(--line-2);outline-offset:-1px}
+.pane-b{flex:1;overflow:auto;padding:7px 9px;font-family:var(--mono);font-size:7px;
+  line-height:1.75;color:#9a9a9a;white-space:pre-wrap}
+/* The frame is 260px standing in for 375px, so every touch target is written
+   as a real number times that scale — otherwise the picture claims 44px while
+   showing 40, which is the whole failure this section is about. */
+.vp.phone{aspect-ratio:375/812;max-width:260px;--k:.6933}
+.vp.phone .con{padding:calc(10px*var(--k)) calc(12px*var(--k));gap:calc(6px*var(--k))}
+.vp.phone .chip{min-height:calc(44px*var(--k));padding:0 calc(14px*var(--k));
+  font-size:9px;align-items:center}
+.vp.phone .strip{height:calc(16px*var(--k))}
+.vp.phone .rw{min-height:calc(44px*var(--k));padding:0 calc(8px*var(--k));font-size:8.5px}
+.vp.phone .bar .go,.vp.phone .bar .b{min-height:calc(44px*var(--k));
+  display:inline-flex;align-items:center;padding:0 calc(16px*var(--k))}
+@media (max-width:900px){.step{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <div class="head">
+    <h1>Console Disclosure Ladder</h1>
+    <span class="sub">the scene composer, against the 30% budget</span>
+  </div>
+
+  <p class="rule">
+    Every frame is one viewport at <b>1512×982</b>, canvas included at true
+    proportion — which is what the last mockup hid. The bar under each is the
+    console against <code>CONSOLE_BUDGET = 0.3</code>; the amber tick is the
+    budget line. <b>The rule this is built on:</b> shots divide the field's
+    existing allowance rather than adding to it, and anything that discloses on
+    demand floats instead of pushing the canvas.
+  </p>
+
+  <div class="steps">
+
+    <!-- 1 ─────────────────────────────────────────────────────────── -->
+    <div class="step">
+      <div class="vp">
+        <div class="canvas">canvas · 862px</div>
+        <div class="con">
+          <div class="fld tall"><span class="doors"><i>@</i><i>◎</i><i>◨</i></span>Describe the shot, the motion — and the audio…</div>
+          <div class="bar">
+            <span class="b">16:9 · 768p</span><span class="sp"></span>
+            <span class="b">MiniMax-H3</span><span class="go">Generate</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <h3>At rest <span>unchanged</span></h3>
+        <div class="meter"><span class="v">121px · 12.3%</span>
+          <span class="track"><i style="width:41.0%"></i><u></u></span></div>
+        <p>Byte-for-byte what ships today. <b>No cast, no shots, nothing to
+          dismiss</b> — and the compiler agrees: with no scene the run is the
+          typed prompt exactly as it was.</p>
+        <p>Nothing here announces that a scene exists. It is reached the way
+          regions are — by doing the thing, not by finding the control.</p>
+      </div>
+    </div>
+
+    <!-- 2 ─────────────────────────────────────────────────────────── -->
+    <div class="step">
+      <div class="vp">
+        <div class="canvas">canvas · 862px</div>
+        <div class="con">
+          <div class="menu">
+            <b class="new">+ new character “ava”</b>
+            <b class="new">+ new place</b>
+          </div>
+          <div class="fld tall"><span class="doors"><i>@</i><i>◎</i><i>◨</i></span>@ava<span style="color:#4a4a4a">▌ sits alone in the diner…</span></div>
+          <div class="bar">
+            <span class="b">16:9 · 768p</span><span class="sp"></span>
+            <span class="b">MiniMax-H3</span><span class="go">Generate</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <h3>Typing <code>@</code> <span>+0px</span></h3>
+        <div class="meter"><span class="v">121px · 12.3%</span>
+          <span class="track"><i style="width:41.0%"></i><u></u></span></div>
+        <p>The cast has no empty state, because it is never empty on screen
+          before it exists. <b>The gesture creates it</b> — the menu floats off
+          the caret and costs the console nothing.</p>
+        <p>This is the <code>+ LoRA</code> door inverted: there, you open a
+          picker to insert a name. Here <b>the name you are already typing is
+          the picker</b> — and that is the gesture the other two doors now
+          answer to as well.</p>
+      </div>
+    </div>
+
+    <!-- 3 ─────────────────────────────────────────────────────────── -->
+    <div class="step">
+      <div class="vp">
+        <div class="canvas">canvas · 833px</div>
+        <div class="con">
+          <div class="rail">
+            <span class="chip on"><i class="d"></i>ava</span>
+            <span class="chip"><i class="d"></i>diner</span>
+            <span class="chip k-shot">push in</span>
+            <span class="chip k-lora">k3nan · 0.8</span>
+          </div>
+          <div class="fld tall"><span class="doors"><i>@</i><i>◎</i><i>◨</i></span>@ava sits alone in the @diner, both hands around a cold mug</div>
+          <div class="bar">
+            <span class="b">16:9 · 768p</span><span class="sp"></span>
+            <span class="b">MiniMax-H3</span><span class="go">Generate</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <h3>The cast is a rail <span>+29px</span></h3>
+        <div class="meter"><span class="v">159px · 16.2%</span>
+          <span class="track"><i style="width:54.0%"></i><u></u></span></div>
+        <p><b>One rail, three kinds of chip</b> — cast, shot pills, LoRAs.
+          They were three mechanisms in two places, and they are one tool: each
+          is something attached to the thing you are making, and each opens its
+          own card when touched.</p>
+        <p>Which is why <code>+ LoRA</code> and <code>Shot</code> are gone from
+          the settings bar. Sitting there they read as settings, next to the
+          size and the checkpoint. They are composition, so they ride the field
+          — the three marks on its trailing edge, where <code>.neg-t</code>
+          already lives. <b>Zero height</b>: they sit on a line the field is
+          already spending.</p>
+        <p>The rail scrolls sideways rather than wrapping
+          (<code>flex-wrap:nowrap</code>, already <code>#shot-rail</code>'s
+          rule), so nine chips is one row on a phone rather than three.</p>
+      </div>
+    </div>
+
+    <!-- 4 ─────────────────────────────────────────────────────────── -->
+    <div class="step">
+      <div class="vp">
+        <div class="canvas">canvas · 833px</div>
+        <div class="con">
+          <div class="card">
+            <div class="ct">@ava · drop a file on a slot</div>
+            <div class="slots">
+              <span class="sl full"><i></i></span>
+              <span class="sl full two"><i></i></span>
+              <span class="sl">Body</span><span class="sl">Voice</span><span class="sl">Motion</span>
+            </div>
+          </div>
+          <div class="rail">
+            <span class="chip on"><i class="d"></i>ava</span>
+            <span class="chip"><i class="d"></i>diner</span>
+            <span class="chip k-shot">push in</span>
+            <span class="chip k-lora">k3nan · 0.8</span>
+          </div>
+          <div class="fld tall"><span class="doors"><i>@</i><i>◎</i><i>◨</i></span>@ava sits alone in the @diner, both hands around a cold mug</div>
+          <div class="bar">
+            <span class="b">16:9 · 768p</span><span class="sp"></span>
+            <span class="b">MiniMax-H3</span><span class="go">Generate</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <h3>A chip opens <span>+0px</span></h3>
+        <div class="meter"><span class="v">159px · 16.2%</span>
+          <span class="track"><i style="width:54.0%"></i><u></u></span></div>
+        <p><b>The depth is here, and it costs the console nothing.</b> A card
+          rooted on the chip, the way a region's card is rooted on its box —
+          floating, so the canvas never yields for it.</p>
+        <p>Five slots, disclosed only for the chip you touched. The slot is the
+          role: dropping a photo on Face <i>is</i> the tagging, and a voice file
+          over Face never highlights.</p>
+      </div>
+    </div>
+
+    <!-- 5 ─────────────────────────────────────────────────────────── -->
+    <div class="step">
+      <div class="vp">
+        <div class="canvas">canvas · 807px</div>
+        <div class="con">
+          <div class="rail">
+            <span class="chip"><i class="d"></i>ava</span>
+            <span class="chip"><i class="d"></i>diner</span>
+          </div>
+          <div class="strip"><i class="sel" style="flex:1.6"></i><i style="flex:1"></i></div>
+          <div class="rows">
+            <div class="rw sel"><span class="n">1 · 0.00</span>@ava sits alone in the @diner</div>
+            <div class="rw"><span class="n">2 · 04.9</span>her hands, and the ring</div>
+          </div>
+          <div class="bar">
+            <span class="b">16:9 · 768p</span><span class="sp"></span>
+            <span class="b">MiniMax-H3</span><span class="go">Generate</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <h3>A second shot <span>+26px</span></h3>
+        <div class="meter"><span class="v">199px · 20.3%</span>
+          <span class="track"><i style="width:67.7%"></i><u></u></span></div>
+        <p><b>The rows divide the field's allowance rather than adding to it.</b>
+          One prompt at two lines and two shots at one line each are the same
+          height — so a four-shot scene costs exactly what a long prompt costs,
+          and <code>fieldMax()</code> already does the arithmetic.</p>
+        <p><b>The strip is a readout, not an input.</b> A shot's share of the
+          clip is the length of what you wrote about it — <code>shares()</code>
+          in <code>storyline/model.ts</code>, already in this codebase:
+          <i>extent drives prominence</i>. Write more about shot 1 and it gets
+          more of the clip. Nothing to drag, so nothing to miss with a thumb.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="mob">
+    <h2>Does it break on a phone?</h2>
+    <p class="rule">
+      Asked before this is called settled, because that is where sloppiness
+      shows. Below 1024px <code>.console{max-height:none}</code> — the 30%
+      budget is released and the page scrolls — so the question stops being
+      percentage and becomes <b>targets and reach</b>. Frames are 375×812.
+    </p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="vp phone">
+          <div class="canvas">canvas</div>
+          <div class="con">
+            <div class="rail">
+              <span class="chip tall on"><i class="d"></i>ava</span>
+              <span class="chip tall"><i class="d"></i>diner</span>
+            </div>
+            <div class="strip big"><i class="sel" style="flex:1.6"></i><i style="flex:1"></i></div>
+            <div class="rows">
+              <div class="rw sel"><span class="n">1</span>@ava sits alone in the @diner</div>
+              <div class="rw"><span class="n">2</span>her hands, and the ring</div>
+            </div>
+            <div class="bar">
+              <span class="b">16:9</span><span class="sp"></span><span class="go">Generate</span>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <h3>Two things were broken <span>found, not avoided</span></h3>
+          <p><b>1 · The beat strip was a 9px drag target.</b> Unusable with a
+            thumb, and sizing it to 44px would have spent a fifth of the console
+            on a control almost nobody touches. Deriving the share from what you
+            wrote removes the input instead of enlarging it — and the strip that
+            is left is <i>information</i>, so it can stay thin. Dragging it
+            survives on a pointer as the precision escape hatch, the way a
+            region's four coordinates do.</p>
+          <p><b>2 · The chip was ~18px tall.</b> It is 44px under
+            <code>(hover:none)</code>, matching <code>.shot-back</code>, which is
+            already the established target here. On a pointer it stays small.</p>
+          <p>What did <i>not</i> need a mobile answer: the card floats over the
+            canvas, which is right on glass because you are composing rather than
+            judging a render; and the mention menu opens above the caret, so the
+            keyboard never covers it.</p>
+          <p><b>Measured on the frame beside this, not asserted:</b> chip 44.0,
+            row 44.0, Generate 44.0, strip 16 — the strip is the one thing under
+            target and it is allowed to be, because it is a readout and nothing
+            aims at it. Console <b>235.7px, 29.0%</b> of a 375×812 screen with
+            the cast, two shots and the bar all showing; canvas keeps 576px.
+            Under the desktop budget on the screen that releases it.</p>
+          <p>The first version of this frame claimed 44px in the prose and drew
+            39.7. The targets are written as <code>44px × scale</code> now, so
+            the picture cannot disagree with the sentence next to it.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mob insp">
+    <h2>The prompt is the inspector</h2>
+    <p class="rule">
+      It was frame 6 of the ladder, and that was wrong: it made reading the
+      compiled prompt a <b>step in composing</b>. It is not one. The scene is
+      the source and the document is what it compiles to — so the right
+      precedent is not a disclosure, it is <b>view source</b>.
+    </p>
+
+    <div class="step">
+      <div class="vp">
+        <div class="canvas insp-open">
+          <div class="pane">
+            <div class="pane-h"><span>compiled · ref2va</span>
+              <span class="ed">edited · <u>reattach</u></span></div>
+            <div class="pane-b">subject_definitions:
+&lt;Subject 1&gt; is the person in &lt;Picture 1&gt;, &lt;Picture 2&gt;.
+&lt;Subject 2&gt; is the location in &lt;Picture 3&gt;.
+summary:
+[reference generation] &lt;Subject 1&gt; sits alone in &lt;Subject 2&gt;…
+retention_analysis:
+&lt;Subject 1&gt; (appears in [Shot 1], [Shot 2]): fully_preserved — …
+detailed_description:
+The target video is in a live-action, cinematic style.
+[Shot 1] &lt;Subject 1&gt; sits alone in &lt;Subject 2&gt;, both hands…
+[Shot 2] At 00:04.923, the shot cuts to her hands<span class="car">▌</span>
+overall_soundscape:
+Quiet room tone continues throughout the video.
+non_diegetic_music:
+N/A</div>
+          </div>
+        </div>
+        <div class="con">
+          <div class="rail">
+            <span class="chip on"><i class="d"></i>ava</span>
+            <span class="chip"><i class="d"></i>diner</span>
+            <span class="chip k-shot">push in</span>
+          </div>
+          <div class="strip"><i class="sel" style="flex:1.6"></i><i style="flex:1"></i></div>
+          <div class="rows">
+            <div class="rw sel"><span class="n">1 · 0.00</span>@ava sits alone in the @diner</div>
+            <div class="rw"><span class="n">2 · 04.9</span>her hands, and the ring</div>
+          </div>
+          <div class="bar">
+            <span class="b">16:9 · 768p</span><span class="sp"></span>
+            <span class="b">MiniMax-H3</span><span class="go">Generate</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <h3>Four things follow <span>from the precedent</span></h3>
+        <p><b>1 · No button says “inspect”.</b> Devtools is a chord and a
+          context menu; the page never advertises it. So the composer carries
+          nothing for this — the console below measures <b>199px, identical to
+          the frame before it</b>, same four parts.</p>
+        <p>Nothing is hidden by that. <b>There is no replacement here</b> — no
+          model in the loop, no prose taken and handed back rewritten. The
+          document is derived from chips and rows already on screen, so the
+          visibility this codebase demands of <code>REWRITE_OPS</code> is not
+          owed by a compiler.</p>
+        <p><b>2 · It is not in the console budget,</b> because it is not in the
+          console. It takes the canvas the way devtools takes the window, and
+          that is fine: nobody is judging a render while reading a prompt. The
+          surface that kept breaking the budget stops competing for it.</p>
+        <p><b>3 · It is a textarea, not a <code>&lt;pre&gt;</code>.</b> Devtools
+          is directly editable and the page responds live; this is too, and the
+          edit is what runs. Where the precedent stops applying: a devtools edit
+          evaporates on reload because the source file is the truth you are
+          expected to port back to. Here that would mean a render you cannot
+          reproduce.</p>
+        <p>So editing <b>detaches the document</b> — one bit, for the whole
+          thing, visible in the header, one gesture back. Not the per-field
+          pinning of the last version: that was six independent states nobody
+          asked for, and it was me trying to make a derived surface partly
+          authoritative. Either the scene is driving it or you have taken it
+          over, and you can always see which.</p>
+        <p>Reattaching recompiles and discards the edit, so the way back is the
+          same shape as <code>applyRewrite</code>'s undo — the thing you typed
+          is gone and what you had before is exact.</p>
+        <p><b>4 · It shows derivation.</b> Devtools names the rule behind a
+          computed value. Touch a field here and the part of the scene that
+          produced it lights up — <code>retention_analysis</code> back to the
+          slots that filled it, a shot back to its row.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <p><b>Fully engaged: 20.3% of the viewport,</b> against a 30% budget and the
+    12.3% the console costs at rest. Every number on this page is read off the
+    frame beside it at 1280 wide, not asserted — twice while drawing this the
+    prose and the picture disagreed, and both times the prose was the optimistic
+    one. The last version reached the same capability at
+    roughly 80% and called the remainder a canvas.</p>
+    <p>Nothing in here is a new pattern. The rail is the LoRA rail, the card is
+    the region card, the document is <code>#shot-peek</code>, the mention menu is
+    the caret popover, the field-edge doors are <code>.neg-t</code>, and the
+    budget is <code>fieldMax()</code>. What the scene needed was not new
+    furniture — it was the furniture already here, arranged so the depth arrives
+    when it is asked for.</p>
+    <p><b>And the settings bar got shorter.</b> It holds the size, the
+    checkpoint and Generate: what the run is, rather than what is in it. Two
+    buttons that had been sitting there announcing capabilities now ride the
+    field, which is the surface they act on.</p>
+  </div>
+</div>

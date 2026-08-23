@@ -180,9 +180,14 @@ export function chipFrom(l: LoraFile, region = false): LoraChip {
 export function vidExpert(experts: string[], chip: LoraChip): string {
   if (chip.expert && experts.includes(chip.expert)) return chip.expert
   const n = chip.rel.toLowerCase()
-  if (/(^|\/)high|high_noise/.test(n)) return 'high'
-  if (/(^|\/)low|low_noise/.test(n)) return 'low'
-  return 'both'
+  const read = /(^|\/)high|high_noise/.test(n) ? 'high'
+    : /(^|\/)low|low_noise/.test(n) ? 'low' : 'both'
+  // Clamped to what this model actually has. The filename read is a heuristic
+  // for Wan's matched speed pairs, where `high`/`low` is the whole naming
+  // scheme — on a model with one expert it is just a word somebody used, and
+  // `high_detail.safetensors` on H3 was being tagged `high` and refused by the
+  // route with a message about noise experts that model does not have.
+  return experts.includes(read) ? read : 'both'
 }
 
 /** The image stack. `text_encoder` is left null when unset on purpose: the

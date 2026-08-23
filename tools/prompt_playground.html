@@ -1,0 +1,122 @@
+<!doctype html><meta charset=utf-8><title>Prompt playground</title>
+<style>
+:root{--bg:#000;--fg:#f5f5f5;--mut:#8a8a8a;--dim:#767676;
+ --w2:rgba(255,255,255,.05);--w3:rgba(255,255,255,.07);--line:rgba(255,255,255,.10);
+ --line2:rgba(255,255,255,.24);--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.55 -apple-system,BlinkMacSystemFont,
+ "Segoe UI",Inter,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:940px;margin:0 auto;padding:26px 20px 70px}
+h1{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.sub{color:var(--dim);font-size:13px;margin:2px 0 20px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:9px}
+label{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#5a5a5a}
+select,input,textarea,button{font:inherit;color:var(--fg);background:var(--w2);
+ border:1px solid var(--line);border-radius:11px;padding:8px 10px}
+textarea{width:100%;min-height:96px;resize:vertical;line-height:1.6}
+select:focus,input:focus,textarea:focus{outline:none;border-color:var(--line2)}
+button{cursor:pointer;background:#e8e8e8;color:#000;font-weight:600;border:0;padding:8px 18px}
+button:disabled{opacity:.5;cursor:default}
+button.ghost{background:var(--w2);color:var(--mut);font-weight:400}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.7;white-space:pre-wrap;
+ word-break:break-word;background:var(--w2);border:1px solid var(--line);
+ border-radius:11px;padding:12px 14px;margin-top:14px;color:#d8d8d8}
+.meta{display:flex;gap:14px;font-family:var(--mono);font-size:11px;color:#5a5a5a;
+ margin-top:8px;flex-wrap:wrap}
+.err{border-color:rgba(248,113,113,.4);color:#fca5a5}
+#pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+#pair h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#5a5a5a;
+ font-weight:600}
+#pair h2.shown{color:var(--mut)}
+#pair pre{margin-top:6px}
+@media(max-width:760px){#pair{grid-template-columns:1fr}}
+@media(max-width:620px){select,input,textarea,button{min-height:44px}}
+</style>
+<div class=wrap>
+ <h1>Prompt playground</h1>
+ <p class=sub>MiniMax H3 prompt enhancer &middot; LFM2.5-2.6B fine-tune, greedy by default</p>
+ <div class=row>
+  <label for=task>Task</label>
+  <select id=task>
+   <option>T2VA</option><option>I2VA</option><option>FL2VA</option><option>L2VA</option>
+   <option>reference_generation</option>
+   <option>reference_generation+audio_reference</option>
+   <option>keyframe_completion</option><option>video_editing</option>
+   <option>video_editing+audio_reuse</option><option>video_continuation</option>
+  </select>
+  <label for=secs>Seconds</label><input id=secs type=number value=5 min=4 max=15 style=width:74px>
+  <label for=temp>Temp</label><input id=temp type=number value=0 min=0 max=1.5 step=.1 style=width:74px>
+ </div>
+ <textarea id=prompt placeholder="Rough idea, dialogue, shot notes&hellip;"></textarea>
+ <div class=row style=margin-top:9px>
+  <button id=go>Generate</button>
+  <button id=ab class=ghost>A/B both</button>
+  <button id=reveal class=ghost disabled>Reveal</button>
+  <button id=copy class=ghost>Copy</button>
+  <span class=meta id=meta></span>
+ </div>
+ <pre id=out>&mdash;</pre>
+ <div id=pair style=display:none></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+$('#go').onclick=async()=>{
+ const b=$('#go'); b.disabled=true; b.textContent='Generating\u2026';
+ $('#meta').textContent=''; const t0=performance.now();
+ try{
+  const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},
+   body:JSON.stringify({task:$('#task').value,seconds:+$('#secs').value,
+    temperature:+$('#temp').value,prompt:$('#prompt').value})});
+  const d=await r.json();
+  $('#out').className=d.error?'err':'';
+  $('#out').textContent=d.error||d.text||'\u2014';
+  if(!d.error){const w=(d.text||'').trim().split(/\s+/).length;
+   $('#meta').textContent=`${((performance.now()-t0)/1000).toFixed(1)}s \u00b7 ${w} words \u00b7 ${(d.text||'').length} chars`;}
+ }catch(e){$('#out').className='err';$('#out').textContent=String(e);}
+ b.disabled=false; b.textContent='Generate';
+};
+let WHICH=null;
+const LETTERS='ABCDEFGH';
+$('#ab').onclick=async()=>{
+ const b=$('#ab'); b.disabled=true; b.textContent='Running\u2026';
+ $('#out').style.display='none'; $('#pair').style.display='grid';
+ $('#reveal').disabled=true; WHICH=null;
+ // Columns are built from the reply, because how many arms ran is the
+ // route's decision — hardcoding two is what broke this the first time.
+ $('#pair').innerHTML='<div class=col><h2>\u2026</h2><pre>\u2026</pre></div>';
+ const t0=performance.now();
+ try{
+  const r=await fetch('/api/ab',{method:'POST',headers:{'content-type':'application/json'},
+   body:JSON.stringify({task:$('#task').value,seconds:+$('#secs').value,
+    temperature:+$('#temp').value,prompt:$('#prompt').value,
+    scene:window.SCENE||null})});
+  const d=await r.json();
+  if(d.error){
+   $('#pair').innerHTML='<div class=col><pre class=err></pre></div>';
+   $('#pair').querySelector('pre').textContent=
+     d.error+(d.traceback?'\n\n'+d.traceback:'');
+  }else{
+   const cols=d.cols||[];
+   $('#pair').style.gridTemplateColumns=`repeat(${Math.max(1,cols.length)},1fr)`;
+   $('#pair').innerHTML=cols.map((c,i)=>
+     `<div class=col><h2 data-i="${i}">${LETTERS[i]}</h2>`
+     +`<pre class="${c.error?'err':''}"></pre></div>`).join('');
+   [...$('#pair').querySelectorAll('pre')].forEach((el,i)=>{
+     el.textContent=cols[i].error||cols[i].text||'\u2014';});
+   WHICH=d.which||[]; $('#reveal').disabled=!WHICH.length;
+   $('#meta').textContent=`${((performance.now()-t0)/1000).toFixed(1)}s \u00b7 `
+    +cols.map((c,i)=>`${LETTERS[i]} ${(c.text||'').length}`).join(' \u00b7 ')+' chars';
+  }
+ }catch(e){$('#pair').innerHTML='<div class=col><pre class=err></pre></div>';
+  $('#pair').querySelector('pre').textContent=String(e);}
+ b.disabled=false; b.textContent='A/B both';
+};
+$('#reveal').onclick=()=>{
+ if(!WHICH)return;
+ [...$('#pair').querySelectorAll('h2')].forEach((h,i)=>{
+  h.textContent=`${LETTERS[i]} \u00b7 ${WHICH[i]||'?'}`; h.className='shown';});
+};
+$('#copy').onclick=()=>navigator.clipboard.writeText($('#out').textContent||'');
+$('#prompt').addEventListener('keydown',e=>{
+ if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();$('#go').click();}});
+</script>

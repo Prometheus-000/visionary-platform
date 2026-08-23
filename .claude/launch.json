@@ -2,16 +2,29 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "stub-api",
+      "name": "design-system",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["tools/preview_ui.py"],
-      "port": 8791
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4173",
+        "--directory",
+        "design-system"
+      ],
+      "port": 4173
     },
     {
-      "name": "web-dev",
+      "name": "blocking",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "web", "run", "dev"],
-      "port": 5173
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5174"
+      ],
+      "port": 5174,
+      "cwd": "web"
     }
   ]
 }

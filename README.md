@@ -47,7 +47,7 @@ scene the picture is generated inside.
 **Train your own LoRAs.** Point the trainer at a folder of images and get a
 `.safetensors` back. Runs live on a board rather than taking over a screen, so
 you can **train several at once** — each is its own card showing live epoch,
-step, rate and loss, and a finished card hands its checkpoints straight to the
+step, rate and loss, and a finished card hands its LoRA files straight to the
 LoRA picker. Start a run, add another, and leave; status is read off each job's
 heartbeat, so a card reports what actually happened even if a container was
 killed mid-step.
@@ -241,7 +241,7 @@ against stubbed jobs, so the entire UI is workable with no Modal account, no GPU
 and nothing billed:
 
 ```bash
-python3 tools/preview_ui.py 8777
+python3 tools/preview_ui.py
 ```
 
 ---

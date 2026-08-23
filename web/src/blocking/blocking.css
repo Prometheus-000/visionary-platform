@@ -1,0 +1,68 @@
+/* The probe's own sheet. Deliberately not importing the app's — a throwaway
+   that pulls in ui.css inherits a console it does not have. */
+.bp{max-width:1180px;margin:0 auto;padding:22px 20px 60px;color:#f5f5f5;
+ font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+ -webkit-font-smoothing:antialiased}
+.bp header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+ padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,.10);margin-bottom:14px}
+.bp h1{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.bp .sub{color:#767676;font-size:13px}
+.bp .hint{color:#5a5a5a;font-size:12.5px;line-height:1.7;margin-bottom:14px;max-width:76ch}
+.bp .hint b{color:#8a8a8a;font-weight:500}
+.bp .views{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:880px){.bp .views{grid-template-columns:1fr}}
+.bp section{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.10);
+ border-radius:16px;overflow:hidden}
+.bp h2{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:#767676;
+ font-weight:600;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.10);
+ display:flex;justify-content:space-between}
+.bp h2 span{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#5a5a5a;
+ letter-spacing:0;text-transform:none}
+/* **3:2, because that is the sensor.** The projection derives its horizontal
+   field from a 36x24mm frame, and three.js derives the camera's from the
+   canvas aspect — so at any other shape the two disagree and the projected
+   boxes drift off the bodies they describe. Matching the viewport to the
+   sensor removes the variable rather than fudging a correction into one side. */
+.bp .vp{position:relative;aspect-ratio:3/2;touch-action:none}
+.bp .vp canvas{display:block;width:100%!important;height:100%!important;cursor:grab}
+.bp .boxes{position:absolute;inset:0;pointer-events:none}
+.bp .boxes rect{fill:none;stroke:#fbbf24;stroke-width:1.25;
+ vector-effect:non-scaling-stroke}
+.bp .bar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:14px 0}
+.bp .bar label{font-size:11.5px;color:#767676;display:inline-flex;align-items:center;gap:7px}
+.bp input[type=range]{accent-color:#f5f5f5;width:118px}
+.bp button{background:rgba(255,255,255,.05);border:1px solid transparent;
+ border-radius:999px;padding:5px 12px;color:#8a8a8a;font-size:12px;cursor:pointer;
+ min-height:34px}
+.bp button:hover{background:rgba(255,255,255,.07);color:#f5f5f5}
+.bp button.on{background:rgba(255,255,255,.14);color:#f5f5f5;
+ border-color:rgba(255,255,255,.24)}
+.bp .tag{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#767676;
+ background:rgba(255,255,255,.05);border-radius:5px;padding:2px 7px}
+.bp .out{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.10);
+ border-radius:16px;overflow:hidden;margin-top:12px}
+.bp .out pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+ line-height:1.75;color:#c8c8c8;padding:11px 13px;white-space:pre-wrap;
+ word-break:break-word;margin:0}
+.bp .out b{color:#f5f5f5;font-weight:400}
+.bp .dim{color:#5a5a5a}
+
+/* ── the viewfinder ────────────────────────────────────────────────────────
+   One canvas, edge to edge. No panes, no rail, no sliders — every control that
+   was here became a gesture, because a slider that raises you when you drag it
+   sideways is an arbitrary mapping wearing a label. */
+.vf{position:fixed;inset:0;display:flex;flex-direction:column;background:#000}
+.vf .stage{position:relative;flex:1;min-height:0;touch-action:none;overscroll-behavior:none}
+.vf .stage canvas{display:block;width:100%!important;height:100%!important;cursor:grab}
+.vf .stage canvas:active{cursor:grabbing}
+.vf .boxes{position:absolute;inset:0;pointer-events:none}
+.vf .boxes rect{fill:none;stroke:rgba(251,191,36,.62);stroke-width:1.25;
+ vector-effect:non-scaling-stroke}
+/* The sentence, on the frame it describes. Nothing else is on screen. */
+.vf .prose{flex:none;margin:0;padding:13px 18px 15px;
+ font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+ line-height:1.7;color:#c8c8c8;white-space:pre-wrap;word-break:break-word;
+ border-top:1px solid rgba(255,255,255,.10);background:#050505;max-height:26vh;
+ overflow:auto}
+.vf .prose b{color:#f5f5f5;font-weight:400}
+.vf .prose .dim{color:#5a5a5a}

@@ -5,7 +5,7 @@ import { status, stop, video } from '../api/routes'
 import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { readVidChips, stripLoras } from '../lora/tokens'
-import { docFor, docFrom, negAllowed, readShot, useStore, type Store } from '../store'
+import { docFor, docFrom, negAllowed, readShot, supports, useStore, type Store } from '../store'
 import { resolveVid } from '../console/resolve'
 
 /**
@@ -66,8 +66,13 @@ export function videoBody(s: Store): Record<string, unknown> {
     switch_at: s.vid.switchAt,
     sampler: r.sampler,
     scheduler: r.scheduler,
+    // The expert list is per *model*, not global: `wan_experts` describes the
+    // A14B pair, and handing it to a one-expert model invites a tag that model
+    // has no branch for.
     loras: readVidChips(s.loras, s.state?.max_loras ?? 6,
-                        s.state?.wan_experts ?? ['both', 'high', 'low']),
+                        supports(s).experts
+                          ? (s.state?.wan_experts ?? ['both', 'high', 'low'])
+                          : ['both']),
     shot: readShot(s.shot),
     ref_roles: s.refRoles.slice(0, s.refs.length),
     first_frame: s.keyframe.first,

@@ -83,6 +83,18 @@ with sync_playwright() as pw:
         page.locator(".menu button", has_text=label).first.click()
         time.sleep(0.35)
 
+    # **This block dies with video's prompt box, and what it is testing does
+    # not.** Three lines below depend on `#prompt` existing on the video side:
+    # the empty-check, the `fill`, and the come-back check that needs the video
+    # side dirtied to prove the two buffers are separate.
+    #
+    # The claim underneath is "one live set and one dormant, swapped by kind,
+    # neither leaking" — which survives the scene composer whole; video's buffer
+    # just stops being one box and becomes the first shot row. So this is a
+    # **re-point, not a delete**: aim the three at whatever video's input is
+    # then, or the LoRA side loses a real guard for a reason that has nothing to
+    # do with LoRAs. Deleting it would read as tidying up after a UI change and
+    # would quietly drop the only check that the per-kind buffers do not bleed.
     duration("5s")
     if page.locator("#lora-box").count():
         fails.append("an image LoRA followed the switch to video")

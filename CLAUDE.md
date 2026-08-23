@@ -805,6 +805,8 @@ linen dress. The frame is what holds it to the person's scene.
                         the only measurement of this that is not a proxy
     tools/does_it_help.py renders the same fragment bare and interpreted, one seed
     tools/smoke_rewrite.py  the rewrite path offline — no GPU, no Modal
+    tools/upstream.py   what moved upstream that would reach a render —
+                        the answer to "a pin means falling behind"
     tools/judge_renders.py scores a rendered pair blind, both orders, or it is a tie
 
 **The front end is built into the image, not mounted from your disk.** That is
@@ -2544,21 +2546,48 @@ situated, full of corrections that only make sense against what was on screen at
 the time, and useless without the reactions that produced it. Nobody has the
 same argument twice, including the person who had it.
 
-**The strongest version of this is not conversation, it is owning the weights.**
-Authorship at the prompt is thin — it is the last few centimetres of a pipeline
-somebody else built. Authorship in a LoRA trained on your own photographs is the
-model itself learning what you meant, and it is why training is Phase 1 here
-rather than an advanced feature bolted on later. The trainer is in the
-application, the picker reads the volume rather than a registry, and a dataset
-is a folder of your images with your captions beside them. That shape is not an
-accident and it is not for convenience: it is what a tool looks like when the
-person using it makes their own instruments.
+**The strongest version of this is not conversation, it is that the instrument
+is made of your own material.** Authorship at the prompt is thin — it is the
+last few centimetres of a pipeline somebody else built. Authorship in something
+trained or conditioned on your own photographs is the model itself learning what
+you meant, and it is why training is Phase 1 here rather than an advanced
+feature bolted on later. The trainer is in the application, the picker reads the
+volume rather than a registry, and a dataset is a folder of your images with
+your captions beside them. That shape is not an accident and it is not for
+convenience: it is what a tool looks like when the person using it makes their
+own instruments.
 
-It is also a standing veto. Nothing in this application browses, searches or
-recommends somebody else's weights, and a "discover models" surface is the exact
-feature that would look obviously helpful in a pull request and would undo the
-paragraph above. Pulling a specific file you were sent is fine — that is what
-the Drive route is for. A marketplace is not.
+**This paragraph used to say "owning the weights", and that sentence was the
+vehicle wearing the principle's clothes.** Every argument above it is about one
+thing, and the direction matters: **the unit of authorship must not be
+transferable.** A prompt fails that test precisely *because* it copies whole —
+paste the string, get the look, bring no taste. A LoRA passes because it is not
+a string. **And a set of your own photographs passes for exactly the same
+reason** — copying it hands somebody your pictures, not your eye.
+
+Stated the other way round this reads as a virtue, which is how the sentence
+went wrong the first time: "owning the weights" sounds like a claim about
+possession when it is a claim about *non-transferability*. The weights were one
+way to hold your own material, not the reason it mattered, and promoting them to
+the headline made a rule about a file format out of a rule about authorship.
+
+That is not a pedantic distinction, because the format is already moving.
+Personalisation is shifting from training toward reference conditioning —
+IC-LoRA, ID-LoRA, multi-reference identity anchoring, a reusable character
+object binding reference sets and wardrobe across models. `H3_CAST_KINDS` and
+the cast buckets are already that object: slots holding *your* pictures, bound
+to a person, read by whichever model is in front of them. Same authorship,
+different vehicle. LoRA becomes the self-hosted tier rather than the definition.
+
+**So the veto is about instruments, not about weights.** Nothing in this
+application browses, searches or recommends somebody else's instruments —
+weights, reference sets, character bibles, style packs, or whatever the next
+format is called. Written the old way it had a hole exactly where the drift
+happened: a "browse character packs" surface contains no weights at all, would
+pass the letter of the rule, and would undo the paragraph above completely. It
+is the same feature that looks obviously helpful in a pull request. Pulling a
+specific file you were sent is fine — that is what the Drive route is for. A
+marketplace is not, whatever it is a marketplace *of*.
 
 Which is where this stops being a philosophy and becomes the file above: if
 intent is the durable record and the prompt is a receipt, then what the sidecar
@@ -2584,9 +2613,65 @@ They are not interchangeable, and the UI says so rather than averaging them:
 | -------------- | -------------------- | --------------------------- |
 | Audio          | yes, same latent     | silent                      |
 | CFG / negative | no — guidance-distilled | yes                      |
-| LoRAs          | no ecosystem for the int8 repackage | yes      |
-| References     | ref2va checkpoint    | no                          |
+| LoRAs          | yes                  | yes                         |
+| References     | ref2va — pictures, videos and audio | no           |
 | Experts        | one                  | two on A14B, one on the 5B  |
+
+**The LoRA row said "no ecosystem for the int8 repackage" and was wrong on both
+halves.** `LoraLoaderModelOnly` is architecture-agnostic weight patching — what
+decides whether a file does anything is whether its keys map onto the DiT, not
+whether ComfyUI knows the family — and MiniMax ship three Lightning
+distillations in the same repo the H3 weights already come from: 8-step and
+4-step for the fl2va transformer, 4-step for ref2va. They are catalogue entries
+now, so they get the download UI and the picker for free.
+
+Two things learned settling that, both of the shape "the obvious check answers
+a narrower question than the one asked":
+
+- **`turbo_mode` is real and is not a node input.** Grepping
+  `comfy_extras/nodes_minimax_h3.py` for it returns nothing at our pin *or* at
+  master, which reads as proof it does not exist. The t2v and i2v templates
+  wrap the whole graph in a **subgraph** and promote `turbo_mode`,
+  `turbo_model_strength` and `turbo_steps` as widgets on it;
+  `video_minimax_h3_r2v.json` is not a subgraph and shows the parts unwrapped —
+  a `PrimitiveBoolean` driving two `ComfySwitchNode`s that choose between the
+  bare DiT and `LoraLoaderModelOnly(DiT)`, and between two step counts. A
+  template is a fixed graph and needs a switch to turn a node off. This console
+  has a LoRA picker and a steps field, so it needs neither.
+- **`MiniMaxH3SigmaShift` exists and we had been right to omit it.** Its
+  defaults (12.0 video, 3.0 audio) are the model's own —
+  `MiniMaxH3.forward` reads
+  `transformer_options.get("minimax_h3_sigma_shift_video", self.sigma_shift_video)`
+  against `sigma_shift_video=12.0, sigma_shift_audio=3.0`, and
+  `supported_models.MiniMaxH3.sampling_settings` says `shift: 12.0` besides. So
+  the node at rest is a no-op. It stops being one under a distilled LoRA, which
+  is the only reason it is now in the graph at all — **opt-in, and after the
+  stack**, because the shift is the last word on the sampling curve. The trap
+  next to it: `/api/video`'s shared `shift` key falls back to
+  `WAN_DEFAULT_SHIFT`, so reading *that* would have put 8.0 on every H3 take
+  against the model's 12.0. `shift_video` and `shift_audio` are their own keys
+  and `None` means the model's default.
+
+**`<Audio N>` is wired, and it is a sibling of the subject rather than one of
+its sources.** `MiniMaxH3ReferenceToVideo` has a `ref_audios` autogrow group
+alongside `ref_images` and `ref_videos` — three clips, counting toward the same
+twelve — and it is not `ref_video_audios`, which means "this is *that clip's*
+soundtrack" and would tell the model a voice belongs to a video nobody attached.
+The guide's construction is `<Audio 1> is the voice-timbre reference for
+<Subject 1> (S1)`: its own line in `subject_definitions`, its own line in
+`retention_analysis` with a marker from the *audio* table (`fully_copy` for a
+reuse, `reference` for a timbre), and the speaker ID **reused, never assigned**.
+So a voice file does not fold into a subject's definition the way a second
+photograph does. And somebody with only a voice attached is not a `<Subject N>`
+at all — nothing visible was uploaded for them, and a label would point the
+model at a picture that does not exist.
+
+**An unmatched LoRA is reported rather than assumed to have worked.** Keys that
+do not map load nothing, the clip arrives, and it looks like a LoRA that was
+simply subtle — the same "a row that does nothing looks like a row that did"
+failure the expert guard already names. `_drain` counts ComfyUI's `NOT LOADED`
+lines and publishes once on the first progress line, which is the moment loading
+is finished and a publish that was going anyway.
 
 `VIDEO_MODELS` is served to the page, so the composer shows only the controls
 the chosen model reads. A control that is present but ignored is worse than one

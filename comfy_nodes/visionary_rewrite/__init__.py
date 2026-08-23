@@ -59,6 +59,9 @@ import threading
 # of fact as the regional node's stranded LoRAs — see `_reclaim()` — and the
 # reason it is fine here rather than a leak is that it is bounded, constant,
 # and known at startup instead of growing per run.
+_LOCK = threading.Lock()
+_READY: dict = {}
+
 MODEL_FILE = os.environ.get(
     "VISIONARY_TE_FILE", "/workspace/models/qwen3vl-4b-bf16.safetensors")
 # The tokenizer and config come from the base repo, baked into the image at
