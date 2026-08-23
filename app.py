@@ -1665,10 +1665,24 @@ _RELOAD_OK = True
 # for inside a request handler. That one is what the False is for.
 RELOAD_INSIST_BACKOFF = (0.15, 0.35)
 
+# Above this, a reload is worth a line of its own. Under it there would be one
+# per gallery miss and the log would be reloads.
+RELOAD_SLOW_S = 2.0
+
 
 def _reload_volume_locked() -> bool:
     try:
+        # **Timed, because this is the one step in a request with no bound on
+        # it.** Everything else between accepting a job and queueing its graph
+        # is arithmetic or a stat; this is a network call whose cost scales with
+        # what is on the volume, and a volume grows with every render. It was
+        # the prime suspect for an eight-minute gap and could not be confirmed
+        # or cleared, which is the whole argument for the line.
+        t0 = time.time()
         volume.reload()
+        took = time.time() - t0
+        if took > RELOAD_SLOW_S:
+            print(f"[volume] reload took {took:.1f}s", flush=True)
         return True
     except RuntimeError as exc:
         if "open files" not in str(exc):
@@ -5792,38 +5806,13 @@ class ImageGenerator:
         # wrong, minutes into a warm GPU, when the traceback that explains it
         # scrolled past during startup.
         self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
-                                  "VisionaryRewrite", "VisionaryFreeRegional")
-        _warm_rewrite(self._comfy, "image")
-
-    @modal.method()
-    def rewrite(self, prose: str, instruction: str,
-                max_tokens: int = 420, image_b64: str = "") -> dict[str, Any]:
-        """
-        Prose in, prose out, on the encoder this container already holds.
-
-        **The Enhance button that used to call this is gone**; `/api/motion` is
-        what is left, and the reason this lives here rather than on its own card
-        is unchanged: the container is warm for the length of a session because
-        every render goes through it, so there is no cold start to hide.
-
-        **It queues behind a render, and that is correct.** `max_inputs=1` means
-        one sampling loop at a time, which is the invariant `_publish`'s
-        process-local lock depends on. Pressing Expand during a take waits for
-        the take rather than competing with it — and in the ordinary flow the
-        two are sequential anyway, because you rewrite the prompt and then press
-        Generate.
-
-        `image_b64` is the motion path's whole reason for being here rather
-        than on the interpreter: this arm is the one with eyes. The vision
-        tower was always loaded (see the node's own comment on why dropping it
-        broke), so a frame riding along costs plumbing, not memory. It is the
-        one reason this method outlived the button it was written for.
-        """
-        graph = {"rw": {"class_type": "VisionaryRewrite",
-                        "inputs": {"prose": prose, "instruction": instruction,
-                                   "max_tokens": int(max_tokens),
-                                   "image_b64": image_b64}}}
-        return {"text": self._comfy.run_text(graph)}
+                                  "VisionaryFreeRegional")
+        # **No rewrite warm-up here, and that is worth a line because it used to
+        # be symmetric with the video side.** `/api/motion` is the only caller
+        # left and it asks for the video container by name, so this one loaded
+        # ~9 GiB for a method nothing invokes — and did it as a *ComfyUI graph*,
+        # which holds the single queue for the 132 seconds it takes, right at
+        # the moment a cold container is about to be asked for a render.
 
     @modal.method()
     def warm(self) -> dict[str, Any]:
@@ -9347,7 +9336,24 @@ class VideoGenerator:
         the same contract the image side uses, extended rather than duplicated.
         """
         started = time.time()
-        jobs[job_id] = {"status": "running", "phase": "loading", "stop": False}
+        # **The first line, and it is the one that was missing.** A ten-minute
+        # gap between pressing Generate and ComfyUI receiving the graph could
+        # not be attributed without it: Modal holding the input behind another
+        # and this function being slow look identical from outside, and the
+        # container prints nothing either way. Stamped here, the two are one
+        # subtraction apart.
+        print(f"[video] {job_id} accepted", flush=True)
+        # **Everything from here to `run()` used to be silent**, and a ten-minute
+        # gap between pressing Generate and ComfyUI receiving the graph was
+        # therefore unattributable: the job record said `loading` from the first
+        # line and `generate` from the last, with nothing in between and nothing
+        # in the log either. A volume reload queues behind another, a reference
+        # is base64 that has to reach disk and be resized, and a missing weight
+        # walks the volume — each of those can be the minutes, and none of them
+        # could be told apart afterwards. So each one names itself, to the log
+        # for later and to the record for the person waiting.
+        _publish(job_id, status="running", phase="reloading the volume",
+                 stop=False)
         _reload_volume()
 
         model = str(params.get("model") or "h3")
@@ -9359,10 +9365,19 @@ class VideoGenerator:
             def stage(blob: str, slot: str, ext: str = "png") -> str:
                 return self._comfy.stage(job_id, blob, slot, ext)
 
+            _publish(job_id, phase="staging the inputs")
+            t_plan = time.time()
             plan = (self._plan_h3 if model == "h3" else self._plan_wan)(params, stage)
             graph, info = plan["graph"], plan["info"]
+            print(f"[video] ready to queue after {time.time() - started:.1f}s "
+                  f"({time.time() - t_plan:.1f}s of it staging)", flush=True)
 
-            _publish(job_id, phase="generate", step=0,
+            # **`loading`, not `generate`.** ComfyUI has the graph and has not
+            # sampled anything: on a warm H100 it is 82 seconds of VAE, text
+            # encoder and DiT before the first step, and a bar sitting at 0%
+            # under the word "generate" for that long is the page saying
+            # something untrue. `_drain` moves it on when a step arrives.
+            _publish(job_id, phase="loading", step=0,
                      total_steps=info["steps"], percent=0, **info)
 
             out_names = self._comfy.run(job_id, graph, what="video")

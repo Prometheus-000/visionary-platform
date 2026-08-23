@@ -83,14 +83,22 @@ def _load():
         from transformers import (AutoConfig, AutoProcessor, AutoTokenizer,
                                   Qwen3VLForConditionalGeneration)
 
-        cfg = AutoConfig.from_pretrained(BASE_REPO)
-        tok = AutoTokenizer.from_pretrained(BASE_REPO)
+        # **`local_files_only`, or the bake buys nothing.** These three are
+        # baked into the image precisely so a warm H100 never waits on
+        # HuggingFace and an outage there cannot take renders with it — but a
+        # repo id without this flag still reaches the Hub to check the revision
+        # even when every file is already in the cache. So the files were local
+        # and the *lookup* was not: three API calls on every container start,
+        # for nothing, on the one path that had been documented as offline.
+        _local = {"local_files_only": True}
+        cfg = AutoConfig.from_pretrained(BASE_REPO, **_local)
+        tok = AutoTokenizer.from_pretrained(BASE_REPO, **_local)
         # The processor is the vision path's tokenizer — it writes the image
         # placeholder tokens into the template and turns pixels into
         # `pixel_values`/`image_grid_thw`. Loaded unconditionally because it is
         # a config read, not weights, and a lazy load would make the first
         # image request the one that discovers the cache is incomplete.
-        proc = AutoProcessor.from_pretrained(BASE_REPO)
+        proc = AutoProcessor.from_pretrained(BASE_REPO, **_local)
 
         state = load_file(MODEL_FILE)
         # **The vision tower is loaded even though this path never sees a
