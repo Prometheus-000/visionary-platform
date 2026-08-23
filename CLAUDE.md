@@ -824,8 +824,22 @@ nobody has looked at.
   it. The browser caps too, at the same number, for the payload; that copy is an
   optimisation and the server's is the one that binds, so drift costs nothing.
 
+  **A cap on the pixels is not a cap on the payload, and that took a ten-minute
+  render to notice.** The browser's copy resizes to 1536 and then re-encoded as
+  PNG, which is 8.6x a photograph's own encoding — a number `shrinkB64`'s own
+  comment already had, and had applied only to the *pass-through* case. Every
+  photo over the cap took the other branch. Nine references is H3's maximum, so
+  the case to size for is nine: **48 MB of base64 in one body**, up from the
+  browser, through the web container, into Modal's blob store and back down to
+  the GPU, before a weight is read. At q0.92 the same nine are 3.8 MB.
+
+  Lossless bought nothing: every reference is consumed at `LoadImage`'s index 0
+  and no graph in this file takes the MASK output, so alpha is discarded
+  downstream whatever is sent.
+
   The general rule: an option whose cost is set by something the page never
-  measured is an option that will be found by whoever has the biggest camera.
+  measured is an option that will be found by whoever has the biggest camera —
+  and *how many* is as much a cost as *how big*.
 
 ## The page
 

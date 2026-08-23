@@ -15,8 +15,9 @@ export const toB64 = (f: Blob): Promise<string | null> =>
   })
 
 /**
- * 1536px on the long side, because eight photographs in one JSON body is the
- * payload this feature invites.
+ * 1536px on the long side and JPEG when it resizes, because **nine** photographs
+ * in one JSON body is the payload this feature invites — nine being H3's own
+ * maximum, so it is the case to size for rather than the unlucky one.
  *
  * On the image side this is the only cap there is: the node's own `ref_max_side` is
  * set to 0 in the graph so the resizing happens in exactly one place and the two
@@ -51,7 +52,18 @@ export function shrinkB64(file: File): Promise<string | null> {
       c.width = Math.round(img.width * k)
       c.height = Math.round(img.height * k)
       c.getContext('2d')?.drawImage(img, 0, 0, c.width, c.height)
-      res(c.toDataURL('image/png').split(',')[1] ?? null)
+      // **JPEG, and the note above is why.** That note measured PNG at 8.6x a
+      // photograph's own encoding and drew the right conclusion for the
+      // pass-through case only — the resize path kept emitting PNG, which is
+      // the path every phone photo takes. Nine references is H3's maximum and
+      // somebody hitting it sent 40-60 MB of base64 in one body, through the
+      // web container, through Modal's blob store and back down to the GPU.
+      //
+      // Lossless buys nothing here: every reference is read at `LoadImage`'s
+      // index 0 and the MASK output is taken by no graph in this file, so alpha
+      // is discarded downstream whatever is sent. 0.92 on a 1536px photograph
+      // is a few hundred KB against several MB.
+      res(c.toDataURL('image/jpeg', 0.92).split(',')[1] ?? null)
     }
     img.onerror = () => {
       URL.revokeObjectURL(url)

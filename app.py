@@ -1422,6 +1422,27 @@ _PUBLISH_LOCK = threading.Lock()
 # A key nobody merges cannot be clobbered by a merge. The record's own `stop`
 # field is still read as a fallback, because a job already in flight when this
 # deploys has one and nothing else would answer it.
+def _attachment_weight(params: dict[str, Any]) -> tuple[int, float]:
+    """
+    How many pictures came with this request, and how many megabytes of base64.
+
+    Counted rather than inferred: the fields differ per family and per mode, and
+    a number the log is going to be read against has to be the real one.
+    """
+    blobs: list[str] = []
+    for key in ("scene", "outfit", "first_frame", "last_frame"):
+        if isinstance(params.get(key), str) and params[key]:
+            blobs.append(params[key])
+    for key in ("references", "ref_videos", "ref_audios"):
+        for b in params.get(key) or []:
+            if isinstance(b, str) and b:
+                blobs.append(b)
+    for r in params.get("regions") or []:
+        if isinstance(r, dict) and isinstance(r.get("ref_image"), str) and r["ref_image"]:
+            blobs.append(r["ref_image"])
+    return len(blobs), sum(len(b) for b in blobs) / 1_000_000
+
+
 def _stop_key(job_id: str) -> str:
     return f"stop:{job_id}"
 
@@ -9433,12 +9454,22 @@ class VideoGenerator:
             # this is still arithmetic and a file copy rather than after a
             # graph is on a GPU.
             _stop_gate(job_id, "the volume reload")
-            _publish(job_id, phase="staging the inputs")
+            # **Counted and weighed, because "staging the inputs" was still not
+            # an answer.** Nine references is H3's maximum and each one arrives
+            # as base64 in the request body — through the web container, through
+            # Modal's blob store, back down here to be decoded and written. It
+            # is the one part of this window whose cost is set by something the
+            # person did, so it is the one that has to name itself.
+            n_att, mb = _attachment_weight(params)
+            _publish(job_id, phase=(f"staging {n_att} attachment"
+                                    f"{'' if n_att == 1 else 's'}"
+                                    f" · {mb:.0f} MB" if n_att else "staging"))
             t_plan = time.time()
             plan = (self._plan_h3 if model == "h3" else self._plan_wan)(params, stage)
             graph, info = plan["graph"], plan["info"]
             print(f"[video] ready to queue after {time.time() - started:.1f}s "
-                  f"({time.time() - t_plan:.1f}s of it staging)", flush=True)
+                  f"({time.time() - t_plan:.1f}s staging {n_att} attachments, "
+                  f"{mb:.1f} MB)", flush=True)
             _stop_gate(job_id, "staging")
 
             # **`loading`, not `generate`.** ComfyUI has the graph and has not
