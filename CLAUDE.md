@@ -25,6 +25,28 @@ the next one. Concretely:
   confirm dialog is the safety net now, so it has to say what is going and how
   much of it: a dialog that undersells the blast radius is the failure mode this
   replaced. `_drop_legacy_trash()` clears what the old scheme left behind.
+- **A wait costs what it shows, not what it takes.** The clearest statement of
+  it is the owner's own, and it is worth quoting rather than paraphrasing:
+
+  > I can sit here with you for 30-40 minutes while you work on a feature
+  > because I can see everything you do, your thought process, the subagent
+  > tasks, everything, so the wait doesn't feel like I'm waiting. Looking at a
+  > black screen do absolutely nothing after you hit the main button even for a
+  > minute feels like an eternity.
+
+  Forty minutes of visible work is comfortable; sixty seconds of a still button
+  is not. So the lever on a slow path is almost never *make it faster* — it is
+  **say what it is doing**, and say something different as often as the thing
+  itself changes. A phase that holds one string for forty-seven seconds is a
+  spinner with extra words.
+
+  This is why the loading stretch is narrated per model rather than as "Loading
+  the model…": ComfyUI already prints `Requested to load MiniMaxH3` and
+  `Model MiniMaxH3 prepared for dynamic VRAM loading. 19995MB Staged`, so the
+  page can read "loading MiniMax-H3 · 20.0 GB" and change six times through a
+  window that used to change none. Nothing was measured or optimised to get
+  that; it was output already being printed to a log nobody was reading.
+
 - **A silent wait is diagnosed by guessing, and the guess lands on whatever was
   added most recently.** This is the error rule above applied to the state that
   is not an error, and it cost more than any error here has. A render took ten

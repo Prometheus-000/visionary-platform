@@ -1495,6 +1495,20 @@ def _log_spawn(kind: str, job_id: str, payload: dict[str, Any],
           flush=True)
 
 
+def _pretty_model(name: str) -> str:
+    """ComfyUI's class name as something worth showing somebody."""
+    for raw, shown in (("MiniMaxH3VideoVAE", "the video VAE"),
+                       ("MiniMaxH3TEModel_", "the text encoder"),
+                       ("MiniMaxH3", "MiniMax-H3"),
+                       ("WAN21", "the Wan VAE"),
+                       ("WanTEModel", "the text encoder"),
+                       ("AutoencodingEngine", "the VAE"),
+                       ("Krea2", "Krea 2")):
+        if name.startswith(raw):
+            return shown
+    return name
+
+
 def _stop_key(job_id: str) -> str:
     return f"stop:{job_id}"
 
@@ -3347,6 +3361,20 @@ COMFY_OOM_MARK = "ran out of memory on your GPU"
 # thing. Ours is the count, not the verdict.
 COMFY_LORA_MISS = "NOT LOADED"
 
+# ComfyUI narrates the model loading that happens between accepting a graph and
+# taking its first sampling step — on H3 that is 47 seconds of VAE, text encoder
+# and a 20 GB DiT — and every word of it went to a log nobody was reading while
+# the page showed one unchanging line.
+#
+# **A wait is bearable in proportion to what it shows, not to how long it is.**
+# The person who found this put it exactly: they will sit through forty minutes
+# of an agent working because every step is visible, and a still button for one
+# minute is an eternity. So the last static stretch on this path is spent, and
+# what spends it is output we were already printing.
+COMFY_LOADING_RE = re.compile(r"Requested to load (?P<name>[\w.]+)")
+COMFY_STAGED_RE = re.compile(
+    r"Model (?P<name>[\w.]+) prepared for dynamic VRAM loading\.\s*(?P<mb>\d+)MB")
+
 # H3's flow shifts, and the reason `MiniMaxH3SigmaShift` is normally absent from
 # our graph: these are the *model's own* defaults — `MiniMaxH3.forward` reads
 # `transformer_options.get("minimax_h3_sigma_shift_video", self.sigma_shift_video)`
@@ -3491,6 +3519,17 @@ class _Comfy:
             if COMFY_LORA_MISS in line:
                 self._unmatched += 1
                 continue
+            # Named, and with a size when ComfyUI has one. Published before the
+            # tqdm check because these arrive first and stop the moment it does.
+            if self.job_id:
+                load = COMFY_STAGED_RE.search(line) or COMFY_LOADING_RE.search(line)
+                if load:
+                    name = _pretty_model(load.group("name"))
+                    mb = load.groupdict().get("mb")
+                    _publish(self.job_id, phase=(
+                        f"loading {name}" + (f" · {int(mb) / 1000:.1f} GB" if mb else "")))
+                    continue
+
             m = TQDM_RE.search(line)
             if m and self.job_id:
                 fields: dict[str, Any] = {
