@@ -1443,6 +1443,35 @@ def _attachment_weight(params: dict[str, Any]) -> tuple[int, float]:
     return len(blobs), sum(len(b) for b in blobs) / 1_000_000
 
 
+def _note_queue_wait(tag: str, job_id: str, params: dict[str, Any]) -> float:
+    """
+    How long this job waited between being spawned and being given to a
+    container, and a line when that is not instant.
+
+    **The gap nothing could see.** Both GPU classes are `max_containers=1` with
+    `@modal.concurrent(max_inputs=1)`, so anything already holding that slot
+    delays everything behind it — and `/api/motion` holds it, on the same
+    container renders run on. A suggestion queuing behind a render is fine on a
+    single-user platform, which is the trade that arrangement was chosen for; a
+    render queuing behind a suggestion is the same trade read backwards, and it
+    is what a ten-minute wait turned out to be.
+
+    It cannot be prevented cheaply — the whole point of riding the generator is
+    that the weights are already there — so it is measured instead. Measured
+    rather than inferred, because this window also holds cold starts, blob
+    transfer and scheduling, and a line that named one of them would be a guess
+    wearing a number.
+    """
+    t = params.get("queued_at")
+    if not isinstance(t, (int, float)) or not t:
+        return 0.0
+    waited = max(0.0, time.time() - float(t))
+    if waited >= QUEUE_WAIT_SLOW_S:
+        print(f"[{tag}] {job_id} waited {waited:.1f}s to be delivered — the "
+              f"container was busy, cold, or taking a large body", flush=True)
+    return waited
+
+
 def _log_spawn(kind: str, job_id: str, payload: dict[str, Any],
                t0: float) -> None:
     """
@@ -1767,6 +1796,10 @@ RELOAD_SLOW_S = 2.0
 # Above this, a request is worth a line. Under it the log would be `/api/status`
 # at 400ms, which is a log made of polls and no more use than no log at all.
 REQUEST_SLOW_S = 2.0
+
+# Above this, a job that waited to reach a container is worth a line. Anything
+# under is scheduling noise.
+QUEUE_WAIT_SLOW_S = 5.0
 
 
 def _reload_volume_locked() -> bool:
@@ -5883,6 +5916,7 @@ class ImageGenerator:
         # the phase claimed `loading` while the volume reload — the one
         # unbounded step in it — had not been started.
         print(f"[image] {job_id} accepted", flush=True)
+        _note_queue_wait("image", job_id, params)
         _clear_stop(job_id)
         _publish(job_id, status="running", phase="reloading the volume")
         _reload_volume()
@@ -9429,6 +9463,7 @@ class VideoGenerator:
         # container prints nothing either way. Stamped here, the two are one
         # subtraction apart.
         print(f"[video] {job_id} accepted", flush=True)
+        _note_queue_wait("video", job_id, params)
         _clear_stop(job_id)
         # **Everything from here to `run()` used to be silent**, and a ten-minute
         # gap between pressing Generate and ComfyUI receiving the graph was
@@ -11180,6 +11215,9 @@ def web():
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(ImageGenerator, payload.get("gpu"), IMAGE_GPUS, GPU)
         runner().generate.spawn(job_id=job_id, params={
+            # See the video side: the container subtracts this on arrival, and
+            # the difference is a delivery that waited.
+            "queued_at": time.time(),
             # Prose, not a document: Krea 2 has no fields to fill in, so the
             # same pills append their clauses to the sentence in the same order.
             # The rail is shared with the video side and the vocabulary decides
@@ -11348,6 +11386,10 @@ def web():
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
         runner().generate.spawn(job_id=job_id, params={
+            # When it was handed to Modal. The container subtracts this on
+            # arrival, which is the only way to see a delivery that waited —
+            # see `_note_queue_wait`.
+            "queued_at": time.time(),
             "model": model,
             # Both travel. `prompt` is what runs and is the only one the graph
             # sees; the other two are what you chose, and they exist so a

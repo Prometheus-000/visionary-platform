@@ -50,6 +50,14 @@ the next one. Concretely:
   rewrite on a cold container holds it for its whole cold start. That is the
   shape a ten-minute wait has, and the arithmetic said so before any log did.
 
+  **It was the queue.** The volume reload was the other unbounded candidate and
+  is ruled out by the person who runs this — reloads do not take that long —
+  which leaves the held input slot, and matches the observation that settled it:
+  the runs that skipped Enhance were fast *with the same references attached*.
+  The warm-up is lazy now so no render pays it, but the slot itself is inherent
+  to riding the resident encoder, so `_note_queue_wait` measures the delivery
+  gap rather than trying to prevent it.
+
   A feature was nearly retired for another feature's cost. **And the logs were
   as silent as the page, which is worse** — the logs are the escape hatch, so
   what somebody sees after giving up on the screen is ComfyUI's own output
