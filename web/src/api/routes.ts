@@ -216,11 +216,20 @@ export const compile = (body: {
   kind?: 'image' | 'video'
   model?: string
   seconds?: number
+  /** **Counts, not pictures.** The compiler needs only that there *is* a
+   *  reference — the bytes would make a route re-fetched on every keystroke
+   *  carry megabytes. The scene's own refs are indices into these same counts. */
   references?: number
   ref_videos?: number
+  ref_audios?: number
   ref_roles?: string[]
   first_frame?: boolean
   last_frame?: boolean
+  /** The cast and the timeline. Validated here as well as on the way to the GPU,
+   *  because this is what the composer polls: a handle nobody defined should be
+   *  a sentence under the rows the moment it is typed, not a refusal discovered
+   *  at Generate. */
+  scene?: unknown
 }) => post<CompileResult>('/api/compile', body)
 
 /**

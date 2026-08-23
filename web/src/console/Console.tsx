@@ -12,7 +12,7 @@ import { Rail } from '../shot/Rail'
 import { SourceRow } from '../video/SourceRow'
 import { supports, useStore } from '../store'
 import { Field } from './Field'
-import { autoGrow } from './fieldMax'
+import { growField } from './fieldMax'
 import { dropUnsupported, videoReady } from './resolve'
 import { ImageSampling, VideoSampling } from './SamplingButton'
 import { SizeButton, VideoSizeButton } from './SizeButton'
@@ -70,11 +70,7 @@ export function Console({
   useLayoutEffect(() => {
     const con = box.current
     if (!con) return
-    const grow = () => {
-      const field = con.querySelector<HTMLTextAreaElement>('.field.on-neg #neg')
-        ?? con.querySelector<HTMLTextAreaElement>('#prompt')
-      autoGrow(field, con)
-    }
+    const grow = () => { growField(con) }
     grow()
     const ro = new ResizeObserver(grow)
     ro.observe(con)

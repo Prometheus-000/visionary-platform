@@ -488,6 +488,63 @@ svg{width:100%;height:100%;display:block}
    selection is a highlighted rectangle with nothing written in it. */
 #prompt::selection{background:var(--line-2)}
 
+/* ── the timeline ──────────────────────────────────────────────────────────
+   The video side's prose, where the prompt box used to be. **With one shot
+   none of this is visible**: no gutter, no strip, no row chrome, and the box
+   inside is `#prompt` under the same rules as the image side's. That is the
+   degrade the composer rests on — a surface that looked different while doing
+   exactly the same thing would be announcing a feature it is not yet using. */
+.tline{display:flex;flex-direction:column;min-width:0}
+/* The mirror is positioned against its row now rather than against `.field`,
+   which is the whole of what nesting the box cost. Everything else about it has
+   to keep matching the textarea exactly — same padding, same inherited font,
+   same wrapping — or a mention's chip drifts off the word it belongs to. */
+.tbox{position:relative;flex:1;min-width:0}
+.tline .mk-mirror{inset:0}
+/* `display:block` is not tidying. A textarea is inline-block, so its line
+   box adds descender leading under it — 5.5px measured — which the
+   absolutely-positioned mirror does not have, so the two drift apart by a
+   fraction of a line and the row grows for nothing. */
+.tline textarea{display:block;color:transparent;caret-color:var(--fg)}
+.tline textarea::selection{background:var(--line-2)}
+
+/* A mention is stored as the literal text `@ava` and painted here. The chip is
+   a *reading* of what you typed, not a token replacing it: edit the handle and
+   it stops being a mention, the words turn plain, and the shot no longer claims
+   that subject. That is the user's text staying the record. */
+.men{border-radius:var(--r-mark);background:var(--wash-3);
+  box-shadow:0 0 0 1px var(--line) inset;padding:0 1px;margin:0 -1px}
+/* Nobody in the cast is called that. Marked rather than left plain because the
+   failure reads as the model ignoring you — `@ava` reaches the encoder as those
+   five characters, which it renders as nothing at all. */
+.men.miss{background:none;box-shadow:none;
+  text-decoration:underline wavy var(--crit);text-underline-offset:3px}
+
+/* The clip, divided. **A readout, not an input** — a shot's share is the length
+   of what you wrote about it, so there is nothing to drag, nothing to miss with
+   a thumb, and no reason for it to be thicker than a line. */
+.tstrip{display:flex;height:4px;margin:7px 9px 3px;border-radius:2px;overflow:hidden;
+  background:var(--wash-2);flex:none}
+.tstrip i{border-right:1px solid var(--bg);min-width:2px}
+.tstrip i:last-child{border-right:0}
+.tstrip i.sel{background:var(--line-2)}
+
+/* The rows only take chrome once there are two of them. The number and the cut
+   time are one gutter because they answer one question — where in the clip is
+   this — and the time is the smaller half because it is derived. */
+.trow{display:flex;min-width:0}
+.tline.many .trow{align-items:flex-start;gap:9px;border-radius:var(--r-inner)}
+.tline.many .trow.sel{background:var(--wash-2)}
+.tline.many .tnum{flex:none;min-width:46px;padding:5px 0 0 9px;text-align:right;
+  display:flex;flex-direction:column;align-items:flex-end;line-height:1.3;
+  font:11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);
+  -webkit-user-select:none;user-select:none}
+.tline.many .tnum em{font-style:normal;font-size:10px;color:#5a5a5a}
+.tline.many .mk-mirror,.tline.many textarea{padding:4px 10px 4px 0}
+/* A row is a 44px target on glass, where the pointer that can hit an 18px one
+   does not exist. Same rule `.chip` and `.shot-back` already follow. */
+@media (hover:none){.tline.many .trow{min-height:44px;align-items:center}}
+
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —
    while a separate strip below carried every control. They are one row now:
    the chip says what you are making and the rest of the line says how. */

@@ -6,6 +6,7 @@ import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { readVidChips, stripLoras } from '../lora/tokens'
 import { negAllowed, readShot, supports, useStore, type Store } from '../store'
+import { readScene, typedProse } from '../scene/model'
 import { resolveVid } from '../console/resolve'
 
 /**
@@ -48,8 +49,15 @@ const IDLE: VideoRun = {
 export function videoBody(s: Store): Record<string, unknown> {
   const r = resolveVid(s)
   // See `imageBody`: one string, keying both halves of the same request.
-  const prompt = stripLoras(s.prompt)
+  const prompt = stripLoras(typedProse(s.scene))
+  // Null when the scene is not live, and that is the contract rather than an
+  // optimisation: no cast, one shot and nothing chosen, and the run is the typed
+  // sentence byte-for-byte — the same document a prompt box would have produced,
+  // because there is no document. Its three asset lists are what `<Picture N>`
+  // numbers against, so they replace the flat trays whenever it is live.
+  const sc = readScene(s.scene, s.pool)
   return {
+    ...(sc && { scene: sc.scene }),
     model: s.vid.model,
     prompt,
     negative_prompt: negAllowed(s) ? s.negative : '',
@@ -71,11 +79,16 @@ export function videoBody(s: Store): Record<string, unknown> {
                           ? (s.state?.wan_experts ?? ['both', 'high', 'low'])
                           : ['both']),
     shot: readShot(s.shot),
-    ref_roles: s.refRoles.slice(0, s.refs.length),
+    ref_roles: sc ? [] : s.refRoles.slice(0, s.refs.length),
     first_frame: s.keyframe.first,
     last_frame: s.keyframe.last,
-    references: s.refs,
-    ref_videos: s.refVids,
+    // The cast's files when there is a cast, and the flat trays otherwise. Never
+    // both: `<Picture N>` is a *position* in this array, so a cast ref pointing
+    // at index 1 and a tray photo also sitting at index 1 is a well-formed
+    // document naming somebody else's face.
+    references: sc ? sc.references : s.refs,
+    ref_videos: sc ? sc.ref_videos : s.refVids,
+    ...(sc && { ref_audios: sc.ref_audios }),
     ref_size: s.vid.refSize,
     gpu: s.gpu.video,
   }
@@ -108,7 +121,7 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
 
   const start = useCallback(async () => {
     const s = useStore.getState()
-    if (!stripLoras(s.prompt)) return
+    if (!stripLoras(typedProse(s.scene))) return
     // Keep the last clip on screen and overlay a progress state on it — see `jobId`
     // above. A cold first run has nothing to keep and shows the full placeholder.
     setRun((p) => ({

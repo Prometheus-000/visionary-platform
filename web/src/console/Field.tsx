@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
 import { caretProps } from '../lora/caret'
-import { negAllowed, supports, useStore } from '../store'
+import { negAllowed, useStore } from '../store'
+import { Shots } from '../scene/Shots'
 import { Duration } from './Duration'
-import { autoGrow } from './fieldMax'
+import { growField } from './fieldMax'
 import { moveClause } from './moveClause'
 
 /**
@@ -50,17 +51,14 @@ export function Field({
   }, [s.negOn, ok, s])
 
   useLayoutEffect(() => {
-    autoGrow(live.current, consoleEl.current)
-  }, [s.prompt, s.negative, s.negOn, live, consoleEl])
+    growField(consoleEl.current)
+  }, [s.prompt, s.negative, s.negOn, s.scene.shots, live, consoleEl])
 
-  // One placeholder, three states: it has to name the kind, and on the H3 checkpoints
-  // it also has to ask for the soundtrack, which is denoised from the same sequence
-  // and invented when you leave it out.
-  const hint = s.kind === 'image'
-    ? 'Describe an image…'
-    : supports(s).audio
-      ? 'Describe the shot, the motion — and the audio: dialogue, effects, music…'
-      : 'Describe the shot and the motion…'
+  // The video side's two placeholders moved onto the row that shows them — it
+  // has to name the kind, and on the H3 checkpoints it also has to ask for the
+  // soundtrack, which is denoised from the same sequence and invented when you
+  // leave it out. See `Shots`.
+  const hint = 'Describe an image…'
 
   /** Shared by both textareas: they are the same kind of comma-separated prose, and a
    *  chord that works in one box and not the one under it is a chord nobody trusts. */
@@ -92,35 +90,32 @@ export function Field({
 
   return (
     <div className={['field', ok ? 'has-neg' : '', s.negOn && ok ? 'on-neg' : ''].filter(Boolean).join(' ')}>
+      {/* **The prose is a timeline on one side and a sentence on the other.**
+          H3 reads a document with named fields — shots, cut times, speaker IDs —
+          and a text field has no shots in it, so the video side's box is the
+          first row of `Shots` rather than this one. With one shot it renders the
+          same `#prompt` under the same rules, which is the degrade the whole
+          composer rests on: nothing changes until you ask for a second shot.
+
+          The image side keeps this box. Krea 2 has no fields to fill in, so a
+          timeline there would be a control the compiler discards. */}
+      {s.kind === 'video' ? <Shots consoleEl={consoleEl} hide={s.negOn && ok}
+                                   onSubmit={onSubmit} /> : (
+      <>
       {/* **The mirror is the text you read**, and the textarea over it is
           transparent with only its caret coloured. It was built to paint marks
           onto the prompt — a textarea cannot style a range of its own value,
           and contenteditable would have taken the caret, the undo stack and
-          every chord in `keys` with it. The marks are gone and the arrangement
-          stays, because unwinding it buys nothing: ⌥←/→, ⌘↑/↓, Enter-to-submit
-          and the `+ LoRA` caret sink all work because the thing you type into
-          is still a textarea, and that is true either way. */}
+          every chord in `keys` with it. The marks are gone here and the
+          arrangement stays, because unwinding it buys nothing — and the video
+          side's mirror is painting mentions again, which is what it was for. */}
       <div className={`mk-mirror${s.negOn && ok ? ' hide' : ''}`} ref={mirror} aria-hidden="true">
         {/* Two spans, and the empty one is load-bearing: a mirror that ends
             exactly at its last character loses the newline just typed, and the
-            copy behind the box stops matching the box by one line. It is what
-            `runs()` emitted here before the marks were deleted, and the reason
-            is worth keeping now that the function that carried it is gone. */}
+            copy behind the box stops matching the box by one line. */}
         <span>{s.prompt}</span>
         <span />
       </div>
-      {/* Read-only while a rewrite is in flight, which is the whole of the
-          staleness fix. The answer is written into this box when it lands, and
-          it is the rewrite of the sentence that was here when the button was
-          pressed — so typing during the wait means a stale answer arrives on
-          top of newer words. A guard comparing the two was the other way to fix
-          it and it is more machinery for a worse outcome: it would throw the
-          answer away *after* paying for it. The rewrite is seconds, and a field
-          that cannot drift is a field nothing has to be reconciled with.
-
-          `readOnly` rather than `disabled`: disabled takes the caret and the
-          selection with it, so the box loses your place for the length of a
-          request you are about to get an answer to. */}
       <textarea id="prompt" ref={prompt} rows={1} placeholder={hint}
                 className={s.negOn && ok ? 'hide' : ''}
                 value={s.prompt}
@@ -138,6 +133,8 @@ export function Field({
                 onCompositionStart={() => { composing.current = true }}
                 onCompositionEnd={() => { composing.current = false }}
                 {...caretProps('prompt', (v) => useStore.getState().setPrompt(v))} />
+      </>
+      )}
       {/* The same field in a different sign. Hidden outright on a model that reads no
           negative — H3 is guidance-distilled, Krea 2 Turbo runs at CFG 1.0, and on
           both of those a negative prompt is a promise the sampler will not keep. */}

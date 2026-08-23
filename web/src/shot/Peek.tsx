@@ -4,6 +4,7 @@ import { failed } from '../api/client'
 import { compile } from '../api/routes'
 import { readShot, useStore } from '../store'
 import { stripLoras } from '../lora/tokens'
+import { readScene, typedProse } from '../scene/model'
 import { resolveVid } from '../console/resolve'
 
 /**
@@ -27,7 +28,11 @@ export function Peek() {
   // Offered only when there is something to compile. With no pills the compiled
   // prompt is the typed one, and a disclosure that opens to show you your own
   // sentence back is a control with nothing to say.
-  const has = s.shot.length > 0 || s.refRoles.some(Boolean)
+  // On the video side the scene is most of the document, and it can be live with
+  // no pill on the rail at all — a second shot alone changes everything about
+  // what the encoder is handed.
+  const sc = s.kind === 'video' ? readScene(s.scene, s.pool) : null
+  const has = s.shot.length > 0 || s.refRoles.some(Boolean) || !!sc
   const open = s.peekOpen && has
 
   useEffect(() => {
@@ -38,16 +43,20 @@ export function Peek() {
       const r = await compile({
         kind: s.kind,
         model: s.vid.model,
-        prompt: stripLoras(s.prompt),
+        prompt: stripLoras(s.kind === 'video' ? typedProse(s.scene) : s.prompt),
         shot: readShot(s.shot),
         seconds: Number(resolveVid(s).seconds) || undefined,
+        ...(sc && { scene: sc.scene }),
         // Never the bytes. This is re-fetched on every pill and every keystroke,
-        // and what the compiler needs from a reference is that there is one.
+        // and what the compiler needs from a reference is that there is one —
+        // the scene's own refs are indices into exactly these counts, so they
+        // have to be the counts the run would upload rather than the trays.
         first_frame: !!s.keyframe.first,
         last_frame: !!s.keyframe.last,
-        references: s.refs.length,
-        ref_videos: s.refVids.length,
-        ref_roles: s.refRoles.slice(0, s.refs.length),
+        references: sc ? sc.references.length : s.refs.length,
+        ref_videos: sc ? sc.ref_videos.length : s.refVids.length,
+        ...(sc && { ref_audios: sc.ref_audios.length }),
+        ref_roles: sc ? [] : s.refRoles.slice(0, s.refs.length),
       })
       setText(failed(r) ? r.error : r.prompt)
     }, 220)

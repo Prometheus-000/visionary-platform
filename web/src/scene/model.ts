@@ -64,10 +64,38 @@ export const SLOTS: Record<CastKind, { key: string; label: string; takes: Media 
   ],
 }
 
+/**
+ * What a reference *video* is doing, and what an `<Audio N>` is doing.
+ *
+ * Mirrors `H3_VIDEO_ROLES` and `H3_AUDIO_ROLES`, and it is the one thing that
+ * can promote a scene's task type past `reference generation` — the guide is
+ * explicit that the mere presence of a video does not create a type. An image
+ * has no role here: a picture attached to a slot is already told what it is by
+ * the slot it landed on.
+ */
+export const VIDEO_ROLES = ['reference', 'edit', 'continue'] as const
+export const AUDIO_ROLES = ['reference', 'reuse'] as const
+
 /** A pointer plus the roles it plays. One entry per file per bucket: a second
  *  slot on the same file adds a role rather than a second entry, which is what
  *  makes "this photo is both the outfit and the body" one upload. */
-export type CastRef = { fileId: string; slots: string[] }
+export type CastRef = {
+  fileId: string
+  slots: string[]
+  /** Only read for video and audio — see `VIDEO_ROLES`. Left at `reference`,
+   *  which is what both tables default to and what the server assumes. */
+  role?: string
+}
+
+/**
+ * The guide's relationship markers for visual content — `H3_RETENTION`.
+ *
+ * Not the audio list: `fully_copy` is meaningless about a photograph and
+ * `fully_preserved` is meaningless about a signal, which is why the server
+ * keeps two tables rather than one.
+ */
+export const RETENTION = ['fully_preserved', 'partially_preserved',
+                          'attribute_transfer', 'weak_reference'] as const
 
 export type CastMember = {
   id: string
@@ -75,6 +103,10 @@ export type CastMember = {
   /** The @handle, and the only text anyone types about them. */
   name: string
   note: string
+  /** How much of the reference has to survive into the render. Defaults to the
+   *  strictest, because the common case for a face is "this exact person" and a
+   *  looser default is a likeness quietly allowed to drift. */
+  retention: string
   refs: CastRef[]
 }
 
@@ -94,16 +126,40 @@ export type Shot = {
   id: string
   /** The sentence, with mentions as literal `@handle` text — see `mentions`. */
   line: string
-  /** Duration weight. Seconds fall out of the share, so two rows cannot be out
-   *  of order and a cut cannot land outside the clip. */
-  beats: number
+  /**
+   * Duration weight, and **null is the normal state**: the share is derived from
+   * how much you wrote about the shot — see `shares`. Seconds fall out of the
+   * share, so two rows cannot be out of order and a cut cannot land outside the
+   * clip.
+   *
+   * A number here is the precision escape hatch, the way a region's four
+   * coordinates are: dragging teaches the proportion and the proportion never
+   * taught the dragging.
+   */
+  beats: number | null
   pills: ShotPill[]
   say: Say
 }
 
+/**
+ * The three clip-level sources — `H3_SOURCES`.
+ *
+ * Not cast references, which is why they need their own home: a video you are
+ * continuing from is not a subject's likeness, it is a property of the clip.
+ * A keyframe points into the images, `continue` and `edit` into the videos, and
+ * the last two are mutually exclusive because they are different task types and
+ * different documents.
+ */
+export type SourceKind = 'keyframe' | 'continue' | 'edit'
+export type Sources = Partial<Record<SourceKind, string[]>>
+
+export const SOURCE_TAKES: Record<SourceKind, Media> =
+  { keyframe: 'image', continue: 'video', edit: 'video' }
+
 export type Scene = {
   cast: CastMember[]
   shots: Shot[]
+  sources: Sources
   style: string
   grade: string
 }
@@ -112,16 +168,16 @@ let seq = 0
 const uid = (p: string) => `${p}${++seq}`
 
 export const newShot = (line = ''): Shot => ({
-  id: uid('s'), line, beats: 1, pills: [],
+  id: uid('s'), line, beats: null, pills: [],
   say: { who: [], text: '', lang: 'English', voice: '',
          carry: false, cutoff: false, offscreen: false },
 })
 
 export const newMember = (kind: CastKind): CastMember =>
-  ({ id: uid('c'), kind, name: '', note: '', refs: [] })
+  ({ id: uid('c'), kind, name: '', note: '', retention: RETENTION[0], refs: [] })
 
 export const emptyScene = (): Scene =>
-  ({ cast: [], shots: [newShot()], style: '', grade: '' })
+  ({ cast: [], shots: [newShot()], sources: {}, style: '', grade: '' })
 
 // ── handles ─────────────────────────────────────────────────────────────────
 
@@ -168,25 +224,76 @@ export const named = (cast: CastMember[]) => cast.filter((c) => handleOf(c.name)
  * this returns is exactly what has to be uploaded, in this order. Number one
  * way here and upload another and every label is well-formed and points at
  * somebody else's face.
+ *
+ * The cast first and the clip-level sources after it, and only files something
+ * still points at. A member you have started and not yet named is not sent —
+ * `named` drops it — so uploading its photograph would be megabytes on the wire
+ * for a picture no label mentions.
  */
-export function assets(cast: CastMember[], kind: Media, pool: Record<string, PoolFile>) {
+export function assets(sc: Scene, kind: Media, pool: Record<string, PoolFile>) {
   const out: PoolFile[] = []
-  for (const c of cast) {
-    for (const r of c.refs) {
-      const f = pool[r.fileId]
-      if (f && f.kind === kind && !out.some((x) => x.id === f.id)) out.push(f)
-    }
+  const take = (id: string) => {
+    const f = pool[id]
+    if (f && f.kind === kind && !out.some((x) => x.id === f.id)) out.push(f)
+  }
+  for (const c of named(sc.cast)) for (const r of c.refs) take(r.fileId)
+  for (const k of Object.keys(sc.sources) as SourceKind[]) {
+    for (const id of sc.sources[k] ?? []) take(id)
   }
   return out
 }
 
-/** Seconds each shot occupies, as [start, end], from the beat shares. */
+/**
+ * The shortest thing that still reads as a shot, in characters.
+ *
+ * A floor rather than a proportion, because the failure it prevents is at zero:
+ * a row you have just added has nothing written in it, and without this its
+ * share is zero — a tick with no width on the strip, and a cut time identical to
+ * its neighbour's, which is the one thing `_h3_shot_text` refuses to compile.
+ */
+const MIN_EXTENT = 20
+
+/**
+ * How the clip divides, by shot.
+ *
+ * **The share is a readout, not an input.** A shot's slice of the clip is the
+ * length of what you wrote about it — write more about shot 1 and it gets more
+ * of the clip — which removes a 9px drag target rather than enlarging it to a
+ * thumb-sized one. `beats` overrides it where somebody has dragged, and that is
+ * the escape hatch a region's four coordinates are.
+ *
+ * Dialogue counts toward the extent because a line of it *is* the shot: a row
+ * whose whole content is somebody speaking would otherwise sit at the floor
+ * while the shot beside it, describing the same beat in prose, took the clip.
+ */
+export function shares(shots: Shot[]): number[] {
+  return shots.map((s) => s.beats ?? Math.max(
+    MIN_EXTENT, s.line.trim().length + s.say.text.trim().length))
+}
+
+/**
+ * What the person actually typed, as one string.
+ *
+ * The sidecar's `prompt_typed`, and the guard on whether there is anything to
+ * render. The compiled document is what runs and this is what you meant — the
+ * durable half, which is why Reuse, Copy and the metadata sheet all prefer it.
+ *
+ * Newline-joined rather than space-joined: the rows *are* separate sentences,
+ * and a gallery card showing them run together would be showing a paragraph
+ * nobody wrote. With one shot it is that shot's line and nothing else, which is
+ * the string the prompt box used to hold.
+ */
+export const typedProse = (sc: Scene) =>
+  sc.shots.map((s) => s.line.trim()).filter(Boolean).join('\n')
+
+/** Seconds each shot occupies, as [start, end], from the shares. */
 export function times(shots: Shot[], seconds: number): [number, number][] {
-  const total = shots.reduce((n, s) => n + s.beats, 0) || 1
+  const w = shares(shots)
+  const total = w.reduce((n, x) => n + x, 0) || 1
   let t = 0
-  return shots.map((s) => {
+  return shots.map((_, i) => {
     const at = t
-    t += (s.beats / total) * seconds
+    t += (w[i]! / total) * seconds
     return [at, t]
   })
 }
@@ -202,9 +309,17 @@ export const clock = (t: number) => {
  * The degrade, and it has to be exact: one shot, no cast, no pills and the run
  * is the typed prompt byte-for-byte. A scene that is merely *open* changes
  * nothing — the same contract `_compile_h3_prompt` keeps.
+ *
+ * Style and grade are in it because they are not decoration: with either one set
+ * the document opens on a sentence declaring it, which is a different input to
+ * the encoder than the bare prose. Empty means "the compiler's own default",
+ * which is what `_compile_h3_scene` falls back to, so leaving them alone is
+ * still the degrade.
  */
 export const live = (sc: Scene) =>
-  sc.cast.length > 0 || sc.shots.length > 1
+  named(sc.cast).length > 0 || sc.shots.length > 1
+  || sc.style.trim() !== '' || sc.grade.trim() !== ''
+  || Object.values(sc.sources).some((v) => v.length > 0)
   || sc.shots.some((s) => s.pills.length > 0 || s.say.text.trim() !== '')
 
 /**
@@ -220,30 +335,43 @@ export function readScene(
 ): { scene: unknown; references: string[]; ref_videos: string[]; ref_audios: string[] } | null {
   if (!live(sc)) return null
   const order: Record<Media, PoolFile[]> = {
-    image: assets(sc.cast, 'image', pool),
-    video: assets(sc.cast, 'video', pool),
-    audio: assets(sc.cast, 'audio', pool),
+    image: assets(sc, 'image', pool),
+    video: assets(sc, 'video', pool),
+    audio: assets(sc, 'audio', pool),
   }
+  const at = (id: string, kind: Media) =>
+    order[kind].findIndex((x) => x.id === id)
   const cast = named(sc.cast).map((c) => ({
     id: c.id,
     kind: c.kind,
     name: c.name,
     note: c.note,
+    retention: c.retention,
     refs: c.refs.flatMap((r) => {
       const f = pool[r.fileId]
       if (!f) return []
-      const index = order[f.kind].findIndex((x) => x.id === f.id)
-      return index < 0 ? [] : [{ kind: f.kind, index, slots: r.slots }]
+      const index = at(f.id, f.kind)
+      return index < 0 ? [] : [{ kind: f.kind, index, slots: r.slots,
+                                 role: r.role ?? 'reference' }]
     }),
   }))
+  const w = shares(sc.shots)
+  const sources: Partial<Record<SourceKind, number[]>> = {}
+  for (const k of Object.keys(sc.sources) as SourceKind[]) {
+    const idx = (sc.sources[k] ?? [])
+      .map((id) => at(id, SOURCE_TAKES[k]))
+      .filter((i) => i >= 0)
+    if (idx.length) sources[k] = idx
+  }
   return {
     scene: {
       style: sc.style,
       grade: sc.grade,
+      sources,
       cast,
-      shots: sc.shots.map((s) => ({
+      shots: sc.shots.map((s, i) => ({
         line: s.line,
-        beats: s.beats,
+        beats: w[i],
         pills: s.pills.map((p) => ({ key: p.key, ...(p.value !== undefined && { value: p.value }), ...(p.lang && { lang: p.lang }) })),
         say: {
           who: s.say.who, text: s.say.text, lang: s.say.lang,
@@ -257,4 +385,3 @@ export function readScene(
     ref_audios: order.audio.map((f) => f.b64),
   }
 }
-

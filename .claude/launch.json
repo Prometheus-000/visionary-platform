@@ -25,6 +25,18 @@
       ],
       "port": 5174,
       "cwd": "web"
+    },
+    {
+      "name": "design-notes",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4174",
+        "--directory",
+        "docs/design-notes"
+      ],
+      "port": 4174
     }
   ]
 }

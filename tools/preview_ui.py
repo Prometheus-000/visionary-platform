@@ -990,6 +990,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 pills = api["_validate_shot"](p.get("shot"))
                 n_refs = max(0, min(9, int(p.get("references") or 0)))
+                n_vids = max(0, min(3, int(p.get("ref_videos") or 0)))
+                n_auds = max(0, min(3, int(p.get("ref_audios") or 0)))
                 roles = api["_validate_ref_roles"](p.get("ref_roles"), n_refs)
             except (TypeError, ValueError) as exc:
                 return self.reply({"error": str(exc)})
@@ -1004,11 +1006,30 @@ class Handler(BaseHTTPRequestHandler):
                 seconds = float(p.get("seconds") or 5)
             except (TypeError, ValueError):
                 seconds = 5.0
-            return self.reply({"prompt": api["_compile_h3_prompt"](
-                typed=typed, pills=pills, seconds=seconds, roles=roles,
-                task=api["_h3_task"](p.get("first_frame"), p.get("last_frame"),
-                                     n_refs, int(p.get("ref_videos") or 0)),
-            )})
+            # The scene, validated here for the reason the real route does it
+            # here: this is what the composer polls, so a handle nobody defined
+            # is a sentence under the rows the moment it is typed rather than a
+            # refusal discovered at Generate. A stub that skipped it would be a
+            # preview of a composer with no error messages.
+            try:
+                scene = api["_validate_scene"](p.get("scene"), n_refs=n_refs,
+                                               n_vids=n_vids, n_auds=n_auds,
+                                               seconds=seconds)
+            except (TypeError, ValueError) as exc:
+                return self.reply({"error": str(exc)})
+            try:
+                return self.reply({"prompt": api["_compile_h3_prompt"](
+                    typed=typed, pills=pills, seconds=seconds, roles=roles,
+                    scene=scene,
+                    task=api["_h3_task"](p.get("first_frame"),
+                                         p.get("last_frame"),
+                                         n_refs, n_vids, n_auds),
+                )})
+            except ValueError as exc:
+                # `_compile_h3_prompt` raises on an over-length document, which
+                # is the one refusal that arrives from the compiler rather than
+                # the validator — and it is the one somebody hits by writing.
+                return self.reply({"error": str(exc)})
 
         # `/api/train` is the one-call form: make the card, then start it. The
         # page does not use it — the board posts a session and starts that — but

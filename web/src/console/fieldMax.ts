@@ -47,3 +47,51 @@ export function autoGrow(fieldEl: HTMLTextAreaElement | null, consoleEl: HTMLEle
   fieldEl.style.height = 'auto'
   fieldEl.style.height = `${Math.min(fieldEl.scrollHeight, fieldMax(consoleEl, fieldEl))}px`
 }
+
+/**
+ * The same allowance, divided between shot rows.
+ *
+ * **Rows divide the field's allowance rather than adding to it.** One prompt at
+ * two lines and two shots at one line each are the same height, so a four-shot
+ * scene costs exactly what a long prompt costs and the 30% budget holds without
+ * a second arithmetic. With one row it reduces to `autoGrow` exactly — same
+ * cap, same measurement — which is what keeps the single-shot case byte-for-byte
+ * the prompt box it replaces.
+ *
+ * `ROW_FLOOR` is one line plus the padding `.field textarea` already spends. A
+ * share below that is a row you cannot read the current line of, and at that
+ * point the box scrolls rather than shrinking further — the same trade
+ * `FIELD_FLOOR` makes for the single field.
+ */
+export const ROW_FLOOR = 30
+
+export function growRows(box: HTMLElement | null, consoleEl: HTMLElement | null): void {
+  if (!box) return
+  const areas = [...box.querySelectorAll('textarea')]
+  if (!areas.length) return
+  // `auto` first for the same reason `autoGrow` does it: `scrollHeight` on an
+  // element with an explicit height reports that height, so measuring without
+  // this lets a row grow and never shrink.
+  for (const a of areas) a.style.height = 'auto'
+  const share = Math.max(ROW_FLOOR, fieldMax(consoleEl, box) / areas.length)
+  for (const a of areas) a.style.height = `${Math.min(a.scrollHeight, share)}px`
+}
+
+/**
+ * Grow whichever surface is currently the field.
+ *
+ * There are three and only one is ever on screen: the negative box when you
+ * have switched into it, the shot rows on the video side, and the prompt on the
+ * image side. This lived as a `querySelector` chain inside `Console`'s
+ * ResizeObserver and had to be repeated by every caller that could change a
+ * height — which is how a fourth surface gets added and grows only when the
+ * window is resized.
+ */
+export function growField(consoleEl: HTMLElement | null): void {
+  if (!consoleEl) return
+  const neg = consoleEl.querySelector<HTMLTextAreaElement>('.field.on-neg #neg')
+  if (neg) { autoGrow(neg, consoleEl); return }
+  const rows = consoleEl.querySelector<HTMLElement>('.tline:not(.hide)')
+  if (rows) { growRows(rows, consoleEl); return }
+  autoGrow(consoleEl.querySelector<HTMLTextAreaElement>('#prompt'), consoleEl)
+}

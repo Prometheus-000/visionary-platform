@@ -263,7 +263,15 @@ export function App() {
       // here as its own stray key while focus was still in flight.
       field.focus()
       const st = useStore.getState()
-      const write = field.id === 'neg' ? st.setNegative : st.setPrompt
+      // `#prompt` is the image side's box on one kind and shot 1's row on the
+      // other — same id because it is the same thing, "the box you write in".
+      // The write has to follow it, or a stray letter on the video side lands in
+      // a buffer nothing is showing.
+      const write = field.id === 'neg'
+        ? st.setNegative
+        : st.kind === 'video'
+          ? (v: string) => { st.patchShot(st.scene.shots[0]?.id ?? '', { line: v }) }
+          : st.setPrompt
       // Never welded to the last word — the same courtesy `insertLora` extends.
       const sep = field.value && !/\s$/.test(field.value) ? ' ' : ''
       write(field.value + sep + e.key)

@@ -35,6 +35,10 @@ import { create } from 'zustand'
 
 import type { AppState, ShotGroup, ShotItem, ShotPill, VideoModel } from './api/types'
 import type { LoraChip } from './lora/tokens'
+import {
+  emptyScene, handleOf, newMember, newShot, rename,
+  type CastKind, type CastMember, type PoolFile, type Scene, type Shot,
+} from './scene/model'
 
 export type Kind = 'image' | 'video'
 export type Mode = 'generate' | 'train'
@@ -346,6 +350,54 @@ export type Store = {
   setBoxDrag: (on: boolean) => void
   setFileOver: (on: boolean) => void
 
+  /* ---- the scene (video only) ------------------------------------------ */
+  /**
+   * The cast and the timeline — **the record for the video side's prose**.
+   *
+   * `prompt` above is the image side's. The two used to be one field swapped by
+   * `setKind`, and the stash comment there calls that the halfway point: the
+   * workflows have diverged past what one string can carry, because H3 reads a
+   * document with named fields and the composer is what collects them. A shot's
+   * line is where the sentence lives now, and with one shot and nothing else
+   * chosen `readScene` returns null and the run is that line byte-for-byte.
+   *
+   * Not stashed by `setKind`, for the same reason `regions` is not: it belongs
+   * to one kind, and a scene left standing while you look at Krea 2 is not a
+   * state anything reads.
+   */
+  scene: Scene
+  /** Every dropped file, held once and pointed at by id. See `PoolFile`. */
+  pool: Record<string, PoolFile>
+  /** Which row is selected — an id rather than an index, because rows are added
+   *  in the middle and an index would move a selection somebody did not touch. */
+  shotSel: string
+  /** Which rail chip has its card open, if any. Cast id, pill key or LoRA path:
+   *  one rail, three kinds of chip, one open slot between them. */
+  railOpen: string | null
+  setScene: (patch: Partial<Scene>) => void
+  /** The prose, one row per line. What `typedProse` joined, taken back apart —
+   *  which is what makes Reuse a round trip rather than a re-parse. The cast is
+   *  left alone: it is not in the sentence. */
+  setProse: (text: string) => void
+  selectShot: (id: string) => void
+  setRailOpen: (id: string | null) => void
+  patchShot: (id: string, patch: Partial<Shot>) => void
+  /** A new row after `after`, selected. Returns its id so the caller can focus it. */
+  addShot: (after?: string) => string
+  dropShot: (id: string) => void
+  /** A cast member, named on creation because the gesture that makes one is
+   *  typing its name — see the mention menu. Returns it so the caller can insert
+   *  the handle it settled on, which is not always the string typed. */
+  addCast: (kind: CastKind, name: string) => CastMember
+  patchCast: (id: string, patch: Partial<CastMember>) => void
+  dropCast: (id: string) => void
+  addFile: (f: PoolFile) => void
+  /** One file onto one slot of one cast member. A second slot on the same file
+   *  adds a role rather than a second entry — that is what makes "this photo is
+   *  both the wardrobe and the body" one upload. */
+  attachSlot: (castId: string, fileId: string, slot: string) => void
+  detachSlot: (castId: string, slot: string) => void
+
   /* ---- every picture the model can be given ----------------------------- */
   keyframe: Keyframes
   refs: string[]
@@ -477,6 +529,109 @@ export const useStore = create<Store>((set, get) => ({
   setEdit: (edit) => set({ edit }),
   setBoxDrag: (boxDrag) => set({ boxDrag }),
   setFileOver: (fileOver) => set({ fileOver }),
+
+  scene: emptyScene(),
+  pool: {},
+  shotSel: '',
+  railOpen: null,
+  setScene: (patch) => set((s) => ({ scene: { ...s.scene, ...patch } })),
+  setProse: (text) => set((s) => {
+    const lines = text.split('\n')
+    const shots = (lines.length ? lines : ['']).map((line) => newShot(line))
+    return { scene: { ...s.scene, shots }, shotSel: shots[0]?.id ?? '' }
+  }),
+  selectShot: (shotSel) => set({ shotSel }),
+  setRailOpen: (railOpen) => set({ railOpen }),
+  patchShot: (id, patch) => set((s) => ({
+    scene: { ...s.scene,
+             shots: s.scene.shots.map((x) => (x.id === id ? { ...x, ...patch } : x)) },
+  })),
+  addShot: (after) => {
+    const row = newShot()
+    set((s) => {
+      const at = s.scene.shots.findIndex((x) => x.id === after)
+      const shots = [...s.scene.shots]
+      shots.splice(at < 0 ? shots.length : at + 1, 0, row)
+      return { scene: { ...s.scene, shots }, shotSel: row.id }
+    })
+    return row.id
+  },
+  // Never to zero rows. A scene with no shots is not an empty scene, it is a
+  // scene with nowhere to type — and `_validate_scene` reads no shots as "no
+  // scene", so the composer would silently become the old prompt box with the
+  // sentence deleted.
+  dropShot: (id) => set((s) => {
+    if (s.scene.shots.length < 2) return {}
+    const i = s.scene.shots.findIndex((x) => x.id === id)
+    const shots = s.scene.shots.filter((x) => x.id !== id)
+    return {
+      scene: { ...s.scene, shots },
+      shotSel: s.shotSel === id ? (shots[Math.max(0, i - 1)]?.id ?? '') : s.shotSel,
+    }
+  }),
+  addCast: (kind, name) => {
+    // Uniqueness is settled here rather than refused at the door: two people
+    // called Ava is a thing that happens, and the handle is how a shot names
+    // somebody, so it has to pick one of them. `_validate_scene` refuses a
+    // collision, which is the right answer to a stale tab and the wrong answer
+    // to somebody halfway through typing a second name.
+    const taken = new Set(get().scene.cast.map((c) => handleOf(c.name)))
+    const base = handleOf(name)
+    let handle = base
+    for (let n = 2; handle && taken.has(handle); n++) handle = `${base}_${String(n)}`
+    const member = { ...newMember(kind), name: handle }
+    set((s) => ({ scene: { ...s.scene, cast: [...s.scene.cast, member] } }))
+    return member
+  },
+  // A rename rewrites the handle across every row, as a visible find-and-replace
+  // — the alternative is storing `@{id}` and showing a string nobody can safely
+  // edit. See `rename` for the consequence that buys.
+  patchCast: (id, patch) => set((s) => {
+    const was = s.scene.cast.find((c) => c.id === id)
+    const from = was ? handleOf(was.name) : ''
+    const to = patch.name === undefined ? from : handleOf(patch.name)
+    return {
+      scene: {
+        ...s.scene,
+        cast: s.scene.cast.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+        shots: from === to ? s.scene.shots
+          : s.scene.shots.map((x) => ({ ...x, line: rename(x.line, from, to) })),
+      },
+    }
+  }),
+  // The mentions are left alone. They are the person's own text and deleting a
+  // bucket is not a licence to edit their sentences — `_validate_scene` says so
+  // out loud instead, naming the handle nobody defines any more, which is a
+  // sentence under the timeline rather than words vanishing from a line.
+  dropCast: (id) => set((s) => ({
+    scene: { ...s.scene, cast: s.scene.cast.filter((c) => c.id !== id) },
+    railOpen: s.railOpen === id ? null : s.railOpen,
+  })),
+  addFile: (f) => set((s) => (s.pool[f.id] ? {} : { pool: { ...s.pool, [f.id]: f } })),
+  attachSlot: (castId, fileId, slot) => set((s) => ({
+    scene: { ...s.scene, cast: s.scene.cast.map((c) => {
+      if (c.id !== castId) return c
+      // One file per slot, and one entry per file. Dropping onto an occupied
+      // slot replaces what was there rather than stacking, which is the same
+      // rule `setAttached` keeps for a region's plates.
+      const rest = c.refs
+        .map((r) => ({ ...r, slots: r.slots.filter((x) => x !== slot) }))
+        .filter((r) => r.slots.length || r.fileId === fileId)
+      const has = rest.find((r) => r.fileId === fileId)
+      return { ...c, refs: has
+        ? rest.map((r) => (r.fileId === fileId
+            ? { ...r, slots: [...r.slots.filter((x) => x !== slot), slot] } : r))
+        : [...rest, { fileId, slots: [slot] }] }
+    }) },
+  })),
+  detachSlot: (castId, slot) => set((s) => ({
+    scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id === castId ? {
+      ...c,
+      refs: c.refs
+        .map((r) => ({ ...r, slots: r.slots.filter((x) => x !== slot) }))
+        .filter((r) => r.slots.length),
+    } : c)) },
+  })),
 
   keyframe: { first: null, last: null },
   refs: [],

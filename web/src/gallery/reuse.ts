@@ -24,7 +24,12 @@ const set = (v: unknown): string => (v == null || v === '' ? '' : String(v))
  *  text and never belonged in there. */
 function restore(s: ReturnType<typeof useStore.getState>,
                  typed: string, chips: LoraChip[]): void {
-  s.setPrompt(typed)
+  // The image side has a sentence and the video side has rows, so "the prompt"
+  // is two different shapes and `prompt_typed` is what both were written from.
+  // The rows come back one per line, which is exactly how `typedProse` joined
+  // them — a round trip rather than a re-parse.
+  if (s.kind === 'video') s.setProse(typed)
+  else s.setPrompt(typed)
   useStore.setState({ loras: chips })
 }
 
