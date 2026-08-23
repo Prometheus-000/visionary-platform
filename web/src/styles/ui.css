@@ -676,7 +676,12 @@ svg{width:100%;height:100%;display:block}
    out of the console's 30% budget: it is not in the console. `inset:0` on
    `.canvas`, which is already the positioned box the render fills, so the two
    occupy exactly the same rectangle and nothing reflows on the way in. */
-.tsource{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;
+/* Anchored to the bottom edge — the side the console it describes is on — and
+   only as tall as the document in it. `inset:0` was the first version and a
+   six-line document then sat in a 680px box with five hundred pixels of black
+   under it, which is the whole of what "it takes the canvas" bought. */
+.tsource{position:absolute;left:0;right:0;bottom:0;max-height:100%;z-index:8;
+  display:flex;flex-direction:column;
   background:#070707;border-radius:var(--r-card);overflow:hidden;
   outline:1px solid var(--line-2);outline-offset:-1px}
 .tsource-h{display:flex;align-items:center;gap:9px;padding:7px 10px;
@@ -695,9 +700,9 @@ svg{width:100%;height:100%;display:block}
 .tsource-h .x:hover{background:var(--wash-3);color:var(--fg)}
 /* A textarea, not a `<pre>`: devtools is directly editable and the page responds
    live, and here the edit is what runs. */
-#doc-source{flex:1;min-height:0;width:100%;border:0;border-radius:0;background:none;
-  padding:12px 14px;resize:none;color:#9a9a9a;
-  font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+#doc-source{flex:none;width:100%;border:0;border-radius:0;background:none;
+  padding:12px 14px;resize:none;overflow:auto;color:#9a9a9a;
+  font:12px/21px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
 #doc-source:focus{border:0;box-shadow:none;color:var(--fg)}
 
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —

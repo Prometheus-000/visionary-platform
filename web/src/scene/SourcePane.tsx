@@ -1,7 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 import { useCompiled } from '../shot/useCompiled'
 import { useStore } from '../store'
+
+/** `#doc-source`'s line height and the shortest pane worth drawing a header on. */
+const LINE = 21
+const MIN_LINES = 3
 
 /**
  * The compiled document, as view source.
@@ -19,6 +23,13 @@ import { useStore } from '../store'
  *   takes the canvas the way devtools takes the window, and that is fine —
  *   nobody is judging a render while reading a prompt. The surface that kept
  *   breaking the budget stops competing for it.
+ *
+ *   **It takes what it needs of the canvas, not all of it.** `inset:0` was the
+ *   first version and a six-line document then sat in a 680px box with five
+ *   hundred pixels of black under it. Devtools docks to a *fraction* of the
+ *   window and drags to more; this grows from the bottom edge — the side the
+ *   console it describes is on — to fit what it holds, and scrolls once it
+ *   reaches the top.
  * - **A textarea, not a `<pre>`.** Devtools is directly editable and the page
  *   responds live; this is too, and the edit is what runs. Where the precedent
  *   stops applying: a devtools edit evaporates on reload because the source file
@@ -50,6 +61,23 @@ export function SourcePane() {
     document.addEventListener('keydown', key)
     return () => { document.removeEventListener('keydown', key) }
   }, [s])
+
+  // Grow to the document, up to the canvas; past that, scroll. The same shape as
+  // `autoGrow`, and the `height = 'auto'` first is load-bearing for the same
+  // reason — `scrollHeight` on an element with an explicit height reports that
+  // height, so without it the pane can only ever get taller.
+  useLayoutEffect(() => {
+    const el = area.current
+    const box = el?.parentElement
+    const stage = box?.parentElement
+    if (!el || !box || !stage) return
+    el.style.height = 'auto'
+    const chrome = box.getBoundingClientRect().height - el.getBoundingClientRect().height
+    const cap = stage.getBoundingClientRect().height - chrome
+    // A floor, so a one-field document is not a sliver with a header on it. Three
+    // lines is the shortest thing that reads as a document rather than a caption.
+    el.style.height = `${String(Math.max(MIN_LINES * LINE, Math.min(el.scrollHeight, cap)))}px`
+  })
 
   /**
    * Which shot the caret is in, if any.
