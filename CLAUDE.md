@@ -370,6 +370,7 @@ not a proxy, and until it runs, a text judge should be read as one.
 
     app.py              the whole application — images, jobs, API
     web/                the front end: React + TypeScript, built by Vite
+    web/src/scene/      the scene composer — what replaced the video prompt box
     comfy_nodes/        our own ComfyUI nodes — one shim, see visionary_boxes
     tools/              smoke tests, the local UI preview
     tools/tune_dupes.py where the duplicate thresholds come from — takes a folder
@@ -1259,13 +1260,12 @@ two domains, and the page follows the domains.
   unreachable because there is only ever one to read. What still differs beyond
   that is the options, which rebuild from `VIDEO_MODELS` — see below.
 
-  **And the console itself is splitting, so read the stash as the halfway point
-  rather than the destination.** The workflows have diverged past what one strip
-  can carry: the video side is losing its prompt box entirely to the scene
-  composer. Two buffers behind one live slot is the right *shape* — it is already
-  two composer states — but once each side owns its own surface they stop being
-  swapped and start being separate. Nothing in `setKind` is wasted by that; what
-  changes is who reads it.
+  **The split has happened, and the stash is now half of what it was.** The
+  video side lost its prompt box to the scene composer: its prose lives in
+  `scene.shots`, which belongs to one kind and is therefore not stashed at all —
+  the same arrangement `regions` has. What still swaps is the negative, the pills
+  and the chips. Two buffers behind one live slot was the right *shape* for the
+  transition and it is still the right shape for what is left of it.
 - **Copy is a last resort — but a number is not a value it can show.** Design
   first, then an icon, then words. A control that shows its own value gets no
   label: "Krea 2 Turbo", "16:9", "720p", "5s" name themselves. Twice the icon
@@ -1349,10 +1349,10 @@ two domains, and the page follows the domains.
   **Everything above about *placement* is the Krea 2 side, and only that.** The
   `▸ 4 LoRAs` disclosure, `+ LoRA` in the strip, the region dropdown, `LoraBox`,
   `LoraButton` and every id in `check_loras.py` describe a console with a prompt
-  box in it. **The video side is not getting one** — the scene composer replaces
-  it, and a LoRA there is a chip that lives beside setting, character, shot and
-  audio rather than under a sentence. Do not port these controls across, and do
-  not read a rule about `#lora-box` as a rule about video.
+  box in it. **The video side does not have one**, so none of them are there: a
+  LoRA is a chip on the one rail, beside the cast and the shot pills, and the
+  picker is a mark on the field's trailing edge. Do not port these controls
+  across, and do not read a rule about `#lora-box` as a rule about video.
 
   What *is* shared is the idea and nothing else: **a LoRA is a file plugged into a
   module, a trigger phrase is text, and the two do not live in the same place.**
@@ -1659,16 +1659,20 @@ two domains, and the page follows the domains.
   where they are and the text between them changes places, so a prompt written
   across two lines still has two lines however many times you press the chord.
 
-- **The empty prompt box is the worst control on the page, so it is not the
-  only one.** H3 does not read a paragraph; it reads a document with named
-  fields, published in the model repo. The composer offered a textarea for it,
-  and every symptom of that is the same symptom: there is no slot for camera
+- **The empty prompt box is the worst control on the page, so on the video side
+  there is not one.** H3 does not read a paragraph; it reads a document with
+  named fields, published in the model repo. The composer offered a textarea for
+  it, and every symptom of that is the same symptom: there is no slot for camera
   direction, so every position is a guess; tone and genre belong to a clause
   with no name on screen; the place a reference image's description belongs is
   not on the page, so it goes in the only box there is. A documented grammar
   presented as free prose reads as superstition — whether a comma or "the woman"
   versus "a woman" changes the take is not something anyone can infer — and a
   take is two to three minutes, so every guess is paid for at that rate.
+
+  The palette below was the first half of the answer and the **scene composer**
+  is the second — see "The scene composer" further down, and
+  `docs/design-notes/console-ladder.html` for the design it was built to.
 
   So the closed vocabulary is a **palette**: a door in the strip beside `+ LoRA`,
   a popover of small animated tiles, and the pills themselves under the prompt.
@@ -1861,6 +1865,133 @@ The direction instead is **unbounded buttons**: controls that carry no chrome
 until they need it, so the strip stops looking like a strip. It is a step toward
 the console disappearing entirely, which is the actual goal the rail was a
 detour around.
+
+## The scene composer
+
+**The video side has no prompt box.** H3 reads a document with named fields —
+shots, cut times, speaker IDs, a retention line per subject — and a text field
+has no shots in it, which is why `_compile_h3_prompt` could not emit half the
+grammar it was written against: the composer never collected it. The design is
+`docs/design-notes/the-scene-is-the-prompt.md` for the argument and
+**`docs/design-notes/console-ladder.html` for the layout**, and the second
+supersedes `scene-composer.html`, which hides the canvas behind a 132px stub. The
+ladder draws all five states at true proportion against `CONSOLE_BUDGET`, and its
+own footnote is why to trust the picture over the prose: twice while it was being
+drawn the two disagreed and the prose was the optimistic one both times.
+
+**The degrade is exact, and everything rests on it.** One shot, no cast, no
+pills, and `readScene` returns null: no `scene` key is sent and the run is the
+typed text byte-for-byte, in a box that is identical to the prompt box it
+replaced, under the same `#prompt` id. Nothing about the video side changes until
+somebody asks for a second shot. That is what let this land in three commits
+rather than one, and it is the rule to check first if any of it is ever moved.
+
+- **The gesture creates the cast.** Typing `@` floats a picker off the caret;
+  picking makes the member and drops the handle. So the cast has no empty state,
+  because it is never on screen before it exists — which is `+ LoRA` inverted:
+  there you open a picker in order to insert a name, here the name you are
+  already typing *is* the picker. The three doors on the field's trailing edge
+  reach the same thing without knowing the gesture.
+
+  **Where the caret is comes from the mirror**, and that is the third job it has
+  done. It is a glyph-for-glyph copy of the textarea, so a zero-width span
+  spliced into it at the caret's index sits exactly where the caret does — the
+  only way anything on this page can answer that question. It was built for
+  provenance marks, kept when they were deleted on the grounds that unwinding it
+  bought nothing, and it is now load-bearing again.
+
+- **The share is a readout, not an input.** A shot's slice of the clip is the
+  length of what you wrote about it. That is not a shortcut — it is what removes
+  a 9px drag target instead of enlarging it to a thumb-sized one, which is the
+  question a phone frame asked and the console could not afford to answer. Extent
+  drives prominence; `beats` survives as the precision escape hatch, the way a
+  region's four coordinates do.
+
+- **Rows divide the field's existing allowance rather than adding to it.**
+  `growRows` is `autoGrow` over n boxes and reduces to it exactly at n=1, so a
+  four-shot scene costs what a long prompt costs and the 30% budget needs no
+  second arithmetic. Measured at 1512x982 with three shots and the source row
+  showing: 287px, 29.2%.
+
+- **The slot is the role**, and a file over a slot that cannot take it does not
+  highlight. The rejection is the absence of an invitation, which arrives before
+  the drop rather than after it; read off `dataTransfer.items` during the drag,
+  the one moment the answer is available and still useful. `DropTile` alerts
+  instead and is right to — its tiles all take images, so a wrong file there is
+  worth naming, and here the row *is* the table of what takes what.
+
+- **One rail, three kinds of chip** — cast, shot pills, LoRAs. They were three
+  mechanisms in two places and they are one tool: each is something attached to
+  the thing you are making, and each opens its own card when touched.
+
+- **The pool is keyed by what travels**, not by the file on disk. A photograph
+  and its own re-export shrink to the same bytes, and two entries in
+  `references[]` pointing at one picture would put every `<Picture N>` after the
+  first off by one with nothing on screen saying so. It also makes the numbering
+  derivable rather than kept in step by hand, which is what `refs`/`refRoles`
+  had to do — not fixed, *unrepresentable*.
+
+- **Everything that floats is portalled and fixed.** `.console` is
+  `overflow:auto` — the rule that stops a full console pushing the canvas out of
+  frame — so a child of it floating above its own top edge is clipped by it. Not
+  `Popover` either: that closes on scroll, which is right for a menu and wrong
+  for a box you type a name into. Two faults found here and both are the same
+  shape: a ref read during the parent's render is null and nothing re-renders to
+  correct it, so the menu placed itself at 0,0; and picking left the menu open on
+  the name just chosen, which is a picker that will not take yes for an answer.
+
+### The compiled document is view source
+
+**Reading the prompt is not a step in composing.** It was frame 6 of the ladder
+and that was the error: the scene is the source and the document is what it
+compiles to, so the precedent is not a disclosure, it is devtools — and four
+things follow rather than being chosen.
+
+- **No button says "inspect".** Devtools is a chord and a context menu and the
+  page never advertises it, so the composer carries nothing for this. ⌘⌥U, which
+  is the browser's own chord for exactly this, or right-click the console — one
+  of the two has to be findable without being told. It stands aside for a text
+  field's spelling menu or an image's Save Image rather than deciding it outranks
+  the platform.
+- **It is not in the console budget, because it is not in the console.** It takes
+  the canvas the way devtools takes the window, and nobody is judging a render
+  while reading a prompt. The surface that kept breaking the budget stops
+  competing for it.
+- **A textarea, not a `<pre>`,** and the edit is what runs. Where the precedent
+  stops applying: a devtools edit evaporates on reload because the source file is
+  the truth you port back to, and here that would be a render you cannot
+  reproduce. So editing **detaches** — one bit for the whole document, visible in
+  the header, one gesture back. Not per-field pinning: six independent states
+  nobody asked for, and an attempt to make a derived surface partly
+  authoritative. Either the scene is driving it or you have taken it over, and
+  you can always see which.
+- **It shows derivation.** Put the caret in a `[Shot N]` block and that row lights
+  up below. Only while attached — a detached document is arbitrary text and its
+  markers are claims about nothing.
+
+`prompt_compiled` is its own key on `/api/video` rather than a rewrite of
+`prompt`, and this is the case that separates the two halves of a run:
+`prompt_typed` stays the prose somebody wrote and only the receipt is overridden.
+Folded together, the sidecar's intent field would hold a six-field schema and
+Reuse would load it into the first shot's row and compile *that* on the next run.
+It is stripped and never `_oneline`d — that function exists because a newline
+inside a *field* ends it early, and this is the document, where one field per
+line is the format.
+
+### What it does not do yet
+
+- **Blocking is not reachable from it.** `_stage_*` and `_stage_boxes` are live
+  in the compiler and nothing fills them in, which is exactly the state the scene
+  itself was in before this. `web/src/blocking/` is still the throwaway probe.
+- **Wan gets the timeline and cannot read it.** `/api/video` compiles a scene
+  only for H3; on Wan the rows join into prose. Nothing on screen says so, and by
+  the rule that a control present but ignored is worse than one absent, something
+  should.
+- **`retention` reaches the document at its default and no control sets it.**
+  That is a default that reaches the output rather than a `ties` — but the moment
+  it wants a control, it wants one on the cast card and not in a panel.
+- **None of it has been measured against a render.** It has been driven and read.
+  `tools/prompt_ab.py` is the measurement that is not a proxy and it has not run.
 
 ## Phases
 
