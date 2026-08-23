@@ -35,13 +35,17 @@ function Row({ label, hint, children }: {
 }
 
 // The carve-out to the copy-is-a-last-resort rule, and the same one the
-// dimension boxes get: a field that silently stopped being random is a value
-// that cannot show itself. There is no lock glyph, no dice and no chip —
-// the number is visible in its own field and one gesture from gone, which is
-// what makes saying so enough.
+// dimension boxes get: an empty field cannot show what emptiness does. There is
+// no lock glyph, no dice and no chip — the number is visible in its own field
+// and one gesture from gone, which is what makes saying so enough.
+//
+// **It said the seed pinned itself here, and that stopped being true.** The
+// pin fired only once the prompt had been read into a document; there are no
+// documents now, so the field is always what you left it. Copy describing a
+// behaviour the code no longer has is worse than no copy, and it is the kind
+// that survives a deletion because nobody greps the strings.
 const SEED_HINT = 'Blank draws a new one. A seed worth keeping is on the render '
-  + 'that used it — and once the prompt has been read, the first one is kept here '
-  + 'so an edit changes only what it implied. Clear it to roll again.'
+  + 'that used it, and Reuse puts it back.'
 const SHIFT_HINT = 'Bends the noise schedule — higher spends more steps on composition and motion.'
 
 export function ImageSampling() {

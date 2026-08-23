@@ -167,15 +167,11 @@ export function useGenerate(onLanded: (it: GalleryItem) => void) {
       s.duration_s ? `${String(s.duration_s)}s` : '',
     ].filter(Boolean)
 
-    // **The seed no longer pins itself, and it died with its own gate rather
-    // than being removed.** The pin existed so that editing one assumption moved
-    // only what that edit implied, which it cannot if the seed rerolls
-    // underneath — but a seed that stops rolling for somebody who never engaged
-    // reads as "Generate is broken, it keeps making the same picture", so it
-    // fired only once the prompt had been read into a document. There are no
-    // documents now, so the condition was permanently false. Rebuilding it needs
-    // a new answer to "how do we know they meant to hold this frame", and
-    // `SEED_HINT` still describes the field as the place to type one.
+    // **Nothing writes the seed back into the box, and that is the decision
+    // rather than the gap.** A field that silently stopped being random reads
+    // as "Generate is broken, it keeps making the same picture" — so the seed
+    // rolls until you type one, and the one that made a picture you liked is
+    // on that picture, one Reuse away.
     // Replaces the on-screen render atomically: the new job's id and files land in
     // the same set as `running:false`, so there is never a frame where the old
     // `jobId` is paired with the new `files`.

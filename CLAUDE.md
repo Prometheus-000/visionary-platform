@@ -1084,27 +1084,38 @@ two domains, and the page follows the domains.
   differ, split on the *pointer* rather than the width — `(hover:none)` is
   asking the question the layout actually cares about, and a tablet with a
   keyboard is neither of the things a width test thinks it is.
-- **The seed pins itself once the prompt has been read, and only then.** Editing
-  one assumption should move only what that edit implied, and it cannot if the
-  seed rerolls underneath it — so `finish()` writes the run's seed back into the
-  field when a document exists and the field was left blank. Never over a number
-  somebody typed, and never without a document: a seed that stopped rolling for
-  a person who never engaged with any of this reads as *"Generate is broken, it
-  keeps making the same picture."*
+- **The seed rolls until you type one, and nothing writes it back for you.** It
+  used to: `finish()` put the run's seed into the field when a document existed
+  and the field was blank, so that editing one assumption moved only what that
+  edit implied. It was gated on the document precisely because the ungated
+  version is a trap — *a seed that stopped rolling for a person who never
+  engaged reads as "Generate is broken, it keeps making the same picture"* — and
+  with the documents deleted the gate can never be true, so the behaviour went
+  with them rather than being ungated by default.
 
-  **A pin is not cleared when the size or the model changes.** Considered and
-  rejected, and recorded because it looks like a bug for as long as it is not.
-  Same seed, wider frame is a comparison people actually run; clearing deletes
-  it. It would also be the first control here that silently empties another
-  field — `setImg`/`setVid` are shallow patches, and the only writes of
-  `seed: ''` in the codebase are the two Reset buttons, which is a person
-  asking. A value that empties itself when you touch a control you did not think
-  was a decision is the specific way a surface stops being believed, which is
-  the delete-count finding transferred whole. The number is visible in its own
-  field and one gesture from gone, and **that visibility is what makes clearing
-  it for you unnecessary rather than merely risky.** No lock glyph, no dice, no
-  chip; `SEED_HINT` gained a sentence, which is the carve-out a field that
-  silently stopped being random has always been owed.
+  **What made that safe to lose is that the seed is on the render.** It is drawn
+  once, sent to the sampler, written to the sidecar beside the file, shown on the
+  metadata sheet and restored by Reuse. A generation knows its own seed forever;
+  what is gone is only the input box filling itself in.
+
+  **If it comes back, the question to answer first is what says "I am iterating"
+  rather than "I am starting something".** The document was that signal and it
+  was a bad one — it meant "you used a feature", not "you meant to hold this
+  frame". A gesture is the better shape: the number is already on screen, so
+  clicking it into the field costs one click and never changes a field under
+  somebody's hand.
+
+  **And a pin is never cleared when the size or the model changes.** Considered
+  and rejected, and recorded because it looks like a bug for as long as it is
+  not. Same seed, wider frame is a comparison people actually run; clearing
+  deletes it. It would also be the first control here that silently empties
+  another field — `setImg`/`setVid` are shallow patches, and the only writes of
+  `seed: ''` are the two Reset buttons, which is a person asking. A value that
+  empties itself when you touch a control you did not think was a decision is
+  the specific way a surface stops being believed. The number is visible in its
+  own field and one gesture from gone, and that visibility is what makes
+  clearing it for you unnecessary rather than merely risky.
+
 
 - **Generate is the page, not a destination.** It has no nav item. Train is one
   door, labelled with where it leads rather than where you are, so two things
