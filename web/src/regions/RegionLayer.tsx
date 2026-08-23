@@ -58,6 +58,29 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   const attach = useStore((z) => z.attach)
 
   const layer = useRef<HTMLDivElement>(null)
+
+  /**
+   * Did this really happen *on the layer*?
+   *
+   * React events bubble along the **React tree**, and `Popover` is a portal to
+   * `<body>` — so the LoRA menu is a DOM child of the document and a React child
+   * of the card, which is a React child of this div. Every handler below was
+   * written against the DOM, and the one that mattered guarded with
+   * `closest('.rins')`: true of the card, false of a menu opened *from* the card,
+   * because the menu is not inside it.
+   *
+   * So pressing a row in the LoRA picker arrived here as a press on the picture.
+   * It drew a rectangle, `preventDefault()`ed the pointerdown — which is what
+   * suppresses the compatibility mousedown/mouseup — and captured the pointer, so
+   * the click retargeted to this div and the row's own handler never ran. The
+   * symptom was the picker doing nothing except quietly adding a region.
+   *
+   * The DOM is the authority on what is on the layer, so ask it. A `closest()`
+   * denylist cannot answer this: it would have to name every portal anyone ever
+   * opens from inside a region.
+   */
+  const onLayer = useCallback(
+    (e: React.SyntheticEvent) => !!layer.current?.contains(e.target as Node), [])
   const [guides, setGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] })
   const [dropHit, setDropHit] = useState<number | null>(null)
   /** Said on the layer rather than through `alert()`. A modal that stops the app to
@@ -187,6 +210,7 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
     const target = e.target as HTMLElement
+    if (!onLayer(e)) return
     // The card and the frame button are children of this layer, so without this every
     // click on a numeric field or on the corner button would start drawing a rectangle
     // underneath it.
@@ -461,10 +485,15 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
             answer is the box being dragged and nothing else. */
          onPointerMove={(e) => {
            if (e.pointerType === 'touch' || useStore.getState().boxDrag) return
+           // Same portal rule as the press: a pointer over the LoRA menu is not a
+           // pointer over the picture, and lighting the box underneath it would be
+           // the hairline naming something a click cannot reach.
+           if (!onLayer(e)) return
            setUnderTo(hitAt(e.clientX, e.clientY).i)
          }}
          onPointerLeave={() => setUnderTo(-1)}
          onDragOver={(e) => {
+           if (!onLayer(e)) return
            e.preventDefault()
            // Re-read on every `dragover` rather than latched on enter: a drag can
            // begin outside the layer, and this is the event that repeats.
@@ -480,8 +509,12 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
          onDragLeave={(e) => {
            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropHit(null)
          }}
-         onDrop={(e) => { void onDrop(e) }}
+         onDrop={(e) => { if (onLayer(e)) void onDrop(e) }}
          onKeyDown={(e) => {
+           // A portal is not the layer here either: Escape inside the LoRA menu is
+           // the menu's to answer, and taking it here would close the card out from
+           // under the picker that is still open on top of it.
+           if (!onLayer(e)) return
            // Escape puts the picture back. Over a render that means all the way out —
            // one press returns the clean result, which is the state the canvas is meant
            // to be in — and on the frame, where there is no render to return to, it

@@ -176,6 +176,32 @@ with sync_playwright() as pw:
         pg.evaluate(DRAG, [fx, fy, fx, fy, False])
         pg.wait_for_timeout(140)
 
+    def pick_lora(n):
+        """Press row `n` of the open LoRA menu with a real pointer, over the canvas.
+
+        Not `el.click()`, and not Playwright's own `.click()` on the locator either.
+        A scripted click dispatches a bare `click` with no pointerdown in front of
+        it, and the fault this exists for lives entirely in the pointerdown — the
+        menu is a portal to <body> and a React child of the card, so React bubbled
+        its press to `#region-layer`, which drew a rectangle, `preventDefault`ed
+        the pointerdown and captured the pointer, leaving the row's own handler
+        unreached. Every scripted press passed against that.
+
+        Aimed at least 30px inside the layer for the same reason: the menu hangs
+        off the left edge of the canvas, and a press on the part that overhangs
+        misses the layer and works whatever is wrong.
+        """
+        row = pg.evaluate("(n) => document.querySelectorAll('.menu button')[n]"
+                          ".getBoundingClientRect().toJSON()", n)
+        lay = pg.eval_on_selector("#region-layer", "e=>e.getBoundingClientRect().toJSON()")
+        x = max(row["x"] + 12, lay["x"] + 30)
+        y = row["y"] + row["height"] / 2
+        pg.mouse.move(x, y, steps=4)
+        pg.mouse.down()
+        pg.wait_for_timeout(40)
+        pg.mouse.up()
+        pg.wait_for_timeout(250)
+
     def drop_last():
         """Delete the most recently drawn box, so the next drag starts from the
         same state the last one did."""
@@ -372,18 +398,22 @@ with sync_playwright() as pw:
     pg.wait_for_timeout(200)
     rows = pg.eval_on_selector_all(".menu button", "els=>els.length")
     check("the press opens the list", rows > 0, f"{rows} rows")
-    pg.eval_on_selector_all(".menu button", "els=>els[0].click()")
-    pg.wait_for_timeout(250)
+    was = boxes()
+    pick_lora(0)
     check("picking one arms the box",
           pg.inner_text("#r-lora") != label
           and pg.locator("#region-layer .rbox.armed").count() > 0,
           pg.inner_text("#r-lora"))
+    # The half that was broken, and the half a scripted `.click()` cannot see: the
+    # menu is a portal to <body> and a React child of the card, so its press
+    # bubbled to the layer, drew a rectangle and swallowed the click.
+    check("and does not draw a rectangle doing it", len(boxes()) == len(was),
+          f"{len(was)} -> {len(boxes())}")
     # And it comes back off, which is the row the menu only shows once there is
     # something to take off.
     pg.click("#r-lora")
     pg.wait_for_timeout(200)
-    pg.eval_on_selector_all(".menu button", "els=>els[0].click()")
-    pg.wait_for_timeout(250)
+    pick_lora(0)
     check("and comes back off", pg.inner_text("#r-lora") == label, pg.inner_text("#r-lora"))
 
     # Frame scope is a different card, reached by a gesture rather than by
