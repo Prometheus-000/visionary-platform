@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
+import { useSettled } from '../ui/gesture'
 import { useStore } from '../store'
 import { Slot } from './Slot'
 import { SLOTS, handleOf, type CastMember } from './model'
@@ -25,6 +26,14 @@ export function CastCard({ member }: { member: CastMember }) {
   const box = useRef<HTMLDivElement>(null)
   const name = useRef<HTMLInputElement>(null)
   const [at, setAt] = useState<{ left: number; top: number } | null>(null)
+  // **Nothing on this card answers the gesture that made it.** It mounts at the
+  // cursor — the mention menu picks on mousedown, because the textarea has focus
+  // and a click would blur it first — so without this the mouseup of that same
+  // press landed on whichever slot was now underneath and opened a file dialog
+  // for Motion, with the card nobody had seen yet behind it. `pointer-events`
+  // rather than a guard per control, because the ✕ is under the same cursor and
+  // that one deletes the thing you just made.
+  const settled = useSettled()
 
   // **It finds its own chip**, rather than being handed a coordinate by the rail.
   // The rail is a masked scroller, so a card rendered inside it would be clipped
@@ -78,7 +87,8 @@ export function CastCard({ member }: { member: CastMember }) {
   return createPortal(
     <div className="tcard" ref={box}
          style={{ left: at?.left ?? 0, top: at?.top ?? 0,
-                  visibility: at ? 'visible' : 'hidden' }}>
+                  visibility: at ? 'visible' : 'hidden',
+                  pointerEvents: settled ? undefined : 'none' }}>
       <div className="tcard-h">
         <span className="at">@</span>
         <input ref={name} className="tname" value={member.name} spellCheck={false}
@@ -91,22 +101,25 @@ export function CastCard({ member }: { member: CastMember }) {
         <button type="button" className="x" title={`Remove @${member.name || member.kind}`}
                 onClick={() => { s.dropCast(member.id) }}>×</button>
       </div>
+      {/* **Who they are comes before what you have of them.** The slots were
+          first and the card then read as a request for five files — which is
+          what it is *not*: a cast member with a sentence and no photograph is a
+          perfectly good subject, and `_h3_label` falls back to exactly this
+          note. With a picture it trails the definition — `<Subject 1> is the
+          person in <Picture 1>, mid-thirties`; with none it is the whole of what
+          the encoder is told about them, and the alternative is the literal word
+          "sam". */}
+      <input className="tnote" value={member.note} spellCheck={false}
+             placeholder={member.kind === 'character'
+               ? 'who they are — a phrase, not a paragraph'
+               : 'what it is'}
+             onChange={(e) => { s.patchCast(member.id, { note: e.target.value }) }} />
       <div className="tslots">
         {slots.map((sl) => (
           <Slot key={sl.key} member={member} slot={sl.key}
                 label={sl.label} takes={sl.takes} />
         ))}
       </div>
-      {/* The one line of prose about somebody, and it is what a member with no
-          picture compiles to: `_h3_label` falls back to the note, then to the
-          handle, so without this an unphotographed cast member reaches the encoder
-          as the literal word "ava". With a picture it trails the subject
-          definition — `<Subject 1> is the person in <Picture 1>, mid-thirties`. */}
-      <input className="tnote" value={member.note} spellCheck={false}
-             placeholder={member.kind === 'character'
-               ? 'who they are — a phrase, not a paragraph'
-               : 'what it is'}
-             onChange={(e) => { s.patchCast(member.id, { note: e.target.value }) }} />
     </div>,
     document.body,
   )
