@@ -34,6 +34,22 @@ the next one. Concretely:
   the prompt rewrite was to blame, because it was the newest thing on that path.
   It was 48 MB of PNG references crossing the wire.
 
+  **The counterpart failure is the investigator's, and it happened here too.**
+  Handed a ten-minute gap, the diagnosis landed on 48 MB of PNG references —
+  a real waste, fixed on its own merits, and *never a candidate*: parsing that
+  body is 0.05s, decoding and writing all nine is 0.10s, and uploading it is
+  0.4-15s depending on the connection. Sixteen seconds against four hundred and
+  eighty, and none of it touches the GPU. The number was reached for because it
+  was large, and never divided by a rate.
+
+  So: **prefer the explanation with an unbounded shape over the one with a
+  computable ceiling.** A payload has a ceiling — bytes over a rate, and it can
+  be worked out in a minute. A queue does not: `VideoGenerator` is
+  `max_containers=1` and `@modal.concurrent(max_inputs=1)`, so anything holding
+  that slot delays everything behind it by however long it holds it, and a
+  rewrite on a cold container holds it for its whole cold start. That is the
+  shape a ten-minute wait has, and the arithmetic said so before any log did.
+
   A feature was nearly retired for another feature's cost. **And the logs were
   as silent as the page, which is worse** — the logs are the escape hatch, so
   what somebody sees after giving up on the screen is ComfyUI's own output
