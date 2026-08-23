@@ -248,10 +248,14 @@ export function useGenerate(onLanded: (it: GalleryItem) => void) {
           running: true,
           percent: Number(st.percent ?? 0),
           // The step count when there is one: "Working…" is equally true of a run on
-          // step 2 and one that has stalled.
+          // step 2 and one that has stalled. And every phase before the first
+          // step is shown as the server named it — "reloading the volume",
+          // "staging the inputs" — because those are where the minutes go on a
+          // cold container and "Working…" over all of them is the state
+          // somebody kills the app out of.
           phase: st.step
             ? `Step ${st.step}/${String(st.total_steps ?? st.steps ?? '?')}`
-            : (st.phase || 'Working…'),
+            : (st.phase === 'loading' ? 'Loading the model…' : (st.phase || 'Working…')),
         }))
       }
     }, 400)

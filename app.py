@@ -1409,11 +1409,62 @@ def _publish(job_id: str, /, **fields: Any) -> None:
 _PUBLISH_LOCK = threading.Lock()
 
 
+# **The stop flag lives in its own key, and that is not tidiness.** It used to
+# be a field on the job record, which every `_publish` rewrites — and `_publish`
+# is get-update-put against a *network* Dict under a **process-local** lock. The
+# Stop route runs in the web container, so it never took that lock: it read the
+# record, set `stop`, and wrote it back, while the GPU container's next publish
+# was already holding a copy read before the press and put it back with
+# `stop: False`. On the generate path a publish lands on every tqdm line, so the
+# window was open several times a second and Stop mostly did nothing — the
+# symptom being a run somebody eventually killed from the Modal dashboard.
+#
+# A key nobody merges cannot be clobbered by a merge. The record's own `stop`
+# field is still read as a fallback, because a job already in flight when this
+# deploys has one and nothing else would answer it.
+def _stop_key(job_id: str) -> str:
+    return f"stop:{job_id}"
+
+
+def _request_stop(job_id: str) -> None:
+    jobs[_stop_key(job_id)] = True
+
+
+def _clear_stop(job_id: str) -> None:
+    """At the top of a run, because the key outlives the job that set it."""
+    try:
+        jobs.pop(_stop_key(job_id))
+    except Exception:
+        pass
+
+
 def _stop_requested(job_id: str) -> bool:
     try:
+        if jobs.get(_stop_key(job_id)):
+            return True
         return bool((jobs.get(job_id) or {}).get("stop"))
     except Exception:
         return False
+
+
+def _stop_gate(job_id: str, where: str) -> None:
+    """
+    Raise if Stop was pressed, at a point where nothing is holding a GPU.
+
+    **The generate path used to read the flag in exactly one place** — inside
+    `_await`, which is reached only once the graph has been posted. Everything
+    before it, which on a cold container is where the minutes are, ran to
+    completion whatever the person did: the button set a bit nobody looked at,
+    the page said "Stopping…", and the render carried on to a picture nobody
+    was waiting for any more. Somebody watching that goes to Modal and kills
+    the app, which is what happened and how this was found.
+
+    Cheap enough to call between phases: one read of a Dict this path already
+    writes to several times.
+    """
+    if _stop_requested(job_id):
+        print(f"[{job_id}] stop requested during {where}", flush=True)
+        raise StopRequested(where)
 
 
 def _hf_token() -> str | None:
@@ -3066,7 +3117,10 @@ def _session_view(rec: dict[str, Any]) -> dict[str, Any]:
     # said "Stopping — finishing the step it is on" over a run that finished
     # unwinding an hour ago. It is a fact about a *live* run, so it is only
     # reported while there is one.
-    stopping = bool(job.get("stop")) and status in ("running", "queued")
+    # Through `_stop_requested`, so the card reflects the same fact the job
+    # reads. Asking the record alone would show "stopping" only for a press
+    # that landed in the merged field — which is the half that could be lost.
+    stopping = _stop_requested(job_id) and status in ("running", "queued")
     return {**out, **live, "status": status, "stopping": stopping}
 
 
@@ -5823,7 +5877,13 @@ class ImageGenerator:
     @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
         started = time.time()
-        jobs[job_id] = {"status": "running", "phase": "loading", "stop": False}
+        # Same three lines as the video side, and for the same reason: the
+        # window between accepting a job and queueing its graph was unlit, and
+        # the phase claimed `loading` while the volume reload — the one
+        # unbounded step in it — had not been started.
+        print(f"[image] {job_id} accepted", flush=True)
+        _clear_stop(job_id)
+        _publish(job_id, status="running", phase="reloading the volume")
         _reload_volume()
 
         model = "turbo" if str(params.get("model") or "turbo") != "raw" else "raw"
@@ -5833,6 +5893,7 @@ class ImageGenerator:
             # would leave the record saying "running" forever, and the UI
             # polling a job that is never going to answer.
             _require_models(model, "vae", "text_encoder")
+            _stop_gate(job_id, "the volume reload")
 
             regions = _validate_regions(params.get("regions"))
             plates = {}
@@ -5916,7 +5977,10 @@ class ImageGenerator:
             )
 
             info = {"width": width, "height": height, "seed": seed, "steps": steps}
-            _publish(job_id, phase="generate", step=0, total_steps=steps,
+            _stop_gate(job_id, "staging")
+            # `loading`, not `generate` — ComfyUI has the graph and has not
+            # sampled anything. `_drain` moves it on at the first real step.
+            _publish(job_id, phase="loading", step=0, total_steps=steps,
                      percent=0, **info)
             out_names = self._comfy.run(job_id, graph, what="image")
         except StopRequested:
@@ -9343,6 +9407,7 @@ class VideoGenerator:
         # container prints nothing either way. Stamped here, the two are one
         # subtraction apart.
         print(f"[video] {job_id} accepted", flush=True)
+        _clear_stop(job_id)
         # **Everything from here to `run()` used to be silent**, and a ten-minute
         # gap between pressing Generate and ComfyUI receiving the graph was
         # therefore unattributable: the job record said `loading` from the first
@@ -9352,8 +9417,7 @@ class VideoGenerator:
         # walks the volume — each of those can be the minutes, and none of them
         # could be told apart afterwards. So each one names itself, to the log
         # for later and to the record for the person waiting.
-        _publish(job_id, status="running", phase="reloading the volume",
-                 stop=False)
+        _publish(job_id, status="running", phase="reloading the volume")
         _reload_volume()
 
         model = str(params.get("model") or "h3")
@@ -9365,12 +9429,17 @@ class VideoGenerator:
             def stage(blob: str, slot: str, ext: str = "png") -> str:
                 return self._comfy.stage(job_id, blob, slot, ext)
 
+            # Gated either side of the slow part, so Stop is answered while
+            # this is still arithmetic and a file copy rather than after a
+            # graph is on a GPU.
+            _stop_gate(job_id, "the volume reload")
             _publish(job_id, phase="staging the inputs")
             t_plan = time.time()
             plan = (self._plan_h3 if model == "h3" else self._plan_wan)(params, stage)
             graph, info = plan["graph"], plan["info"]
             print(f"[video] ready to queue after {time.time() - started:.1f}s "
                   f"({time.time() - t_plan:.1f}s of it staging)", flush=True)
+            _stop_gate(job_id, "staging")
 
             # **`loading`, not `generate`.** ComfyUI has the graph and has not
             # sampled anything: on a warm H100 it is 82 seconds of VAE, text
@@ -10892,9 +10961,7 @@ def web():
             return {"error": "That session is gone — it was deleted in another window."}
         job_id = str(rec.get("job_id") or "")
         if job_id:
-            cur = jobs.get(job_id) or {}
-            cur["stop"] = True
-            jobs[job_id] = cur
+            _request_stop(job_id)
         return {"ok": True, "session": _session_view(rec)}
 
     @api.post("/api/sessions/{sid}/delete")
@@ -10913,9 +10980,7 @@ def web():
             return {"ok": True, "gone": True}
         job_id = str(rec.get("job_id") or "")
         if job_id and _session_view(rec).get("status") in ("running", "queued"):
-            cur = jobs.get(job_id) or {}
-            cur["stop"] = True
-            jobs[job_id] = cur
+            _request_stop(job_id)
         _session_drop(sid)
         return {"ok": True}
 
@@ -11553,9 +11618,7 @@ def web():
 
     @api.post("/api/stop/{job_id}")
     def stop(job_id: str) -> dict[str, Any]:
-        cur = jobs.get(job_id) or {}
-        cur["stop"] = True
-        jobs[job_id] = cur
+        _request_stop(job_id)
         return {"ok": True}
 
     return api
