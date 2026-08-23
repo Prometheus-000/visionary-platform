@@ -175,7 +175,6 @@ export type AppState = {
   /** The three jobs the interpreter will do on your sentence. The instruction
    *  stays on the server and the page sends a key, so a run is reproducible
    *  from the job record rather than from whatever text was in a field. */
-  rewrite_ops: { key: string; label: string; note: string }[]
   /** The motion panel's sections, and the feature flag in one: absent (an
    *  older server) means the video strip renders the old shot palette. */
   motion_groups?: MotionGroup[]
@@ -379,8 +378,6 @@ export type DupeReport = {
 
 /** Prose in, prose out. `text` is the original on any failure, so a model that
  *  fell over can never blank the box. */
-export type RewriteResult = { ok: boolean; op?: string; text: string; error?: string }
-
 /** What `/api/motion` answers: grouped suggestion sentences, keyed by
  *  MotionGroup key. Empty groups on any failure — the panel says so and the
  *  prompt box is never touched by a model that fell over. */

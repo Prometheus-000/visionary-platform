@@ -102,20 +102,9 @@ CAPTION = {
     "DEFAULT_CAPTION_MODEL", "DEFAULT_CAPTION_PRESET",
 }
 
-# The rewrite operations, for `preview_ui.py`'s `/api/state` stub. Pulled rather
-# than transcribed for the reason the shot vocabulary is: a stub that omits them
-# renders no button at all, so the one surface this feature has is invisible in
-# the preview that exists to make the front end developable without a GPU.
-# `KREA_EXPANSION` comes too, and its absence is the one failure this file has:
-# the subset executes top-level statements in order, so `REWRITE_OPS` naming a
-# constant nobody pulled raises `NameError` from inside app.py — which reads as
-# a broken preview rather than an incomplete pull.
-REWRITE = {"REWRITE_OPS", "KREA_EXPANSION"}
-
-# The motion panel's sections and its parser, for the same two callers the
-# rewrite set has: `preview_ui.py` serves `motion_groups` and stubs
-# `/api/motion` through the real parser, and `smoke_rewrite.py` asserts the
-# instruction budget and the parse cases. `_THINK` and `_oneline` ride along
+# The motion panel's sections and its parser: `preview_ui.py` serves
+# `motion_groups` and stubs `/api/motion` through the real parser, and
+# `smoke_prompt.py` asserts the instruction budget. `_THINK` and `_oneline` ride along
 # because `_parse_motion` calls them — the rule the MODULES comment records:
 # a constant a pulled function names has to be pulled in the same edit.
 MOTION = {
@@ -131,7 +120,8 @@ MOTION = {
 # control is a preview of a control that does not exist.
 #
 # `requires` and `defaults` name six other constants, and they come too — the
-# rule the REWRITE set records: a constant a pulled definition names has to be
+# rule this file's one real failure mode records: a constant a pulled definition
+# names has to be
 # pulled in the same edit, or app.py raises NameError from inside the subset.
 VIDEO = {
     "VIDEO_MODELS", "VIDEO_MODEL_KEYS", "VIDEO_REF_MODEL_KEYS",

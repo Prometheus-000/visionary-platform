@@ -488,38 +488,6 @@ svg{width:100%;height:100%;display:block}
    selection is a highlighted rectangle with nothing written in it. */
 #prompt::selection{background:var(--line-2)}
 
-/* Two channels, and they answer different questions: the underline is reach,
-   the colour is authorship.
-
-   Dotted under every *element*, because an element is a thing the document can
-   act on — one is one reroll away from being something else. The earlier note
-   here said derived text carries no mark at all, on the grounds that
-   underlining what somebody wrote would mark nearly every word; that was right
-   about a rule which underlined all derived text and wrong about this one. An
-   element is an anchor and what hangs off it, not a word, so the marks land on
-   the handful of things in the sentence there is anything to *do* to, and the
-   connective tissue between them carries nothing.
-
-   Grey is the separate claim laid over the top: these particular words are the
-   model's. So a clause you wrote and a clause it supplied are both underlined
-   and only one of them is grey, which keeps provenance binary instead of
-   inventing a third state for it. */
-.mk-el{text-decoration:underline dotted;text-decoration-color:var(--dim);
-  text-underline-offset:3px}
-.mk-i{color:var(--mut);text-decoration:underline dotted;
-  text-decoration-color:var(--mut);text-underline-offset:3px}
-/* Rooted at the run's own end and gone the moment the caret leaves it. It is
-   the one affordance a span has, so it carries no chrome until it is under the
-   pointer — the console's unbounded-button rule, on the one control that is not
-   in the console. `pointer-events` because the mirror above it has none. */
-.mk-reroll{position:absolute;z-index:2;transform:translate(3px,-1px);
-  display:flex;align-items:center;justify-content:center;
-  width:16px;height:16px;padding:0;border:0;border-radius:var(--r-mark);
-  background:none;color:var(--mut);cursor:pointer;pointer-events:auto}
-.mk-reroll:hover{background:var(--wash-2);color:var(--fg)}
-/* In flight, and it settles the same way for all three outcomes — a new
-   reading, an identical one, and a refusal look alike on purpose. */
-.mk-reroll:disabled{opacity:.45;cursor:default}
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —
    while a separate strip below carried every control. They are one row now:
    the chip says what you are making and the rest of the line says how. */
@@ -2218,13 +2186,6 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   .grid2{grid-template-columns:1fr}
 }
 
-/* ── the rewrite rail ─────────────────────────────────────────────────────
-   Three jobs on the sentence, under the field. It follows `#shot-rail`'s rule
-   rather than the strip's: the row is affordable because it carries content,
-   and the component returns null with an empty prompt so there is no empty row
-   to hide. */
-
-
 /* ── thumb-sized targets ──────────────────────────────────────────────────
    Last in the file on purpose. Every rule it overrides is declared above it —
    `#canvas-acts .ico` carries an id, and the drawer's `.foot .more` is four
@@ -2236,11 +2197,10 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
 
    Two shapes, because the buttons are two kinds. The ones in a row of their own
    grow: they sit in flex rows with a gap, so a bigger box pushes its neighbours
-   along rather than landing on top of them. The two that float over content
-   cannot grow — a 44px reroll would cover the prompt text it is anchored to, so
-   tapping a word beside it would reroll instead of placing the caret — and for
-   those the *target* grows while the button does not: an unpainted ::after,
-   centred, 32px. That clears the 24px floor without the control swallowing what
+   along rather than landing on top of them. The one that floats over content
+   cannot grow — a 44px control would cover what it is anchored to, so tapping
+   beside it would hit the button instead — and for that one the *target* grows
+   while the button does not: an unpainted ::after, centred, 32px. That clears the 24px floor without the control swallowing what
    it sits on, which is the trade a flat 44px cannot make. Neither takes
    `position`: both are already absolute, and relative would break them. */
 @media (hover:none){
@@ -2249,7 +2209,7 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   .drawer .grid>.gal .foot .more{width:44px;height:44px}
   .shot .acts button svg,.foot .more svg{width:20px;height:20px;margin:auto}
 
-  .mk-reroll::after,.ref button.x::after{
+  .ref button.x::after{
     content:'';position:absolute;left:50%;top:50%;
     transform:translate(-50%,-50%);width:32px;height:32px}
 }

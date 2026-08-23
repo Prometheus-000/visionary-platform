@@ -313,17 +313,6 @@ export type Store = {
   /** ⌘Z in the prompt field, while there is a write to take back. */
   undoDoc: () => void
 
-  /** Which rewrite is in flight, so its own button can say so and the other two
-   *  can refuse. Null when nothing is running. */
-  rewriting: string | null
-  setRewriting: (op: string | null) => void
-  /** A rewrite's write into the box. It reuses `docUndo` rather than adding a
-   *  second slot, because it is the same gesture the parse made — one write,
-   *  taken back by the same ⌘Z — and two undo stacks in one field is the bug
-   *  that arrangement would exist to cause. Clears any document: the sentence
-   *  the elements described is gone. */
-  applyRewrite: (text: string) => void
-
   /** The motion panel's suggestions and picks. `base` is the prompt as it
    *  stood before the first pick — the person's own sentence, which every
    *  composition starts from and which ⌘Z restores whole. `picks` are
@@ -333,8 +322,8 @@ export type Store = {
   motion: MotionState
   setMotion: (patch: Partial<MotionState>) => void
   /** One suggestion in or out of the prompt. The write is composed — base,
-   *  then the picked sentences in section order — and lands through the same
-   *  `docUndo` slot the rewrite uses: one gesture, one ⌘Z. */
+   *  then the picked sentences in section order — and lands through the
+   *  `docUndo` slot: one gesture, one ⌘Z. */
   toggleMotion: (id: string) => void
 
   /** The rail, in the order you built it. */
@@ -503,17 +492,6 @@ export const useStore = create<Store>((set, get) => ({
   // is the honest answer — there is only ever one parse write to take back.
   undoDoc: () => set((s) => (s.docUndo ? { ...s.docUndo, docUndo: null } : {})),
 
-  rewriting: null,
-  setRewriting: (rewriting) => set({ rewriting }),
-  applyRewrite: (text) =>
-    set((s) =>
-      text && text !== s.prompt
-        ? { prompt: text, doc: null, docUndo: { prompt: s.prompt, doc: s.doc } }
-        // An unchanged answer is a real answer — Enhance returns its input when
-        // it finds nothing to fix. Recording an undo for a write that did not
-        // happen would arm ⌘Z to do nothing visible.
-        : {}),
-
   motion: { sug: null, busy: false, error: null, for: null, base: null, picks: [] },
   setMotion: (patch) => set((s) => ({ motion: { ...s.motion, ...patch } })),
   toggleMotion: (id) => {
@@ -535,8 +513,8 @@ export const useStore = create<Store>((set, get) => ({
       prompt: composeMotion(groups, sug, base, picks),
       doc: null,
       // Undo always lands on the pre-pick prompt however many toggles
-      // happened, and clears itself when the last pick is untoggled — an
-      // armed ⌘Z with nothing to take back is the applyRewrite rule again.
+      // happened, and clears itself when the last pick is untoggled: an armed
+      // ⌘Z with nothing to take back is a gesture that does nothing visible.
       docUndo: picks.length ? { prompt: base, doc: s.doc } : null,
       motion: { ...s.motion, base, picks },
     })

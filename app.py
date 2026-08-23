@@ -5826,13 +5826,12 @@ class ImageGenerator:
     def rewrite(self, prose: str, instruction: str,
                 max_tokens: int = 420, image_b64: str = "") -> dict[str, Any]:
         """
-        The rewrite, on the encoder this container already holds.
+        Prose in, prose out, on the encoder this container already holds.
 
-        Same shape as `Interpreter.rewrite` so `_rewrite_backend` can swap the
-        two by name, and the whole reason for it: this container is warm for the
-        length of a session because every render goes through it, so there is no
-        cold start to hide. The interpreter's own L4 pays three to five minutes
-        on the first press.
+        **The Enhance button that used to call this is gone**; `/api/motion` is
+        what is left, and the reason this lives here rather than on its own card
+        is unchanged: the container is warm for the length of a session because
+        every render goes through it, so there is no cold start to hide.
 
         **It queues behind a render, and that is correct.** `max_inputs=1` means
         one sampling loop at a time, which is the invariant `_publish`'s
@@ -5844,9 +5843,8 @@ class ImageGenerator:
         `image_b64` is the motion path's whole reason for being here rather
         than on the interpreter: this arm is the one with eyes. The vision
         tower was always loaded (see the node's own comment on why dropping it
-        broke), so a frame riding along costs plumbing, not memory — and the
-        `"interpreter"` arm cannot take one, which is why `/api/motion` calls
-        this class directly instead of going through `_rewrite_backend`'s seam.
+        broke), so a frame riding along costs plumbing, not memory. It is the
+        one reason this method outlived the button it was written for.
         """
         graph = {"rw": {"class_type": "VisionaryRewrite",
                         "inputs": {"prose": prose, "instruction": instruction,
@@ -7340,23 +7338,6 @@ class Interpreter:
             rules, prose, PARSE_SCHEMA["input_schema"], self._dialect)
         return {"elements": json.loads(said).get("elements") or []}
 
-    @modal.method()
-    def rewrite(self, prose: str, instruction: str,
-                max_tokens: int = 420) -> dict[str, Any]:
-        """
-        Prose in, prose out. The same warm server, without the schema.
-
-        A separate method rather than a flag on `parse`, because the two return
-        different kinds of thing and folding them would mean a caller checking
-        which shape came back. `_revive` for the same reason `parse` calls it:
-        `@modal.enter` runs once, so a dead process is otherwise every request
-        refused until the scaledown window expires.
-        """
-        self._revive()
-        said = _plain_call(f"http://127.0.0.1:{PARSE_PORT}/v1", PARSE_REPO,
-                           instruction, prose, max_tokens=max_tokens)
-        return {"text": _clean_rewrite(said)}
-
 
 def _parse_storyline(prose: str) -> list[dict[str, Any]]:
     """
@@ -7414,155 +7395,6 @@ def _reroll_storyline(prose: str, document: Any, only: str) -> list[dict[str, An
 # reproducible from the job record rather than from whatever text was in a field
 # at the time.
 
-# --------------------------------------------------------------------------
-# Rewriting the prompt, which is the feature the semantic layer was trying to
-# be. Measured, thirty blind render comparisons said the document approach
-# never beat the sentence it came from — see tools/parse-eval-2026-08-17 —
-# because a schema whose unit is a tagged fragment makes a model decompose
-# where it needed to write. So this asks for **prose and nothing else**, and
-# asks the person which of three jobs to do rather than inferring it.
-#
-# **The person chooses the operation, so the model never classifies.** That was
-# the largest remaining thing the interpreter could get wrong and it is now not
-# its decision. It also sets the expectation: somebody who pressed Expand is not
-# surprised to get more words back, which is most of the trust problem solved
-# without marking a single character.
-#
-# Server-side for the reason `CAPTION_PRESETS` gives: a run has to be
-# reproducible from the job record rather than from whatever text was in a
-# field at the time. The page sends a key.
-# Krea's own expansion prompt, verbatim.
-#
-#   https://github.com/krea-ai/krea-2/blob/main/docs/expansion.txt
-#   retrieved 2026-08-18, 2,115 characters
-#
-# Vendored rather than paraphrased, and recorded the way
-# `docs/vendor-parse-model.md` records the parse fork: the source, the date, and
-# the fact that nothing local was changed. `docs/prompting.md` publishes it "as a
-# system prompt for LLM of your choice", so this is the instruction the people
-# who trained the encoder wrote for the job — which beats one we tuned against
-# our own corpus, if it measures better. `tools/prompt_ab.py` is what decides;
-# the loser stays in this file as a comment so it stays a measurement.
-#
-# **Its rule 7 is our Enhance.** "If the user's prompt is already detailed,
-# lightly polish and finalize rather than heavily expanding" means one
-# instruction covers both operations by reading the input's length. The three
-# buttons stay anyway — the person choosing is what pays for the answer arriving
-# unmarked — but Enhance is now this plus a line holding it to the light touch,
-# rather than a separate philosophy.
-#
-# It asks for a thinking step before the paragraph. Rule 3 tells the model to
-# keep that internal; `_META` in `_clean_rewrite` is what makes it true when the
-# model obliges anyway.
-KREA_EXPANSION = """\
-You are an expert prompt engineer for text-to-image models. Your task is to expand the user's prompt into a highly effective image-generation prompt.
-
-Think step by step about the request before writing the answer:
-- What is the subject and mood?
-- What visual styles, mediums, and lighting options would fit? Consider two or three alternatives and pick the one that best serves the caption.
-- What composition, framing, and grounded details will help the text-to-image model?
-
-Then output a single expanded prompt paragraph.
-
-Follow these rules strictly:
-1. **Faithfulness First:** Preserve all original subjects, actions, colors, and spatial relationships. Do not add new objects, props, characters, or animals unless the user clearly implies them.
-2. **Practical T2I Structure:** Write a prompt that a text-to-image model can parse cleanly. Group subjects with their own attributes and actions. Use grounded phrasing for poses, interactions, and spatial layout.
-3. **Style Planning Stays Internal:** Use your internal reasoning to choose style, medium, framing, and lighting. Do not emit planning tags or wrappers in the visible answer body.
-4. **Text Rendering:** If the user requests visible text, quotes, labels, or typography, specify the exact text clearly and wrap requested words in quotes.
-5. **Avoid Over-Specification:** Do not invent highly specific clothing, colors, materials, or scene details unless the input supports them.
-6. **Structure:** Write one cohesive paragraph after the thinking block. No bullets, JSON, or markdown.
-7. **Respect Existing Detail:** If the user's prompt is already detailed, lightly polish and finalize rather than heavily expanding — preserve their phrasing and direction.
-8. **Respect the Human Form:** Treat depictions of people with dignity. Assume clothing covers genitals and intimate anatomy.
-9. **Preserve User Medium:** When the user explicitly requests a medium (e.g. "photo of", "photograph of", "illustration of", "painting of", "sketch of", "3D render of"), honor it. Do not pivot to a different medium to avoid difficulty — match the user's stated intent.
-"""
-
-# One job, not three. Expand, Balance and Enhance were three buttons because
-# the person choosing the operation is one thing the model cannot then get
-# wrong — but measured, only one of them was ever scored: the blind A/B that
-# beat the bare fragment 3-1 ran `op: expand` on every pair, which is
-# `KREA_EXPANSION` and nothing else. The other two shipped unmeasured.
-#
-# **The task is structure, and the other two fall out of it.** Krea's rule 7
-# already makes expansion conditional — "if the user's prompt is already
-# detailed, lightly polish and finalize rather than heavily expanding" — so a
-# separate Enhance was asking for behaviour the instruction had. And balance is
-# emergent rather than instructed: given three friends where the third had three
-# words, this returned "Dev stands beside her... Sam is positioned nearby...",
-# grouping each subject with their own attributes under rule 2, with no rule
-# about prominence anywhere in the text. A dedicated Balance was a second way to
-# ask for the first thing.
-#
-# So the row is one button. That costs the expectation-setting the three bought
-# — somebody who pressed Expand was not surprised the sentence grew, and one
-# generic press can still return 20x on a fragment — and `docUndo` is what pays
-# for it now instead: ⌘Z, or the Undo beside the button, restoring byte for byte.
-REWRITE_OPS: dict[str, dict[str, str]] = {
-    "enhance": {
-        "label": "Enhance",
-        # No model name in here. `/api/state` is fetched once and is kind-blind, so this
-        # one string is read by the image strip and the video strip alike — and it said
-        # "the way Krea 2 reads best" while MiniMax-H3 was the model on screen and the
-        # one about to be handed the prompt. The rewrite does run on Krea 2's own text
-        # encoder, which is why it was written that way, but that is a fact about our
-        # plumbing rather than about the button, and it is wrong in half the places the
-        # button appears.
-        "note": "Restructures your prompt the way the model you are running reads "
-                "best, and fills it out only where it is thin.",
-        "instruction": KREA_EXPANSION,
-    },
-}
-
-
-# The cap scales with the input, which the three fixed numbers could not.
-#
-# A length is a token cap and never an instruction — a model does not count, and
-# our own wording asking for one produced 95, 122 and 617 words on three
-# fragments. 200 was the measured bound for a *fragment*, where the answer is
-# several times the input and coherence is what the cap buys: the 617-word diner
-# drifted into "early morning mist" against a 3am brief and the capped one kept
-# the clock at 3:02.
-#
-# One job means one cap serving both ends of the range, and a flat 200 truncates
-# the case rule 7 exists for — a long prompt lightly polished comes back about as
-# long as it went in, and `_clean_rewrite` would drop the partial sentence at the
-# cut, losing content the person wrote. So it floors at the fragment's measured
-# bound and grows with the input, at roughly a token per four characters plus
-# room to restructure.
-REWRITE_TOKEN_FLOOR = 200
-REWRITE_TOKEN_CEILING = 1024
-
-
-def _rewrite_tokens(prose: str) -> int:
-    return max(REWRITE_TOKEN_FLOOR,
-               min(REWRITE_TOKEN_CEILING, len(prose) // 2))
-
-# Appended to every instruction rather than written into each, and it earns the
-# line: without it `enhance` returned its analysis — the prompt, then an arrow,
-# then "**Change explained:**" and three bullets about what it did. That is a
-# model being helpful in the one place helpfulness is indistinguishable from
-# failure, because the answer goes straight into the box.
-_REWRITE_TAIL = (
-    "\n\nReturn only the prompt itself, as prose. No preamble, no quotes, no "
-    "explanation, no notes on what you changed or why."
-)
-
-# Which process does the rewriting. One constant, because the choice is a
-# deployment fact rather than a per-request one and every caller should be
-# unable to care.
-#
-# `"interpreter"` is the separate 4B on its own L4 — correct, and it costs a
-# 3-5 minute cold start on the first press, where the old automatic parse had
-# fifteen seconds of typing to hide the same wait behind. `"comfy"` runs the
-# rewrite on the Qwen3-VL-4B that Krea 2 already has resident, which is warm
-# for the whole session because it is the encoder the renders go through.
-#
-# **The seam is the point.** Swapping backends should be one line and reverting
-# should be the same line, because the thing being changed is where a model
-# runs and that is exactly the kind of change worth being able to undo without
-# a diff.
-REWRITE_BACKEND = "comfy"
-
-
 def _rewrite_generator(kind: str):
     """
     The container the session is already keeping warm.
@@ -7575,24 +7407,6 @@ def _rewrite_generator(kind: str):
     is already on, and the session's own kind is the answer.
     """
     return VideoGenerator() if kind == "video" else ImageGenerator()
-
-
-def _rewrite_backend(prose: str, instruction: str, max_tokens: int,
-                     kind: str = "image") -> str:
-    """Prose in, prose out, wherever the model happens to live."""
-    if REWRITE_BACKEND == "comfy":
-        said = _rewrite_generator(kind).rewrite.remote(
-            prose, instruction, max_tokens)
-        # Cleaned here, not in the node — its own comment says cleaning stays in
-        # app.py, and for a while nothing here held up that half of the bargain:
-        # the comfy arm returned the model's text verbatim while the interpreter
-        # arm cleaned inside `Interpreter.rewrite`. Per arm rather than hoisted
-        # below the if, because running the interpreter's already-clean answer
-        # through the quote-strip rule a second time is how a prompt that
-        # legitimately ends in quoted speech loses its quotes.
-        return _clean_rewrite(said.get("text") or "")
-    said = Interpreter().rewrite.remote(prose, instruction, max_tokens)
-    return said.get("text") or ""
 
 
 # Prose back, not a document — so no schema, no grammar, no dialect
@@ -7621,25 +7435,6 @@ def _plain_call(base_url: str, model: str, system: str, user: str,
         return json.loads(r.read())["choices"][0]["message"]["content"]
 
 
-# Models like to introduce their own output. Stripped here rather than
-# instructed away, because an instruction not to preamble is one more line of
-# system prompt competing with the five that matter — and this is deterministic
-# where the instruction is not.
-_PREAMBLE = re.compile(
-    r"^\s*(?:here(?:'s| is)[^:\n]*:|sure[^:\n]*:|prompt:|rewritten[^:\n]*:)\s*",
-    re.I)
-
-
-# Where a model stops answering and starts narrating its answer. Deterministic
-# rather than left to the instruction, because the instruction is a request and
-# this is the box the text lands in — `enhance` produced the prompt followed by
-# an arrow, "Revised version:", and three bullets explaining itself, and every
-# character after that arrow is the model talking about the work instead of
-# doing it.
-_META = re.compile(
-    r"(?:\s*(?:→|->|\n)\s*)?(?:\*\*)?(?:revised(?:\s+version)?|change[sd]?\s+"
-    r"explained|explanation|note[s]?|what\s+(?:i|was)\s+changed|why)\b\s*:?",
-    re.I)
 
 # The other half of the same problem, and it arrives at the *front* rather than
 # the back. Krea's expansion prompt asks the model to think before it writes —
@@ -7654,44 +7449,6 @@ _THINK = re.compile(
     r"(?:final|expanded|output)\s+prompt\s*:|"
     r"^\s*(?:answer|prompt)\s*:)\s*",
     re.I | re.S | re.M)
-
-
-def _clean_rewrite(said: str) -> str:
-    text = (said or "").strip()
-    # Planning first, because it sits in front of the answer and every later
-    # rule is about the answer. Only when something follows it — a model that
-    # emitted nothing but its thinking has failed, and returning the empty
-    # string lets the caller fall back to the original rather than writing
-    # somebody's reasoning into the prompt box.
-    if (hit := _THINK.match(text)) and text[hit.end():].strip():
-        text = text[hit.end():]
-    text = _PREAMBLE.sub("", text.strip())
-    # Cut at the first meta marker, and keep the cut only when something
-    # survives it — a prompt that legitimately opens with "Notes" is not what
-    # this is for, and truncating to nothing would blank the box.
-    #
-    # **Stated as "is there an answer left" rather than as a character floor**,
-    # which is what this was and which got it wrong: the floor was 40, and
-    # "A lone fisherman hauling a net." is 31, so the one shape this exists to
-    # catch went uncut on any prompt short enough to need it least. A threshold
-    # standing in for a question is the same error the token cap fixed one
-    # function up.
-    if (hit := _META.search(text)) and (head := text[:hit.start()].strip()):
-        text = head
-    # A model that wrapped its answer in quotes did not mean them as characters.
-    text = text.strip()
-    if len(text) > 1 and text[0] == text[-1] and text[0] in "\"'":
-        text = text[1:-1]
-    text = _oneline(text).strip()
-    # The token cap is what actually holds the length, so it lands mid-sentence
-    # roughly whenever it binds. Drop the fragment it left — a prompt ending
-    # "and the counter runs" is worse than one sentence shorter, and the encoder
-    # has no way to know the tail was an accident.
-    if text and text[-1] not in ".!?":
-        cut = max(text.rfind(". "), text.rfind("! "), text.rfind("? "))
-        if cut > 40:
-            text = text[:cut + 1]
-    return text.strip()
 
 
 # --------------------------------------------------------------------------
@@ -7743,7 +7500,8 @@ def _motion_instruction(*, image: bool, audio: bool) -> str:
     axes are independent facts about the request — is there a frame, can the
     model hear — and 2x2 near-identical strings is the drift this file keeps
     paying for elsewhere. Size budget 500-2000 characters, asserted in
-    `smoke_rewrite.py` like every other instruction here.
+    `smoke_prompt.py` — it moved there when the enhance harness was deleted
+    with the feature, and a budget nobody asserts is a paragraph.
     """
     lines = [
         "SUBJECT: one short present-tense sentence of motion for one visible "
@@ -7779,9 +7537,9 @@ _MOTION_LINE = re.compile(
     r"\**\s*[:—-]\s*(.+)$", re.I)
 MOTION_MAX_PER = 4
 MOTION_PHRASE_MAX = 200
-# A flat cap, not `_rewrite_tokens`: that one scales with the input because a
-# polish comes back about as long as it went in, and a suggestion list does not
-# — fifteen short lines is the whole answer whatever was typed.
+# A flat cap. The rewrite's cap scaled with the input, because a polish comes
+# back about as long as it went in; a suggestion list does not — fifteen short
+# lines is the whole answer whatever was typed.
 MOTION_TOKENS = 512
 
 
@@ -8777,7 +8535,7 @@ def _shot_audio(buckets: dict[tuple[int, str, str], list[str]],
 # What the composer sends instead of a sentence.
 #
 # The reason it exists is that MiniMax's own guides — `skills/h3-prompt-writing`
-# in the model repo, vendored the way `KREA_EXPANSION` is — document a grammar
+# in the model repo, vendored verbatim rather than paraphrased — document a grammar
 # far larger than a text field can hold, and every part of it that is missing
 # here is missing for the same reason: `_compile_h3_prompt` could not emit it
 # because the composer never collected it.
@@ -11216,13 +10974,6 @@ def web():
                  "instruction": p["instruction"], "custom": bool(p.get("custom"))}
                 for k, p in _caption_presets().items()
             ],
-            # The instruction stays here and the page sends a key, for the
-            # reason the captioner does the same: a run has to be reproducible
-            # from the job record rather than from whatever text was in a field.
-            "rewrite_ops": [
-                {"key": k, "label": o["label"], "note": o["note"]}
-                for k, o in REWRITE_OPS.items()
-            ],
             # The motion panel's sections, and the feature flag in one: a page
             # that finds no `motion_groups` renders the old shot palette on the
             # video side, so turning this feature off is deleting one key.
@@ -11298,9 +11049,8 @@ def web():
         Start the container this session will actually use, on page load.
 
         **It used to start the interpreter's L4, and that was worse than
-        useless.** `REWRITE_BACKEND` has been `"comfy"` since the rewrite moved
-        onto the resident encoder, so nothing on any user-facing path answers
-        there — yet every page load rented a card and paid a vLLM cold start
+        useless.** Nothing on any user-facing path answers there — yet every
+        page load rented a card and paid a vLLM cold start
         for it. A warm-up that warms something no request will reach is not a
         no-op; it is competing for the same quota as the container that *is*
         about to be asked for something.
@@ -11318,55 +11068,6 @@ def web():
         except Exception as exc:
             print(f"[rewrite] {kind} warm-up failed: {exc}", flush=True)
         return {"ok": True}
-
-    @api.post("/api/rewrite")
-    def rewrite_prose(payload: dict) -> dict[str, Any]:
-        """
-        One of three jobs on the person's own sentence, and prose back.
-
-        **The operation is theirs, not inferred.** That removes the largest
-        thing the interpreter could get wrong — deciding what kind of help was
-        wanted — and it is what lets the answer arrive with no marks on it: a
-        person who pressed Expand knows why the sentence got longer, so the
-        trust question is answered by the gesture rather than by underlining
-        every word the model supplied.
-
-        Refused by name on a bad key, the posture `_validate_shot` takes toward
-        an unknown pill; a failure downstream of that returns the reason and the
-        original text, so the box is never left empty by a model that fell over.
-        """
-        prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
-        # Which container answers, not which model runs — the weights are the
-        # same file either side. See `_rewrite_generator`.
-        kind = "video" if str(payload.get("kind") or "") == "video" else "image"
-        op = str(payload.get("op") or "")
-        if op not in REWRITE_OPS:
-            return {"ok": False, "error": f"no such rewrite: {op!r}",
-                    "text": prose}
-        if not prose:
-            return {"ok": True, "text": "", "op": op}
-        try:
-            text = _rewrite_backend(
-                prose, REWRITE_OPS[op]["instruction"] + _REWRITE_TAIL,
-                _rewrite_tokens(prose), kind)
-        except Exception as exc:
-            print(f"[rewrite] {op} failed on {REWRITE_BACKEND}: {exc}", flush=True)
-            return {"ok": False, "error": str(exc), "text": prose}
-        # **A refusal is caught here rather than designed against upstream.**
-        # `docs/vendor-parse-model.md` took an abliterated fork because a
-        # schema-bound refusal arrives as an evasive storyline nothing
-        # downstream can tell from a real one. That argument does not transfer
-        # to this path: prose comes back as prose, so a decline is *visible*,
-        # and the prefix-anchored test the captioner already owns catches it.
-        # Anchored, because "I cannot" inside a prompt is a sentence about the
-        # picture rather than a model talking about itself.
-        if text and _looks_like_refusal(text):
-            print(f"[rewrite] {op} declined on {REWRITE_BACKEND}: {text[:80]!r}",
-                  flush=True)
-            text = ""
-        # An empty answer is a failure wearing a success's clothes: it would
-        # blank the box. The original standing is always the safe degrade.
-        return {"ok": True, "op": op, "text": text or prose}
 
     @api.post("/api/motion")
     def motion_suggest(payload: dict) -> dict[str, Any]:
@@ -11409,8 +11110,7 @@ def web():
         audio = bool(VIDEO_MODELS[model]["supports"].get("audio"))
         instruction = _motion_instruction(image=bool(image), audio=audio)
         try:
-            # ImageGenerator directly, not `_rewrite_backend`: the seam swaps
-            # between two arms and only this one has eyes. An empty user turn is
+            # The generator, because only it has eyes. An empty user turn is
             # undefined behaviour in a chat template, so the i2v-with-no-prose
             # case sends a stand-in that says where the answer should come from.
             # The video container, because this is a video-only surface and it

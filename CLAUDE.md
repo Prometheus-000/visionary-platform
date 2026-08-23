@@ -360,244 +360,80 @@ sees it — and `smoke_parse.py` only ever compiles through
 `_compile_image_prompt`. **The change that opens the gates is the change that
 starts feeding H3 badly, and the compile coverage has to arrive with it.**
 
-### One job, and the structure is the job
+### The rewrite is gone, and this is what it measured on the way out
 
-The feature the semantic layer was reaching for, arrived at by deleting most of
-it. `REWRITE_OPS` holds **one** instruction and `/api/rewrite` returns **prose**,
-not a document. The instruction is Krea's own `docs/expansion.txt`, vendored
-verbatim: the people who trained the encoder wrote the prompt for talking to it.
+**Removed on the person's own call**: *"the entire enhance feature doesn't
+help… you lose too much control"*, and later *"it adds unnecessary overhead and
+causes bugs because it interferes with the model's text encoders."* Recorded
+here in the shape this file uses for everything it has retired — the claim,
+then the measurement — because the numbers below were expensive and the next
+person to reach for this idea should reach for them first.
 
-**The number that turned this around, and it is the only one that is not a
-proxy.** Rendered blind, both orders, a win counted only when both agree:
+**What it was.** `REWRITE_OPS` held one instruction, Krea's own
+`docs/expansion.txt` vendored verbatim, and `/api/rewrite` returned prose rather
+than a document. One button, `Enhance`, beside `+ LoRA` in the strip.
+
+**It was the only configuration that ever beat doing nothing.** Rendered blind,
+both orders, a win counted only when both agree:
 
 |  | beats bare | loses to bare | tie |
 |---|---|---|---|
 | the document layer, 30 comparisons | **0** | 4-10 | rest |
 | `REWRITE_OPS`, 10 fragments | **3** | 1 | 6 |
 
-The document approach never won a single pair across two model sizes and two
-rule sets. This is the first configuration that beats doing nothing — and the
-three wins are *the fragments the old validator refused*: "night. no, late
-afternoon" (coverage 59%), "something like a courtroom but colder" (31%), "the
-kitchen after the party". The cases the apparatus threw away are the cases the
-feature exists for, which is the finding this whole section is downstream of.
+The three wins were the fragments the old validator refused — `night. no, late
+afternoon`, `something like a courtroom but colder`, `the kitchen after the
+party`. Read honestly it is n=10, six ties, net +2 pairs: a real win, the first
+one, and not a landslide. **And a win on a fragment is not a reason to keep a
+button on every prompt**, which is the trade that finally decided it.
 
-Read it honestly: n is 10, six were ties, and the net is +2 pairs. It is a real
-win, it is the first one, and it is not a landslide.
-
-**It was three — Expand, Balance, Enhance — and the collapse is a measurement
-rather than a tidy-up.** The blind A/B that beat the bare fragment 3-1 ran
-`op: expand` on every pair, which is `KREA_EXPANSION` and nothing else. The other
-two shipped **unscored**, and both turned out to be asking for behaviour that
-instruction already has:
-
-- **Expansion is already conditional.** Rule 7 — *"if the user's prompt is
-  already detailed, lightly polish and finalize rather than heavily expanding"* —
-  is Enhance, written by upstream. Measured across one instruction: a
-  16-character fragment grows **40.4x**, a finished prompt **2.6x**. Nobody had
-  to say which job it was.
-- **Balance is emergent, not instructed.** `KREA_EXPANSION` contains no
-  "balance", no "equal", no "prominence", no "weight". Given three friends where
-  the third had three words, it returned each subject grouped with their own
-  attributes and the thin one placed and described — because rule 2 asks for
-  subjects grouped with their attributes, and that is what balance *is*. A
-  dedicated Balance was a second way to ask for the first thing.
-
-**And trust is structural here, not a property of how many buttons there are.**
-Worth stating plainly because the reasoning that built the underlines was one
-level too fine, and collapsing three buttons to one looks like it should cost
-something. It does not. The distinction that matters:
-
-> A **distrustful** feature takes your prompt, alters it, and sends it to the
-> DiT. A **trustful** one lets you decide whether to run it through a model at
-> all, shows you what came back, and lets you accept it, edit it, or throw it
-> away and run what you wrote.
-
-Every clause of the second is a property of this code rather than a claim about
-it. *You decide*: `useDocument` is still on disk and **nothing invokes it** —
-`Field.tsx` hardcodes `marks` to empty, so no parse fires on a pause and the only
-path to the model is a click. *You see it*: the answer is written into the prompt
-box, which is the same string `/api/generate` receives. *You edit it*: it is a
-plain `<textarea>` and always was. *You throw it away*: `applyRewrite` records
-`docUndo` before it writes, so ⌘Z and the Undo beside the button both restore
-byte for byte.
-
-Nothing reaches the encoder that was not on screen first. That is the whole
-guarantee, it survives the button count, and it is what the marks were an
-expensive way of approximating.
-
-Three things the measurements decided, each of which reads as a detail and is
-not:
+Five things it established that outlive it, because each cost a measurement:
 
 - **A length is a token cap, not an instruction.** "Between 60 and 100 words"
-  produced 95, 122 and **617** on three fragments — a model does not count. The
-  bound is the decoder's and `_clean_rewrite` drops the partial sentence the cap
-  leaves behind. **It scales with the input now, because one job has to serve
-  both ends of the range**: 200 was measured against a fragment, where the answer
-  is several times what was typed, and a flat 200 truncates the case rule 7
-  exists for — a long prompt lightly polished comes back about as long as it went
-  in, and the cut would drop a sentence the *person* wrote. `_rewrite_tokens`
-  floors at the measured bound and grows from there, ceilinged at 1024. It bought coherence as well as length: the
-  617-word diner drifted into "early morning mist" and "the night has passed"
-  against a 3am brief, and the capped one keeps the clock at 3:02.
-- **A multiple is the wrong unit for a fragment.** Four to six times "empty
-  diner, 3am" is 96 characters, which is absurd, so the model ignored it. Absolute
-  targets only.
-- **`_clean_rewrite` cuts at meta-commentary, deterministically.** `enhance`
-  returned the prompt, then "→ Revised version:", then three bullets explaining
-  itself — a model being helpful in the one place helpfulness is
-  indistinguishable from failure, because the answer goes straight into the box.
-  An instruction not to preamble is a request; a regex is not.
+  produced 95, 122 and **617** on three fragments. A model does not count. The
+  cap has to scale with the input, too — a flat 200 truncates the case a light
+  polish exists for, cutting a sentence the *person* wrote.
+- **Meta-commentary is cut by a regex, not asked away.** The model returned the
+  prompt, then "→ Revised version:", then three bullets explaining itself —
+  helpfulness in the one place it is indistinguishable from failure, because
+  the answer went straight into the box. An instruction not to preamble is a
+  request; a regex is not.
+- **Expansion is already conditional and balance is emergent.** Rule 7 of
+  Krea's own instruction — *"if the user's prompt is already detailed, lightly
+  polish"* — is Enhance, written by upstream: a 16-character fragment grew
+  **40.4x** and a finished prompt **2.6x** under one instruction. And the text
+  contains no "balance", "equal", "prominence" or "weight", yet given three
+  friends where the third had three words it returned each subject grouped with
+  their own attributes. Three buttons collapsed to one on those two facts.
+- **A returned-unchanged answer is a pass, not a failure.** Told only to change
+  what would render wrong, the right behaviour on an already-good prompt is to
+  change nothing.
+- **The rewriter can be the encoder.** Krea 2 reads its prompt through
+  Qwen3-VL-4B — a decoder model, already resident — so the rewrite ran on
+  weights the platform had paid for: warm **2.2-9.2s**, no card of its own.
+  Nobody else does this because Flux's encoder is T5-XXL and SD's is CLIP and
+  both are encoder-only; Krea 2 is the unusual case where the question can be
+  asked at all.
 
-**Enhance returning its input unchanged is a pass, not a failure.** Told only to
-"change what would render wrong" it changed nothing, so the four failures are
-named outright and it now converts "dramatic perspective" into a camera angle and
-stages "it feels lonely" as negative space and a turned back — while leaving an
-already-good prompt byte-identical. Both halves matter and the second is the
-harder one.
+**What survives the deletion, and why.** `comfy_nodes/visionary_rewrite`,
+`Comfy.rewrite` and `_rewrite_generator` are all still here — **`/api/motion`
+runs on them**. That path shows the model a *frame* rather than a sentence and
+returns labelled suggestions the person picks from, which is a different
+feature answering a different question, and it is the one arm with eyes. Gutting
+the button stopped exactly at that seam. `_clean_rewrite`, `KREA_EXPANSION`,
+`REWRITE_OPS`, `_rewrite_backend`, `Interpreter.rewrite` and the L4 arm behind
+it are gone; so are `tools/smoke_rewrite.py` and `tools/enhancer_ab.py`. The
+motion instruction's 500-2000 character budget moved to `smoke_prompt.py` in the
+same commit, because a budget nobody asserts is a paragraph.
 
-**What is left on disk and unused:** `useDocument`, `marks.ts`, `Reroll.tsx`,
-`insertionOnly`, and the `modules` plumbing through `/api/generate` and
-`/api/video`. Nothing calls them from the console. Kept rather than deleted so
-the measurement can be re-run against them and so the deletion is one commit
-somebody makes on purpose — but they are dead, and a reader should not mistake
-them for the live path.
+**The trust argument the feature rested on, kept because it is about the app
+rather than about the button.** A *distrustful* feature takes your prompt,
+alters it, and sends it to the DiT. A *trustful* one lets you decide whether to
+run it through a model at all, shows you what came back, and lets you accept it,
+edit it, or throw it away. Nothing now reaches the encoder that was not on
+screen first — which is the same guarantee, arrived at by having no model in the
+path rather than by disclosing one.
 
-### One job, and what the person is owed
-
-Two corrections from the person this is being built for, both of which moved
-code rather than prose.
-
-**"The goal isn't prompt enhancement, it's prompt replacement."** Enhancement is
-their sentence with clauses added, marked grey, written back over their words —
-which is what `insertionOnly`, `_document_matches` and the mirror were all built
-for. Replacement is a *new* prompt, written for the encoder, with their prose
-kept as the record. The second is what `prompt_typed` versus the compiled
-`prompt` has always encoded, and what this file's own end state asks for.
-
-**"Not only should the replacement be visible, it has to be editable."** That
-settles a question measurement could not: `insertionOnly` gated the write and
-passed 5 documents of 19, so whether your sentence was replaced on screen
-depended on whether the model happened to preserve word order — and the refused
-14 *still ran*, showing your words while the encoder got something else. The
-gate is gone. The replacement is always written, ⌘Z takes it back, and what
-you wrote is kept in `doc.from` and recorded as `prompt_original`.
-
-That last field found a bug that had been waiting: `_shot_meta` only wrote a
-sidecar when `prompt_typed != prompt`, which is exact under enhancement and
-inverts under replacement — the box *is* the compiled text, so the two are equal
-on precisely the runs with the most to record, and the sidecar came back empty
-on every one of them.
-
-**A mark is a claim about a fact, not about characters.** Their example is the
-whole rule: `a red winter coat` written as `an oxblood down jacket` is the same
-fact in better words and carries no mark; `a red winter coat, and she looks
-visibly cold` adds a state nobody mentioned and is underlined, so deleting it is
-one gesture. That reverses a decision made an hour earlier — provenance had been
-computed from the characters, which would have underlined every reworded noun
-and put the whole prompt in grey. So they are two questions now and only one is
-the model's: `_derived_from` asks whether the document is about this prose at
-all (arithmetic, and the evasion guard), and `origin` asks what was added
-(judgement, and a wrong answer is a wrong underline over an editable prompt —
-the cheapest failure this feature has).
-
-**And there is one job, not two.** A first draft split the rules into
-replacement and enhancement, with a test for telling them apart. Collapsed on
-their observation: if the job is *the prompt this encoder should get for what
-they meant*, then enhancement falls out for free. The rule is **keep whatever
-already works, because they chose it** — so narration comes back rewritten
-because almost none of it was a prompt, and a prompt comes back nearly untouched
-with only the thing that would render wrong put right. The model never
-classifies, which is one fewer thing it can get wrong.
-
-What survives from the enhancement idea are two rules that were never about
-which mode you were in: **balance is an instruction** — "a photo of three
-friends" is a claim that three people matter equally, and two of them with four
-clauses each and a third with none renders two friends and a bystander — and a
-clause that names two subjects merges them. `smoke_parse.py`'s scene corpus
-carries a case for each, plus a well-formed prompt as the control, because the
-risk of one job is that everything gets treated as narration.
-
-### The rewriter is the encoder, and that was almost free
-
-Krea 2 reads its prompt through **Qwen3-VL-4B** — a decoder language model, not
-a T5 or a CLIP — and it is already resident in the image container during a
-session. So the rewrite runs there, on weights the platform has already paid
-for. `REWRITE_BACKEND` selects it; the `"interpreter"` arm still names the old
-L4 and exists so this is reversible by one constant.
-
-**The file can generate, and finding that out is the whole decision.** Comfy's
-repackage strips `lm_head` — it is dead weight for conditioning, which taps
-layers 2-35 and never reaches the head. But `tie_word_embeddings: true`, and
-`model.language_model.embed_tokens.weight` is present, so the head *is* the
-embedding matrix and supplying it is a reference rather than a copy. Read off
-the safetensors index before a line was written: 713 tensors, all 36 layers,
-vision tower included, `lm_head` absent.
-
-**Nobody else does this, and the reason is not that it is a bad idea.** The
-three ComfyUI prompt-enhancer node packs all load their own model — Ollama, LM
-Studio, a `gokaygokay/Flux-Prompt-Enhance` seq2seq. None reuses the encoder,
-because Flux's is T5-XXL and SD's is CLIP and both are **encoder-only**: there
-is no head to reach and no tokens to sample. Krea 2 is the unusual case where
-the question can even be asked.
-
-**A second copy in the same container, not the resident instance.** Reusing what
-ComfyUI holds saves ~9 GiB and was declined on arithmetic: Krea 2 is ~24 GiB
-resident and the worst case on record is ~30 GiB steady plus ~18 GiB transient,
-so a second copy lands near 56 of 80 GiB — measured at **70.1 of 79.2 GiB free**
-before a run. Against that saving, reuse means reaching into `comfy.sd.CLIP` at
-a pinned `COMFY_SHA` and hand-writing a KV-cached decode loop, because ComfyUI's
-wrapper runs a single forward for conditioning and has no cache. A pinned-fragile
-dependency and our own sampler, to save memory that is not scarce, for a one-time
-~20s load. Recorded as considered and declined rather than left as a TODO.
-
-**And the OOM cascade that argues against it is a leak, not a ceiling.**
-`_reclaim()` exists because the regional node strands its per-region LoRAs in
-ComfyUI's execution cache where `unload_all_models()` cannot see them — a bug in
-an interaction, since closed by `visionary_free_regional`. An 80 GB Hopper card
-carrying 9 GiB alongside Krea 2 is not what triggers it.
-
-Two things in the node are load-bearing and both look like the obvious
-optimisation is missing:
-
-- **The vision tower is loaded even though this path never sees a picture.**
-  Dropping its 315 tensors saves ~1-2 GiB and leaves every `model.visual.*`
-  parameter on the meta device, because `assign=True` materialises only what the
-  state dict carries — and `.to("cuda")` then dies with *"Cannot copy out of meta
-  tensor; no data"*, which names the symptom and not the cause.
-- **It is built on CPU with real storage, not on `meta`.** Meta init is the fast
-  way and it does not work here: a model's *non-persistent buffers* — the rotary
-  `inv_freq` among them — are created at init and appear in no checkpoint. They
-  stay meta, `load_state_dict` does not report them in `missing`, and the failure
-  surfaces two lines later naming a device rather than a buffer.
-
-**The concurrency objection was written about a different feature.**
-`PARSE_GPU`'s comment rejects "a second model in either process" because
-`max_inputs=1` is what `_publish`'s process-local lock depends on. That is right
-about the *parse*, which fired on every 500ms typing pause and could land
-mid-render. A rewrite is a button you press and then wait for, before pressing
-Generate: they are sequential, on a single-user platform, and a rewrite queuing
-behind a take is correct rather than a defect.
-
-**What it bought, measured.** Warm **2.2-9.2s**; growth 21-22x on a fragment,
-1.6x on a prompt that only needed polish. Cold is **~200s and no better than the
-L4** — a cold image container loads 35 GB of checkpoint before anything — so the
-honest claim is narrower than "no cold start": the rewrite no longer needs *its
-own* container, and rides one a session is paying for anyway.
-
-**The transport is the one the file already had.** The node is `OUTPUT_NODE` and
-returns `{"ui": {"text": [...]}}`, which lands in `/history/{prompt_id}` — the
-same place `_await` already polls for renders. No second channel, and
-`require_nodes` gains `VisionaryRewrite` so a missing node is a named startup
-failure rather than a mystery at request time.
-
-**And the stock model earns the fork nothing here.** `docs/vendor-parse-model.md`
-took an abliterated checkpoint because a *schema-bound* refusal arrives as an
-evasive storyline nothing downstream can tell from a real one. Prose has no such
-problem — a refusal is visible text — and on five deliberately charged fragments
-the stock encoder rewrote **5 of 5**, none evasive. `_looks_like_refusal()` is
-kept on the path as a guard rather than an expectation, falling back to the
-original prose.
 
 ### Relations are the weakest link, and the rules were making it worse
 
@@ -706,9 +542,10 @@ measure **0.73x median, not 1.4x**, and keep the feeling word **3 of 10, not 0 o
 5**. They were most likely measured before the final cut to meet the size budget
 and never re-run.
 
-**So the document path is off.** `Field.tsx` no longer calls `useDocument`, and
-what replaced it is `REWRITE_OPS` — one instruction, Krea's own, returning
-prose. See "One job, and the structure is the job" below.
+**So the document path is off, and it is now deleted rather than dormant.**
+`useDocument.ts`, `marks.ts` and `Reroll.tsx` are gone, and so is the rewrite
+that replaced them — see "The rewrite is gone" below for what that one measured
+before it went.
 
 ### The system prompt has a size budget: 500–2000 characters
 
@@ -795,7 +632,6 @@ linen dress. The frame is what holds it to the person's scene.
     app.py              the whole application — images, jobs, API
     web/                the front end: React + TypeScript, built by Vite
     comfy_nodes/        our own ComfyUI nodes — one shim, see visionary_boxes
-    ai-toolkit/         training reference
     tools/              smoke tests, the local UI preview
     tools/tune_dupes.py where the duplicate thresholds come from — takes a folder
     tools/ui-checks/    parity checks — each takes a URL, runs on either page
@@ -804,7 +640,6 @@ linen dress. The frame is what holds it to the person's scene.
     tools/prompt_ab.py  render a prompt pair and have a vision model judge it —
                         the only measurement of this that is not a proxy
     tools/does_it_help.py renders the same fragment bare and interpreted, one seed
-    tools/smoke_rewrite.py  the rewrite path offline — no GPU, no Modal
     tools/upstream.py   what moved upstream that would reach a render —
                         the answer to "a pin means falling behind"
     tools/judge_renders.py scores a rendered pair blind, both orders, or it is a tie
@@ -820,11 +655,12 @@ The lockfile is copied before the sources so that editing a component re-runs
 `npm run build` and not `npm ci`. Modal invalidates from the first changed
 layer down, so the order of those four lines is a minute per deploy.
 
-`UI_HTML` is still in app.py and is no longer served. It is the oracle the port
-was checked against — `preview_ui.py` serves it with no flags and the shipped
-bundle with `--dist` — and it should go once a real deploy has been exercised.
-Do not read it as a description of intended behaviour; see the arrow-key note
-under "The page".
+`UI_HTML` is **gone**. It was the oracle the React port was checked against —
+`preview_ui.py` served it with no flags and the shipped bundle with `--dist` —
+and this paragraph said for a long time that it should go once a real deploy had
+been exercised. It did. Nothing reads it now, and the arrow-key note under "The
+page" is kept as the record of what it got wrong, because that fault is the kind
+that survives a port.
 
 `_from_app.py` exists because two tools need the *real* thing rather than a
 copy: `smoke_prompt.py` checking a compiler against a reimplementation would be
@@ -2196,21 +2032,22 @@ two domains, and the page follows the domains.
   `tools/ui-checks/probe_size.py` asserts it and now passes every row — it used
   to fail two by design, and that exemption went with `UI_HTML`.
 
-`tools/preview_ui.py` serves `UI_HTML` against stubbed JSON, so the front end
-is worked on locally instead of paying an image build and a cold start per CSS
-change. Its stubs are shaped to hold the awkward states — a missing model, an
+`tools/preview_ui.py` serves the built bundle against stubbed JSON, so the front
+end is worked on locally instead of paying an image build and a cold start per
+CSS change. Its stubs are shaped to hold the awkward states — a missing model, an
 uncaptioned dataset, a prompt too long to belong in a gallery card.
 
 **A stub that omits a menu is a preview of a control that does not exist**, and
-it fails silently: `rewrite_ops` missing from `/api/state` rendered no Enhance
-button at all, so the one surface the feature has was invisible in the very file
-that exists to make the front end developable without a GPU. Every menu the page
-builds itself out of is pulled from app.py rather than transcribed, for that
-reason — and pulling one means pulling **what it references**. `REWRITE_OPS`
-names `KREA_EXPANSION`, and a subset without it raises `NameError` from inside
-app.py, which reads as a broken preview rather than an incomplete pull. That is
-`_from_app.py`'s one failure mode and the reason its subset is named rather than
-pattern-matched.
+it fails silently — the case that taught this was `rewrite_ops` missing from
+`/api/state`, which rendered no Enhance button at all, so the one surface that
+feature had was invisible in the very file that exists to make the front end
+developable without a GPU. The button is gone now; the rule is not. Every menu
+the page builds itself out of is pulled from app.py rather than transcribed, and
+pulling one means pulling **what it references** — a subset naming a constant
+nobody pulled raises `NameError` from inside app.py, which reads as a broken
+preview rather than an incomplete pull. That is `_from_app.py`'s one failure
+mode and the reason its subset is named rather than pattern-matched. It fired
+twice in one session over `_stage_*`, which is the rule working.
 
 ## Where the console redesign got to
 

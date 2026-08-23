@@ -10,7 +10,7 @@ import { useCallback, useState } from 'react'
  * meant two writes, and for a delete meant a second confirm dialog for a file already on
  * its way out.
  *
- * The shape is not new. `Rewrite` has been doing exactly this with `s.rewriting` since
+ * The shape is not new — the rewrite button did exactly this with its own flag since
  * it shipped — one key in flight, the others shut, the live one saying so — and the
  * downloads, captioning and duplicates panels each grew their own version of it. This is
  * that pattern with a name, so the ninth one does not have to be invented again.

@@ -18,7 +18,7 @@ runs them in order, which is the whole of what it adds:
   2. `stress_parse.py --vision` serves a vision model in a throwaway Sandbox.
   3. `judge_renders.py` scores the pairs inside it.
 
-`--from` takes a `smoke_parse.py --enrich` dump or an `/api/rewrite` dump, so the
+`--from` takes a `smoke_parse.py --enrich` dump, so the
 rewritten half is what a model actually wrote rather than what somebody hoped it
 would write. That distinction is not academic: hand-written replacements won
 their pairs and every model-written one lost.

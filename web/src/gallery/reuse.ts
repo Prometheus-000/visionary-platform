@@ -25,10 +25,11 @@ const set = (v: unknown): string => (v == null || v === '' ? '' : String(v))
  * **The one place this feature could quietly corrupt a run**, which is why the
  * key is *computed from what was just written* rather than from the field the
  * document came out of. Those are the same string today, and a document keyed
- * to a plausible-looking near-miss is a document `docFor` refuses forever: the
- * marks never appear, the run silently goes plain, and nothing on screen says
- * why. Deriving both from one value is what makes that unreachable instead of
- * merely unlikely.
+ * to a plausible-looking near-miss is a document `docFor` refuses forever — the
+ * run silently goes plain and nothing on screen says why. Deriving both from
+ * one value is what makes that unreachable instead of merely unlikely. (The
+ * marks that used to be the visible half of this are deleted; the refusal is
+ * still silent, which is what the rule is about.)
  *
  * `stripLoras`, because that is the form the interpreter was given and the form
  * `/api/generate` receives — the tokens ride in the box and never in the prose.

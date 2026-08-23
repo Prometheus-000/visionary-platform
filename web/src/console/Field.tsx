@@ -5,9 +5,6 @@ import { negAllowed, supports, useStore } from '../store'
 import { Duration } from './Duration'
 import { autoGrow } from './fieldMax'
 import { moveClause } from './moveClause'
-import { Reroll } from './Reroll'
-import type { Marks } from './marks'
-import { runs } from './useDocument'
 
 /**
  * The prompt, its negative, and the chip that says what you are making.
@@ -43,21 +40,6 @@ export function Field({
   // and making this state would re-run the parse effect on every composition
   // start — which is the one moment it must not be disturbed.
   const composing = useRef(false)
-  // **The automatic parse is off, and the marks with it.** It ran on every
-  // pause, wrote its own prose into the box and underlined what it claimed to
-  // have supplied. Measured over thirty blind render comparisons that document
-  // never once beat the sentence it came from, and the provenance the marks were
-  // drawn from was wrong every time the model asserted it — see
-  // tools/parse-eval-2026-08-17. What replaced it is `Rewrite`: three jobs the
-  // person asks for by name, which answers the same trust question by the
-  // gesture rather than by colouring characters.
-  //
-  // `useDocument`, `marks.ts` and `Reroll` are still on disk and still wired to
-  // `/api/parse`; nothing calls them from here. Left rather than deleted so the
-  // measurement can be re-run against them, and so the deletion is one commit
-  // somebody makes on purpose.
-  const marks: Marks = { invented: [], spans: [] }
-
   // Switched away from under you: a model that reads no negative must not leave you
   // typing into a field it will not read. The text is kept — the next model may well
   // read it, and silently emptying a box someone wrote in is the one thing worse than
@@ -121,18 +103,22 @@ export function Field({
 
   return (
     <div className={['field', ok ? 'has-neg' : '', s.negOn && ok ? 'on-neg' : ''].filter(Boolean).join(' ')}>
-      {/* The marks, painted on a copy of the prompt sitting exactly behind it.
-          A textarea cannot style a range of its own value, and the alternative —
-          contenteditable — would take the caret, the undo stack and every chord
-          in `keys` with it. ⌥←/→, ⌘↑/↓, Enter-to-submit and the `+ LoRA` caret
-          sink all keep working here because the thing you type into is still a
-          textarea and nothing about it changed. */}
+      {/* **The mirror is the text you read**, and the textarea over it is
+          transparent with only its caret coloured. It was built to paint marks
+          onto the prompt — a textarea cannot style a range of its own value,
+          and contenteditable would have taken the caret, the undo stack and
+          every chord in `keys` with it. The marks are gone and the arrangement
+          stays, because unwinding it buys nothing: ⌥←/→, ⌘↑/↓, Enter-to-submit
+          and the `+ LoRA` caret sink all work because the thing you type into
+          is still a textarea, and that is true either way. */}
       <div className={`mk-mirror${s.negOn && ok ? ' hide' : ''}`} ref={mirror} aria-hidden="true">
-        {runs(s.prompt, marks).map((r, i) => (
-          <span key={i}
-                className={[r.span ? 'mk-el' : '', r.invented ? 'mk-i' : '']
-                  .filter(Boolean).join(' ') || undefined}>{r.text}</span>
-        ))}
+        {/* Two spans, and the empty one is load-bearing: a mirror that ends
+            exactly at its last character loses the newline just typed, and the
+            copy behind the box stops matching the box by one line. It is what
+            `runs()` emitted here before the marks were deleted, and the reason
+            is worth keeping now that the function that carried it is gone. */}
+        <span>{s.prompt}</span>
+        <span />
       </div>
       {/* Read-only while a rewrite is in flight, which is the whole of the
           staleness fix. The answer is written into this box when it lands, and
@@ -148,8 +134,6 @@ export function Field({
           request you are about to get an answer to. */}
       <textarea id="prompt" ref={prompt} rows={1} placeholder={hint}
                 className={s.negOn && ok ? 'hide' : ''}
-                readOnly={!!s.rewriting}
-                aria-busy={!!s.rewriting}
                 value={s.prompt}
                 onScroll={(e) => {
                   // The mirror has no scrollbar of its own — it is shorter than
@@ -173,9 +157,6 @@ export function Field({
                 value={s.negative}
                 onChange={(e) => s.setNegative(e.target.value)}
                 onKeyDown={keys(s.negative, s.setNegative)} />
-      {/* Rooted on the sentence rather than beside it, so there is nothing at
-          rest and nothing to dismiss. */}
-      {!(s.negOn && ok) && <Reroll mirror={mirror} el={prompt} />}
       {ok && (
         <button type="button" id="neg-toggle"
                 className={`neg-t${s.negative.trim() ? ' filled' : ''}`}

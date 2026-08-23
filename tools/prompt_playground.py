@@ -309,7 +309,8 @@ class Vision:
         text = self.proc.decode(out[0][ins["input_ids"].shape[-1]:],
                                 skip_special_tokens=True).strip()
         # A model asked not to write a sentence writes one anyway often enough
-        # that this is a regex rather than a request — `_clean_rewrite`'s rule.
+        # that this is a regex rather than a request. An instruction is asking;
+        # a regex is not.
         text = text.strip().strip('"').rstrip(".").split("\n")[0].strip()
         return {"slot": slot, "mode": mode, "clause": text}
 

@@ -9,7 +9,9 @@ and some pills come out as the published *format*, and this one asks whether a
 cast and a timeline come out as the published *grammar* — shot markers, cut
 times, speaker IDs, retention markers, task types, the transition tokens.
 
-Every assertion below is a line in `MiniMax-H3/skills/h3-prompt-writing`, and
+Every assertion below is a line in MiniMax's `h3-prompt-writing` skill — the
+clone lives at `~/MiniMax-H3`, outside this repo, because it is 255MB read by
+hand rather than by anything here — and
 the ones worth naming are the ones where a wrong answer is still a *valid*
 document that quietly says something else:
 

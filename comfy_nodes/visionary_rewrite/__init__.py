@@ -248,8 +248,9 @@ class VisionaryRewrite:
                 pad_token_id=tok.pad_token_id or tok.eos_token_id)
         said = tok.decode(out[0][ids["input_ids"].shape[1]:],
                           skip_special_tokens=True)
-        # Cleaning stays in app.py — `_clean_rewrite` is the one implementation
-        # and it is already the thing every other backend's output goes through.
+        # Returned verbatim. Cleaning stays with the caller, which is now
+        # `/api/motion` alone — it parses this into labelled sections, so a
+        # tidier here would be a second thing deciding where a clause ends.
         return {"ui": {"text": [said]}, "result": (said,)}
 
 

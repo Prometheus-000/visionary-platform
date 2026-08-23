@@ -13,7 +13,7 @@
  */
 import { api, post, type Res } from './client'
 import type {
-  RewriteResult, AppState, CompileResult, DupeReport, Insight, JobStatus, MotionResult, ParseElement, ParseResult, Session, ShotPill } from './types'
+  AppState, CompileResult, DupeReport, Insight, JobStatus, MotionResult, ParseElement, ParseResult, Session, ShotPill } from './types'
 
 const seg = encodeURIComponent
 
@@ -233,17 +233,6 @@ export const compile = (body: {
  */
 export const parse = (body: { prose: string }) =>
   post<ParseResult>('/api/parse', body)
-
-/**
- * One of three jobs on the sentence in the box, and prose back.
- *
- * The operation is the person's choice rather than the model's inference, which
- * is what lets the answer arrive unmarked: somebody who pressed Expand is not
- * surprised that the sentence got longer, so the question the underlines were
- * built to answer is answered by the gesture instead.
- */
-export const rewrite = (body: { prose: string; op: string; kind?: 'image' | 'video' }) =>
-  post<RewriteResult>('/api/rewrite', body)
 
 /**
  * What could move in this frame — the one route where a model is shown a

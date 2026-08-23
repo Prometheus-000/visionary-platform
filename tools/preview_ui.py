@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from _from_app import (CAPTION, MODULES, MOTION, REWRITE, SHOT, TRAINER,
+from _from_app import (CAPTION, MODULES, MOTION, SHOT, TRAINER,
                        VIDEO, pull)
 
 APP = Path(__file__).resolve().parent.parent / "app.py"
@@ -84,7 +84,7 @@ def app_api() -> dict:
     if _APP_CACHE.get("stamp") != stamp:
         _APP_CACHE.update(stamp=stamp,
                           api=pull(SHOT | CAPTION | TRAINER | MODULES
-                                   | REWRITE | MOTION))
+                                   | MOTION))
     return _APP_CACHE["api"]
 
 
@@ -660,11 +660,6 @@ def _params(**over) -> dict:
 
 
 SESSIONS: list = []
-# How many rewrites this preview has served, and it rides in the answer so a
-# check can tell "pressed again" from "pressed once". `/api/rewrite` had no stub
-# at all, which made the preview a page whose Enhance button could be seen and
-# not pressed — the same fault as a missing menu, one level down.
-REWRITES = 0
 # The server is threaded and the seed is lazy, so the first two requests race:
 # both find SESSIONS empty, both build the list — paying the cold app.py pull
 # inside _params(), which is the window — and both extend, and every card sits
@@ -1074,27 +1069,6 @@ class Handler(BaseHTTPRequestHandler):
                                "prominence": api["_prominence"](mods),
                                "text": api["_compile_image_prompt"]("", [], mods)})
 
-        # The rewrite, stubbed so the button `/api/state` already advertises can
-        # be pressed. It **echoes the prose it received**, which is the whole
-        # point: a check can then prove both halves of the LoRA rule at once —
-        # that no `<lora:` reached the model, and that the tokens came back.
-        if path == "/api/rewrite":
-            try:
-                p = json.loads(body or b"{}")
-            except json.JSONDecodeError:
-                p = {}
-            prose = str(p.get("prose") or "")
-            if not prose:
-                return self.reply({"ok": True, "text": "", "op": p.get("op")})
-            global REWRITES
-            REWRITES += 1
-            # `unchanged` is how a check reaches the case the note line exists
-            # for: Enhance returning its input is a real answer, and it must not
-            # relocate a token to say so.
-            said = prose if "unchanged" in prose else f"[{REWRITES}] {prose}, lit from one side"
-            time.sleep(0.3)
-            return self.reply({"ok": True, "op": p.get("op"), "text": said})
-
         # Half stubbed, like `/api/parse`: **which** motions the model proposes
         # is canned, because there is no model here — but the canned answer is
         # written the way the model writes (labelled lines, a bullet, a bolded
@@ -1281,7 +1255,7 @@ class Handler(BaseHTTPRequestHandler):
                                                         for m in STATE["models"]],
                                    "loras": [], "shot_vocab": api["SHOT_VOCAB"],
                                    "shot_langs": api["H3_LANGUAGES"], "shot_roles": [],
-                                   "caption_presets": [], "caption_models": [], "rewrite_ops": [],
+                                   "caption_presets": [], "caption_models": [],
                                    # Empty on a cold answer, which is also the
                                    # degrade rehearsal: no motion_groups means
                                    # the video strip falls back to the old shot
@@ -1313,12 +1287,6 @@ class Handler(BaseHTTPRequestHandler):
                        for k, m in CUSTOM_VLMS.items()]),
                 "caption_defaults": {"preset": api["DEFAULT_CAPTION_PRESET"],
                                      "model": api["DEFAULT_CAPTION_MODEL"]},
-                # Label and note only, exactly as `state()` serves them — the
-                # instruction stays on the server. Without this the rewrite row
-                # renders nothing and the preview cannot exercise the feature at
-                # all, which is the one thing this file exists to prevent.
-                "rewrite_ops": [{"key": k, "label": o["label"], "note": o["note"]}
-                                for k, o in api["REWRITE_OPS"].items()],
                 # Pulled for the reason every menu here is: a stub that omits
                 # this renders no Motion door at all, and the old palette would
                 # look like the shipped behaviour in the one file that exists

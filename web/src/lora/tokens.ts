@@ -8,8 +8,9 @@
  * most, which is where in the sentence the LoRA applies."*
  *
  * **The claim is true in a region and false in the main prompt**, and this
- * codebase says so itself, in `useDocument.ts`: *"a token's position in the main
- * prompt means nothing to the backend, which reads them into a stack."* So the
+ * codebase said so itself, in the since-deleted `useDocument.ts`: *"a token's
+ * position in the main prompt means nothing to the backend, which reads them
+ * into a stack."* So the
  * canvas was paying for a parser, a caret-targeting scheme and a drag subsystem
  * to buy a property only a box has — and what the position means in a box is
  * *which box*, which a control living on that box says without any syntax.
