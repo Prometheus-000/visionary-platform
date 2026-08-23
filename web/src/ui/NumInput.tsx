@@ -13,7 +13,7 @@
  * — typing 1153 shows 1153 until you leave the field — and an arrow is a faster
  * way to *type* a number, not a second way to commit one.
  */
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 
 const dec = (v: number | string) => (String(v).split('.')[1] ?? '').length
 
@@ -49,6 +49,16 @@ export function step(
  * count and reaching for the mouse to commit it is the wrong ending. The blur is
  * first so a width still on its way to being snapped is snapped before the run
  * reads it.
+ *
+ * **What you typed is not yet a number, and the box has to hold it anyway.**
+ * Most parents here parse what comes out and hand back the parse, which made the
+ * halfway state of every decimal unreachable: "0." went out, came back as "0"
+ * with the dot deleted, and the next keystroke turned 1.4 into 14 and 0.8 into
+ * 8. Backspacing to empty was refused outright — the digit reappeared, because
+ * "" parses to nothing and the parent kept what it had. So a region LoRA could
+ * only be moved off 1 with the arrows, which is what made it look like a floor
+ * rather than a field that would not take the keys. The box holds the
+ * keystrokes; the parent holds the number.
  */
 export function NumInput({
   value,
@@ -70,6 +80,22 @@ export function NumInput({
   /** Blur and Enter, for the boxes that snap on the way out. */
   onCommit?: () => void
 } & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'step'>) {
+  const [typed, setTyped] = useState<string | null>(null)
+
+  // And it lets go the moment the parent's number moves for a reason that is not
+  // this box — another region selected into the same card, a rectangle dragged
+  // under a focused X — because half-typed text describes the number it was
+  // typed into. A difference in *spelling* is not that: "0." against the "0" it
+  // just committed is this box's own write arriving back, so what is compared is
+  // the numbers rather than the strings. Adjusted during render rather than in
+  // an effect, which is what keeps a stale draft from being painted first.
+  const [seen, setSeen] = useState(value)
+  if (value !== seen) {
+    setSeen(value)
+    if (typed !== null && parseFloat(typed) !== parseFloat(value)) setTyped(null)
+  }
+  const shown = typed ?? value
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
@@ -81,19 +107,27 @@ export function NumInput({
       }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
       if (e.altKey || e.shiftKey) return
-      const next = step(value, e.key === 'ArrowUp' ? 1 : -1, e.metaKey || e.ctrlKey,
+      const next = step(shown, e.key === 'ArrowUp' ? 1 : -1, e.metaKey || e.ctrlKey,
                         { fine, bigStep, base })
       if (next === null) return
       e.preventDefault()
+      // An arrow lands on a whole number, so there is nothing half-typed left to
+      // protect — and letting go here is what makes a step the parent refuses,
+      // like a coordinate clamped at 1, show the number it kept rather than the
+      // one this box asked for.
+      setTyped(null)
       onValue(next)
     },
-    [value, onValue, fine, bigStep, base, onEnter, onCommit],
+    [shown, onValue, fine, bigStep, base, onEnter, onCommit],
   )
 
   return (
-    <input {...rest} value={value} inputMode={rest.inputMode ?? 'decimal'}
-           onChange={(e) => onValue(e.target.value)}
-           onBlur={(e) => { onCommit?.(); rest.onBlur?.(e) }}
+    <input {...rest} value={shown} inputMode={rest.inputMode ?? 'decimal'}
+           onChange={(e) => { setTyped(e.target.value); onValue(e.target.value) }}
+           // Leaving the field is what hands the spelling back: a box left
+           // holding "1.40", or holding nothing because the parent refused an
+           // empty string, reads as the number that was actually kept.
+           onBlur={(e) => { setTyped(null); onCommit?.(); rest.onBlur?.(e) }}
            onKeyDown={onKeyDown} />
   )
 }
