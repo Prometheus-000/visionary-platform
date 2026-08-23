@@ -25,9 +25,36 @@ the next one. Concretely:
   confirm dialog is the safety net now, so it has to say what is going and how
   much of it: a dialog that undersells the blast radius is the failure mode this
   replaced. `_drop_legacy_trash()` clears what the old scheme left behind.
-- **Stops are cooperative.** Jobs check a flag between steps and unwind cleanly,
-  so the container survives and the next request is warm. Killing the process
-  is what you do when there is no other lever, not the default.
+- **A silent wait is diagnosed by guessing, and the guess lands on whatever was
+  added most recently.** This is the error rule above applied to the state that
+  is not an error, and it cost more than any error here has. A render took ten
+  minutes to start; the page said "generate, 0%" throughout; Stop did nothing;
+  and the only way its owner learned it had begun was opening the Modal
+  dashboard to kill the app. Their conclusion — reasonable, and wrong — was that
+  the prompt rewrite was to blame, because it was the newest thing on that path.
+  It was 48 MB of PNG references crossing the wire.
+
+  A feature was nearly retired for another feature's cost. **So anything that
+  can take minutes says which minutes they are**: the phase names the step
+  ("reloading the volume", "staging 9 attachments · 48 MB"), the log stamps when
+  the job was accepted and how long the unbounded steps took, and the parts
+  whose cost the person controls report the number they control.
+
+- **Stops are cooperative — and a cooperative stop has to be readable and
+  read.** Jobs check a flag between steps and unwind cleanly, so the container
+  survives and the next request is warm. Killing the process is what you do when
+  there is no other lever, not the default.
+
+  Both halves of that failed at once and neither was visible. The flag lived on
+  the job record, which `_publish` rewrites with get-update-put against a
+  *network* Dict under a **process-local** lock — and Stop is pressed in the web
+  container, which never takes it, so a publish straddling the press put
+  `stop: False` back. `smoke_stop.py` enumerates the six interleavings and two
+  of them lose it. It has its own key now, because a merge cannot clobber what
+  it does not touch. And the flag was read in exactly one place, inside
+  `_await`, which is reached only after the graph is posted — so every minute
+  before that ran to completion whatever anybody pressed. `_stop_gate` is called
+  at each phase boundary, where nothing holds a GPU and unwinding is free.
 - **Pin to what you can reproduce.** A commit SHA, not a branch or a floating
   ref. When upstream force-pushes, your build should not change under you.
 
