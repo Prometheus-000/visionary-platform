@@ -13,7 +13,7 @@
  */
 import { api, post, type Res } from './client'
 import type {
-  AppState, CompileResult, DupeReport, Insight, JobStatus, MotionResult, Session, ShotPill } from './types'
+  AppState, CompileResult, DupeReport, Insight, JobStatus, Session, ShotPill } from './types'
 
 const seg = encodeURIComponent
 
@@ -224,24 +224,13 @@ export const compile = (body: {
 }) => post<CompileResult>('/api/compile', body)
 
 /**
- * What could move in this frame — the one route where a model is shown a
- * *picture* of the user's rather than their words. `first_frame` is the full
- * base64, unlike `compile`'s booleans: this is a press, not a keystroke
- * follower, and grounding is the whole point. Audio categories are gated by
- * the server against the model's own `supports`, so a silent model's reply
- * simply never contains them.
- */
-export const motion = (body: { prose: string; model: string; first_frame?: string | null }) =>
-  post<MotionResult>('/api/motion', body)
-
-/**
  * Start the container this session will use, while the page is still being read.
  *
  * It warmed the interpreter's L4 for a long time after nothing routed there,
  * which cost a cold start on every page load to warm a card no request would
- * reach. It warms the *generator* now — the one that answers both Enhance and
- * the motion suggestions — and that container loads the rewrite weights as it
- * comes up, so this window is spent on exactly what the first press waits for.
+ * reach. It warms the *generator* now, so this window is spent getting ComfyUI
+ * up and the checkpoint resident — which is the whole of what the first
+ * Generate waits for, since that container loads one model again.
  *
  * Fire and forget: nothing on screen depends on it, and a slow first press is
  * the only cost of it failing.

@@ -80,17 +80,6 @@ export function Field({
       requestAnimationFrame(() => el.setSelectionRange(moved.caret, moved.caret))
       return
     }
-    // ⌘Z while there is a parse write to take back. Native undo is already
-    // superseded by `moveClause`, which writes the value through React — so this
-    // is one more, not a new kind of thing. It falls through to the browser's own undo
-    // when the slot is empty, which is every keystroke that is not the one
-    // immediately after a document landed.
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'z'
-        && write === s.setPrompt && useStore.getState().docUndo) {
-      e.preventDefault()
-      s.undoDoc()
-      return
-    }
     // Shift+Enter keeps the newline, because prompts here are prose and paragraphs in
     // them are real. ⌘/Ctrl+Enter works too: it is what the muscle expects from every
     // other box that submits. isComposing, because an IME's Enter is committing a

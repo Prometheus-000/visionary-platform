@@ -5,14 +5,12 @@ import { usePopover } from '../ui/Popover'
 import { LoraBox } from '../lora/LoraBox'
 import { LoraButton } from '../lora/LoraButton'
 import { loraNote } from '../lora/note'
-import { MotionDoor } from '../motion/MotionDoor'
-import { MotionPanel } from '../motion/MotionPanel'
 import { Palette } from '../shot/Palette'
 import { Peek } from '../shot/Peek'
 import { ShotDoor } from '../shot/ShotDoor'
 import { Rail } from '../shot/Rail'
 import { SourceRow } from '../video/SourceRow'
-import { motionLive, supports, useStore } from '../store'
+import { supports, useStore } from '../store'
 import { Field } from './Field'
 import { autoGrow } from './fieldMax'
 import { dropUnsupported, videoReady } from './resolve'
@@ -60,7 +58,6 @@ export function Console({
   const s = useStore()
   const box = useRef<HTMLDivElement>(null)
   const pal = usePopover()
-  const mo = usePopover()
 
   // The console has to watch itself, because the prompt is not the only thing that
   // grows: arming Regions adds a bar and picking pills adds a rail, and both happen
@@ -169,16 +166,13 @@ export function Console({
                 A14B pair forces — which expert a LoRA patches — rides in the token as a
                 third field, read off the filename when the matched pair names it. */}
             {supports(s).loras && <LoraButton id="v-add-lora" />}
-            {/* The motion door replaces the shot palette on this side — the
-                palette's tiles were phrases in a vacuum, and behind this door
-                the model has looked at the frame. The old door survives as the
-                degrade: a server with no `motion_groups` gets the app exactly
-                as it was, so turning the feature off is deleting one key. */}
-            {s.state?.motion_groups?.length
-              ? <MotionDoor id="v-shot"
-                            on={motionLive(s) || !!s.shot.length}
-                            onClick={mo.toggle} />
-              : <ShotDoor id="v-shot" kind="video" on={!!s.shot.length} onClick={pal.toggle} />}
+            {/* The same door as the image side. A motion panel stood here for a
+                while — a VLM shown the first frame, answering with prose about
+                what could move — and the text it wrote was fine; it was simply
+                not the shape H3 reads, which is a document with named fields.
+                Its cost was not the output either: it ran on the generator's one
+                input slot and could hold a render behind it. */}
+            <ShotDoor id="v-shot" kind="video" on={!!s.shot.length} onClick={pal.toggle} />
             <span className="actions">
               <span className="muted" id="v-model-line">{vid.note}</span>
               <VideoSampling />
@@ -192,10 +186,8 @@ export function Console({
 
       {/* One palette, shared by both strips' doors — the vocabulary is one table with
           three compilers behind it, so a second popover per side would be a second
-          place for the dimming rules to drift. (With motion_groups served, only the
-          image door opens it; the video door opens the motion panel below.) */}
+          place for the dimming rules to drift. */}
       {pal.open && <Palette anchor={pal.anchor} onClose={pal.close} />}
-      {mo.open && <MotionPanel anchor={mo.anchor} onClose={mo.close} />}
 
       {/* Every picture the model can be given. Lifted out of the video strip when that
           moved into the field: this is a row of pictures, not a row of controls, and it

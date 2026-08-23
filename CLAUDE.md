@@ -246,9 +246,10 @@ depends on either feature existing:
   the most distinctive thing in it. And it began **parroting its own examples**
   back as the answer — given three friends on a fire escape it returned phrases
   lifted verbatim from the instruction. So concrete examples came out with the
-  wordcount, and that was not a coincidence: they *were* the parroting. The one
-  instruction still on a user-facing path is `_motion_instruction`, and
-  `smoke_prompt.py` asserts the budget rather than leaving it to judgement.
+  wordcount, and that was not a coincidence: they *were* the parroting. No
+  instruction is on a user-facing path any more — `_motion_instruction` was the
+  last and went with the motion panel — so the budget is a fact about a class of
+  thing rather than a check on a live string.
 - **A length is a token cap, never an instruction.** "Between 60 and 100 words"
   produced 95, 122 and **617**. A model does not count.
 - **Meta-commentary is cut by a regex, not asked away.** The model returned the
@@ -259,8 +260,11 @@ depends on either feature existing:
   Krea 2 reads its prompt through Qwen3-VL-4B, a decoder model already resident,
   so the rewrite ran warm in 2.2-9.2s on weights already paid for. Nobody else
   does this because Flux's encoder is T5-XXL and SD's is CLIP and both are
-  encoder-only. The trick is still in the tree — `comfy_nodes/visionary_rewrite`
-  and `_rewrite_generator` are what `/api/motion` runs on.
+  encoder-only.
+
+  **It is out of the tree now, and this entry is the record of why the trick was
+  not worth its bill.** `comfy_nodes/visionary_rewrite`, `_rewrite_generator`
+  and `/api/motion` are deleted; the video container loads one model again.
 
   **What it costs is the thing the ten-minute render was really about.** Riding
   the generator means riding its `@modal.concurrent(max_inputs=1)`, so a rewrite
@@ -704,11 +708,13 @@ nobody has looked at.
   no second writer — the arrangement that lost the terminal status 15 runs out
   of 15 before the lock existed.
 
-  **And the exception that survives is `/api/motion`**, which does run on the
-  encoder the image container already holds. It is allowed because it is a
-  button somebody presses and then waits for, not something firing on a typing
-  pause: a suggestion queuing behind a render is correct rather than a defect on
-  a single-user platform. See "The rewriter is the encoder" in the history above.
+  **There is no longer an exception.** `/api/motion` was one — a button somebody
+  pressed and waited for, running on the encoder the container already held —
+  and the argument for it was that a suggestion queuing behind a render is
+  correct on a single-user platform. True, and it is the wrong way round: what
+  actually happened is a *render* queuing behind a *suggestion*, because the
+  slot is one slot and it does not care which direction you were thinking in.
+  Nothing shares a generator process now.
 
 
 - **Reload through `_reload_volume()`, never `volume.reload()`.** Modal refuses

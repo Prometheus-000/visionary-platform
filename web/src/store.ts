@@ -39,17 +39,6 @@ import type { LoraChip } from './lora/tokens'
 export type Kind = 'image' | 'video'
 export type Mode = 'generate' | 'train'
 
-/** See `Store.motion`. `for` is the cache key of the fetch that produced
- *  `sug`, so reopening the panel is free until the frame, the model or the
- *  prose it was grounded on changes. */
-export type MotionState = {
-  sug: Record<string, string[]> | null
-  busy: boolean
-  error: string | null
-  for: string | null
-  base: string | null
-  picks: string[]
-}
 /** What the region layer draws. See `Store.edit` for what each one means and why
  *  editing a box's contents and redrawing the box are two states rather than one. */
 export type EditMode = 'off' | 'content' | 'geometry'
@@ -268,27 +257,6 @@ export type Store = {
   dropLora: (path: string) => void
   patchLora: (path: string, patch: Partial<LoraChip>) => void
 
-  /** The prompt as it stood immediately before the last composed write. One
-   *  slot, because the gesture it reverses is one write at a time. The motion
-   *  panel is the only thing that writes now; it was shared with the parse and
-   *  the rewrite, and outlived both. */
-  docUndo: { prompt: string } | null
-  /** ⌘Z in the prompt field, while there is a write to take back. */
-  undoDoc: () => void
-
-  /** The motion panel's suggestions and picks. `base` is the prompt as it
-   *  stood before the first pick — the person's own sentence, which every
-   *  composition starts from and which ⌘Z restores whole. `picks` are
-   *  `"group:index"` receipts against that exact base; the moment the box no
-   *  longer reads as base-plus-picks (a hand edit), the next toggle re-bases
-   *  on what is actually there rather than stomping it. */
-  motion: MotionState
-  setMotion: (patch: Partial<MotionState>) => void
-  /** One suggestion in or out of the prompt. The write is composed — base,
-   *  then the picked sentences in section order — and lands through the
-   *  `docUndo` slot: one gesture, one ⌘Z. */
-  toggleMotion: (id: string) => void
-
   /** The rail, in the order you built it. */
   shot: ShotPill[]
   /** Which valued pill is expanded, if any. */
@@ -402,8 +370,6 @@ export const useStore = create<Store>((set, get) => ({
   setMode: (mode) => set({ mode }),
   stash: { image: null, video: null },
   // The swap, and the only statement in the file where both sets exist at once.
-  // `docUndo` is dropped rather than stashed: an undo that restores the other
-  // kind's sentence is worse than no undo.
   setKind: (kind) => set((s) => {
     if (kind === s.kind) return {}
     const mine = s.stash[kind]
@@ -418,7 +384,6 @@ export const useStore = create<Store>((set, get) => ({
       negOn: mine?.negOn ?? false,
       shot: mine?.shot ?? [],
       loras: mine?.loras ?? [],
-      docUndo: null,
     }
   }),
 
@@ -438,38 +403,6 @@ export const useStore = create<Store>((set, get) => ({
   patchLora: (path, patch) => set((s) => ({
     loras: s.loras.map((l) => (l.path === path ? { ...l, ...patch } : l)),
   })),
-
-  docUndo: null,
-  // The slot is spent on use. A second ⌘Z is the field's own undo again, which
-  // is the honest answer — there is only ever one composed write to take back.
-  undoDoc: () => set((s) => (s.docUndo ? { ...s.docUndo, docUndo: null } : {})),
-
-  motion: { sug: null, busy: false, error: null, for: null, base: null, picks: [] },
-  setMotion: (patch) => set((s) => ({ motion: { ...s.motion, ...patch } })),
-  toggleMotion: (id) => {
-    const s = get()
-    const sug = s.motion.sug
-    if (!sug) return
-    const groups = s.state?.motion_groups
-    // Re-base whenever the box no longer reads as base-plus-picks — a hand
-    // edit, or the first pick. The prose is the record and the picks are
-    // receipts against one specific prose; composing onto an edited sentence
-    // from a stale base would overwrite words the person just typed, which is
-    // the one write this feature must never make.
-    const stale = s.motion.base === null
-      || s.prompt !== composeMotion(groups, sug, s.motion.base, s.motion.picks)
-    const base = stale ? s.prompt : (s.motion.base as string)
-    const prior = stale ? [] : s.motion.picks
-    const picks = prior.includes(id) ? prior.filter((p) => p !== id) : [...prior, id]
-    set({
-      prompt: composeMotion(groups, sug, base, picks),
-      // Undo always lands on the pre-pick prompt however many toggles
-      // happened, and clears itself when the last pick is untoggled: an armed
-      // ⌘Z with nothing to take back is a gesture that does nothing visible.
-      docUndo: picks.length ? { prompt: base } : null,
-      motion: { ...s.motion, base, picks },
-    })
-  },
 
   shot: [],
   shotOpen: null,
@@ -554,61 +487,6 @@ export const useStore = create<Store>((set, get) => ({
   setRefVids: (refVids) => set({ refVids }),
   setRefRoles: (refRoles) => set({ refRoles }),
 }))
-
-/**
- * Base plus picked sentences, in section order then the model's own order.
- *
- * Section order is the served `motion_groups` order — subject, environment,
- * camera — which is the guide's clause order, so a pick made late still lands
- * where it reads best rather than where the finger happened to fall. Each
- * suggestion is already a full sentence about this frame's subjects; joining
- * them is composition, not compilation, and the result sits in the box where
- * it is editable and one ⌘Z from gone.
- */
-function composeMotion(
-  groups: { key: string }[] | undefined,
-  sug: Record<string, string[]>,
-  base: string,
-  picks: string[],
-): string {
-  const order = (groups ?? []).map((g) => g.key)
-  const chosen = picks
-    .map((id) => {
-      const cut = id.indexOf(':')
-      const key = id.slice(0, cut)
-      const idx = Number(id.slice(cut + 1))
-      const text = sug[key]?.[idx]
-      return text ? { key, idx, text } : null
-    })
-    // A pick whose suggestion no longer exists (a refetch shrank the list)
-    // simply drops out of the composition rather than composing `undefined`.
-    .filter((p): p is { key: string; idx: number; text: string } => !!p)
-    .sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key) || a.idx - b.idx)
-  const dot = (t: string) => (/[.!?…]$/.test(t) ? t : `${t}.`)
-  // The base is closed too, once something follows it — "a cup of coffee She
-  // lifts the cup" is the join this line exists to prevent. With no picks the
-  // base comes back byte-for-byte, so untoggling the last pick restores the
-  // sentence exactly as typed, unclosed and all.
-  const head = base.trim()
-  return chosen.length
-    ? [head && dot(head), ...chosen.map((c) => dot(c.text))].filter(Boolean).join(' ')
-    : head
-}
-
-/**
- * Whether the picks still describe the box. False after a hand edit or a ⌘Z —
- * the picks are receipts against one specific prose, and a highlighted row
- * over a prompt that no longer carries the sentence is a lie with a worse
- * consequence than looks: clicking it to *unpick* would re-add the sentence,
- * because the toggle re-bases on the edited prompt. The panel reads this so a
- * stale pick simply shows unpicked, and the door reads it so it does not stay
- * lit for a composition ⌘Z took away.
- */
-export function motionLive(s: Pick<Store, 'state' | 'prompt' | 'motion'>): boolean {
-  return s.motion.base !== null && !!s.motion.picks.length && !!s.motion.sug
-    && s.prompt === composeMotion(
-      s.state?.motion_groups, s.motion.sug, s.motion.base, s.motion.picks)
-}
 
 /* ---- reading the served vocabulary ------------------------------------- */
 /* A pill key is `"{group}.{item}"`. Split here and nowhere else, so a malformed

@@ -102,20 +102,6 @@ CAPTION = {
     "DEFAULT_CAPTION_MODEL", "DEFAULT_CAPTION_PRESET",
 }
 
-# The motion panel's sections and its parser: `preview_ui.py` serves
-# `motion_groups` and stubs `/api/motion` through the real parser, and
-# `smoke_prompt.py` asserts the instruction budget. `_THINK` and `_oneline` ride along
-# because `_parse_motion` calls them. **A module-level constant added beside a
-# pulled function has to be added here in the same edit** — that is this file's
-# whole failure mode: a function arrives without what it calls, and app.py
-# raises `NameError` from inside the subset, which reads as a broken preview
-# rather than an incomplete pull. It fired twice in one session over `_stage_*`.
-MOTION = {
-    "MOTION_GROUPS", "MOTION_MAX_PER", "MOTION_PHRASE_MAX", "MOTION_TOKENS",
-    "_MOTION_HEAD_IMAGE", "_MOTION_HEAD_TEXT", "_MOTION_LINE",
-    "_motion_instruction", "_parse_motion", "_THINK", "_oneline",
-}
-
 # What each video model can be asked for. Pulled rather than transcribed for
 # the reason every other set here is, and because this one has already drifted
 # once: `preview_ui.py` hand-wrote `supports` and went on rendering H3 with no

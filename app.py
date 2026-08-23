@@ -558,30 +558,9 @@ comfy_image = (
     # image layer, so pointing it one level up would overlay the directory the
     # clone above writes into and the pack would vanish at runtime while the
     # build log still showed it being cloned.
-    # `visionary_rewrite` loads the text encoder's *weights* from the local
-    # safetensors but still wants the tokenizer and config by repo id. Baked for
-    # the reason `trainer_image` bakes the same one: an H100 that is already
-    # warm should never wait on HuggingFace, and an outage there should not be
-    # able to take renders with it.
-    # AutoProcessor beside the tokenizer, because the motion path shows the
-    # model a frame and the processor is what turns pixels into
-    # `pixel_values`/`image_grid_thw` — it is a config download, not weights,
-    # and fetching it at request time would put HuggingFace back on a path the
-    # two lines below exist to keep it off.
-    .run_commands(
-        "python -c \"from transformers import AutoConfig, AutoProcessor, "
-        "AutoTokenizer; "
-        "r='Qwen/Qwen3-VL-4B-Instruct'; "
-        "AutoConfig.from_pretrained(r); AutoTokenizer.from_pretrained(r); "
-        "AutoProcessor.from_pretrained(r)\""
-    )
     .add_local_dir(
         f"{COMFY_NODES_DIR}/visionary_boxes",
         remote_path=f"{COMFY}/custom_nodes/visionary_boxes",
-    )
-    .add_local_dir(
-        f"{COMFY_NODES_DIR}/visionary_rewrite",
-        remote_path=f"{COMFY}/custom_nodes/visionary_rewrite",
     )
     .add_local_dir(
         f"{COMFY_NODES_DIR}/visionary_free_regional",
@@ -1450,14 +1429,16 @@ def _note_queue_wait(tag: str, job_id: str, params: dict[str, Any]) -> float:
 
     **The gap nothing could see.** Both GPU classes are `max_containers=1` with
     `@modal.concurrent(max_inputs=1)`, so anything already holding that slot
-    delays everything behind it — and `/api/motion` holds it, on the same
-    container renders run on. A suggestion queuing behind a render is fine on a
-    single-user platform, which is the trade that arrangement was chosen for; a
-    render queuing behind a suggestion is the same trade read backwards, and it
-    is what a ten-minute wait turned out to be.
+    delays everything behind it. `/api/motion` used to hold it, on the same
+    container renders run on, and a ten-minute wait came out of that — the trade
+    was defended as "a suggestion queuing behind a render is fine on a
+    single-user platform", which is true and is the wrong way round. Nothing
+    shares that slot now.
 
-    It cannot be prevented cheaply — the whole point of riding the generator is
-    that the weights are already there — so it is measured instead. Measured
+    It is kept because the window it measures did not go with the thing that
+    filled it: a cold start, a blob transfer and Modal's own scheduling all land
+    here, and the next occupant of this gap will be something nobody predicted.
+    Measured
     rather than inferred, because this window also holds cold starts, blob
     transfer and scheduling, and a line that named one of them would be a guess
     wearing a number.
@@ -5934,12 +5915,11 @@ class ImageGenerator:
         # scrolled past during startup.
         self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
                                   "VisionaryFreeRegional")
-        # **No rewrite warm-up here, and that is worth a line because it used to
-        # be symmetric with the video side.** `/api/motion` is the only caller
-        # left and it asks for the video container by name, so this one loaded
-        # ~9 GiB for a method nothing invokes — and did it as a *ComfyUI graph*,
-        # which holds the single queue for the 132 seconds it takes, right at
-        # the moment a cold container is about to be asked for a render.
+        # **One model in this container, which is how it started.** A second
+        # lived here for a while — Qwen3-VL for the prompt rewrite — loaded at
+        # `enter` as a *ComfyUI graph*, which holds the single queue for the 132
+        # seconds it takes, right at the moment a cold container is about to be
+        # asked for a render.
 
     @modal.method()
     def warm(self) -> dict[str, Any]:
@@ -7030,157 +7010,6 @@ SHOT_ITEMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
 # payload cannot spell a sentence one character at a time, not because a
 # seventeenth run would mean anything.
 MAX_SPANS = 16
-
-def _rewrite_generator(kind: str):
-    """
-    The container the session is already keeping warm.
-
-    **Which container answers is the whole latency story**, and getting it
-    wrong is what made this feature unusable: a rewrite always went to
-    `ImageGenerator`, so a video session paid a second container's cold start —
-    ComfyUI and 35 GB of Krea 2 — to write a sentence. Both hold the same
-    weights off the same volume, so the only question worth asking is which one
-    is already on, and the session's own kind is the answer.
-    """
-    return VideoGenerator() if kind == "video" else ImageGenerator()
-
-
-# The other half of the same problem, and it arrives at the *front* rather than
-# the back. Krea's expansion prompt asks the model to think before it writes —
-# "What is the subject and mood?", "Consider two or three alternatives" — and
-# tells it to keep that internal. Rule 3 is a request; models answer the
-# questions out loud often enough that the visible prompt begins with the
-# planning. So the last fenced or labelled block wins: everything up to and
-# including a `</think>` or a "Expanded prompt:" heading is the working, and the
-# paragraph after it is the answer.
-_THINK = re.compile(
-    r"^.*?(?:</think>|<\/thinking>|"
-    r"(?:final|expanded|output)\s+prompt\s*:|"
-    r"^\s*(?:answer|prompt)\s*:)\s*",
-    re.I | re.S | re.M)
-
-
-# --------------------------------------------------------------------------
-# Motion suggestions — the video side's answer to the shot palette, which it
-# replaces. The palette's flaw was named precisely by the person this is built
-# for: it added comma-separated phrases in a vacuum, with no knowledge of what
-# those phrases were acting on, against an encoder that reads prose where
-# elements and subjects tie together. The fix is grounding: the model *looks at
-# the attached frame* (the Qwen3-VL beside Krea 2 has its vision tower resident
-# — see visionary_rewrite's loading comment) and proposes motion for the
-# subjects that are actually there. On t2v, where there is no frame, it grounds
-# on the typed prose instead — same instruction frame, different first line.
-#
-# The keys are the panel's sections and the parser's labels, in the order the
-# clauses should land in the prompt — subject, then environment, then camera,
-# which is the guide's own clause order. `needs` is the same fact it is in
-# SHOT_VOCAB: sound and dialogue are audio, and a silent model must never be
-# offered a category the compiler would drop. Served to the page, and serving it
-# is also the feature flag — a client that finds no `motion_groups` renders the
-# old palette, so the degrade is the app as it was.
-MOTION_GROUPS: dict[str, dict[str, Any]] = {
-    "subject":     {"label": "Subjects",    "needs": None},
-    "environment": {"label": "Environment", "needs": None},
-    "camera":      {"label": "Camera",      "needs": None},
-    "sound":       {"label": "Sound",       "needs": "audio"},
-    "dialogue":    {"label": "Dialogue",    "needs": "audio"},
-}
-
-# Two heads, one body. The i2v head is the whole point of the feature — the
-# frame already fixes the scene, so describing looks is the failure mode — and
-# the t2v head is the same discipline applied to prose. No scene examples
-# anywhere in the body: the 10.2k-character PARSE_RULES lesson is that concrete
-# examples get parroted back as the answer, and a format spec is the part a
-# model cannot infer while "what does a kitchen do" is the part it can.
-_MOTION_HEAD_IMAGE = (
-    "You are directing a short video clip. The still image you are given is "
-    "its first frame: it already fixes the scene, the subjects, the light and "
-    "the framing, so never describe how anything looks. Propose only what "
-    "MOVES.")
-_MOTION_HEAD_TEXT = (
-    "You are directing a short video clip from the written description you "
-    "are given. The description already says what the scene is; do not "
-    "restate it. Propose only what MOVES over the clip.")
-
-
-def _motion_instruction(*, image: bool, audio: bool) -> str:
-    """
-    Assembled per request rather than four baked constants, because the two
-    axes are independent facts about the request — is there a frame, can the
-    model hear — and 2x2 near-identical strings is the drift this file keeps
-    paying for elsewhere. Size budget 500-2000 characters, asserted in
-    `smoke_prompt.py` — it moved there when the enhance harness was deleted
-    with the feature, and a budget nobody asserts is a paragraph.
-    """
-    lines = [
-        "SUBJECT: one short present-tense sentence of motion for one visible "
-        "subject",
-        "ENVIRONMENT: one short sentence of ambient or background motion",
-        "CAMERA: one camera move with its size and speed, written as action",
-    ]
-    counts = "Give 2-4 SUBJECT lines, 2-3 ENVIRONMENT lines and 2-3 CAMERA lines"
-    if audio:
-        lines += [
-            "SOUND: a few words naming a sound the scene itself would carry",
-            "DIALOGUE: one short line a visible subject could plausibly say",
-        ]
-        counts += ", 2-3 SOUND lines and 1-2 DIALOGUE lines"
-    return (
-        (_MOTION_HEAD_IMAGE if image else _MOTION_HEAD_TEXT)
-        + "\n\nEvery proposal must be concrete, modest and tied to something "
-        "actually present — motion a few seconds of video can complete. One "
-        "proposal per line, each formatted exactly as one of:\n"
-        + "\n".join(lines)
-        + "\n\n" + counts + ". No headers, no numbering, no commentary: "
-        "nothing but these lines.")
-
-
-# Tolerant at the front — models bullet, bold and dash their lists however
-# firmly the instruction says not to — and strict about the label itself,
-# because the label is the only structure this contract has. A line that
-# matches nothing is dropped, never an error: a suggestion list three lines
-# short is still a suggestion list, where the parse path's whole apparatus
-# existed because a malformed *document* is never an acceptable output.
-_MOTION_LINE = re.compile(
-    r"^[^A-Za-z]{0,4}(subject|environment|camera|sound|dialogue)"
-    r"\**\s*[:—-]\s*(.+)$", re.I)
-MOTION_MAX_PER = 4
-MOTION_PHRASE_MAX = 200
-# What the panel will read of a long prompt. It inherited this bound from the
-# document validator, which is gone; a suggestion is grounded in the frame far
-# more than in the prose, so the cap is about refusing a pathological body
-# rather than about how much context helps.
-MOTION_PROSE_MAX = 2000
-# A flat cap. The rewrite's cap scaled with the input, because a polish comes
-# back about as long as it went in; a suggestion list does not — fifteen short
-# lines is the whole answer whatever was typed.
-MOTION_TOKENS = 512
-
-
-def _parse_motion(said: str, *, audio: bool) -> dict[str, list[str]]:
-    """LABEL: sentence lines in, grouped phrases out. Deterministic, lossy."""
-    text = said or ""
-    # The think-block guard, reused: planning arrives in front of the answer on
-    # this path too, and a reasoning line that happens to start with "Camera"
-    # would otherwise be served as a suggestion.
-    if (hit := _THINK.match(text)) and text[hit.end():].strip():
-        text = text[hit.end():]
-    out: dict[str, list[str]] = {k: [] for k in MOTION_GROUPS}
-    for raw in text.splitlines():
-        m = _MOTION_LINE.match(raw.strip())
-        if not m:
-            continue
-        key = m.group(1).lower()
-        # Asserted here as well as in the instruction, because the instruction
-        # is a request: a silent model's panel must not offer a sound however
-        # helpfully the model volunteered one.
-        if not audio and MOTION_GROUPS[key]["needs"] == "audio":
-            continue
-        phrase = _oneline(m.group(2)).strip().strip("\"'")[:MOTION_PHRASE_MAX].strip()
-        if phrase and phrase not in out[key] and len(out[key]) < MOTION_MAX_PER:
-            out[key].append(phrase)
-    return {k: v for k, v in out.items() if v}
-
 
 _ORIGIN_JOINS = frozenset(
     "the a an of in on at to and or with is are it its for from by as".split())
@@ -9427,55 +9256,14 @@ class VideoGenerator:
         # that failed to import leaves ComfyUI running happily without it, and
         # the first symptom is otherwise a rewrite rejected for an unknown
         # class_type — minutes into a session, with the traceback long scrolled.
-        self._comfy.require_nodes("VisionaryRewrite")
-        # **No warm-up here, and the reasoning inverted rather than changed.**
-        # Warming eagerly was right when the rewrite was on every prompt: the
-        # load is ~8 GB off a network volume plus a CPU construction the node
-        # prices at forty seconds, and charging it to whoever pressed first was
-        # the worse trade. It posts a ComfyUI *graph* to do it, though, and that
-        # queue is serial — so every cold container spent 132 seconds refusing
-        # to render while it loaded weights for a button.
-        #
-        # `/api/motion` is the only caller left. It is a panel somebody opens
-        # and waits for, on the video side only, and it may never be opened at
-        # all — so the first press pays the load and a render never does. The
-        # node keeps the model in a module-level `_READY`, so it is once per
-        # container either way; the only question was who waits, and it should
-        # not be the person who asked for a clip.
-
-    @modal.method()
-    def rewrite(self, prose: str, instruction: str,
-                max_tokens: int = 420, image_b64: str = "") -> dict[str, Any]:
-        """
-        The same rewrite, on the container the video session is already using.
-
-        **This exists because the alternative was a two-hundred-second wait for
-        a sentence.** Every rewrite used to answer on `ImageGenerator`, so
-        pressing Enhance halfway through a video session woke a *second*
-        container from zero — ComfyUI plus 35 GB of Krea 2 — to produce text,
-        on a card whose checkpoint the run would never touch. The weights this
-        needs are the same file on the same volume, so the fix is a method
-        rather than an architecture: whichever container the session is already
-        keeping warm is the one that answers.
-
-        It is not the video encoder. H3 reads its own and Wan reads umT5, so
-        unlike the image side there is nothing resident here to reuse — this is
-        Qwen3-VL, 9 GiB against the 28.5 GB this card has spare once H3's
-        42.5 GB is in, loaded **on the first call rather than at `enter`**. The
-        node holds it in a module-level `_READY` afterwards, so it is once per
-        container either way; loading it eagerly meant posting a graph to a
-        serial queue and every cold render waiting 132 seconds behind it.
-
-        **This holds `max_inputs=1` while it runs, and that is the trap.** The
-        slot it takes is the same one `generate` needs, so a panel opened on a
-        cold container delays a clip that has nothing to do with it — which is
-        how a ten-minute wait got blamed on the wrong feature.
-        """
-        graph = {"rw": {"class_type": "VisionaryRewrite",
-                        "inputs": {"prose": prose, "instruction": instruction,
-                                   "max_tokens": int(max_tokens),
-                                   "image_b64": image_b64}}}
-        return {"text": self._comfy.run_text(graph)}
+        # **Nothing but ComfyUI starts here now.** This container held a second
+        # model for a while — Qwen3-VL beside H3, for the prompt rewrite and
+        # then for the motion panel — and it cost more than it returned. It
+        # rides `@modal.concurrent(max_inputs=1)`, so a suggestion in flight is
+        # a render that cannot be *delivered*; loaded eagerly it put a 132s
+        # graph in front of every cold render; loaded lazily it still took the
+        # slot on first press. A ten-minute wait came out of that and was blamed
+        # on the wrong feature, because nothing anywhere said so.
 
     @modal.method()
     def warm(self) -> dict[str, Any]:
@@ -9985,10 +9773,6 @@ def web():
                  "instruction": p["instruction"], "custom": bool(p.get("custom"))}
                 for k, p in _caption_presets().items()
             ],
-            # The motion panel's sections, and the feature flag in one: a page
-            # that finds no `motion_groups` renders the old shot palette on the
-            # video side, so turning this feature off is deleting one key.
-            "motion_groups": [dict(v, key=k) for k, v in MOTION_GROUPS.items()],
             # The repo is shown in the gear's Caption models section, and
             # `custom` is what makes an entry deletable there — a built-in has
             # no delete because there is nothing behind it to remove.
@@ -10060,87 +9844,26 @@ def web():
         Start the container this session will actually use, on page load.
 
         **It used to start the interpreter's L4, and that was worse than
-        useless.** Nothing on any user-facing path answers there — yet every
-        page load rented a card and paid a vLLM cold start
-        for it. A warm-up that warms something no request will reach is not a
-        no-op; it is competing for the same quota as the container that *is*
-        about to be asked for something.
+        useless.** Nothing on any user-facing path answered there — yet every
+        page load rented a card and paid a vLLM cold start for it. A warm-up
+        that warms something no request will reach is not a no-op; it competes
+        for the same quota as the container that *is* about to be asked for
+        something.
 
-        So it warms the generator instead, which is where both the rewrite and
-        the motion suggestions live. `enter` stages the rewrite weights, so the
-        window this buys is spent on the exact thing the first press waits for.
+        What it buys now is the only thing left worth buying: ComfyUI started
+        and the checkpoint resident, so the first Generate is not also a cold
+        start. It used to be described as staging the rewrite weights too, and
+        that is gone with them — this container loads one model again.
 
         `spawn`, so the page never waits, and errors are swallowed: a warm-up
         that fails is a slower first press, not something to put on screen.
         """
         kind = "video" if str(payload.get("kind") or "") == "video" else "image"
         try:
-            _rewrite_generator(kind).warm.spawn()
+            (VideoGenerator() if kind == "video" else ImageGenerator()).warm.spawn()
         except Exception as exc:
-            print(f"[rewrite] {kind} warm-up failed: {exc}", flush=True)
+            print(f"[warm] {kind} warm-up failed: {exc}", flush=True)
         return {"ok": True}
-
-    @api.post("/api/motion")
-    def motion_suggest(payload: dict) -> dict[str, Any]:
-        """
-        What could move in this frame — grounded suggestions, grouped.
-
-        The one route where a model is shown a *picture* of the user's rather
-        than their words: the attached first frame rides along and the encoder
-        proposes motion for the subjects actually in it. Nothing here writes
-        into the prompt — the page composes the picks into prose on screen,
-        where they are editable and one ⌘Z from gone, which is the same trust
-        shape as the rewrite: nothing reaches the encoder that was not in the
-        box first.
-
-        Audio categories are gated per model *here*, not on the page: a reply
-        that offers a sound to a silent model is a reply the compiler would
-        have to drop later, and the sidecar-must-not-lie rule is cheaper to
-        enforce before the suggestion exists.
-
-        Every failure answers with empty groups and a reason. The panel says
-        so; the prompt box is never touched by a model that fell over.
-        """
-        prose = _oneline(str(payload.get("prose") or ""))[:MOTION_PROSE_MAX]
-        model = str(payload.get("model") or "")
-        if model not in VIDEO_MODELS:
-            return {"ok": False, "groups": {},
-                    "error": f"no such video model: {model!r} — one of "
-                             f"{sorted(VIDEO_MODELS)}"}
-        image = str(payload.get("first_frame") or "")
-        # The page shrinks a frame to 1536px before sending it (the reference
-        # cap), so a shrunk frame is 1-3 MB of base64. Anything past this bound
-        # is a client that skipped the shrink, and refusing it by name beats
-        # feeding a 12 MB phone original through the processor.
-        if len(image) > 8_000_000:
-            return {"ok": False, "groups": {},
-                    "error": "first_frame is too large — the page caps a frame "
-                             "at 1536px before sending it"}
-        if not prose and not image:
-            return {"ok": True, "groups": {}}
-        audio = bool(VIDEO_MODELS[model]["supports"].get("audio"))
-        instruction = _motion_instruction(image=bool(image), audio=audio)
-        try:
-            # The generator, because only it has eyes. An empty user turn is
-            # undefined behaviour in a chat template, so the i2v-with-no-prose
-            # case sends a stand-in that says where the answer should come from.
-            # The video container, because this is a video-only surface and it
-            # is the one the session already has warm. Both hold the same
-            # weights; the image container is a cold start away.
-            said = _rewrite_generator("video").rewrite.remote(
-                prose or "(nothing was typed — ground every proposal in the image)",
-                instruction, MOTION_TOKENS, image_b64=image)
-        except Exception as exc:
-            print(f"[motion] failed: {exc}", flush=True)
-            return {"ok": False, "groups": {}, "error": str(exc)}
-        raw = said.get("text") or ""
-        # Prose declines are visible, so the rewrite's guard covers this path
-        # too — anchored, because "I cannot" inside a suggestion is a line about
-        # the picture.
-        if raw and _looks_like_refusal(raw):
-            print(f"[motion] declined: {raw[:80]!r}", flush=True)
-            raw = ""
-        return {"ok": True, "groups": _parse_motion(raw, audio=audio)}
 
     @api.post("/api/download")
     def download(payload: dict) -> dict[str, Any]:

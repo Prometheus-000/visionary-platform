@@ -33,9 +33,9 @@ Loaded out of app.py by AST rather than by import — see `_from_app.py`, which
 both this and the UI preview server share so there is one way of doing it.
 """
 
-from _from_app import MOTION, SHOT, pull
+from _from_app import SHOT, pull
 
-G = pull(SHOT | MOTION)
+G = pull(SHOT)
 FAIL: list[str] = []
 
 
@@ -311,16 +311,6 @@ check("non_diegetic_music still is, which is the opposite rule and the point",
 # The one system prompt still on a user-facing path, and the budget is asserted
 # rather than left to judgement for the reason PARSE_RULES records: it grew from
 # 2.9k to 10.2k characters one well-reasoned rule at a time and the output got
-# worse, because concrete examples come back parroted as the answer. This check
-# lived in the enhance harness and moved here when that was deleted with the
-# feature — a budget nobody asserts is a paragraph.
-for _img in (True, False):
-    for _aud in (True, False):
-        _n = len(G["_motion_instruction"](image=_img, audio=_aud))
-        check(f"the motion instruction fits its budget "
-              f"(image={_img}, audio={_aud}): {_n} chars",
-              500 <= _n <= 2000, True)
-
 if FAIL:
     print("\n" + "\n".join("  " + f for f in FAIL), flush=True)
     raise SystemExit(f"\n{len(FAIL)} disagreement(s) with the published format.")
