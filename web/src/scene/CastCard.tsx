@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { useSettled } from '../ui/gesture'
 import { useStore } from '../store'
 import { Slot } from './Slot'
-import { SLOTS, handleOf, type CastMember } from './model'
+import { RETENTION, RETENTION_LABEL, SLOTS, handleOf, type CastMember } from './model'
 
 /**
  * What a cast member is made of, disclosed only for the chip you touched.
@@ -13,6 +13,13 @@ import { SLOTS, handleOf, type CastMember } from './model'
  * the canvas, the way a region's card is rooted on its box — which is what makes
  * the depth affordable at all: five slots per member and eight members is a panel,
  * and a panel is the month-four failure Phase 6 names.
+ *
+ * **And it is a form, deliberately.** Labels, field edges, one row per thing you
+ * can say about somebody. The first version stripped all of that on the "copy is
+ * a last resort" instinct and it was the wrong rule to reach for: that one governs
+ * a row you *scan*, and this is a thing you *fill in* — the same distinction that
+ * keeps Train's edges while the console's controls lose theirs. A form without
+ * field edges is a worse form. Unlabelled, it read as a request for five files.
  *
  * **Not a `Popover`, and a portal anyway.** Popover closes on scroll, which is
  * right for a menu and wrong for a box you type a name into — the objection
@@ -89,37 +96,53 @@ export function CastCard({ member }: { member: CastMember }) {
          style={{ left: at?.left ?? 0, top: at?.top ?? 0,
                   visibility: at ? 'visible' : 'hidden',
                   pointerEvents: settled ? undefined : 'none' }}>
-      <div className="tcard-h">
+      <button type="button" className="x" title={`Remove @${member.name || member.kind}`}
+              onClick={() => { s.dropCast(member.id) }}>×</button>
+
+      <label htmlFor={`cast-name-${member.id}`}>Name</label>
+      {/* The `@` is inside the field's edge because it is part of the value, not a
+          label on it: this string *is* the handle a shot mentions them by, and
+          renaming rewrites it across every row as a visible find-and-replace. */}
+      <div className="tname-row">
         <span className="at">@</span>
-        <input ref={name} className="tname" value={member.name} spellCheck={false}
-               placeholder={member.kind}
-               // Renaming rewrites the handle across every row as a visible
-               // find-and-replace — see `rename`. Reduced to handle characters on
-               // the way in rather than on the way out, so what you see in the box
-               // is what the rows will say.
+        <input id={`cast-name-${member.id}`} ref={name} className="tname"
+               value={member.name} spellCheck={false} placeholder={member.kind}
                onChange={(e) => { s.patchCast(member.id, { name: handleOf(e.target.value) }) }} />
-        <button type="button" className="x" title={`Remove @${member.name || member.kind}`}
-                onClick={() => { s.dropCast(member.id) }}>×</button>
       </div>
-      {/* **Who they are comes before what you have of them.** The slots were
-          first and the card then read as a request for five files — which is
-          what it is *not*: a cast member with a sentence and no photograph is a
-          perfectly good subject, and `_h3_label` falls back to exactly this
-          note. With a picture it trails the definition — `<Subject 1> is the
-          person in <Picture 1>, mid-thirties`; with none it is the whole of what
-          the encoder is told about them, and the alternative is the literal word
-          "sam". */}
-      <input className="tnote" value={member.note} spellCheck={false}
+
+      <label htmlFor={`cast-note-${member.id}`}>Description</label>
+      {/* **Who they are comes before what you have of them.** A cast member with a
+          sentence and no photograph is a perfectly good subject — `_h3_label` falls
+          back to exactly this. With a picture it trails the definition,
+          `<Subject 1> is the person in <Picture 1>, mid-thirties`; with none it is
+          the whole of what the encoder is told, and the alternative is the literal
+          word "sam". */}
+      <input id={`cast-note-${member.id}`} className="tnote" value={member.note}
+             spellCheck={false}
              placeholder={member.kind === 'character'
                ? 'who they are — a phrase, not a paragraph'
                : 'what it is'}
              onChange={(e) => { s.patchCast(member.id, { note: e.target.value }) }} />
-      <div className="tslots">
+
+      <label>References</label>
+      <div className={`tslots${slots.length > 2 ? ' wide' : ''}`}>
         {slots.map((sl) => (
           <Slot key={sl.key} member={member} slot={sl.key}
                 label={sl.label} takes={sl.takes} />
         ))}
       </div>
+
+      <label htmlFor={`cast-hold-${member.id}`}>Retain</label>
+      {/* How much of the reference has to survive into the render — the marker in
+          `retention_analysis`. It reached the document at the strictest value with
+          nothing setting it, which is right for a face and wrong for a location you
+          want referenced rather than reproduced. */}
+      <select id={`cast-hold-${member.id}`} className="thold" value={member.retention}
+              onChange={(e) => { s.patchCast(member.id, { retention: e.target.value }) }}>
+        {RETENTION.map((r) => (
+          <option key={r} value={r} title={r}>{RETENTION_LABEL[r]}</option>
+        ))}
+      </select>
     </div>,
     document.body,
   )

@@ -582,39 +582,56 @@ svg{width:100%;height:100%;display:block}
 .chip.cast .d.full{background:var(--fg);box-shadow:none}
 
 /* ── the cast card ─────────────────────────────────────────────────────────
-   Rooted on its chip and floating over the canvas, so five slots per member and
-   eight members costs the console nothing. Fixed and portalled for the same
-   clipping reason the mention menu is. */
-.tcard{position:fixed;z-index:60;width:236px;padding:9px;
+   Rooted on its chip and floating over the canvas, so everything you can say
+   about a character costs the console nothing. Fixed and portalled for the same
+   clipping reason the mention menu is.
+
+   **It is a form and it is drawn as one.** Labels, field edges, one row per
+   thing. The first version stripped all of it on the "copy is a last resort"
+   instinct, and that rule governs a row you *scan* — this is a thing you *fill
+   in*, which is the same distinction that keeps Train's edges while the
+   console's controls lose theirs. Unlabelled it read as a request for five
+   files, which is the one thing a cast member does not require. */
+.tcard{position:fixed;z-index:60;width:262px;padding:12px 13px 13px;
   background:var(--lift);border:1px solid var(--lift-line);border-radius:var(--r-panel);
-  box-shadow:0 18px 48px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:8px}
-.tcard-h{display:flex;align-items:center;gap:5px}
-.tcard-h .at{color:var(--dim)}
-.tcard .tname{flex:1;min-width:0;background:none;border:0;padding:2px 0;
-  font-weight:600;letter-spacing:-.01em;border-radius:0}
-.tcard .tname:focus{border:0;box-shadow:none}
-.tcard .x{border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
-  line-height:1;padding:0 4px;border-radius:var(--r-mark)}
-.tcard .x:hover{background:var(--wash-3);color:var(--fg)}
-.tcard .tnote{background:var(--wash-2);border:1px solid var(--line);
-  border-radius:var(--r-inner);padding:5px 8px;font-size:12px}
-/* Five columns for a character and two for a place, from one rule: the slot table
-   is the shape, and `auto-fill` reads it rather than restating it per kind. */
-.tslots{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:5px}
+  box-shadow:0 18px 48px rgba(0,0,0,.6)}
+.tcard label{font-size:11px;letter-spacing:.04em;color:var(--dim);margin:0 0 5px}
+.tcard label:not(:first-of-type){margin-top:11px}
+/* The base field padding is 10px 12px, which is right at full width and eats a
+   262px card. Everything else about them — the edge, the ground, the focus
+   ring — is the form styling every other field on the page has. */
+.tcard input,.tcard select{padding:6px 9px;border-radius:var(--r-inner);font-size:12.5px}
+/* The `@` is inside the edge because it is part of the value, not a label on it:
+   this string *is* the handle a shot mentions them by. */
+.tname-row{display:flex;align-items:center;gap:0;background:var(--wash-2);
+  border:1px solid var(--line);border-radius:var(--r-inner);padding-left:9px}
+.tname-row:focus-within{border-color:var(--line-2)}
+.tname-row .at{color:var(--dim);font-size:12.5px}
+.tcard .tname{border:0;background:none;padding-left:2px;font-weight:600}
+.tcard .tname:focus{border:0}
+.tcard>.x{position:absolute;top:9px;right:9px;border:0;background:none;
+  color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:0 4px;
+  border-radius:var(--r-mark)}
+.tcard>.x:hover{background:var(--wash-3);color:var(--fg)}
+/* Three across for a character's five and two for a place's two — the slot table
+   is the shape, and `auto-fill` would put five 38px tiles in a row nobody can
+   read the labels of. */
+.tslots{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.tslots.wide{grid-template-columns:repeat(3,1fr)}
 /* **A file over a slot that cannot take it does not highlight.** The dashed edge
    is the invitation and its absence is the whole rejection — cheaper than a toast
    and, unlike one, it arrives before the drop. */
 .tslot{position:relative;aspect-ratio:1;border:1px dashed var(--line);
   border-radius:var(--r-inner);background:var(--wash-2);overflow:hidden;padding:0;
-  display:grid;place-items:center;cursor:pointer;color:#5a5a5a}
-.tslot:hover{border-color:var(--line-2);color:var(--mut)}
+  display:grid;place-items:center;cursor:pointer;color:var(--dim)}
+.tslot:hover{border-color:var(--line-2);color:var(--fg)}
 .tslot.set{border-style:solid;border-color:var(--line)}
 .tslot.hot{border-color:var(--line-2);background:var(--wash-3);border-style:solid}
 .tslot img{width:100%;height:100%;object-fit:cover;display:block}
-.tslot .lb{font-size:9px;line-height:1.1;text-align:center;padding:2px;
+.tslot .lb{font-size:10px;line-height:1.15;text-align:center;padding:2px;
   -webkit-user-select:none;user-select:none}
-/* A clip and a sound file have no thumbnail worth 38px, so the role is the tile —
-   which is the one fact a picture would have been standing in for anyway. */
+/* A clip and a sound file have no thumbnail worth a 70px tile, so the role is the
+   tile — which is the one fact a picture would have been standing in for. */
 .tslot .lb.full{color:var(--fg);background:var(--wash-3);width:100%;height:100%;
   display:grid;place-items:center}
 

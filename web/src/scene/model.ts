@@ -97,6 +97,22 @@ export type CastRef = {
 export const RETENTION = ['fully_preserved', 'partially_preserved',
                           'attribute_transfer', 'weak_reference'] as const
 
+/**
+ * The same four in words, for the control that sets them.
+ *
+ * The tokens are a *fixed English value in the output format* — ref-en §4.1 says
+ * so in those words — and they go into the document verbatim. They are also
+ * jargon off a model card, and the whole thesis here is that nobody should have
+ * to learn a text encoder: the prompt is a compilation target, so the control
+ * reads in words and the compiler emits the token.
+ */
+export const RETENTION_LABEL: Record<string, string> = {
+  fully_preserved: 'exactly as shown',
+  partially_preserved: 'closely',
+  attribute_transfer: 'attributes only',
+  weak_reference: 'loosely',
+}
+
 export type CastMember = {
   id: string
   kind: CastKind
