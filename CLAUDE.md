@@ -101,341 +101,97 @@ in for free.
 
 ### The user's prose is the record; everything derived from it is a receipt
 
-This is the fourth word, and it only became one when a model started reading the
-*user's* sentence rather than the encoder's. Everything above is about surviving
-a machine failing. This is about surviving a machine being **plausibly wrong
-about what somebody meant**, which is a different failure and has no stack trace.
+This survived the deletion of everything that was built to serve it, which is
+the strongest thing that can be said for it.
 
-> **The semantic document is not the source of truth for what the user intended.
-> The user's prose is. The document is a derived, disposable interpretation of
-> that prose.**
+> **What a model produces from somebody's sentence is a derived, disposable
+> interpretation. The sentence is the record.**
 
-`docs/design-notes/semantic-layer-brief.md` says the opposite — *"the scene document becomes the
-source of truth"* — and is overruled, because every degrade below depends on the
-reverse. Dropping a document has to cost nothing, and it only costs nothing if
-the record survives it. *Derived*: regenerable from the prose at any time.
-*Disposable*: refusable whole, at any point, with no loss beyond an
-interpretation. It is the relationship this file already draws between
-`prompt_typed` and the compiled `prompt` — intent is what is kept, everything
-downstream of it is a receipt — extended one layer up.
+*Derived*: regenerable at any time. *Disposable*: refusable whole, at any point,
+with no loss beyond an interpretation. It is the relationship this file draws
+between `prompt_typed` and the compiled `prompt` — intent is what is kept,
+everything downstream of it is a receipt.
 
-In one line: **the user owns intent, the model proposes structure, the validator
-enforces boundaries, the compiler executes.** Three invariants serve that, and
-each names where it is enforced, because an invariant nobody can point at is a
-paragraph.
+**And the receipt outlives its writer.** `_shot_meta` still writes
+`prompt_original`, and nothing on any path fills it any more. It stays because
+a sidecar is read years after it is written, and a reader that drops the field
+makes every run that has one unreadable.
 
-**1 · A document is valid only for the exact prose it was derived from.** Made
-unrepresentable rather than remembered: the store holds `doc` and exports only
-`docFor(prose)`, so no caller can obtain elements without saying which string it
-believes they describe. A grep for `.doc.elements` outside the store should
-return nothing, and `check_document.py` asserts a stale one sends no `modules`.
-Re-asked server-side, because the route receives the prose and the document as
-two independent fields and a client is one more untrusted caller — but asked as
-**derivation** rather than identity. It used to be `_document_matches`: compile
-the document and require it to equal the box. That holds only while a document
-is the person's sentence with clauses added; under replacement the compiled
-prompt is *meant* to differ from what they typed, so an identity test drops
-every document there is. It is `_trusted_modules` now, which asks whether every
-run the document claims as theirs is in this prose.
+### What was built here, what it measured, and why none of it is left
 
-**2 · Interpretation is untrusted probabilistic input.** The pipeline is
-`Qwen → candidate → deterministic validation → compiler`, never `Qwen →
-truth`. **Two failures, two behaviours, and keeping them apart is the design.**
-A *malformed* document is refused by name, the posture `_validate_shot` takes
-toward an unknown pill. An *untrustworthy* one is dropped and the run proceeds
-plain — no error, no toast, no banner, no partial document, byte-for-byte the
-app as it was before any of this existed. A malformed semantic scene is never an
-acceptable output; the absence of one always is. That is why shape and trust are
-two functions (`_validate_modules` raises, `_document_trust` returns a reason)
-rather than one with a flag.
+Two features lived in this space and both are gone. They are recorded together
+because they failed the same way and the numbers cost real GPU time.
 
-**3 · The layer adds meaning without taking ownership of the words.** Two rules
-that read alike and are not, and both sit at the *head* of `PARSE_RULES` where
-they govern everything under them. The first bounds how **much** is added. The
-second — *the document may enrich, but may not contradict, replace or
-reinterpret an explicit fact* — bounds what may be **touched**: enrichment is
-legal because it is marked grey and one gesture from a reroll; replacement is
-illegal however it is marked. On the page the same rule is `insertionOnly`:
-**the model may insert, never revise**, and a write that would take words off
-the person simply does not happen.
+**The semantic layer** read the person's prose into a document of tagged
+elements, marked which words were the model's, and compiled that to the prompt.
+`/api/parse`, `PARSE_RULES`, a 4B on its own L4, a validator, an undo-aware
+mirror painting provenance inline in the box. **The rewrite** replaced it with
+one button and one instruction — Krea's own `docs/expansion.txt` — returning
+prose rather than a document.
 
-The second rule survives everything below. The first one is where this went
-wrong, and it is worth reading the two apart before reading further, because
-they get collapsed into "restraint" and only one of them was ever load-bearing.
-
-### Prompt replacement, and what it cost to get there
-
-Everything from here to the end of this section replaces a page that said the
-opposite. It is kept in that shape — the claim, then the measurement that
-retired it — because each of these looked obviously right and none of them
-survived contact with the deployed model.
-
-**The claim was that the benchmark is restraint.** *"A 14B producing elaborate,
-beautiful interpretations is worse here than a 4B producing sparse ones.
-Fidelity and restraint are the axes; intelligence is not one."* Every
-measurement behind that sentence, and every one in `smoke_parse.py`, is
-**text-to-text**: preserved, covered, round-tripped, idempotent. All of them
-score the document against the sentence it came from and **none of them scores
-the result against the picture**, which is the only thing the app makes. A
-feature can pass all eleven rows and be worth nothing, and that is what happened
-— the incumbent's *zero invented words across 27 fragments* read as maximum
-restraint and meant the feature never appeared.
-
-**Run text-to-image, one seed, one size, the sentence as the only variable, and
-the axis inverts.** Four fragments, bare against what a document compiles to:
-
-| typed | bare render | interpreted render |
-|---|---|---|
-| `night. no, late afternoon` | **a night scene** — the correction ignored | late afternoon through a window |
-| `something like a courtroom but colder` | a dramatic, populated courtroom | an empty grey one that is actually colder |
-| `the kitchen after the party` | **a party, in progress, everyone smiling** | the aftermath |
-| `empty diner, 3am` | a dark 3am diner | **a daylit diner — "3am" contradicted** |
-
-Three of four improve and the fourth is a regression, so this is not "enrichment
-always wins". It is narrower and more useful than that: **a bare fragment is
-read as keywords, and the two failures that produces — a self-correction
-discarded, a hedge rendered literally — are exactly what an interpreter fixes.**
-"the kitchen after the party" contains the word party, so the encoder renders a
-party; no amount of restraint reaches that. The fourth row is the *other* rule
-doing its job in the breach: the model added light that contradicted 3am, which
-is illegal under the rule that survives and which no check catches.
-
-**"The model invents nothing" was never a measurement of the model.**
-`PARSE_RULES` opened with *"PRODUCE THE MINIMUM USEFUL INTERPRETATION"* and
-*"Optional creative detail: do not invent"*, and the model complied. Swap that
-one block for an authoring one — `smoke_parse.py --enrich`, everything else in
-the rules untouched — and on the same weights the fork authored 9 of 18
-fragments at a mean of 17x, the base 4B 12 of 18. So there was never a model
-problem to solve, and the eleven-row matrix that ranked four candidates was
-ranking their obedience.
-
-**And the trust checks select for inaction.** On that same run:
-
-|  | fork | base 4B |
-|---|---|---|
-| documents that authored (>2x) | 9 of 18 | 12 of 18 |
-| …of those, trusted | **0** | **1** |
-| documents that did nothing, trusted | 6 of 9 | 1 of 6 |
-
-**Both thresholds were swept, and sweeping them was not the mistake — sweeping
-them against hand-written documents was.** That table used to sit here, with a
-note saying to re-run it against a served endpoint once weights were up. Re-run,
-both bounds fail, and they fail for one reason: **a share of characters is
-dominated by how much the person typed, not by what the document did with it.**
-
-- The ceiling permits adding at most **1.78x** what was typed. `empty diner, 3am`
-  is 16 characters, so its enrichment budget is **28** — and the prompts that
-  produced the better pictures needed 332 and 279. The budget scales with what
-  you already wrote, so it gives least help to the input that needs most.
-- On a fragment it cannot separate the two cases at all: a written picture
-  scores **94%** and an evasive one **93%**, the good one *higher*. On finished
-  prose it separates cleanly, 32% against 100% — which is the margin the sweep
-  found, on a corpus made entirely of finished prose.
-- It misses its own founding case. The vendor doc's canonical evasion — a meadow
-  returned for a recruit on a latrine floor — scores **54%**, *under* the
-  ceiling, once the prose is long enough to dilute it.
-- The floor inverts on the input this file calls normal. Reading `night. no,
-  late afternoon` correctly means dropping characters, so a correct reading
-  scores 59% and is refused; `she's angry. or maybe just tired` 48%; `something
-  like a courtroom but colder` 31%. The corpus the floor was swept over even
-  contains a case assuming the model keeps "maybe" and "some kind of" as text —
-  the rules tell it to tidy them away.
-
-**The thing to not rebuild is a better metric of the same kind.** A content-word
-"anchoring" score was built to replace both — the share of the person's
-substantive words that survive, which has the property both bounds lack, since
-presence does not move when somebody types four words instead of forty. Swept
-over 75 real documents against 225 evasions it does not separate either: worst
-real 31%, worst evasion 33%, because an evasion coincidentally shares a common
-word ("running", "down", "empty"). It is kept in `smoke_parse.py` as
-`anchor_sweep` so the next person can see it fail rather than reinvent it.
-
-**What actually blocks enrichment is one gate, and the rest of the chain is
-already right.** An enriched document through every check, in order:
-
-    preservation      pass
-    coverage 93%      pass
-    invention 93%     REFUSED   <- the whole of it
-    insertionOnly     accepts the write
-    _document_matches True
-
-**And provenance is a derivable fact the model gets wrong in one direction.** It
-marks its own words `derived`, which is what every *"derived text not in the
-prose"* refusal is — 9 of 18 on the base model. Computed server-side instead of
-asked for, `insertionOnly` accepts **17 of 21** enriched writes. Three rules in
-that computation are load-bearing: match on whole words (`in` inside `diner` is
-not a word anybody wrote), claim a phrase **once** (a repeat is the model
-repeating them), and **leave the separator invented** — dropping a
-punctuation-only run merges the two derived spans either side of it, so the
-client looks for `empty diner. 3am` inside `empty diner, 3am` and fails on a
-comma nobody typed. That one line is worth 7 of the 21.
-
-**Judged on four criteria that are read rather than totalled.** They replace the
-eleven scored rows, and every one is a question about the *picture*:
-
-1. **Core subject extraction.** Is the thing they were looking at the subject of
-   the prompt, or has it become a detail in a scene? "a colossal stone hand
-   bursting out of the dirt" is a prompt about a hand, not about a forest.
-2. **Emotional tone transfer.** Is "it feels lonely" staged — isolation,
-   negative space, a desaturated grade, one hard light — or typed back out as
-   the word *lonely*, which renders as nothing?
-3. **Spatial and setting logic.** "a man under a streetlamp across wet pavement"
-   is one arrangement; a prompt listing all three without relating them is a
-   different picture.
-4. **Literal feature fidelity.** The blue tiles are blue and the yellow sweater
-   is yellow. The old apparatus answered this one, and it is one of four.
-
-`smoke_parse.py --enrich shipped --scenes` runs the corpus they are written for:
-somebody describing a picture they already have in their head, hedges and all,
-ending in an emotional verdict that is not a visual instruction. That last
-sentence is the test — it is the part the encoder renders as nothing.
-
-**Against those four, the rules as they stood failed two of them outright.**
-Ten recollections, live weights, and the two countable facts decided what to do:
-median growth **1.0x**, and the feeling word kept verbatim **6 of 6**. The stone
-hand came back leading with *"We were walking through a regular forest"*. The
-floating dress lost *"there's no one inside it"*; the man under the streetlamp
-lost *"I couldn't see his face at all"* — in both cases the one fact the picture
-was about. Literal fidelity passed, trivially, because the mode was copying.
-
-**The mechanism was one thing: a paragraph makes the model decompose instead of
-write.** Same weights, same rules, median growth **3.3x on fragments and 1.0x on
-recollections** — with a fragment there is nothing to take apart, so it writes;
-with a paragraph the element tree's affordance is to chop the sentence up. Where
-output grew it grew by *duplicating*: "the sun hits the linoleum floor
-**sunlight on the linoleum floor**", "flapping in the wind **in the wind in the
-wind**".
-
-**And the sharpest fact was in the verdict column: the two documents the shipped
-checks trusted were the two that stapled fragments of the sentence back onto
-itself.** They preserve everything and invent nothing, so they pass — and they
-render worse than the prose they came from. The checks did not merely refuse the
-good documents; they selected for the bad ones.
-
-**So the rules were thrown out and rewritten rather than patched**, because
-swapping blocks inside them does not work: everything around a swapped block
-still said *structure this sentence*. The same ten scenes, after:
-
-| | old rules | rewritten |
-|---|---|---|
-| feeling word kept verbatim | **6 of 6** | **0 of 5** |
-| narration reaching the prompt | 3 of 3 | **0 of 3** |
-| median growth | 1.0x | 1.4x |
-| trusted | 2 of 10 | **9 of 9** |
-
-The stone hand is the case to read, because it failed hardest:
-
-    now   "a colossal stone hand, fingers reaching up like they are trying to
-           grab the clouds, moss growing all over the knuckles, rough,
-           weathered stone with deep fissures, standing at the height of a
-           tall person, palm facing upward, emerging from the ground, …
-           the forest background is blurred and out of focus, with only the
-           clearing sharply defined."
-
-Subject first, the forest demoted to setting and then thrown *out of focus* —
-prominence spent rather than stated. "Ancient and terrifying" is gone as a word
-and present as weathered stone, deep fissures and the height of a person. The
-same pass recovered "no one inside the dress" and "right in the middle of the
-floor", both of which the old rules dropped.
-
-**What is still wrong is the old habit leaking:** two scenes came back *shorter*
-than the prose, and the red armchair carries adjective echo — "a pristine,
-bright red velvet armchair, velvet, bright red, pristine". Decomposition
-surviving inside a replacement, and the thing to watch when this is next
-measured.
-
-**One landing item came out of running it rather than reading it.** The first
-scene died on `Unterminated string` at 7,647 characters — not an error the model
-reports, just a document that stops mid-token. `--max-model-len` was 8192, sized
-for the *prose*; a replacement is several times what was typed and the document
-carrying it longer again. It is 16384 now.
-
-**And one thing has to land in the same commit as any of this.**
-`_compile_h3_prompt` takes `modules[0]["text"]` as the **`summary`** field of
-H3's published six-field grammar. With the old rules that field got the typed
-sentence; with a replacement the first element is the subject phrase, so H3
-would be told `summary: empty diner`. A six-field document with a bare noun
-phrase in `summary` is still a valid six-field document, so nothing downstream
-sees it — and `smoke_parse.py` only ever compiles through
-`_compile_image_prompt`. **The change that opens the gates is the change that
-starts feeding H3 badly, and the compile coverage has to arrive with it.**
-
-### The rewrite is gone, and this is what it measured on the way out
-
-**Removed on the person's own call**: *"the entire enhance feature doesn't
-help… you lose too much control"*, and later *"it adds unnecessary overhead and
-causes bugs because it interferes with the model's text encoders."* Recorded
-here in the shape this file uses for everything it has retired — the claim,
-then the measurement — because the numbers below were expensive and the next
-person to reach for this idea should reach for them first.
-
-**What it was.** `REWRITE_OPS` held one instruction, Krea's own
-`docs/expansion.txt` vendored verbatim, and `/api/rewrite` returned prose rather
-than a document. One button, `Enhance`, beside `+ LoRA` in the strip.
-
-**It was the only configuration that ever beat doing nothing.** Rendered blind,
-both orders, a win counted only when both agree:
+**The measurement that ended both.** Rendered blind, both orders, a win counted
+only when both orders agree:
 
 |  | beats bare | loses to bare | tie |
 |---|---|---|---|
 | the document layer, 30 comparisons | **0** | 4-10 | rest |
-| `REWRITE_OPS`, 10 fragments | **3** | 1 | 6 |
+| the rewrite, 10 fragments | **3** | 1 | 6 |
 
-The three wins were the fragments the old validator refused — `night. no, late
-afternoon`, `something like a courtroom but colder`, `the kitchen after the
-party`. Read honestly it is n=10, six ties, net +2 pairs: a real win, the first
-one, and not a landslide. **And a win on a fragment is not a reason to keep a
-button on every prompt**, which is the trade that finally decided it.
+The document layer never won a single pair, across two model sizes and two rule
+sets. The rewrite did win — its three were the fragments the validator had been
+refusing — and it was still not worth a button on every prompt, which is the
+call the person made: *"you lose too much control"*, and *"it adds unnecessary
+overhead and causes bugs because it interferes with the model's text encoders."*
 
-Five things it established that outlive it, because each cost a measurement:
+Six things they established, each of which cost a measurement and none of which
+depends on either feature existing:
 
-- **A length is a token cap, not an instruction.** "Between 60 and 100 words"
-  produced 95, 122 and **617** on three fragments. A model does not count. The
-  cap has to scale with the input, too — a flat 200 truncates the case a light
-  polish exists for, cutting a sentence the *person* wrote.
+- **A text metric cannot measure this.** Preserved, covered, round-tripped and
+  idempotent all score a rewrite against the sentence it came from, so returning
+  the sentence unchanged scores perfectly — which is exactly what the incumbent
+  did: zero invented words across 27 fragments, read as maximum restraint, from
+  a feature reaching 0% of renders. Eleven scored rows, every one a string
+  comparison, not one asking whether the picture got better.
+- **A threshold standing in for a question is the error to not repeat.** Two
+  bounds were swept and both failed for one reason: a share of characters is
+  dominated by how much the person typed. `empty diner, 3am` is 16 characters,
+  so its budget was 28, and the prompts that made better pictures needed 332.
+  Reading `night. no, late afternoon` *correctly* means dropping characters, so
+  a correct reading scored 59% and was refused. A content-word variant was built
+  to replace both and does not separate either — worst real 31%, worst evasion
+  33%, because an evasion coincidentally shares a common word.
+- **A system prompt has a size budget: 500–2000 characters.** `PARSE_RULES` grew
+  from 2.9k to 10.2k one well-reasoned rule at a time and the output got worse,
+  in two ways no check caught. It went lossy on a well-formed prompt, dropping
+  the most distinctive thing in it. And it began **parroting its own examples**
+  back as the answer — given three friends on a fire escape it returned phrases
+  lifted verbatim from the instruction. So concrete examples came out with the
+  wordcount, and that was not a coincidence: they *were* the parroting. The one
+  instruction still on a user-facing path is `_motion_instruction`, and
+  `smoke_prompt.py` asserts the budget rather than leaving it to judgement.
+- **A length is a token cap, never an instruction.** "Between 60 and 100 words"
+  produced 95, 122 and **617**. A model does not count.
 - **Meta-commentary is cut by a regex, not asked away.** The model returned the
-  prompt, then "→ Revised version:", then three bullets explaining itself —
-  helpfulness in the one place it is indistinguishable from failure, because
-  the answer went straight into the box. An instruction not to preamble is a
-  request; a regex is not.
-- **Expansion is already conditional and balance is emergent.** Rule 7 of
-  Krea's own instruction — *"if the user's prompt is already detailed, lightly
-  polish"* — is Enhance, written by upstream: a 16-character fragment grew
-  **40.4x** and a finished prompt **2.6x** under one instruction. And the text
-  contains no "balance", "equal", "prominence" or "weight", yet given three
-  friends where the third had three words it returned each subject grouped with
-  their own attributes. Three buttons collapsed to one on those two facts.
-- **A returned-unchanged answer is a pass, not a failure.** Told only to change
-  what would render wrong, the right behaviour on an already-good prompt is to
-  change nothing.
+  prompt, then an arrow, then bullets explaining itself — helpfulness in the one
+  place it is indistinguishable from failure, because the answer went into the
+  box. An instruction not to preamble is a request.
 - **The rewriter can be the encoder.** Krea 2 reads its prompt through
-  Qwen3-VL-4B — a decoder model, already resident — so the rewrite ran on
-  weights the platform had paid for: warm **2.2-9.2s**, no card of its own.
-  Nobody else does this because Flux's encoder is T5-XXL and SD's is CLIP and
-  both are encoder-only; Krea 2 is the unusual case where the question can be
-  asked at all.
+  Qwen3-VL-4B, a decoder model already resident, so the rewrite ran warm in
+  2.2-9.2s on weights already paid for. Nobody else does this because Flux's
+  encoder is T5-XXL and SD's is CLIP and both are encoder-only. That trick is
+  still in the tree: `comfy_nodes/visionary_rewrite` and `_rewrite_generator`
+  are what `/api/motion` runs on.
 
-**What survives the deletion, and why.** `comfy_nodes/visionary_rewrite`,
-`Comfy.rewrite` and `_rewrite_generator` are all still here — **`/api/motion`
-runs on them**. That path shows the model a *frame* rather than a sentence and
-returns labelled suggestions the person picks from, which is a different
-feature answering a different question, and it is the one arm with eyes. Gutting
-the button stopped exactly at that seam. `_clean_rewrite`, `KREA_EXPANSION`,
-`REWRITE_OPS`, `_rewrite_backend`, `Interpreter.rewrite` and the L4 arm behind
-it are gone; so are `tools/smoke_rewrite.py` and `tools/enhancer_ab.py`. The
-motion instruction's 500-2000 character budget moved to `smoke_prompt.py` in the
-same commit, because a budget nobody asserts is a paragraph.
-
-**The trust argument the feature rested on, kept because it is about the app
-rather than about the button.** A *distrustful* feature takes your prompt,
-alters it, and sends it to the DiT. A *trustful* one lets you decide whether to
-run it through a model at all, shows you what came back, and lets you accept it,
-edit it, or throw it away. Nothing now reaches the encoder that was not on
-screen first — which is the same guarantee, arrived at by having no model in the
-path rather than by disclosing one.
+**What is left, and it is the useful half.** `tools/judge_prompts.py` marks a
+rewrite against what the person said on four criteria — subject, tone, space,
+fidelity — plus `lost` and `contradicted`, every verdict carrying a quote.
+`tools/judge_renders.py` marks the pictures instead and is the only measurement
+here that is not a proxy. `tools/serve_judge.py` opens a Sandbox for either.
+The four criteria outlived their subject because they are about the *picture*,
+and criterion 3 is what the next section is.
 
 
-### Relations are the weakest link, and the rules were making it worse
+### Relations are the weakest link, and it is the reason blocking exists
 
 The observation is theirs and it names the failure precisely: **when a prompt
 falls apart it is almost always because nothing says how the subjects stand to
@@ -444,187 +200,69 @@ described one at a time arrive photographed one at a time, each squared to the
 lens, none of them party to what is happening. That is a large part of what
 reads as "the AI look".
 
-Checking it against the code turned up something worse than an omission.
-`RELATIONS BETWEEN SUBJECTS ARE PHYSICAL OR THEY ARE NOT STATED` ended with
-*"record real relations as `ties` between elements, not as prose that points
-backwards"* — and **`ties` is validated, stored, and read by no compiler.**
-Nothing puts it in the prompt. So the one channel the rules pointed at for
-relating two subjects was a field the encoder never sees, and the instruction
-was actively moving relations out of the only place they could render.
-
-The reasoning behind it was not wrong, which is why it survived: naming a second
-subject inside this one's clause opens an attention site for somebody who
-already has one, and they merge or one vanishes. That is a real encoder failure
-— it is the same one regional prompting exists for. Two bad options were traded
-and the trade was never written down.
-
-The way out is that a relation does not have to name anybody. Contact,
-orientation, a shared surface, a shared light, attention pointed out of frame
-rather than at each other — a hand on the back of her chair, one boot up on the
-same railing, close enough that their shoulders overlap. All of that renders and
-none of it opens a second attention site. So the rule now says **supply the
-relation, err toward supplying it, and write it as geometry** — and it says
-plainly that `ties` is a record rather than a channel.
+**A relation does not have to name anybody**, which is the way out. Naming a
+second subject inside this one's clause opens an attention site for somebody who
+already has one, and they merge or one vanishes — a real encoder failure, the
+same one regional prompting exists for. But contact, orientation, a shared
+surface, a shared light, attention pointed out of frame: a hand on the back of
+her chair, one boot up on the same railing, close enough that their shoulders
+overlap. All of that renders and none of it opens a second attention site. So
+the rule is **supply the relation, err toward supplying it, and write it as
+geometry**.
 
 **And the placement is theirs too: the link goes at the end of the clause.** The
 subject opens it and how they stand to the others closes it, so the last thing
 read before the encoder moves on is what binds them. Leading with the link makes
 the *relation* the subject; burying it mid-clause loses it between two
-descriptions. `smoke_parse.py` checks both — that a relation exists in the text
-at all, and that it trails — because `has_a_tie` could only ever prove the
-document related two people somewhere nothing renders.
+descriptions.
 
-**An implied relation is not an invention and carries no mark.** Three friends
-hanging out are near each other and turned toward one another; saying so makes
-their sentence renderable rather than adding to it. A relation that introduces
-something never suggested — who is whose, who wants what — is marked.
+**Every word of that is now `_stage_clauses` rather than an instruction**, which
+is the whole point of blocking: a relation derived from where two people are
+standing cannot be forgotten, parroted, or written about somebody who is not
+there. `STAGE_NEAR` is the proximity band, `STAGE_FACING` is orientation, and
+the clause is assembled subject-first with the relation trailing. See "Blocking"
+under Phases.
+
+A previous attempt at this shipped a `ties` field that was validated, stored and
+**read by no compiler** — the one channel the rules pointed at for relating two
+subjects was a field the encoder never saw. Worth remembering as the shape of
+the failure rather than the instance: a relation that does not reach the prompt
+is a relation that does not exist.
 
 ### Arithmetic in the validator, judgement in the harness
 
-The thresholds were retired and then rebuilt one layer over, in the test suite,
-and it took being asked *"isn't this the entire reason for using an LLM"* to see
-it. `relates_subjects` proves a relation reached the prompt and `link_trails`
-proves it sits at the end of a clause; neither can tell a good relation from a
-clumsy one, which is the only question worth asking about a relation.
+Thresholds were retired and then rebuilt one layer over, in the test suite, and
+it took being asked *"isn't this the entire reason for using an LLM"* to see it.
+A keyword check can prove a relation reached the prompt; it cannot tell a good
+relation from a clumsy one, which is the only question worth asking about a
+relation.
 
 The distinction that was collapsed, and is now the rule:
 
-- **The validator stays arithmetic.** It runs on every parse, gates a render and
-  degrades in silence. A probabilistic gate stacked on a probabilistic
-  interpreter is two coin flips where the second one is invisible, and the
-  degrade design in this file exists precisely so a bad interpretation costs
-  nothing. What belongs there are structural zeros: is this document about this
-  prose at all, did it invent a subject.
+- **The validator stays arithmetic.** It runs on every request, gates a render
+  and degrades in silence. A probabilistic gate stacked on a probabilistic
+  writer is two coin flips where the second one is invisible. What belongs there
+  are structural zeros.
 - **The harness gets a judge.** It runs when somebody is measuring, latency is
-  free, and what it measures — did this model understand the scene — is exactly
-  the thing a keyword list cannot answer. The four criteria are a rubric and
-  `smoke_parse.py --judge` has a model read it.
+  free, and what it measures — did this understand the scene — is exactly what a
+  keyword list cannot answer. `tools/judge_prompts.py` is that judge and its
+  rubric is four criteria plus `lost` and `contradicted`.
 
-Three things keep the judge honest, and they are the parts to not skip. **The
-judge is not the subject** — point it at different weights, because a model
-scoring its own output agrees with itself, and the harness says so out loud when
-the two match. **Every verdict carries a quote** from the text it is marking, so
-a score with nothing behind it is visible; a judge that cannot quote the fault
-has usually invented it. And **it is an instrument rather than an oracle** —
+Three things keep it honest and they are the parts to not skip. **The judge is
+not the subject** — point it at different weights, because a model scoring its
+own output agrees with itself, and the harness says so out loud when the two
+match. **Every verdict carries a quote** from the text it is marking, so a score
+with nothing behind it is visible; a judge that cannot quote the fault has
+usually invented it. And **it is an instrument rather than an oracle** —
 spot-check it by reading, which is the discipline the thresholds never got. What
 earns it its place is not that it is right, it is that it is *repeatable*, which
 reading by hand is not.
 
-**What it still cannot do is look at the picture.** Every one of the four
-criteria is finally about a render, and judging the text is one remove from
-that. `does_it_help.py` renders the pair; a vision model reading that output
-against the original description is where this goes, and until it does, the
-judge is measuring a proxy and should be read as one.
-
-**That was built, and it returned a verdict on the whole approach.**
-`tools/prompt_ab.py` runs the loop and `judge_renders.py` scores it blind — the
-prompts hidden, each pair asked twice with the images swapped, a win counted only
-when both orders agree. Thirty comparisons:
-
-| | replacement | bare | tie | median growth |
-|---|---|---|---|---|
-| 4B fork, shipped rules | 0/10 | 4/10 | 6/10 | 0.73x |
-| Qwen3-14B, shipped rules | 0/10 | 1/10 | 9/10 | 0.94x |
-| 4B fork, long rules | 0/10 | 4/10 | 6/10 | 0.91x |
-| hand-written | 2/2 by eye | 0 | 0 | 11-21x |
-
-**The document never won.** The long rules score what the short ones do, so the
-cut to 1,759 characters cost nothing and the question this file kept
-`rules-long.txt` to answer is answered. Size only reduces losses. Every
-configuration **compresses** — shipped came back shorter than the input 10 of 10
-— while the prompts that win grow it eleven- to twenty-one-fold. The missing
-behaviour is authoring, and the element schema is the reason it is missing: a
-grammar whose unit is a short tagged fragment makes a model decompose where it
-needed to write.
-
-Two claims recorded above do not reproduce at temperature 0: the rewritten rules
-measure **0.73x median, not 1.4x**, and keep the feeling word **3 of 10, not 0 of
-5**. They were most likely measured before the final cut to meet the size budget
-and never re-run.
-
-**So the document path is off, and it is now deleted rather than dormant.**
-`useDocument.ts`, `marks.ts` and `Reroll.tsx` are gone, and so is the rewrite
-that replaced them — see "The rewrite is gone" below for what that one measured
-before it went.
-
-### The system prompt has a size budget: 500–2000 characters
-
-Over one session `PARSE_RULES` grew from 2.9k to **10.2k characters**, one
-well-reasoned rule at a time, and the output got worse. The budget is asserted
-in `smoke_parse.py --sweep` rather than left to judgement, because every
-individual addition looks obviously worth its length.
-
-Two degradations, both invisible to every check in the harness and both found by
-reading:
-
-- **It went lossy on a well-formed prompt.** "A lone fisherman in yellow
-  oilskins…" came back without the oilskins — the most distinctive thing in the
-  sentence — while a shorter version kept it.
-- **It began parroting the rules' own examples.** Given three friends on a fire
-  escape it wrote *"their shoulders overlap, both lit by the same window, all
-  three turned three-quarters toward the same thing off-frame"* — every phrase
-  lifted from the instruction rather than composed for that picture. The
-  relation *is* there, so `relates_subjects` and `link_trails` both score it a
-  pass. Only reading it catches that the model is quoting its brief.
-
-**So the concrete examples came out with the wordcount, and that is not a
-coincidence — they were the parroting.** What is left is the smallest set of
-things the model cannot work out for itself: their facts are fixed, keep what
-already works, mark what you added rather than what you reworded, supply the
-relations and trail the link, honour a declared balance — plus the two system
-facts, that elements are the return shape and that `ties` never renders.
-
-Everything cut was teaching a prompt-writing model what a prompt is: subject
-first, geometry over adjectives, stage the feeling rather than name it, drop the
-narrator, nothing a camera could not record. **It already knows that** — it
-speaks the same language as the encoder it is writing for — and each line
-spent saying so is a line competing with the five that matter.
-
-The reasoning for each rule lives in the comment above the string rather than
-inside it. That keeps this codebase's convention — comments explain why — while
-spending no tokens on an audience that is not reading for justification.
-
-`tools/rules-long.txt` keeps the 10.2k version verbatim so this stays a
-measurement rather than a maxim: `--enrich long` runs it against the shipped
-rules on the same corpus, judged the same way, and if the long one ever wins
-that is the thing to find out rather than assume.
-
-**The repair, as landed rather than as proposed.** Subtractive in the places it
-could be, and one addition:
-
-- **Both thresholds deleted.** Nothing replaces them as a number.
-- **`_compute_origin` decides whose words are whose**, so the model is no longer
-  asked for `origin` or `spans` at all — two whole blocks left the system
-  prompt, and with them the one failure nothing downstream could see.
-- **`_document_matches` deleted**, replaced by derivation at both call sites.
-- **The evasion guard came back as a zero rather than a threshold.** Once
-  provenance is computed, a document written about something else claims *none*
-  of the person's substantive words — measured over 75 real documents the
-  lowest retention was 31% and zero never occurred, while a meadow returned for
-  a recruit is zero by construction. There is nothing here to tune, which is
-  what makes it different in kind from the floor it replaces.
-- **`_module_clause` comma-joins an anchor to a child that does not continue
-  it.** A bare space was right when children were "in a purple beret"; with
-  replacement it emits "empty diner the counter is slightly worn", at 76% of
-  anchor-to-first-child joins.
-- **`PARSE_RULES` rewritten whole**, for replacement rather than for structure.
-
-**What is no longer caught, stated plainly.** A document that reads the sentence
-and then contradicts one fact of it — "empty diner, 3am" coming back with even
-daylight. No arithmetic sees that; the measurement above is what says so rather
-than an intuition. **What stands in for it is that the replacement must be
-visible** — a sentence the person can read and delete. That is a UI obligation
-this file is now taking on: if the replacement ends up behind a collapsed
-disclosure nobody opens, the trade stops being sound.
-
-**Two things that did survive.** Contradiction is still enforced by nothing —
-`empty diner, 3am` coming back with even daylight is the failure in the table
-above, and no arithmetic over characters sees it, which is the same fact this
-section has now demonstrated twice. And the rules must change by the *block*
-rather than the frame: replacing the opening and closing sentences too
-(`--enrich full`) makes the model author more and start inventing subjects — it
-answered `night. no, late afternoon` with an entire kitchen and a woman in a
-linen dress. The frame is what holds it to the person's scene.
+**What it still cannot do is look at the picture.** Every criterion is finally
+about a render, and judging the text is one remove from that. `does_it_help.py`
+renders the pair, `judge_renders.py` scores it blind in both orders, and
+`prompt_ab.py` runs the three stages in order. That is the measurement that is
+not a proxy, and until it runs, a text judge should be read as one.
 
 
 ## Layout
@@ -636,13 +274,16 @@ linen dress. The frame is what holds it to the person's scene.
     tools/tune_dupes.py where the duplicate thresholds come from — takes a folder
     tools/ui-checks/    parity checks — each takes a URL, runs on either page
     tools/_from_app.py  pulls plain-Python pieces out of app.py by AST
-    tools/smoke_parse.py --enrich --scenes is the parse evaluation that counts
+    tools/smoke_scene.py  the scene compiler and the blocking derivation
     tools/prompt_ab.py  render a prompt pair and have a vision model judge it —
-                        the only measurement of this that is not a proxy
-    tools/does_it_help.py renders the same fragment bare and interpreted, one seed
+                        the only measurement of this that is not a proxy, and
+                        the one command that runs the three stages in order
+    tools/does_it_help.py renders the same sentence two ways, one seed
+    tools/judge_renders.py scores a rendered pair blind, both orders, or it is a tie
+    tools/judge_prompts.py the same rubric on text, which is cheaper and a proxy
+    tools/serve_judge.py  opens a Sandbox with either judge's model in it
     tools/upstream.py   what moved upstream that would reach a render —
                         the answer to "a pin means falling behind"
-    tools/judge_renders.py scores a rendered pair blind, both orders, or it is a tie
 
 **The front end is built into the image, not mounted from your disk.** That is
 what keeps `modal deploy app.py` the entire install: mounting a local
@@ -947,36 +588,31 @@ nobody has looked at.
   `startswith`: "I cannot" inside a caption is a sentence about the picture, and
   a substring test would throw away real captions to catch a model talking about
   itself.
-- **The interpreter is its own `@app.cls`, and the weights follow the captioner
-  rather than the catalogue.** Two decisions, both against the obvious cheaper
-  option.
+- **The vLLM recipe is settled by running it, and it outlived the model it was
+  written for.** The interpreter behind `/api/parse` was its own `@app.cls` on
+  its own L4 — deleted with the feature — and every line of how it was served
+  survives in `tools/serve_judge.py`, because a judge needs the same thing: a
+  `devel` CUDA base, since vLLM's inductor shells out to `nvcc` and a slim image
+  dies at engine init with "Could not find nvcc", several minutes after a
+  successful model load, which is what made it look like a timeout; vLLM
+  deliberately *unpinned* where everything else here is pinned, because 0.11.0
+  fails on a tokenizer attribute a newer transformers dropped; `/health` probed
+  with urllib and never curl, since the CUDA base has no curl and `command not
+  found` every iteration is indistinguishable from a slow start.
 
-  It is not a process inside a generator. The brief said to raise concurrency on
-  one and let the parse share it; both generators carry
+  **What that arrangement got right and is worth keeping:** a second model does
+  not go inside a generator process. Both generators carry
   `@modal.concurrent(max_inputs=1)` because one GPU runs one sampling loop, and
   `_publish`'s lock is process-local *because* `max_containers=1` means there is
   no second writer — the arrangement that lost the terminal status 15 runs out
-  of 15 before the lock existed. A second model in either process undoes both
-  for a saving that is not real: a 4B at bf16 is ~8 GB, so it runs on an L4 at a
-  fraction of an idle H100, and it scales to zero between sessions. What pays
-  for the cold start is a warm ping on page load — the user then spends fifteen
-  seconds typing before the first pause fires, which is the whole window.
+  of 15 before the lock existed.
 
-  The weights are a pinned repo id served off `hf_cache`, the shape
-  `CAPTION_MODELS` already uses, because `MODEL_CATALOGUE` is built for single
-  files with a `dest: Path` and vLLM wants a repo directory. So there is no gear
-  UI for it at all, which is the same trade against "nothing downloads on its
-  own" that the captioner already makes, and for the same reason: the
-  alternative is a catalogue entry whose only function is friction. **The
-  revision is pinned, not the branch** — see `docs/vendor-parse-model.md` for
-  what is forked, the one local change, and how to replace it.
+  **And the exception that survives is `/api/motion`**, which does run on the
+  encoder the image container already holds. It is allowed because it is a
+  button somebody presses and then waits for, not something firing on a typing
+  pause: a suggestion queuing behind a render is correct rather than a defect on
+  a single-user platform. See "The rewriter is the encoder" in the history above.
 
-  Every line of the vLLM recipe was settled by `tools/stress_parse.py` against a
-  real Sandbox: a `devel` CUDA base because vLLM's inductor shells out to
-  `nvcc`; vLLM deliberately *unpinned* where everything else here is pinned,
-  because 0.11.0 fails on a tokenizer attribute a newer transformers dropped;
-  `/health` probed with urllib and never curl, since the CUDA base has no curl
-  and the failure is indistinguishable from a slow start.
 
 - **Reload through `_reload_volume()`, never `volume.reload()`.** Modal refuses
   a reload while anything on the volume is open, and a container holding a
@@ -1528,9 +1164,9 @@ two domains, and the page follows the domains.
 
   **And the argument that kept it there does not hold for the main prompt.** The
   claim was that a row *could not say where in the sentence the LoRA applies* —
-  true in a region, false on the canvas, and this file says so itself in
-  `useDocument`: *a token's position in the main prompt means nothing to the
-  backend, which reads them into a stack.* So the canvas paid for a parser, a
+  true in a region, false on the canvas, and the since-deleted `useDocument` said
+  so itself: *a token's position in the main prompt means nothing to the backend,
+  which reads them into a stack.* So the canvas paid for a parser, a
   caret-targeting scheme and a drag subsystem to buy a property only a box has,
   and what the position means in a box is *which box*, which a control living on
   that box says without any syntax.

@@ -13,7 +13,7 @@
  */
 import { api, post, type Res } from './client'
 import type {
-  AppState, CompileResult, DupeReport, Insight, JobStatus, MotionResult, ParseElement, ParseResult, Session, ShotPill } from './types'
+  AppState, CompileResult, DupeReport, Insight, JobStatus, MotionResult, Session, ShotPill } from './types'
 
 const seg = encodeURIComponent
 
@@ -224,17 +224,6 @@ export const compile = (body: {
 }) => post<CompileResult>('/api/compile', body)
 
 /**
- * Prose in, structure out — the one route where a model reads the *user's* words.
- *
- * The counterpart of `compile`: that one asks what the encoder will be told,
- * this one asks what was understood. Both are answered by the server rather than
- * reimplemented here, for the reason `compile` records — a second implementation
- * is a second opinion, and the one on screen would be the wrong one.
- */
-export const parse = (body: { prose: string }) =>
-  post<ParseResult>('/api/parse', body)
-
-/**
  * What could move in this frame — the one route where a model is shown a
  * *picture* of the user's rather than their words. `first_frame` is the full
  * base64, unlike `compile`'s booleans: this is a press, not a keystroke
@@ -244,17 +233,6 @@ export const parse = (body: { prose: string }) =>
  */
 export const motion = (body: { prose: string; model: string; first_frame?: string | null }) =>
   post<MotionResult>('/api/motion', body)
-
-/**
- * One element read again — the same route, not a second one.
- *
- * A reroll is the same question at a smaller scope, so it extends `/api/parse`
- * rather than inventing a parallel contract. The whole document goes with it
- * because the merge is a transaction on the server: it comes back whole or the
- * old one stands, and there is no partial result for the page to reason about.
- */
-export const reroll = (body: { prose: string; document: ParseElement[]; only: string }) =>
-  post<ParseResult>('/api/parse', body)
 
 /**
  * Start the container this session will use, while the page is still being read.

@@ -12,7 +12,7 @@
  * clears the rail rather than keeping whatever happened to be on it.
  */
 import { BUCKETS, commitBoxes } from '../console/size'
-import { chipFrom, loraChips, loraIndex, resolveLora, stripLoras } from '../lora/tokens'
+import { chipFrom, loraChips, loraIndex, resolveLora } from '../lora/tokens'
 import { newRegion, shotItem, useStore } from '../store'
 import type { LoraChip } from '../lora/tokens'
 import type { GalleryItem } from './types'
@@ -38,15 +38,9 @@ const set = (v: unknown): string => (v == null || v === '' ? '' : String(v))
  *  They were one string while a LoRA was `<lora:…>` in the prose; a chip is not
  *  text and never belonged in there. */
 function restore(s: ReturnType<typeof useStore.getState>,
-                 typed: string, chips: LoraChip[], modules: GalleryItem['modules'],
-                 original = ''): void {
-  const written = typed
-  s.setPrompt(written)
+                 typed: string, chips: LoraChip[]): void {
+  s.setPrompt(typed)
   useStore.setState({ loras: chips })
-  const prose = stripLoras(written)
-  s.setDoc(modules?.length
-    ? { for: prose, from: original || prose, elements: modules, text: prose }
-    : null)
 }
 
 export function reuse(it: GalleryItem): void {
@@ -68,7 +62,7 @@ export function reuse(it: GalleryItem): void {
     // from a list and always resolves, so there is no such thing as one naming
     // nothing.
     restore(s, it.prompt_typed || it.prompt || '',
-            loraChips(index, it.loras, false), it.modules)
+            loraChips(index, it.loras, false))
     s.setNegative(it.negative_prompt ?? '')
 
     const size = `${it.width}x${it.height}`
@@ -152,7 +146,7 @@ export function reuse(it: GalleryItem): void {
   // filename of both speed pairs, so a stem match would restore the t2v LoRA into an
   // i2v run without a word about it.
   restore(s, it.prompt_typed || it.prompt || '',
-          loraChips(index, it.loras, true), it.modules)
+          loraChips(index, it.loras, true))
   s.setNegative(it.negative_prompt ?? '')
 }
 

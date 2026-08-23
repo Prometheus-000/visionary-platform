@@ -15,10 +15,10 @@ runs them in order, which is the whole of what it adds:
 
   1. `does_it_help.py` renders each fragment twice against the deployed app,
      bare and rewritten, at one seed with the sentence as the only variable.
-  2. `stress_parse.py --vision` serves a vision model in a throwaway Sandbox.
+  2. `serve_judge.py --pairs` serves a vision model in a throwaway Sandbox.
   3. `judge_renders.py` scores the pairs inside it.
 
-`--from` takes a `smoke_parse.py --enrich` dump, so the
+`--from` takes a JSONL of `{name, prose, compiled}`, so the
 rewritten half is what a model actually wrote rather than what somebody hoped it
 would write. That distinction is not academic: hand-written replacements won
 their pairs and every model-written one lost.
@@ -89,10 +89,10 @@ def main() -> int:
     if args.render_only:
         return 0
 
-    judge = [sys.executable, str(ROOT / "tools" / "stress_parse.py"),
-             "--vision", str(out), "--model", args.judge_model, "--gpu", args.gpu]
+    judge = [sys.executable, str(ROOT / "tools" / "serve_judge.py"),
+             "--pairs", str(out), "--model", args.judge_model, "--gpu", args.gpu]
     if args.dump:
-        judge += ["--vision-briefs", args.dump]
+        judge += ["--briefs", args.dump]
     return run(judge)
 
 

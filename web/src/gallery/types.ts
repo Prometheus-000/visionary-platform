@@ -1,5 +1,5 @@
 import { coverUrl, fileUrl } from '../api/routes'
-import type { ParseElement, ShotPill } from '../api/types'
+import type { ShotPill } from '../api/types'
 
 /**
  * A generation, as `/api/gallery` returns it — newest first, no job id needed.
@@ -36,11 +36,6 @@ export type GalleryItem = {
    *  written before the shot palette, which is why `promptOf` falls back. */
   prompt_typed?: string
   shot?: ShotPill[]
-  /** The model's reading of `prompt_typed`, when a document ran. A receipt
-   *  beside the compiled string, never the record — reuse restores it so a
-   *  repeat renders what ran, rather than re-reading the sentence and getting a
-   *  second opinion on it. */
-  modules?: ParseElement[]
   model?: string
   seed?: number
   seeds?: number[]

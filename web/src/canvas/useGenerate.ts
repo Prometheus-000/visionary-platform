@@ -6,7 +6,7 @@ import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { loraIndex, readChips, stripLoras } from '../lora/tokens'
 import { readRegions } from '../regions/geometry'
-import { attached, docFor, docFrom, negAllowed, readShot, regionsLive, useStore, type Store } from '../store'
+import { attached, negAllowed, readShot, regionsLive, useStore, type Store } from '../store'
 import { readSize } from '../console/size'
 
 /**
@@ -107,20 +107,9 @@ export function imageBody(s: Store): Record<string, unknown> {
   const index = loraIndex(s.state)
   const [width, height] = readSize(s.img)
   const regions = readRegions(index, s.regions, regionsLive(s))
-  // Computed once and used twice, because the document is *keyed* by this exact
-  // string: sending a prompt built one way and asking for a document built
-  // another is the stale-document failure with the two halves in one function.
   const prompt = stripLoras(s.prompt)
   return {
     prompt,
-    // The model's reading of that prose, or nothing at all. `docFor` returns
-    // null the moment the box has moved, and the run then proceeds on the plain
-    // path — byte-for-byte the app before any of this existed.
-    modules: docFor(s, prompt),
-    // The sentence the replacement was written from. `prompt` is what runs and
-    // is the person's to edit; this is what they wrote before anything ran, and
-    // without it the sidecar keeps only the prompt a model produced.
-    prompt_original: docFrom(s, prompt),
     negative_prompt: negAllowed(s) ? s.negative : '',
     model: s.img.model,
     shot: readShot(s.shot),
@@ -178,17 +167,15 @@ export function useGenerate(onLanded: (it: GalleryItem) => void) {
       s.duration_s ? `${String(s.duration_s)}s` : '',
     ].filter(Boolean)
 
-    // **The pin, and the `doc &&` is what resolves it against "pick nothing and
-    // nothing changes".** Once the prompt has been read into a document, an edit
-    // to one assumption should move only what that edit implied — and it cannot,
-    // if the seed rerolls underneath it. But a seed that stopped rolling for
-    // somebody who never engaged with any of this reads as *"Generate is broken,
-    // it keeps making the same picture"*, so it is pinned only when a document
-    // exists, and only into a field the person left blank. Their own number is
-    // never overwritten.
-    const st = useStore.getState()
-    if (st.doc && !st.img.seed && seeds.length) st.setImg({ seed: String(seeds[0]) })
-
+    // **The seed no longer pins itself, and it died with its own gate rather
+    // than being removed.** The pin existed so that editing one assumption moved
+    // only what that edit implied, which it cannot if the seed rerolls
+    // underneath — but a seed that stops rolling for somebody who never engaged
+    // reads as "Generate is broken, it keeps making the same picture", so it
+    // fired only once the prompt had been read into a document. There are no
+    // documents now, so the condition was permanently false. Rebuilding it needs
+    // a new answer to "how do we know they meant to hold this frame", and
+    // `SEED_HINT` still describes the field as the place to type one.
     // Replaces the on-screen render atomically: the new job's id and files land in
     // the same set as `running:false`, so there is never a frame where the old
     // `jobId` is paired with the new `files`.

@@ -146,87 +146,12 @@ def role_cases(roles):
     yield "h3/roles/partial", dict(base, references=2, ref_roles=[roles[0]["key"], ""])
 
 
-# A document, one element per clause. Written out rather than generated so the
-# nesting is visible: `_module_clause` folds a child straight onto its anchor,
-# which is the difference between a light that is its own character and a light
-# that falls on somebody.
-DOC_FLAT = [
-    {"id": "e1", "role": "text", "text": "a woman in a red dress"},
-    {"id": "e2", "role": "light", "text": "lit from a low window",
-     "origin": "invented"},
-]
-DOC_NESTED = [
-    {"id": "e1", "role": "place", "text": "A hotel corridor", "children": [
-        {"id": "e1a", "role": "text", "text": "with pale blue floral wallpaper"},
-        {"id": "e1b", "role": "text", "text": "and honey-coloured door frames"}]},
-    {"id": "e2", "role": "subject", "text": "Three figures stand at the far end"},
-]
-DOC_ONE = [{"id": "e1", "role": "text", "text": TYPED["fragment"]}]
-
-
-def document_cases(vocab):
-    """
-    The document through all three compilers — **appended, never merged in.**
-
-    Every case above sends no `modules` and must stay byte-identical forever;
-    this is the new surface, kept in its own namespace so a diff says which of
-    the two moved.
-
-    The `one:plain` / `one:doc` pair is here because the obvious claim about it
-    is **false, by exactly one full stop**, and pinning both halves is what keeps
-    that from being rediscovered:
-
-        typed plain   "a portrait of k3nan"
-        one element   "a portrait of k3nan."
-
-    `_shot_body`'s docstring says a string and a one-element list compile
-    identically, and inside `_shot_body` they do. The difference is one level
-    up: with no pills and no document the compiler returns the typed string
-    *verbatim* — that is the "byte-for-byte today's app" guarantee — while
-    anything chosen goes through `_close`, which closes a sentence the person
-    left open. A one-element document is something chosen, so it is closed, the
-    same way typed text is closed the moment a single pill is picked.
-
-    So the invariant that non-negotiable #6 actually rests on is narrower and is
-    already pinned by every case above: **with no document and no pills, the
-    compile is the typed text and nothing else.** Someone who never engages with
-    the semantic layer sees the app they had. Making the one-element case match
-    plain typing would mean *not* closing the last clause of a document, which
-    would then differ from every multi-element document and from the pills path
-    — a smaller inconsistency traded for a larger one.
-    """
-    pills = [{"key": "framing.mcu"}, {"key": "light.window"}]
-    for kind, model in (("image", None), ("video", "wan22"), ("video", "h3")):
-        tag = kind if model is None else f"{kind}-{model}"
-        base = {"kind": kind, "prompt": "", "shot": []}
-        if model:
-            base["model"] = model
-        # Typed plain against the same text as a one-element document. Both
-        # sides of the pair are captured so the baseline shows the equality
-        # rather than asserting it somewhere the diff cannot see.
-        yield f"doc/{tag}/one:plain", dict(base, prompt=TYPED["fragment"])
-        yield f"doc/{tag}/one:doc", dict(base, modules=DOC_ONE)
-        yield f"doc/{tag}/flat", dict(base, modules=DOC_FLAT)
-        yield f"doc/{tag}/nested", dict(base, modules=DOC_NESTED)
-        # With pills, which is where a document has to fold into the same slots
-        # a typed string does.
-        yield f"doc/{tag}/flat+pills", dict(base, modules=DOC_FLAT, shot=pills)
-        yield f"doc/{tag}/nested+pills", dict(base, modules=DOC_NESTED, shot=pills)
-        # A document *and* typed text: the compiler reads the document and
-        # ignores the string, which is worth pinning because the opposite would
-        # silently double the prompt.
-        yield f"doc/{tag}/doc-wins", dict(base, prompt=TYPED["closed"],
-                                          modules=DOC_FLAT)
-
-
 def capture():
     st = state()
     out = {}
     for name, payload in cases(st["shot_vocab"]):
         out[name] = compile_one(payload)
     for name, payload in role_cases(st["shot_roles"]):
-        out[name] = compile_one(payload)
-    for name, payload in document_cases(st["shot_vocab"]):
         out[name] = compile_one(payload)
     return out
 

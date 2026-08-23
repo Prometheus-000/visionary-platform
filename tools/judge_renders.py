@@ -2,7 +2,7 @@
 Score the picture, not the text. The last proxy removed.
 
 Everything else that measures this feature is one remove from the thing it is
-about. `smoke_parse.py` scores a document against the sentence it came from;
+about. A text judge scores a rewrite against the sentence it came from;
 `--judge` scores the rewritten prompt against the original description, which is
 better and is still text. All four criteria are finally about a **render**, and
 until something reads the render they are being answered by proxy.

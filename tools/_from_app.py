@@ -77,7 +77,7 @@ SHOT = {
     "H3_RETENTION", "H3_AUDIO_RETENTION", "H3_TASK_TYPES", "H3_VIDEO_ROLES",
     "H3_AUDIO_ROLES", "H3_AUDIO_NOUN", "H3_SOURCES", "MAX_H3_PROMPT",
     # Blocking. Pulled with the compiler because `_h3_shot_text` calls into
-    # it — the rule the MODULES comment records, one edit or a NameError.
+    # it — one edit or a NameError.
     "STAGE_SENSOR_W", "STAGE_SENSOR_H", "STAGE_LENS", "STAGE_FIGURE_H",
     "STAGE_EYE_H", "STAGE_EYE_RATIO", "STAGE_MAX_MARKS", "STAGE_SIZE",
     "STAGE_ANGLE",
@@ -105,8 +105,11 @@ CAPTION = {
 # The motion panel's sections and its parser: `preview_ui.py` serves
 # `motion_groups` and stubs `/api/motion` through the real parser, and
 # `smoke_prompt.py` asserts the instruction budget. `_THINK` and `_oneline` ride along
-# because `_parse_motion` calls them — the rule the MODULES comment records:
-# a constant a pulled function names has to be pulled in the same edit.
+# because `_parse_motion` calls them. **A module-level constant added beside a
+# pulled function has to be added here in the same edit** — that is this file's
+# whole failure mode: a function arrives without what it calls, and app.py
+# raises `NameError` from inside the subset, which reads as a broken preview
+# rather than an incomplete pull. It fired twice in one session over `_stage_*`.
 MOTION = {
     "MOTION_GROUPS", "MOTION_MAX_PER", "MOTION_PHRASE_MAX", "MOTION_TOKENS",
     "_MOTION_HEAD_IMAGE", "_MOTION_HEAD_TEXT", "_MOTION_LINE",
@@ -135,35 +138,6 @@ VIDEO = {
 # worse, one it accepts and the GPU container dies on.
 TRAINER = {
     "TRAIN_OPTIMIZERS", "LR_SCHEDULERS", "TIMESTEP_SAMPLINGS", "TRAIN_DEFAULTS",
-}
-
-# The storyline validator, for `preview_ui.py`'s `/api/parse` stub. The stub
-# invents which words are the model's — it has no model — but it must not invent
-# the *offsets*, because those are the thing the mirror is aimed by and a
-# hand-written pair would let the preview underline correctly while the shipped
-# code underlined three characters left.
-MODULES = {
-    "MODULE_ROLES", "MAX_MODULES", "MODULE_TEXT_MAX", "MAX_MODULE_DEPTH",
-    "MAX_SPANS", "_flat", "_oneline", "_spans_to_text", "_validate_modules",
-    "_prominence", "_module_words",
-    # The join, because `/api/parse` answers with the prose its elements add up
-    # to and the page puts *that* in the box. Without these the stub raises a
-    # NameError from inside the real compiler — which reads as a broken preview
-    # rather than an incomplete pull, and is the whole failure mode this
-    # AST-based lift has: a function arrives without what it calls.
-    #
-    # **Twice in one session, so it is worth the rule rather than the anecdote:
-    # a module-level constant added beside a pulled function has to be added
-    # here in the same edit.** `_CONTINUES` and `_ORIGIN_JOINS` were both born
-    # that way, and the second one cost a GPU run — ten Sandbox parses that all
-    # died on `name '_CONTINUES' is not defined`, minutes after the model had
-    # loaded and answered. The name in the traceback is the fix; what makes it
-    # expensive is that nothing fails until something rents a card.
-    "_module_texts", "_module_clause", "_CONTINUES",
-    # The trust checks, so the preview refuses what the deployment refuses.
-    "_document_trust", "_trusted_modules", "_derived_from", "_ORIGIN_JOINS",
-    "_derived_runs", "_walk_document", "_preserved",
-    "_merge_document", "_swap_element",
 }
 
 # Duplicate grouping, whole. `smoke_dupes.py` checks the real hash against real

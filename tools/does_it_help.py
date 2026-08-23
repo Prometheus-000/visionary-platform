@@ -1,24 +1,24 @@
 """
-Does the interpretation make a better picture? Nobody had ever asked.
+Does the rewrite make a better picture? Nobody had ever asked.
 
-Every other measurement of the semantic layer — in `smoke_parse.py`, in the
-matrix, in the plan — is **text-to-text**: preserved, covered, round-tripped,
-idempotent. All of them score the document against the sentence it came from,
-and none of them scores the sentence against the thing the app exists to make.
-A feature can pass every one of them and be worth nothing, which is what
-happened: the incumbent produced zero genuinely invented words across 27
-fragments and scored as maximum restraint.
+**Every text measurement can be passed by a prompt that is worth nothing**, and
+that is not hypothetical: preserved, covered, round-tripped and idempotent all
+score a rewrite against the sentence it came from, so returning the sentence
+unchanged scores perfectly. That is exactly what happened — zero invented words
+across 27 fragments, read as maximum restraint, from a feature reaching 0% of
+renders.
 
 So this renders the same fragment twice on the live deployment — once as the
-person typed it, once as the document compiles it — at one seed, one size, one
-sampler, with the sentence as the only variable. It answers the founding
+person typed it, once as whatever is being tested writes it — at one seed, one
+size, one sampler, with the sentence as the only variable. It answers the founding
 premise, which had never been tested: that an interpreted fragment beats a bare
 one.
 
     python3.11 tools/does_it_help.py --url https://…modal.run          # the pairs below
     python3.11 tools/does_it_help.py --url … --from enrich.jsonl       # model output
 
-`--from` takes `smoke_parse.py --enrich` output, which is the honest version:
+`--from` takes a JSONL of `{name, prose, compiled}`, which is the honest
+version:
 the enriched half is then what the model wrote rather than what somebody hoped
 it would write.
 """
@@ -82,7 +82,7 @@ def main() -> int:
     ap.add_argument("--out", default="tools/parse-eval-2026-08-17",
                     help="Where the PNGs land")
     ap.add_argument("--from", dest="dump", default=None,
-                    help="A `smoke_parse.py --enrich` JSONL — renders what the "
+                    help="A JSONL of name/prose/compiled — renders what the "
                          "model actually wrote instead of the pairs above.")
     ap.add_argument("--limit", type=int, default=4)
     args = ap.parse_args()

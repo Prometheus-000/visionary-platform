@@ -33,7 +33,7 @@
  */
 import { create } from 'zustand'
 
-import type { AppState, ParseElement, ShotGroup, ShotItem, ShotPill, VideoModel } from './api/types'
+import type { AppState, ShotGroup, ShotItem, ShotPill, VideoModel } from './api/types'
 import type { LoraChip } from './lora/tokens'
 
 export type Kind = 'image' | 'video'
@@ -210,35 +210,6 @@ const VIDEO: VideoComposer = {
   refSize: 'match',
 }
 
-/**
- * The model's reading of the prompt — a candidate, never the record.
- *
- * The user's prose is the source of truth for what they meant; this is a
- * derived, disposable interpretation of it. Derived: regenerable from the prose
- * at any time. Disposable: refusable whole, at any point, with no loss beyond an
- * interpretation. That is the same relationship the sidecar already draws
- * between `prompt_typed` and the compiled `prompt`, one layer up — and every
- * degrade in this feature depends on it, because dropping a document only costs
- * nothing if the record survives it.
- *
- * `for` is the exact prose it describes, with LoRA syntax already stripped: the
- * interpreter is never shown `<lora:k3nan:1>`, because that is notation rather
- * than prose and asking a model to structure it is asking it to structure the
- * app. `text` is what the elements add up to — the string the box holds once
- * this lands.
- */
-export type SemanticDoc = {
-  for: string
-  elements: ParseElement[]
-  text: string
-  /** The prose the interpreter actually read, which after a write is no longer
-   *  what is in the box. `for` moves to the written text so the document is not
-   *  stale against its own output; this stays put, because it is the record —
-   *  what somebody wrote before any of this ran. Without it a replacement is
-   *  the only thing the sidecar keeps, and the sentence that produced it is
-   *  gone the moment the box is overwritten. */
-  from: string
-}
 
 export type Store = {
   /* ---- served vocabulary. The server is the authority; never restate it. -- */
@@ -273,9 +244,9 @@ export type Store = {
    * **One live set, one dormant, and `setKind` is the only place both exist.**
    * Moving these five onto `ImageComposer`/`VideoComposer` is the more literal
    * reading and touches every `s.prompt` in the codebase; this touches one
-   * function. It keeps the invalid state unreachable by the same means `docFor`
-   * does — there is exactly one live set, so no component is able to read the
-   * wrong one.
+   * function, and keeps the invalid state unreachable rather than merely
+   * unlikely — there is exactly one live set, so no component is able to read
+   * the wrong one.
    */
   stash: { image: Composed | null; video: Composed | null }
 
@@ -297,19 +268,11 @@ export type Store = {
   dropLora: (path: string) => void
   patchLora: (path: string, patch: Partial<LoraChip>) => void
 
-  /** **Never read this directly — use `docFor(s, prose)`.** A document is valid
-   *  only for the exact prose it was derived from, and an accessor that demands
-   *  the prose is what makes the invalid state unrepresentable instead of a
-   *  check every caller has to remember. `check_document.py` greps for reads of
-   *  `.doc.elements` outside this file. */
-  doc: SemanticDoc | null
-  setDoc: (d: SemanticDoc | null) => void
-  /** The prompt and document as they were immediately before the last parse
-   *  wrote into the box. One slot, because the gesture it reverses is one write
-   *  at a time. */
-  docUndo: { prompt: string; doc: SemanticDoc | null } | null
-  /** The parse's write into the box, and the only thing that performs it. */
-  applyDoc: (prompt: string, doc: SemanticDoc) => void
+  /** The prompt as it stood immediately before the last composed write. One
+   *  slot, because the gesture it reverses is one write at a time. The motion
+   *  panel is the only thing that writes now; it was shared with the parse and
+   *  the rewrite, and outlived both. */
+  docUndo: { prompt: string } | null
   /** ⌘Z in the prompt field, while there is a write to take back. */
   undoDoc: () => void
 
@@ -455,7 +418,6 @@ export const useStore = create<Store>((set, get) => ({
       negOn: mine?.negOn ?? false,
       shot: mine?.shot ?? [],
       loras: mine?.loras ?? [],
-      doc: null,
       docUndo: null,
     }
   }),
@@ -477,19 +439,9 @@ export const useStore = create<Store>((set, get) => ({
     loras: s.loras.map((l) => (l.path === path ? { ...l, ...patch } : l)),
   })),
 
-  doc: null,
   docUndo: null,
-  setDoc: (doc) => set({ doc }),
-
-  // **The undo pair is captured in the same `set()` that performs the write**,
-  // never at the moment the parse was asked for. The staleness guard makes
-  // those two strings equal today, which is exactly why this should not lean on
-  // it: undo staying correct is then a property of one statement rather than of
-  // a guard three lines away that a later change could loosen.
-  applyDoc: (prompt, doc) =>
-    set((s) => ({ prompt, doc, docUndo: { prompt: s.prompt, doc: s.doc } })),
   // The slot is spent on use. A second ⌘Z is the field's own undo again, which
-  // is the honest answer — there is only ever one parse write to take back.
+  // is the honest answer — there is only ever one composed write to take back.
   undoDoc: () => set((s) => (s.docUndo ? { ...s.docUndo, docUndo: null } : {})),
 
   motion: { sug: null, busy: false, error: null, for: null, base: null, picks: [] },
@@ -511,11 +463,10 @@ export const useStore = create<Store>((set, get) => ({
     const picks = prior.includes(id) ? prior.filter((p) => p !== id) : [...prior, id]
     set({
       prompt: composeMotion(groups, sug, base, picks),
-      doc: null,
       // Undo always lands on the pre-pick prompt however many toggles
       // happened, and clears itself when the last pick is untoggled: an armed
       // ⌘Z with nothing to take back is a gesture that does nothing visible.
-      docUndo: picks.length ? { prompt: base, doc: s.doc } : null,
+      docUndo: picks.length ? { prompt: base } : null,
       motion: { ...s.motion, base, picks },
     })
   },
@@ -710,31 +661,7 @@ export function negAllowed(s: Pick<Store, 'state' | 'kind' | 'img' | 'vid'>): bo
   return typeof cfg === 'number' && Number.isFinite(cfg) && cfg > 1
 }
 
-/** The pills, in the shape every route takes them in. Near-identity because the
- *  store holds the wire's own field names — a second spelling here would be a
- *  translation layer between the palette, `/api/compile` and the sidecar that
- *  Reuse reads back, and three places to get it wrong. */
-/**
- * The document, if it still describes this prose — and `null` the moment it does not.
- *
- * The prose is the key, always. Every caller that wants elements has to say
- * which string it believes they are about, so a stale document cannot be sent
- * with a prompt it was never derived from: the failure invariant 1 exists to
- * prevent is not reachable through this door rather than merely unlikely.
- *
- * Pass the **LoRA-stripped** prose, which is what the interpreter was given and
- * what `/api/generate` receives.
- */
-export function docFor(s: Pick<Store, 'doc'>, prose: string): ParseElement[] | null {
-  return s.doc && s.doc.for === prose && s.doc.elements.length ? s.doc.elements : null
-}
 
-/** What the person wrote before the interpreter replaced it, or null. Keyed the
- *  same way `docFor` is, for the same reason: an origin that does not belong to
- *  the prose in the box is a record of somebody else's sentence. */
-export function docFrom(s: Pick<Store, 'doc'>, prose: string): string | null {
-  return s.doc && s.doc.for === prose && s.doc.from !== prose ? s.doc.from : null
-}
 
 export function readShot(shot: ShotPill[]): ShotPill[] {
   return shot.map((p) => {

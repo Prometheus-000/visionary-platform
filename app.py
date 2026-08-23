@@ -590,33 +590,6 @@ comfy_image = (
 )
 
 
-# The interpreter — the one model in this file that reads the *user's* words.
-#
-# Every recipe line below was settled by `tools/stress_parse.py` against a real
-# Sandbox rather than reasoned about, and each one cost a run to find:
-#
-#   * A `devel` CUDA base, not debian_slim. vLLM's inductor shells out to
-#     `nvcc` to build kernels, so a slim image dies with "Could not find nvcc
-#     and default cuda_home='/usr/local/cuda' doesn't exist" — several minutes
-#     *after* a successful model load, which is what made it read as a timeout.
-#     Same base family `caption_image` and `comfy_image` already use.
-#   * vLLM deliberately **unpinned**, where everything else here is pinned to a
-#     SHA. 0.11.0 fails on `Qwen2Tokenizer has no attribute
-#     all_special_tokens_extended` — its `get_cached_tokenizer` reaches for
-#     something a newer transformers dropped. Worth recording that this is not
-#     a defect in the fork: the base model declares the same `tokenizer_class`,
-#     so the fork was the first suspect and the wrong one. The pin that matters
-#     is the model revision, and that one is exact.
-parse_image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04", add_python="3.12"
-    )
-    .pip_install("vllm", "huggingface_hub")
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1",
-          "HF_HOME": "/cache"})
-)
-
-
 # --------------------------------------------------------------------------
 # Model catalogue
 #
@@ -6926,474 +6899,10 @@ SHOT_ITEMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
 }
 
 
-# The module roles — **the encoder's model, never the user's.**
-#
-# These name what a clause *does to the encoder*, which is why the compiler
-# needs them and why they must not reach the interface. A chip reads "tall
-# woman", not "SUBJECT"; an arsenal is filed under whatever key the user
-# invents, not under these. Putting a pipeline's taxonomy on screen is how a
-# tool teaches people to see their work the way the machine does, and it is the
-# one mistake that cannot be undone later. See docs/krea2-prompt-template.md.
-#
-# `text` is the catch-all and the reason nothing regresses: a plain typed prompt
-# is a one-module list of role `text`, and compiles to exactly what it compiles
-# to today.
-MODULE_ROLES = ("text", "declaration", "place", "subject", "behaviour",
-                "secondary", "light", "camera", "register")
-MAX_MODULES = 24
-MODULE_TEXT_MAX = 2000
-# An anchor holding dependents holding their own dependents is the deepest shape
-# the model has produced — a collective, the subjects in it, their wardrobe. The
-# bound exists so a cyclic or runaway payload cannot walk the recursion forever,
-# not because a fourth level would mean anything.
-MAX_MODULE_DEPTH = 4
-
-
-# The parse — the one place a model reads the *user's* words.
-#
-# Everything else in this file speaks to a text encoder. This speaks to a person,
-# and its whole job is to turn what somebody actually typed into the structure
-# the rest of the pipeline needs, so that nobody ever has to learn that
-# structure. A parse that merely reformats faithfully would reproduce every
-# failure in docs/krea2-prompt-template.md, because most of those failures are
-# things a storyteller writes naturally and Krea 2 renders wrong.
-#
-# The rules below are the findings from that document, stated as instructions.
-# They live here rather than in the page for the reason `CAPTION_PRESETS` does:
-# a run has to be reproducible from the job record rather than from whatever
-# text was in a field at the time.
-# Weights, following the `CAPTION_MODELS` precedent rather than
-# `MODEL_CATALOGUE`: a pinned repo id served off the existing HF cache volume,
-# with no gear UI at all. The catalogue is built for single files with a
-# `dest: Path` and vLLM wants a repo directory, so an entry there would be a
-# shape that fits nothing plus a download button for a weight the parse pulls
-# on its own anyway. This trades against "nothing downloads on its own" exactly
-# as the captioner already does, and for the same reason: the alternative is a
-# catalogue entry whose only function is friction.
-#
-# **The revision is pinned, not the branch.** A fork with a few thousand
-# downloads against its base's millions is one person's upload and can be
-# amended or withdrawn without anyone noticing. See docs/vendor-parse-model.md
-# for what is forked, the one local change, and how to replace it.
-PARSE_REPO = "huihui-ai/Huihui-Qwen3-4B-Instruct-2507-abliterated"
-PARSE_REVISION = "c9bd464550d4078c72af0dd22aa18d0437868ce3"
-
-# An L4, measured. A 4B at bf16 is ~8 GB of weights, so this is the smallest
-# card that holds it with room to serve, and it is a fraction of an idle H100 —
-# which is the alternative this rejects. The brief said to raise concurrency on
-# a generation container instead; both carry `@modal.concurrent(max_inputs=1)`
-# because one GPU runs one sampling loop, and `_publish`'s lock is
-# process-local *because* `max_containers=1` means there is no second writer.
-# Putting a second model in either process would undo both.
-PARSE_GPU = "L4"
-PARSE_PORT = 8000
-# torch.compile is left on. It costs ~3 min on a cold L4 and is the one
-# configuration engine init is known to survive here — `--enforce-eager` was
-# tried and engine init failed, so the compile is not what to economise on.
-# Caching it to a Volume is far worse: thousands of small artifacts over 9P
-# never finished inside ten minutes.
-PARSE_START_S = 15 * 60
-
-# **Kept between 500 and 2000 characters, deliberately, and the reasoning lives
-# here rather than in the string.** Over one session this grew from 2.9k to
-# 10.2k and the output got worse in two ways that are only visible by reading.
-# It went lossy on a well-formed prompt — "a lone fisherman in yellow oilskins"
-# came back without the oilskins — and worse, it began **parroting the rules'
-# own examples**: given three friends on a fire escape it wrote "their shoulders
-# overlap, both lit by the same window, all three turned three-quarters toward
-# the same thing off-frame", every phrase lifted from the instruction rather
-# than composed for the scene. Every keyword check in `smoke_parse.py` scores
-# that as a pass.
-#
-# So the concrete examples went out with the wordcount, and that is not a
-# coincidence — they *were* the parroting. What is left is the smallest set of
-# things the model cannot work out for itself. Everything cut was teaching a
-# prompt-writing model what a prompt is: subject first, geometry over
-# adjectives, stage the feeling rather than name it, drop the narrator, nothing
-# a camera could not record. It knows all of that, and each line spent saying so
-# is a line competing with the five that matter.
-#
-# `tools/rules-long.txt` keeps the 10.2k version so this stays a measurement
-# rather than a maxim — `smoke_parse.py --enrich long` runs it against the
-# shipped one on the same corpus, judged the same way.
-PARSE_RULES = """\
-You write prompts for a text-to-image model. Somebody gives you what they want —
-sometimes already a prompt, more often a paragraph about a picture they can
-already see — and you give back the prompt that renders it. You know what a good
-prompt for this encoder looks like; that part is not written out here.
-
-Five things you cannot know:
-
-THEIR FACTS ARE FIXED. Reword anything, change nothing. A bright yellow sweater
-stays bright yellow, 3am stays 3am, and nothing you add may disagree with what
-they said.
-
-KEEP WHAT ALREADY WORKS. A phrase that would render what they meant, you leave
-alone. Narration comes back rewritten because almost none of it was a prompt;
-something already prompt-shaped comes back nearly untouched. The input decides
-that, not you.
-
-MARK WHAT YOU ADDED, NOT WHAT YOU REWORDED. `origin: "invented"`, or `spans` on
-a mixed clause, for any fact they did not state — so they can delete it in one
-gesture. "a red winter coat" as "an oxblood down jacket" is the same fact and
-carries no mark; "and she looks visibly cold" is a state nobody mentioned and
-does.
-
-SUPPLY THE RELATIONS, AND PUT THE LINK LAST IN ITS CLAUSE. Subjects described
-one at a time render one at a time, squared to the lens and party to nothing.
-Say how they stand to each other as physical fact, never as one subject
-regarding another — that opens a second attention site inside the clause and
-they merge.
-
-BALANCE IS WHAT THEY DECLARED. "A photo of three friends" says three people
-matter equally, so give the thin one words.
-
-Return elements in the order they should reach the encoder — a thing plus what
-hangs off it as children, and extent is prominence. `ties` is a record the page
-reads and no compiler emits, so whatever has to render belongs in the text.
-"""
-
-
-
-
-
 # Sixteen runs is far more than any clause has needed. The bound exists so a
 # payload cannot spell a sentence one character at a time, not because a
 # seventeenth run would mean anything.
 MAX_SPANS = 16
-
-_SPAN = {
-    "type": "object",
-    "properties": {
-        "text": {"type": "string"},
-        "origin": {"type": "string", "enum": ["derived", "invented"]},
-    },
-    "required": ["text", "origin"],
-    "additionalProperties": False,
-}
-
-
-# A `$defs`/`$ref` recursion rather than `children: {type: object}`.
-#
-# The loose version is what a schema looks like when nesting is described
-# casually, and under constrained decoding it is a trap: an untyped object
-# permits any JSON forever, so the grammar never pushes the model toward an end
-# and it generates until it hits the token cap. Measured on a 4B that was 40s
-# per request and an empty completion — which reads as a broken model and is a
-# broken schema.
-_ELEMENT = {
-    "type": "object",
-    "properties": {
-        "id": {"type": "string",
-               "description": "Short and stable, e.g. e1 — ties refer to these."},
-        "text": {"type": "string",
-                 "description": "The clause, in the person's own words where possible."},
-        "origin": {"type": "string", "enum": ["derived", "invented"]},
-        "ties": {"type": "array", "items": {"type": "string"}, "maxItems": 8,
-                 "description": "Ids this element physically relates to."},
-        # Text runs rather than offsets, because a model cannot count characters
-        # and can copy its own words. The route answers in offsets, which is what
-        # a renderer needs and what a model cannot be trusted to produce — the
-        # conversion happens here, once, where both halves are in hand.
-        "spans": {"type": "array", "items": _SPAN, "maxItems": MAX_SPANS,
-                  "description": "Only when the clause is mixed. Consecutive "
-                                 "runs that join back to `text` exactly."},
-        "children": {"type": "array", "items": {"$ref": "#/$defs/element"},
-                     "maxItems": 8,
-                     "description": "Properties of this element, same shape."},
-    },
-    # `origin` is no longer required, because it is no longer asked for: the
-    # rules ask for marks as a claim about facts, and `_derived_from` answers
-    # from the two strings. Left in `properties` rather than deleted so a model
-    # that volunteers it is not a schema error — the value is overwritten either
-    # way. Constrained decoding otherwise spends a token per element on a field
-    # whose answer is discarded, and, worse, invites the one mislabel nothing
-    # downstream could see.
-    "required": ["id", "text"],
-    "additionalProperties": False,
-}
-
-PARSE_SCHEMA = {
-    "name": "storyline",
-    "description": "The picture, as elements in the order they reach the encoder.",
-    "input_schema": {
-        "type": "object",
-        "$defs": {"element": _ELEMENT},
-        "properties": {
-            "elements": {"type": "array", "items": {"$ref": "#/$defs/element"},
-                         "maxItems": MAX_MODULES},
-        },
-        "required": ["elements"],
-        "additionalProperties": False,
-    },
-}
-
-
-def _structured_call(base_url: str, model: str, system: str, user: str,
-                     schema: dict[str, Any], chosen: list[str],
-                     *, timeout: float = 300.0, max_tokens: int = 2048) -> str:
-    """
-    One chat completion with the schema **actually bound**, on any vLLM server.
-
-    `guided_json` rather than a politely-worded request for JSON: with the
-    grammar bound, malformed output is not unlikely, it is unreachable. That is
-    the difference between a 4B that works and one that works most of the time.
-
-    Three dialects because servers disagree about the spelling, and one trap
-    that cost a whole run to find: **a dialect is recorded only once a response
-    actually parses.** vLLM 0.27 accepts `guided_json` without binding it and
-    returns empty content, so appending on a 200 was enough to lock every later
-    call onto a dialect the server takes and then ignores — and the run scored
-    0% on a model that works.
-
-    Spelled at the top level of the request, never under `extra_body`: that is
-    an OpenAI *client library* concept which flattens into the body, and sent as
-    a literal key the server ignores it silently. The schema would never bind
-    and a constrained run would be reported for an unconstrained one.
-
-    `chosen` is the caller's one-slot memo of which dialect worked, so the
-    negotiation happens once per process rather than per request.
-    """
-    import urllib.request
-
-    dialects = [
-        ("guided_json", {"guided_json": schema,
-                         "guided_decoding_backend": "xgrammar"}),
-        ("structured_outputs", {"structured_outputs": {"json": schema}}),
-        ("response_format", {"response_format": {
-            "type": "json_schema",
-            "json_schema": {"name": "storyline", "schema": schema,
-                            "strict": True}}}),
-    ]
-
-    def call(extra: dict[str, Any]) -> str:
-        body = json.dumps({
-            "model": model,
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            # Temperature 0. A parse is a reading of somebody's sentence, and
-            # the same sentence read twice should not come back two different
-            # shapes — idempotency is a scored row precisely because a document
-            # has to survive a round trip through the box.
-            "max_tokens": max_tokens, "temperature": 0, **extra,
-        }).encode()
-        req = urllib.request.Request(f"{base_url}/chat/completions", body,
-                                     {"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())["choices"][0]["message"]["content"]
-
-    if chosen:
-        return call(dict(dict(dialects)[chosen[0]]))
-
-    errs = []
-    for name, extra in dialects:
-        said = None
-        try:
-            said = call(extra)
-            json.loads(said)          # parses, so the grammar really bound
-            chosen.append(name)
-            return said
-        except Exception as exc:
-            errs.append(f"{name}: {exc}"
-                        + (f" (returned {len(said)} chars)" if isinstance(said, str) else ""))
-    raise ValueError("No structured-output dialect bound the schema:\n  "
-                     + "\n  ".join(errs))
-
-
-@app.cls(
-    image=parse_image, gpu=PARSE_GPU, cpu=2.0, timeout=30 * 60,
-    volumes={"/cache": hf_cache},
-    # One container for the same reason the generators have one: a second
-    # replica pays a full cold load rather than sharing the warm one, and this
-    # one's cold load is a model download plus a torch.compile.
-    max_containers=1,
-    # Scale to zero, and no `keep_warm`. The page pings this when it loads and
-    # the user then spends ~15s typing before the first pause fires, which is
-    # the window — paying for an idle L4 to save a window you already have is
-    # the wrong trade on a single-user platform.
-    scaledown_window=10 * 60,
-)
-@modal.concurrent(max_inputs=1)
-class Interpreter:
-    """
-    A warm vLLM, serving the one model that reads the user's words.
-
-    Shaped like `_Comfy` and for the same reasons, which is why it is a local
-    server spoken to over 127.0.0.1 rather than an in-process `LLM(...)`:
-    `@modal.enter` runs once per container, so a process that dies is otherwise
-    every parse refused until the scaledown window expires. `_revive` at the top
-    of the call is what makes a dead one cost one request instead of ten
-    minutes.
-    """
-
-    @modal.enter()
-    def setup(self):
-        self._log: deque[str] = deque(maxlen=200)
-        self._dialect: list[str] = []
-        self._proc = None
-        self._start()
-
-    def _start(self) -> None:
-        import threading
-
-        self._proc = subprocess.Popen(
-            ["vllm", "serve", PARSE_REPO,
-             "--revision", PARSE_REVISION,
-             "--port", str(PARSE_PORT),
-             # **Sized by the answer, not by the question.** 8192 was chosen
-             # for the *prose* — the prompt box is capped at MODULE_TEXT_MAX,
-             # so the input was never close — and that reasoning stopped
-             # holding the moment the rules asked for a replacement rather than
-             # a structure. A written picture is several times the length of
-             # what was typed, and the document carrying it is longer again:
-             # the first recollection through the new rules died at 7,647
-             # characters with `Unterminated string`, which reads as a broken
-             # model and is a token cap. The failure mode is worth knowing
-             # because it is not an error the model reports — it stops
-             # mid-string and the JSON simply does not close.
-             #
-             # 16384 still fits an L4 comfortably: the measured KV cache at
-             # 0.90 utilisation is 76,416 tokens, and this serves one request
-             # at a time.
-             "--max-model-len", "16384",
-             "--gpu-memory-utilization", "0.90"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-        )
-        threading.Thread(target=self._drain, daemon=True).start()
-        self._wait_ready()
-
-    def _drain(self) -> None:
-        """Mirror vLLM's output into Modal's logs, and keep a tail for errors."""
-        assert self._proc is not None and self._proc.stdout is not None
-        for line in self._proc.stdout:
-            line = line.rstrip()
-            if line:
-                self._log.append(line)
-                print(f"[parse] {line}", flush=True)
-
-    def _wait_ready(self) -> None:
-        """
-        Poll /health with urllib, never curl.
-
-        The CUDA base has no `curl`, so `curl -sf` fails with "command not
-        found" on every iteration while the server sits there serving — and the
-        symptom is indistinguishable from a slow start. That cost two runs.
-        """
-        import urllib.error
-        import urllib.request
-
-        assert self._proc is not None
-        deadline = time.time() + PARSE_START_S
-        while time.time() < deadline:
-            if self._proc.poll() is not None:
-                raise RuntimeError(
-                    f"vLLM exited during startup (code {self._proc.poll()}).\n"
-                    + "\n".join(list(self._log)[-25:]))
-            try:
-                urllib.request.urlopen(
-                    f"http://127.0.0.1:{PARSE_PORT}/health", timeout=3).read()
-                print("[parse] vLLM ready", flush=True)
-                return
-            except (urllib.error.URLError, OSError):
-                time.sleep(1.0)
-        raise RuntimeError("vLLM did not become ready.\n"
-                           + "\n".join(list(self._log)[-25:]))
-
-    def _revive(self) -> None:
-        """A dead server replaced before this call, not after the next ten fail."""
-        if self._proc is None or self._proc.poll() is None:
-            return
-        print(f"[parse] vLLM died (exit code {self._proc.poll()}); "
-              "starting a fresh one", flush=True)
-        self._log.clear()
-        self._dialect.clear()
-        self._start()
-
-    @modal.method()
-    def warm(self) -> dict[str, Any]:
-        """
-        Nothing, done on a live container — which is the entire point.
-
-        The page calls this on load and the user then spends around fifteen
-        seconds typing before the first pause fires. That window is what pays
-        for scale-to-zero: the container is cold exactly once per session and
-        never at the moment somebody is waiting on a reply.
-        """
-        self._revive()
-        return {"ok": True}
-
-    @modal.method()
-    def parse(self, prose: str, rules: str) -> dict[str, Any]:
-        """
-        Prose in, the model's raw element list out. Never the last word on it.
-
-        Returns what the model said and nothing more — no validation, no trust
-        judgement. Those happen on the web container, where the user's prose is
-        also in hand, because a model is one more untrusted caller and a caller
-        does not get to mark its own homework.
-        """
-        self._revive()
-        said = _structured_call(
-            f"http://127.0.0.1:{PARSE_PORT}/v1", PARSE_REPO,
-            rules, prose, PARSE_SCHEMA["input_schema"], self._dialect)
-        return {"elements": json.loads(said).get("elements") or []}
-
-
-def _parse_storyline(prose: str) -> list[dict[str, Any]]:
-    """
-    A person's description, as structure. Raises with something actionable.
-
-    Constrained decoding rather than free text, so a malformed answer is the
-    grammar's problem rather than a regex's — the same reason
-    `_validate_modules` refuses an unknown role instead of dropping it.
-    Everything it returns still goes through that validator, **because a model
-    is one more untrusted caller.**
-
-    And through `_document_trust`, which is the half that has teeth. With a
-    schema bound a refusal cannot arrive as recognisable prose; it arrives as an
-    evasive storyline that satisfies the schema, and shape validation passes it
-    intact. An untrustworthy interpretation is dropped here and the run proceeds
-    plain — no error, no toast, no partial document — which is byte-for-byte the
-    app as it was before any of this existed. The reason is printed because a
-    degrade nobody can see in the logs is a degrade that gets diagnosed as a bad
-    model.
-    """
-    said = Interpreter().parse.remote(prose, PARSE_RULES)
-    modules, dropped = _trusted_modules(said.get("elements") or [], prose)
-    if dropped:
-        print(f"[parse] document dropped: {dropped}", flush=True)
-    return modules
-
-
-def _reroll_storyline(prose: str, document: Any, only: str) -> list[dict[str, Any]]:
-    """
-    One element read again, or the document exactly as it was.
-
-    Extends `/api/parse` rather than adding a route, because this is the same
-    question asked about a smaller scope — and `PARSE_REROLL` is appended to the
-    rules rather than replacing them, so everything restraint says still governs
-    the one element being replaced.
-
-    The document arriving from the client is validated like any other input: it
-    was ours a moment ago and it has been out of our hands since, which is the
-    same reason `_document_matches` re-asks a question the page has already
-    answered.
-    """
-    old = _validate_modules(document)
-    if not old or not only:
-        return old
-    user = (f"{prose}\n\nThe document you produced:\n"
-            + json.dumps({"elements": old}, ensure_ascii=False)
-            + f"\n\nReroll the element with id {only!r}.")
-    said = Interpreter().parse.remote(user, PARSE_RULES + PARSE_REROLL)
-    return _merge_document(old, _validate_modules(said.get("elements") or []),
-                           only, prose)
-
-
-# Rerolling one span. Appended to `PARSE_RULES` rather than replacing them, and
-# on the server for the reason `CAPTION_PRESETS` gives: a run has to be
-# reproducible from the job record rather than from whatever text was in a field
-# at the time.
 
 def _rewrite_generator(kind: str):
     """
@@ -7407,33 +6916,6 @@ def _rewrite_generator(kind: str):
     is already on, and the session's own kind is the answer.
     """
     return VideoGenerator() if kind == "video" else ImageGenerator()
-
-
-# Prose back, not a document — so no schema, no grammar, no dialect
-# negotiation. `_structured_call`'s whole apparatus exists to bind JSON and
-# there is no JSON here.
-def _plain_call(base_url: str, model: str, system: str, user: str,
-                *, timeout: float = 300.0, max_tokens: int = 1024) -> str:
-    # Imported in the function, which is this file's convention for stdlib that
-    # only some code paths need — and load-bearing rather than stylistic: there
-    # is no module-level `import urllib`, so hoisting this would be the one
-    # difference between a route that answers and a NameError at request time.
-    import urllib.request
-
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": user}],
-        # Temperature 0 for the reason the parse uses it: the same sentence
-        # rewritten twice should not come back two different pictures. Pressing
-        # the same button again is not how you ask for a variation.
-        "max_tokens": max_tokens, "temperature": 0,
-    }).encode()
-    req = urllib.request.Request(f"{base_url}/chat/completions", body,
-                                 {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"]
-
 
 
 # The other half of the same problem, and it arrives at the *front* rather than
@@ -7537,6 +7019,11 @@ _MOTION_LINE = re.compile(
     r"\**\s*[:—-]\s*(.+)$", re.I)
 MOTION_MAX_PER = 4
 MOTION_PHRASE_MAX = 200
+# What the panel will read of a long prompt. It inherited this bound from the
+# document validator, which is gone; a suggestion is grounded in the frame far
+# more than in the prose, so the cap is about refusing a pathological body
+# rather than about how much context helps.
+MOTION_PROSE_MAX = 2000
 # A flat cap. The rewrite's cap scaled with the input, because a polish comes
 # back about as long as it went in; a suggestion list does not — fifteen short
 # lines is the whole answer whatever was typed.
@@ -7568,682 +7055,18 @@ def _parse_motion(said: str, *, audio: bool) -> dict[str, list[str]]:
     return {k: v for k, v in out.items() if v}
 
 
-PARSE_REROLL = """
-
-REROLL ONE ELEMENT.
-You are given a document you produced and the id of one element in it. Return
-the whole document again with **only that element changed**, and change it only
-where it was yours: supply a different reading of the same slot.
-
-Everything else is immutable. Every other element comes back byte for byte,
-including its id, its text and its marks. Inside the element you are rerolling,
-any run marked derived is the person's and comes back untouched — you are
-replacing what you invented, not what they wrote.
-
-A document that touches anything else is discarded whole and the old one stands,
-so there is nothing to gain by improving a second element while you are here.
-"""
-
-
-def _merge_document(old: list[dict[str, Any]], new: list[dict[str, Any]],
-                    only: str, prose: str) -> list[dict[str, Any]]:
-    """
-    The old document with one element replaced — or the old document, unchanged.
-
-    **A transaction, and that is the whole design.** User-authored content is
-    immutable to the interpreter, enforced all-or-nothing: anything suspicious
-    discards the *entire* replacement rather than keeping the part of it that
-    looked fine. No partial salvage, ever — the good half of an ambiguous reroll
-    is a document nobody authored and nobody can reason about, and it is the
-    state that makes a bug here undebuggable.
-
-    **The budget is applied to the replacement itself, not only to the merged
-    document.** A whole-document check is a fraction, and a fraction dilutes: one
-    lavishly invented element in a document of eight passes a ceiling that same
-    element could never pass alone. Reroll would then become the way to buy
-    invention the first parse refused — press the button until the answer is
-    generous — and restraint that can be routed around by pressing a button
-    twice is not a policy. Same ceiling, scoped to `only`: no second threshold to
-    sweep and no second concept.
-
-    **An identical replacement is a commit, not a rejection.** Every check here
-    is about what *moved*, so a reroll that comes back the same passes all of
-    them and commits a document byte-identical to the one it replaced. Worth
-    stating outright, because "anything suspicious rejects the whole thing" reads
-    as an invitation to add an `unchanged?` guard — and a no-op reported as a
-    failure is a bug that would look exactly like a broken interpreter.
-    """
-    if not only:
-        return old
-    index = {m.get("id"): m for m in _walk_document(old)}
-    target = index.get(only)
-    if target is None:
-        return old
-
-    fresh = {m.get("id"): m for m in _walk_document(new)}
-    replacement = fresh.get(only)
-    if replacement is None:
-        return old
-
-    # Every *other* element, byte for byte. Compared by id across both walks so
-    # a reordering is caught too: moving an element is changing the document,
-    # and order is placement here — it decides where a subject lands in frame.
-    if [m.get("id") for m in _walk_document(old)] != [m.get("id") for m in _walk_document(new)]:
-        return old
-    for mid, was in index.items():
-        if mid != only and fresh.get(mid) != was:
-            return old
-
-    # A derived element is not a slot the interpreter may fill, whichever
-    # element it is. Rerolling one that has nothing invented in it would be the
-    # model rewriting the person's clause on request.
-    if target.get("origin") == "derived" and not target.get("invented"):
-        return old
-
-    # The replacement on its own terms, and **only the question an element can
-    # be asked**: are its derived runs genuinely the person's. Not coverage —
-    # one clause covers one clause, so asking a replacement to account for the
-    # whole prose rejects every reroll ever proposed.
-    #
-    # **And not the invention budget either, which is the correction worth
-    # recording because the argument for putting it here is a good one.** The
-    # worry is real: if the ceiling were only ever checked against the merged
-    # whole, a fraction dilutes — one lavish element in a document of eight
-    # passes a bound it could never pass alone — and reroll becomes the way to
-    # buy invention the first parse refused, by pressing the button until the
-    # answer is generous. What that argument misses is that a share is not the
-    # same measurement at element scope. An element the model supplied is 100%
-    # invented *by construction*, so the ceiling rejects it whatever it says,
-    # and the elements it rejects are precisely the ones anybody would ever
-    # reroll. There is no threshold that both admits "lit from a low window" and
-    # refuses a lavish rewrite of it, short of a second constant scoped to
-    # elements — which is the second threshold to sweep and the second concept
-    # this was written to avoid.
-    #
-    # The re-validation below is what actually holds the line, and it holds it
-    # where the line belongs. The ceiling is over the whole document, so
-    # invention accumulated across many rerolls hits it exactly as invention
-    # produced in one parse would; a reroll can never leave the document
-    # somewhere a first parse could not have put it. `smoke_parse.py` keeps the
-    # case that proves it — a replacement valid on its own terms and lavish
-    # enough to put the merged document over — as a rejection.
-    if _preserved([replacement], _oneline(prose))[0]:
-        return old
-
-    merged = _swap_element(old, only, replacement)
-    # And the merged whole re-validated, because an element that is fine alone
-    # can still put the document over a bound that is about all of them.
-    if _document_trust(merged, prose):
-        return old
-    return merged
-
-
-def _swap_element(modules: list[dict[str, Any]], only: str,
-                  replacement: dict[str, Any]) -> list[dict[str, Any]]:
-    """The document with one element substituted, at whatever depth it sits."""
-    out = []
-    for m in modules:
-        if m.get("id") == only:
-            out.append(replacement)
-            continue
-        if m.get("children"):
-            m = {**m, "children": _swap_element(m["children"], only, replacement)}
-        out.append(m)
-    return out
-
-
-def _spans_to_text(raw: Any) -> tuple[str, list[list[int]]]:
-    """
-    The model's text runs, become a clause and the offsets of what it invented.
-
-    **The conversion happens here because it is the one place both halves are in
-    hand.** A model can copy its own words and cannot count characters, so it
-    emits runs; a textarea can only be marked by index, so the page needs
-    offsets. Converting on either side alone means one of them is guessing, and
-    the guess is silent — a mark landing three characters left still looks like
-    a mark, on the wrong words.
-
-    Runs are joined exactly, so the string and the indices into it are produced
-    by the same pass and cannot drift. The only normalisation is whitespace, and
-    it is `_flat` rather than `_oneline` for the reason recorded there.
-    """
-    if not isinstance(raw, (list, tuple)):
-        return "", []
-    buf = ""
-    marks: list[list[int]] = []
-    for entry in list(raw)[:MAX_SPANS]:
-        if isinstance(entry, str):
-            entry = {"text": entry, "origin": "derived"}
-        if not isinstance(entry, dict):
-            continue
-        piece = _flat(str(entry.get("text") or ""))
-        origin = str(entry.get("origin") or "derived")
-        if origin not in ("derived", "invented"):
-            raise ValueError(f"No such origin: {origin!r}. "
-                             f"One of: derived, invented")
-        # A run owns the space in front of it or the one behind it, never both,
-        # and the clause owns neither of its ends.
-        if not buf or buf.endswith(" "):
-            piece = piece.lstrip(" ")
-        if not piece:
-            continue
-        start = len(buf)
-        buf += piece
-        if origin == "invented":
-            # Touching ranges are merged rather than both drawn. The page puts
-            # one underline under one range, and two of them abutting renders as
-            # a seam that means nothing and that the reader has to explain away.
-            if marks and marks[-1][1] == start:
-                marks[-1][1] = len(buf)
-            else:
-                marks.append([start, len(buf)])
-    text = buf.rstrip()
-    return text, [[a, min(b, len(text))] for a, b in marks if a < len(text)]
-
-
-def _validate_modules(raw: Any, _depth: int = 0) -> list[dict[str, Any]]:
-    """
-    Normalise the storyline into what the compiler takes, or say what is wrong.
-
-    **The array order is the order — there is no `order` field.** Carrying both
-    would be two sources of truth for one fact, and the failure mode is silent:
-    a client that reorders the array without renumbering, or renumbers without
-    reordering, gets a prompt whose subjects come out in the wrong places with
-    nothing to indicate why. Order is placement (see the three-axis note in
-    docs/krea2-prompt-template.md), so getting it wrong moves people around the
-    frame — worth being unable to express rather than merely unlikely.
-
-    Empty modules are dropped rather than refused. A module you have started and
-    not finished is a state the storyline can simply show by being visibly
-    empty, which is the same rule `_shot_text` applies to an unfilled pill.
-    """
-    if not raw:
-        return []
-    if _depth >= MAX_MODULE_DEPTH:
-        raise ValueError(f"Storyline nested deeper than {MAX_MODULE_DEPTH}")
-    if isinstance(raw, dict):          # {"modules": [...]} as well as a bare list
-        raw = raw.get("modules") or []
-    if not isinstance(raw, (list, tuple)):
-        raise ValueError(f"Not a storyline: {raw!r}")
-
-    out: list[dict[str, Any]] = []
-    for entry in list(raw)[:MAX_MODULES]:
-        if isinstance(entry, str):
-            entry = {"role": "text", "text": entry}
-        if not isinstance(entry, dict):
-            raise ValueError(f"Not a module: {entry!r}")
-        role = str(entry.get("role") or "text")
-        if role not in MODULE_ROLES:
-            raise ValueError(f"No such module role: {role!r}. "
-                             f"One of: {', '.join(MODULE_ROLES)}")
-        text = _oneline(str(entry.get("text") or ""))[:MODULE_TEXT_MAX]
-        origin = str(entry.get("origin") or "derived")
-        if origin not in ("derived", "invented"):
-            raise ValueError(f"No such origin: {origin!r}. "
-                             f"One of: derived, invented")
-        # Spans are authoritative when they agree with the clause and are dropped
-        # whole when they do not. A model that lost a space has told us its runs
-        # are unreliable *for this clause*, and the two failures are not close:
-        # no marks is a clause that looks entirely the person's own, which is the
-        # reading it had before this existed. Marks off by three characters
-        # underline the wrong words and assert something false about authorship,
-        # with nothing on screen to suggest it should be doubted.
-        spanned, marks = _spans_to_text(entry.get("spans"))
-        if spanned and not text:
-            text = spanned[:MODULE_TEXT_MAX]
-        elif spanned != text:
-            marks = []
-        if not text:
-            continue
-        marks = [[a, min(b, len(text))] for a, b in marks if a < len(text)]
-        # An element with no runs is still all one thing, so the whole clause
-        # takes its element's origin. That is what lets the page read `invented`
-        # alone and never have to consult `origin` as well — one field answers
-        # "which of these words are mine", at both granularities.
-        if not marks and origin == "invented":
-            marks = [[0, len(text)]]
-
-        module = {"role": role, "text": text, "origin": origin}
-        if marks:
-            module["invented"] = marks
-        if entry.get("id"):
-            module["id"] = str(entry["id"])[:64]
-        # Peer edges. Merge covers containment and nothing else — two girls
-        # beside a woman are not part of her, so nesting them would be a lie and
-        # the relation would fall back into prose, where a reorder breaks it
-        # silently. A tie survives a reorder because it is not a word.
-        ties = entry.get("ties")
-        if isinstance(ties, (list, tuple)):
-            kept = [str(t)[:64] for t in ties if t]
-            if kept:
-                module["ties"] = kept[:MAX_MODULES]
-        kids = _validate_modules(entry.get("children"), _depth + 1)
-        if kids:
-            module["children"] = kids
-        out.append(module)
-    return out
-
-
-# ── is this interpretation trustworthy, not merely well-formed ───────────────
-#
-# `_validate_modules` above answers *shape*: roles it knows, depth it allows,
-# spans that join back to their clause. It has never been able to answer the
-# question that matters more, because it has never seen the user's prose — and
-# with a schema bound, the failure that arrives is not malformed JSON. It is an
-# **evasive storyline that satisfies the schema**: fluent, well-shaped, about
-# something other than what was typed, and indistinguishable downstream from a
-# real one. That is docs/vendor-parse-model.md's own finding, and it is the
-# reason these four checks exist.
-#
-# **Two failures, two behaviours, and keeping them apart is the whole design.**
-# A *malformed* document is refused by name — `_validate_modules` raises, the
-# route answers with the reason, the same posture `_validate_shot` takes toward
-# an unknown pill. An *untrustworthy* one is dropped and the run proceeds plain:
-# no error, no toast, no banner, no partial document, byte-for-byte the app as
-# it was before any of this existed. A malformed semantic scene is never an
-# acceptable output; the absence of one always is.
-#
-# So these return a reason rather than raising, and every one of them **rejects
-# the whole document rather than repairing it.** A partially-trusted
-# interpretation is the one output the untrusted-input rule forbids: it is a
-# document nobody authored, and it is the state that makes a bug here
-# undebuggable.
-
-# **There were two thresholds here and they are gone.** An invention ceiling at
-# 64% and a coverage floor at 65%, both swept over a hand-written corpus, both
-# retired 2026-08-18 by measuring them against what the interpreter actually
-# produces. The finding is not that they were set wrong — it is that a share of
-# characters is dominated by how much the person typed rather than by what the
-# document did with it, so on a fragment a written picture scores 94% invention
-# and an evasive one 93%, the good one higher. The floor inverted on the input
-# CLAUDE.md calls normal: reading "night. no, late afternoon" correctly means
-# dropping characters, so a correct reading scored 59% and was refused.
-#
-# What replaces them is not another number. `_derived_from` answers whether the
-# document is about this prose at all, the replacement is written into the box
-# where it can be edited, and an evasive storyline is caught by
-# being **visible** — the compiled document goes into the prompt box in front of
-# the person, in grey, so a meadow returned for a recruit is a box full of grey
-# text one undo away rather than a silent substitution. See CLAUDE.md, "Prompt
-# replacement, and what it cost to get there".
-
-
-def _derived_runs(module: dict[str, Any]) -> list[str]:
-    """
-    The runs of a clause the person wrote, as the complement of `invented`.
-
-    Read off `invented` rather than `origin` for the reason the page reads it:
-    one field answers "which of these words are mine" at both granularities,
-    because `_validate_modules` has already widened a whole-clause `invented`
-    into a single run covering the text.
-    """
-    text = module["text"]
-    out: list[str] = []
-    at = 0
-    for a, b in module.get("invented") or []:
-        if a > at:
-            out.append(text[at:a])
-        at = max(at, b)
-    if at < len(text):
-        out.append(text[at:])
-    return [r for r in (s.strip() for s in out) if r]
-
-
-def _derived_from(modules: list[dict[str, Any]], prose: str) -> bool:
-    """
-    Was this document written about this prose at all?
-
-    **Two questions were one function for an afternoon, and separating them is
-    the design.** This one is lexical and deterministic: does the document
-    contain phrases the person actually typed. It answers staleness — a
-    document derived from a different sentence — and the evasive storyline,
-    which contains none of their words by construction. Neither is a judgement,
-    so neither is asked of the model.
-
-    The *other* question is what to underline, and it is not this. A mark says
-    "I added this fact", not "these characters are new": `red winter coat`
-    becoming `oxblood down jacket` is the same fact in better words and needs no
-    mark, while `and she looks visibly cold` is a state nobody mentioned and
-    does. Only the model can tell those apart, so `origin` and `spans` are its
-    answer and are left exactly as given — see `PARSE_RULES`. A version of this
-    function overwrote them with character provenance and would have underlined
-    every reworded noun in a replacement, which is the whole prompt in grey.
-
-    **Provenance is derivable, and the model gets it wrong in one direction
-    consistently.** It marks its own text `derived`: measured over the enrichment
-    runs, every one of the 4B's `invented` marks was verbatim in the prose, and
-    9 of 18 documents from the base model were refused for *"derived text not in
-    the prose"* when nothing had been rewritten at all. That refusal was reading
-    a mislabel, and `insertionOnly` has the same hole from the other side — it
-    checks the derived gaps and waves through whatever is marked invented, so a
-    document that lies in the other direction takes the person's words off the
-    page. Both close here, because a run is theirs exactly when it appears in
-    what they typed, and that is a question about two strings.
-
-    Three rules, each worth a measured number and none of them obvious:
-
-    - **Whole words on both sides.** `in` inside `diner` is not a word anybody
-      wrote. Claiming it splits the model's own clause into runs the client then
-      has to find in a sentence that never contained them.
-    - **A phrase is theirs once.** They wrote it once, so a second appearance is
-      the model repeating them. This is `insertionOnly`'s non-overlap rule said
-      at the other end, and marking the repeat derived is what makes it refuse.
-    - **The separator is not theirs.** Leaving a punctuation-only run unmarked
-      merges the two derived spans either side of it, so the client goes looking
-      for `empty diner. 3am` inside `empty diner, 3am` and fails on a comma
-      nobody typed. That alone was 7 of 21 refused writes.
-    """
-    hay = [(m.group(0).lower(), m.start()) for m in re.finditer(r"[^\W_]+", prose)]
-    spent = [False] * len(hay)
-
-    def take(seq: list[str]) -> bool:
-        """The earliest unspent run of the prose matching this word sequence."""
-        n = len(seq)
-        for i in range(len(hay) - n + 1):
-            if not any(spent[i:i + n]) and [w for w, _ in hay[i:i + n]] == seq:
-                spent[i:i + n] = [True] * n
-                return True
-        return False
-
-    for module in _walk_document(modules):
-        text = module["text"]
-        words = [(m.group(0).lower(), m.start(), m.end())
-                 for m in re.finditer(r"[^\W_]+", text)]
-        theirs: list[list[int]] = []
-        i = 0
-        while i < len(words):
-            for n in range(min(MAX_SPANS, len(words) - i), 0, -1):
-                seq = [w for w, _, _ in words[i:i + n]]
-                # A run of pure function words is not evidence of authorship;
-                # it is the join between two clauses, and claiming it is how a
-                # document ends up asking the prose for the same "a" four
-                # times. Worse, it is how a document about something else
-                # borrows a "in a" and looks derived — which is what made the
-                # staleness check below toothless until this said *run* rather
-                # than *word*.
-                if not any(len(w) > 2 and w not in _ORIGIN_JOINS for w in seq):
-                    continue
-                if take(seq):
-                    theirs.append([words[i][1], words[i + n - 1][2]])
-                    i += n
-                    break
-            else:
-                i += 1
-        if theirs:
-            return True
-    return False
-
-
-# Words that carry no authorship on their own. Deliberately not a stopword list
-# for meaning — every one of these is a join, and the only thing being decided
-# is whether finding it alone in the prose proves the person wrote *this* one.
 _ORIGIN_JOINS = frozenset(
     "the a an of in on at to and or with is are it its for from by as".split())
 
 
-def _walk_document(modules: list[dict[str, Any]]):
-    """
-    Every element, depth-first pre-order — the order the page walks them in.
-
-    It has to be *that* order rather than any order, because the preservation
-    check below advances a cursor through the prose and never moves it back.
-    `promptMarks` walks an element then its children, so a check that walked
-    breadth-first would ask for the user's words in an order they were never
-    written in and reject a document the page would happily mark up.
-    """
-    for m in modules:
-        yield m
-        yield from _walk_document(m.get("children") or [])
-
-
-def _preserved(modules: list[dict[str, Any]],
-               prose: str) -> tuple[str | None, list[tuple[int, int]]]:
-    """
-    Are the words this claims as the user's actually theirs? And which are spent?
-
-    Its own function because two callers ask it at two scopes and only one of
-    them may ask the rest. A whole document is also checked for coverage — did
-    any of the prose go missing — but a *single element* can never pass that: one
-    clause of a sentence covers one clause of a sentence, and judging a reroll
-    by it would reject every replacement ever proposed. Preservation is the part
-    that means the same thing at both scopes, so it is the part that is shared.
-
-    Returns the reason it failed, and the prose spans the runs consumed.
-    """
-    hay = prose.lower()
-    if len(hay) != len(prose):
-        hay = prose
-    covered: list[tuple[int, int]] = []
-
-    def claim(run: str) -> bool:
-        """
-        Find this run in the prose at a stretch nothing else has claimed.
-
-        **Not a forward-only cursor, and that is a correction rather than a
-        loosening.** `documentMarks` walks forward because it is placing marks
-        and two elements must not underline the same words — a rendering
-        concern. Authorship is not ordered: `PARSE_RULES` *instructs* a reorder
-        ("light, grade and camera go last"), so "Lit by a small window, k3nan
-        sits reading" legitimately comes back with the light last, and a
-        forward-only check rejects a document in which every word is the user's
-        own. That is the feature refusing exactly the documents it exists to
-        produce.
-
-        Consuming the span is what the cursor was really buying, and it is kept:
-        a document cannot satisfy this by quoting one phrase of the prose over
-        and over, because each match spends the characters it matched.
-        """
-        start = 0
-        while True:
-            i = hay.find(run, start)
-            if i < 0:
-                return False
-            end = i + len(run)
-            if not any(a < end and i < b for a, b in covered):
-                covered.append((i, end))
-                return True
-            start = i + 1
-
-    for module in _walk_document(modules):
-        # `role` is the one the rules already forbid and the schema does not yet
-        # offer, so this fires today only on a document a client sent us or a
-        # reroll merged. Checkable rather than hoped for is the point; it costs
-        # two lines and becomes live the moment `role` enters `_ELEMENT`.
-        if module.get("role") == "subject" and module.get("origin") == "invented":
-            return "invented a subject", covered
-        # The highest-value check here, and the one aimed squarely at the
-        # evasive refusal. A storyline the model wrote about something other
-        # than what was typed has derived text the user never typed, and nothing
-        # else downstream can tell it from a real one.
-        for run in _derived_runs(module):
-            if not claim(run.lower()):
-                return f"derived text not in the prose: {run[:60]!r}", covered
-    return None, covered
-
-
-def _document_trust(modules: list[dict[str, Any]], prose: str) -> str | None:
-    """
-    Why this interpretation should be dropped, or None if it may be trusted.
-
-    Never raises and never repairs: the caller degrades to the plain path with
-    the reason in hand, because a degrade nobody can see in the logs is a
-    degrade that gets diagnosed as a bad model.
-
-    **One check now, and it is structural.** There were four: preservation, a
-    coverage floor, an invention ceiling and the subject rule. The two
-    arithmetic ones are gone — see the note above the deleted constants, and
-    CLAUDE.md for the measurements — and what is left asks the only question a
-    string comparison can honestly answer: *does this document claim as the
-    person's any words they did not write?* — asked as `_derived_from`, which
-    is arithmetic over two strings rather than anything the model was asked.
-
-    **Contradiction is still enforced by nothing, and that is now the whole of
-    what is unprotected.** "empty diner, 3am" came back with even, pale light —
-    rendering a daylit diner — and no check here sees it, because every word
-    was legitimately somebody's. The rule that forbids it (*may not contradict,
-    replace or reinterpret an explicit fact*) is in `PARSE_RULES` and is
-    honoured by the model or it is not. What stands in for enforcement is that
-    the document is **visible**: it is written into the prompt box in grey, so a
-    contradiction is a sentence the person can read and delete, not a silent
-    substitution. That is a weaker guarantee than a check and a stronger one
-    than the checks that were here, which refused good documents and — measured
-    on the ten-scene corpus — trusted the two that stapled the sentence back
-    onto itself.
-    """
-    if not modules:
-        return None
-    prose = _oneline(prose)
-    if not prose:
-        return None
-
-    # The subject rule, and only that, out of `_preserved`'s two checks. Its
-    # other one — a derived run the prose never had — was the evasion catcher
-    # and has been replaced by `_derived_from` below, for a reason the new
-    # marking rule forces: a mark is now a claim about a *fact* the model
-    # added, so a replacement that rewords "a red winter coat" as "an oxblood
-    # down jacket" legitimately carries no mark over words the prose never had.
-    # Reading that as a false claim of authorship drops the document for being
-    # well written. A mislabel is a wrong underline, which is one edit away;
-    # it is not a reason to throw the whole interpretation out.
-    for module in _walk_document(modules):
-        if module.get("role") == "subject" and module.get("origin") == "invented":
-            return "invented a subject"
-
-    # **Was this document written about this prose at all?** A zero, not a
-    # threshold — there is nothing here to tune and that is the point. A
-    # document about a different scene contains none of the person's phrases,
-    # because none of them are in it; a replacement, however far it rewrote the
-    # sentence, always keeps some. Measured over 75 real documents the lowest
-    # retention was 31% and zero never occurred, while an evasive storyline is
-    # zero by construction. That is the one separation a string comparison can
-    # honestly claim, and it is what the deleted coverage floor was reaching for
-    # when it asked *how much* instead of *any*.
-    #
-    # Deliberately not read off the model's marks. Those say which *facts* it
-    # added and are a judgement; this says which *characters* are the person's
-    # and is arithmetic, and reading one for the other is how a correctly-marked
-    # replacement gets dropped for being well written.
-    if _derived_from(modules, prose):
-        return None
-    return "not derived from this prose: it shares none of its words"
-
-
-def _trusted_modules(raw: Any, prose: str) -> tuple[list[dict[str, Any]], str | None]:
-    """
-    Shape, then trust — the one call every route that takes a document makes.
-
-    One function rather than a `prose=` argument on `_validate_modules`, because
-    the two answers are not the same kind of answer and the caller has to act on
-    them differently: a malformed document raises out of here and becomes a
-    named form error, while an untrustworthy one comes back as no document and a
-    reason, and the run proceeds plain. Folding the second into the first would
-    return `[]` with nothing to log, and a degrade nobody can see in the logs is
-    a degrade that gets diagnosed as a bad model.
-    """
-    modules = _validate_modules(raw)
-    if not modules:
-        return [], None
-    reason = _document_trust(modules, prose)
-    return ([], reason) if reason else (modules, None)
-
-
-def _module_texts(modules: list[dict[str, Any]]) -> list[str]:
-    """
-    One clause per top-level module, in the order they were given.
-
-    **A module's children are folded into its own clause, comma-joined.** That is
-    the whole of "list within a thing, relate between things": an anchor and
-    everything hanging off it is one thing, so its dependents are an inventory
-    and an inventory is correct there — which is why the wardrobe list works and
-    reads as description rather than as tags. Between anchors the clauses stay
-    separate and `_shot_join` relates them, because peers with nothing above them
-    are exactly a set of entities, and a set of entities is what "AI slop" names.
-
-    So merging two modules is not a display convention. It changes the emitted
-    grammar from two clauses to one, which is the difference between a light
-    that is its own character and a light that falls on somebody.
-    """
-    return [_module_clause(m) for m in modules]
-
-
-# A child that reads as a continuation of its anchor — the shape `PARSE_RULES`
-# asks for, and the one a bare space joins correctly. Anything else is a clause
-# in its own right and needs the comma its siblings already get.
+# A child that reads as a continuation of its anchor is the one a bare space
+# joins correctly. Anything else is a clause in its own right and needs the
+# comma its siblings already get.
 _CONTINUES = re.compile(
     r"^(in|on|at|with|without|under|over|behind|beside|against|through|across|"
     r"from|to|by|into|onto|around|beneath|between|holding|wearing|carrying|"
     r"lit|facing|turned|set|seen|shot|leaning|standing|sitting|resting|"
     r"reaching|wrapped|covered|framed|and)\b", re.I)
-
-
-def _module_clause(module: dict[str, Any]) -> str:
-    """
-    An anchor, then its dependents as one comma list, as one clause.
-
-    **The first child is joined with a space only when it continues the anchor.**
-    That was unconditional, and it was right for the documents the restraint
-    rules produced: a child was "in a purple beret" or "lit hard across her
-    face", and `PARSE_RULES` asks for exactly that. Once the rules ask for a
-    written picture the children are clauses of their own, and a bare space
-    then emits "empty diner the counter is slightly worn" and "nobody at the
-    desk the front desk counter was clean" — measured at **76% of
-    anchor-to-first-child joins** across the enrichment runs, in 9 documents of
-    36. Broken prose, reaching the encoder, invisible in the document.
-
-    A comma rather than a rewrite, because the compiler chooses separators and
-    never words: this is the same licence `_shot_join` already takes between
-    top-level clauses, applied one level down where the same thing became true.
-    """
-    kids = module.get("children") or []
-    if not kids:
-        return module["text"]
-    body = ", ".join(_module_clause(k) for k in kids)
-    anchor = module["text"].rstrip(".")
-    joint = " " if _CONTINUES.match(body) else ", "
-    return f"{anchor}{joint}{body}"
-
-
-def _prominence(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    Each module's share of the prompt, which is the share of the *picture*.
-
-    **Extent is what drives prominence, not position** — the finding that
-    corrected this whole design. Order places a subject left to right; the
-    number of words spent on it is what decides how much the picture is about
-    it. So this counts words, and the number it returns belongs to the module
-    rather than to the slot: rearranging carries a share with it, and only
-    editing changes one.
-
-    Words rather than tokens on purpose. We need *shares*, and English prose
-    runs near a constant tokens-per-word, so the two normalise to almost the
-    same number while a word count costs no tokenizer and no model load on a CPU
-    container answering this on every keystroke.
-
-    It answers *where the weight is*, never *how much*. The honest measurement is
-    one encode of the prompt against one encode with a module removed, which is
-    N+1 forward passes through Qwen3-VL and belongs on the GPU container; this
-    is the cheap shape that is right about the ordering of the shares and makes
-    no claim past it.
-    """
-    counts = [_module_words(m) for m in modules]
-    total = sum(counts) or 1
-    return [{"id": m.get("id") or str(i), "role": m["role"],
-             "share": round(c / total, 4)}
-            for i, (m, c) in enumerate(zip(modules, counts))]
-
-
-def _module_words(module: dict[str, Any]) -> int:
-    """
-    A module's extent, summed over everything hanging off it.
-
-    Merging is what makes this the right sum rather than an arbitrary one. A
-    light folded into a subject stops being its own element, so its words become
-    the subject's words and the two warm spots become one — which is the heat
-    travelling with the element, falling out of the arithmetic rather than being
-    animated on top of it.
-    """
-    return (len(module["text"].split())
-            + sum(_module_words(k) for k in module.get("children") or []))
 
 
 def _validate_shot(raw: Any) -> list[dict[str, Any]]:
@@ -10039,7 +8862,6 @@ def _h3_cap(text: str) -> str:
 def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
                        task: str, seconds: float,
                        roles: list[str] | None = None,
-                       modules: list[dict[str, Any]] | None = None,
                        scene: dict[str, Any] | None = None) -> str:
     """
     The document H3 actually reads, assembled from a sentence and some pills.
@@ -10058,14 +8880,14 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
                 f"holds {MAX_H3_PROMPT}. Shorten a shot, or use fewer.")
         return doc
     roles = [r for r in (roles or [])]
-    if not pills and not any(roles) and not modules:
+    if not pills and not any(roles):
         return typed
-    body_in = _module_texts(modules) if modules else typed
+    body_in = typed
     # The summary is the one line that says what happens, and with a storyline
     # that line already exists: the declaration is the first module by
     # construction. Falling back through the typed text to the description's
     # first sentence keeps the three input shapes answering the same field.
-    lead = (modules[0]["text"] if modules else typed)
+    lead = typed
     buckets = _shot_phrases(pills, side="video")
 
     lines: list[str] = []
@@ -10128,8 +8950,7 @@ def _compile_h3_prompt(*, typed: str, pills: list[dict[str, Any]],
     return "\n".join(lines)
 
 
-def _compile_image_prompt(typed: str, pills: list[dict[str, Any]],
-                          modules: list[dict[str, Any]] | None = None) -> str:
+def _compile_image_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
     """
     The same pills as prose, because Krea 2 has no document to fill in.
 
@@ -10168,10 +8989,9 @@ def _compile_image_prompt(typed: str, pills: list[dict[str, Any]],
     could never produce, while a demoted "A medium close-up." is a bare
     fragment. "in a medium close-up" reads alone and reads joined to an angle.
     """
-    body = _module_texts(modules) if modules else typed
     if not pills:
-        return _shot_join([_close(_oneline(t)) for t in body]) if modules else typed
-    return _shot_body(body, _shot_phrases(pills, side="image"))
+        return typed
+    return _shot_body(typed, _shot_phrases(pills, side="image"))
 
 
 def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
@@ -10196,35 +9016,16 @@ def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
     if not typed:
         return {}
     original = str(params.get("prompt_original") or "")
-    # A one-element document whose compile equals the typed text still writes
-    # nothing — correctly, because the run is then reproducible from the prompt
-    # alone and a `modules` list that adds no information is one more field on a
-    # file that has to still make sense in a year.
-    # `modules` is deliberately not in this list. A document whose compile
-    # equals the typed text adds nothing the prompt does not already say, which
-    # is the case this guard was written for and is still true. What makes a
-    # replacement worth recording is not that a document exists — it is that
-    # `prompt_original` does.
     moved = typed != params.get("prompt")
     if not moved and not (params.get("shot") or original):
         return {}
     out: dict[str, Any] = {"prompt_typed": typed, "shot": params.get("shot") or []}
-    # **What they wrote before the interpreter replaced it.** Under enhancement
-    # `prompt_typed` was the record and the compiled prompt was the receipt;
-    # under replacement the box itself holds a prompt a model wrote, so
-    # `prompt_typed` is a receipt too and the record has moved one layer up.
-    # Recorded only when there is one — a run nobody asked for help on writes
-    # nothing here, which keeps the rule this whole function exists for.
+    # **Kept although nothing writes it any more.** A model replacing somebody's
+    # sentence is what filled this, and there is no such model on the path now —
+    # but a sidecar is read years after it is written, and dropping the field
+    # would make every run that has one unreadable by the code that reads them.
     if original and original != typed:
         out["prompt_original"] = original
-    # A receipt beside the compiled string, never the record. `prompt_typed`
-    # stays the record: what is worth keeping is the intent, and a document is
-    # one interpretation of it that a different interpreter would draw
-    # differently. It is here so a reuse restores what ran rather than
-    # re-reading the sentence and getting a second opinion.
-    modules = params.get("modules") or []
-    if modules:
-        out["modules"] = modules
     roles = params.get("ref_roles") or []
     if any(roles):
         # The whole positional list, blanks included: a role's index is the
@@ -10234,8 +9035,7 @@ def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]],
-                        modules: list[dict[str, Any]] | None = None) -> str:
+def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
     """
     The same pills as prose again, for the family that reads no document.
 
@@ -10247,10 +9047,9 @@ def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]],
     made. Dropped by `needs`, not by field: dialogue is the case that breaks the
     simpler rule, landing in the visual description and still being audio.
     """
-    body = _module_texts(modules) if modules else typed
     if not pills:
-        return _shot_join([_close(_oneline(t)) for t in body]) if modules else typed
-    return _shot_body(body, _shot_phrases(pills, side="video", audio=False))
+        return typed
+    return _shot_body(typed, _shot_phrases(pills, side="video", audio=False))
 
 
 def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
@@ -11090,7 +9889,7 @@ def web():
         Every failure answers with empty groups and a reason. The panel says
         so; the prompt box is never touched by a model that fell over.
         """
-        prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
+        prose = _oneline(str(payload.get("prose") or ""))[:MOTION_PROSE_MAX]
         model = str(payload.get("model") or "")
         if model not in VIDEO_MODELS:
             return {"ok": False, "groups": {},
@@ -11130,43 +9929,6 @@ def web():
             print(f"[motion] declined: {raw[:80]!r}", flush=True)
             raw = ""
         return {"ok": True, "groups": _parse_motion(raw, audio=audio)}
-
-    @api.post("/api/parse")
-    def parse_prose(payload: dict) -> dict[str, Any]:
-        """
-        Prose in, structure out. **Once, at the boundary — never in the loop.**
-
-        Every gesture after this one is local: dragging, merging, breaking a
-        tie, editing a word. The model does the hard part a single time and the
-        surface stays instant, which is what makes an automatic parse
-        affordable at all.
-
-        A failure returns the reason and no storyline rather than a 500. The
-        page keeps whatever the user typed either way — the structure is
-        additive, so losing it costs a view and never any work.
-        """
-        prose = _oneline(str(payload.get("prose") or ""))[:MODULE_TEXT_MAX]
-        if not prose:
-            return {"ok": True, "elements": []}
-        only = str(payload.get("only") or "")
-        document = payload.get("document")
-        try:
-            mods = (_reroll_storyline(prose, document, only)
-                    if only and document else _parse_storyline(prose))
-        except Exception as exc:
-            return {"ok": False, "error": str(exc), "elements": []}
-        # The prose the elements add up to, joined here rather than on the page.
-        #
-        # The page has to put this text in the box — marks cannot be placed
-        # otherwise, because what came back is not what was typed the moment the
-        # model filled anything in. Joining it client-side would be a second
-        # implementation of the one thing this compiler is the authority on, and
-        # the copy on screen would be the wrong one. Element texts survive the
-        # join verbatim — the compiler only closes a sentence and chooses the
-        # separator in front of it — so a mark found by searching this string is
-        # found where it belongs.
-        return {"ok": True, "elements": mods, "prominence": _prominence(mods),
-                "text": _compile_image_prompt("", [], mods)}
 
     @api.post("/api/download")
     def download(payload: dict) -> dict[str, Any]:
@@ -12183,7 +10945,6 @@ def web():
         typed = str(payload.get("prompt") or "").strip()
         try:
             shot = _validate_shot(payload.get("shot"))
-            modules = _validate_modules(payload.get("modules"))
             n_refs = max(0, min(MAX_H3_REFS, int(payload.get("references") or 0)))
             n_vids = max(0, min(MAX_H3_REF_VIDEOS, int(payload.get("ref_videos") or 0)))
             n_auds = max(0, min(MAX_H3_REF_AUDIOS, int(payload.get("ref_audios") or 0)))
@@ -12191,16 +10952,10 @@ def web():
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
 
-        # The shares ride along with every compile because the storyline needs
-        # them on the same round trip it already makes on each keystroke — a
-        # second route polled at the same rate would double the traffic to say
-        # something about the string this one just built.
-        share = {"prominence": _prominence(modules)} if modules else {}
-
         if str(payload.get("kind") or "video") == "image":
-            return {"prompt": _compile_image_prompt(typed, shot, modules), **share}
+            return {"prompt": _compile_image_prompt(typed, shot)}
         if str(payload.get("model") or "h3") != "h3":
-            return {"prompt": _compile_wan_prompt(typed, shot, modules), **share}
+            return {"prompt": _compile_wan_prompt(typed, shot)}
 
         d = VIDEO_MODELS["h3"]["defaults"]
         try:
@@ -12218,11 +10973,10 @@ def web():
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
         return {"prompt": _compile_h3_prompt(
-            typed=typed, pills=shot, seconds=seconds, roles=roles,
-            modules=modules, scene=scene,
+            typed=typed, pills=shot, seconds=seconds, roles=roles, scene=scene,
             task=_h3_task(payload.get("first_frame"), payload.get("last_frame"),
                           n_refs, n_vids, n_auds),
-        ), **share}
+        )}
 
     @api.post("/api/generate")
     def generate(payload: dict) -> dict[str, Any]:
@@ -12234,7 +10988,7 @@ def web():
         # reach — but a client that sends only a document is not malformed, and
         # refusing it here would be the route disagreeing with the compiler
         # about what counts as a prompt.
-        if not prompt and not regions and not payload.get("modules"):
+        if not prompt and not regions:
             return {"error": "A prompt is required."}
 
         def num(k, d, cast):
@@ -12276,28 +11030,8 @@ def web():
                 ]
             regions = _validate_regions(regions)
             shot = _validate_shot(payload.get("shot"))
-            # Beside the pill rail, and rejected the same way: an unknown role
-            # or a document nested past the bound is a named form error on a CPU
-            # container, not something a cold H100 discovers after 42 GB of
-            # weights are resident.
-            modules = _validate_modules(payload.get("modules"))
         except ValueError as exc:
             return {"error": str(exc)}
-
-        # The other half of the same question, and it has the other answer.
-        # Malformed is refused by name above; **stale is dropped in silence** —
-        # the document no longer describes what is in the box, so it is not the
-        # user's reading of this prompt and the run proceeds plain. The page
-        # already keys the document to the prose, but the route receives the two
-        # independently and a client is one more untrusted caller.
-        #
-        # Printed rather than swallowed: a degrade nobody can see in the logs is
-        # a degrade that gets diagnosed as a bad model.
-        if modules:
-            modules, stale = _trusted_modules(modules, prompt)
-            if stale:
-                print(f"[parse] document dropped for {prompt[:60]!r}: {stale}",
-                      flush=True)
 
         # The plates are inputs to the regional node, so they mean nothing
         # without boxes. Caught here rather than in the job because the answer
@@ -12315,11 +11049,10 @@ def web():
             # same pills append their clauses to the sentence in the same order.
             # The rail is shared with the video side and the vocabulary decides
             # what crosses — camera, action, foley and score never reach here.
-            "prompt": _compile_image_prompt(prompt, shot, modules),
+            "prompt": _compile_image_prompt(prompt, shot),
             "prompt_typed": prompt,
             "prompt_original": str(payload.get("prompt_original") or ""),
             "shot": shot,
-            "modules": modules,
             "negative_prompt": str(payload.get("negative_prompt") or ""),
             "model": str(payload.get("model") or "turbo"),
             "loras": stack,
@@ -12399,21 +11132,8 @@ def web():
         try:
             shot = _validate_shot(payload.get("shot"))
             roles = _validate_ref_roles(payload.get("ref_roles"), len(refs))
-            modules = _validate_modules(payload.get("modules"))
         except ValueError as exc:
             return {"error": str(exc)}
-
-        # See /api/generate: malformed is refused by name, stale is dropped in
-        # silence and the clip is made from the prose exactly as it was typed.
-        # Asked as derivation rather than as identity — see the note at
-        # `/api/generate`. Under replacement the compiled prompt is meant to
-        # differ from what was typed, so the old equality test dropped every
-        # document there was.
-        if modules:
-            modules, stale = _trusted_modules(modules, prompt)
-            if stale:
-                print(f"[parse] document dropped for {prompt[:60]!r}: {stale}",
-                      flush=True)
 
         _reload_volume()
         try:
@@ -12483,11 +11203,10 @@ def web():
         if model == "h3":
             compiled = _compile_h3_prompt(
                 typed=prompt, pills=shot, seconds=seconds, roles=roles,
-                modules=modules, scene=scene,
-                task=_h3_task(first, last, refs, vids, auds),
+                scene=scene, task=_h3_task(first, last, refs, vids, auds),
             )
         else:
-            compiled = _compile_wan_prompt(prompt, shot, modules)
+            compiled = _compile_wan_prompt(prompt, shot)
 
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
@@ -12501,7 +11220,6 @@ def web():
             "prompt_typed": prompt,
             "prompt_original": str(payload.get("prompt_original") or ""),
             "shot": shot,
-            "modules": modules,
             "scene": scene,
             "ref_roles": roles,
             # Dropped rather than passed through for a model that cannot read
