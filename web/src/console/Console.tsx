@@ -9,6 +9,7 @@ import { Palette } from '../shot/Palette'
 import { Peek } from '../shot/Peek'
 import { ShotDoor } from '../shot/ShotDoor'
 import { Rail } from '../shot/Rail'
+import { CastCard } from '../scene/CastCard'
 import { SourceRow } from '../video/SourceRow'
 import { supports, useStore } from '../store'
 import { Field } from './Field'
@@ -101,6 +102,7 @@ export function Console({
   }, [s])
 
   const image = s.kind === 'image'
+  const castOpen = s.scene.cast.find((c) => c.id === s.railOpen) ?? null
   const note = loraNote(s)
   const busy = image ? run.running : vidRun.running
   const err = image ? run.error : vidRun.error
@@ -134,7 +136,8 @@ export function Console({
           under the sentence instead of being the sentence — see `ui/ErrorNote`. */}
       <ErrorNote err={err} />
 
-      <Field consoleEl={box} onSubmit={() => { if (ready && !busy) onGenerate() }}>
+      <Field consoleEl={box} onPalette={pal.toggle}
+             onSubmit={() => { if (ready && !busy) onGenerate() }}>
         <div className={image ? '' : 'hide'} id="c-image">
           <div className="opts">
             <SizeButton />
@@ -158,17 +161,15 @@ export function Console({
         <div className={image ? 'hide' : ''} id="c-video">
           <div className="opts">
             <VideoSizeButton />
-            {/* Wan only, and the same picker the image side uses. The one thing the
-                A14B pair forces — which expert a LoRA patches — rides in the token as a
-                third field, read off the filename when the matched pair names it. */}
-            {supports(s).loras && <LoraButton id="v-add-lora" />}
-            {/* The same door as the image side. A motion panel stood here for a
-                while — a VLM shown the first frame, answering with prose about
-                what could move — and the text it wrote was fine; it was simply
-                not the shape H3 reads, which is a document with named fields.
-                Its cost was not the output either: it ran on the generator's one
-                input slot and could hold a render behind it. */}
-            <ShotDoor id="v-shot" kind="video" on={!!s.shot.length} onClick={pal.toggle} />
+            {/* **`+ LoRA` and `Shot` are gone from this strip**, and it is the same
+                correction the regions button got: sitting here beside the size and
+                the checkpoint they read as settings, and they are composition. They
+                ride the field's trailing edge now — see `Doors` — where they cost no
+                height at all, because a row that exists to hold one button spends
+                34px of a 30% budget forever.
+
+                The image side keeps both, because it still has a prompt box under
+                them and `#lora-box` is a disclosure beneath one. */}
             <span className="actions">
               <span className="muted" id="v-model-line">{vid.note}</span>
               <VideoSampling />
@@ -191,7 +192,14 @@ export function Console({
       {!image && <SourceRow />}
 
       <Rail />
-      <LoraBox />
+      {/* Image only. On the video side a LoRA is a chip on the one rail beside the
+          cast and the pills — the disclosure is a fold under a *prompt box*, and
+          that side no longer has one. */}
+      {image && <LoraBox />}
+      {/* Rooted on its chip and floating over the canvas, so the depth costs the
+          console nothing. A child of `.console` rather than of the rail, which is a
+          masked scroller and would clip it. */}
+      {!image && castOpen && <CastCard member={castOpen} />}
       <Peek />
 
       {/* Only ever says what is wrong. A line confirming the LoRAs you can already read

@@ -1,0 +1,113 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+
+import { useStore } from '../store'
+import { Slot } from './Slot'
+import { SLOTS, handleOf, type CastMember } from './model'
+
+/**
+ * What a cast member is made of, disclosed only for the chip you touched.
+ *
+ * **It costs the console nothing.** A card rooted on its chip and floating over
+ * the canvas, the way a region's card is rooted on its box — which is what makes
+ * the depth affordable at all: five slots per member and eight members is a panel,
+ * and a panel is the month-four failure Phase 6 names.
+ *
+ * **Not a `Popover`, and a portal anyway.** Popover closes on scroll, which is
+ * right for a menu and wrong for a box you type a name into — the objection
+ * `LoraBox` records. But the console is `overflow:auto`, so a child of it floating
+ * above its own top edge is clipped by the very rule that stops a full console
+ * pushing the canvas out of frame. So: portalled and fixed, placed off the chip's
+ * own rect, and closing on nothing but a press outside it or Escape.
+ */
+export function CastCard({ member }: { member: CastMember }) {
+  const s = useStore()
+  const box = useRef<HTMLDivElement>(null)
+  const name = useRef<HTMLInputElement>(null)
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null)
+
+  // **It finds its own chip**, rather than being handed a coordinate by the rail.
+  // The rail is a masked scroller, so a card rendered inside it would be clipped
+  // by the very overflow that keeps nine chips one row tall — it has to be a child
+  // of the console, and then the only thing that knows where the chip is is the
+  // DOM. Re-measured on every render for the reason `Popover.place` is: the rail
+  // reflows as chips are added, and a card that keeps its old left is one pointing
+  // at whatever moved into that spot.
+  useLayoutEffect(() => {
+    const el = box.current
+    const chip = document.querySelector<HTMLElement>(`.chip[data-cast="${member.id}"]`)
+    if (!el || !chip) return
+    const r = chip.getBoundingClientRect()
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8))
+    // Above the chip, always. Below it is the console and then the bottom of the
+    // window; there is never room, and a card that flipped down would be a card
+    // half off the screen.
+    const top = Math.max(8, r.top - h - 8)
+    // Only when it moved: a fresh number every render is a state change every
+    // render, which is the "Maximum update depth exceeded" that unmounts the whole
+    // app rather than just this card.
+    setAt((cur) => (cur && cur.left === left && cur.top === top ? cur : { left, top }))
+  })
+
+  // Capture-phase mousedown, which is the pattern in this app that holds: focusout
+  // covers only the case where focus lands somewhere that takes it, and a click on
+  // the canvas or a dead area of the bar moves focus nowhere at all.
+  useEffect(() => {
+    const down = (e: MouseEvent) => {
+      const t = e.target as Element | null
+      if (!box.current?.contains(t) && !t?.closest?.('.chip.cast')) s.setRailOpen(null)
+    }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') s.setRailOpen(null) }
+    document.addEventListener('mousedown', down, true)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', down, true)
+      document.removeEventListener('keydown', key)
+    }
+  }, [s])
+
+  // A member made by typing `@` already has its handle; one made from the rail's
+  // own door does not, and the name is the only thing it cannot do without.
+  useEffect(() => {
+    if (!member.name) name.current?.focus()
+  }, [member.name])
+
+  const slots = SLOTS[member.kind]
+  return createPortal(
+    <div className="tcard" ref={box}
+         style={{ left: at?.left ?? 0, top: at?.top ?? 0,
+                  visibility: at ? 'visible' : 'hidden' }}>
+      <div className="tcard-h">
+        <span className="at">@</span>
+        <input ref={name} className="tname" value={member.name} spellCheck={false}
+               placeholder={member.kind}
+               // Renaming rewrites the handle across every row as a visible
+               // find-and-replace — see `rename`. Reduced to handle characters on
+               // the way in rather than on the way out, so what you see in the box
+               // is what the rows will say.
+               onChange={(e) => { s.patchCast(member.id, { name: handleOf(e.target.value) }) }} />
+        <button type="button" className="x" title={`Remove @${member.name || member.kind}`}
+                onClick={() => { s.dropCast(member.id) }}>×</button>
+      </div>
+      <div className="tslots">
+        {slots.map((sl) => (
+          <Slot key={sl.key} member={member} slot={sl.key}
+                label={sl.label} takes={sl.takes} />
+        ))}
+      </div>
+      {/* The one line of prose about somebody, and it is what a member with no
+          picture compiles to: `_h3_label` falls back to the note, then to the
+          handle, so without this an unphotographed cast member reaches the encoder
+          as the literal word "ava". With a picture it trails the subject
+          definition — `<Subject 1> is the person in <Picture 1>, mid-thirties`. */}
+      <input className="tnote" value={member.note} spellCheck={false}
+             placeholder={member.kind === 'character'
+               ? 'who they are — a phrase, not a paragraph'
+               : 'what it is'}
+             onChange={(e) => { s.patchCast(member.id, { note: e.target.value }) }} />
+    </div>,
+    document.body,
+  )
+}

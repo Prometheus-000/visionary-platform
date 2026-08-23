@@ -1,10 +1,11 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 import { caretProps } from '../lora/caret'
 import { moveClause } from '../console/moveClause'
 import { growRows } from '../console/fieldMax'
 import { resolveVid } from '../console/resolve'
 import { supports, useStore } from '../store'
+import { MentionMenu, complete, mentionAt, type Mention } from './Mentions'
 import { handleOf, shares, times, type Shot } from './model'
 
 /**
@@ -87,11 +88,41 @@ function Row({ shot, n, at, many, onSubmit }: {
   const s = useStore()
   const area = useRef<HTMLTextAreaElement>(null)
   const mirror = useRef<HTMLDivElement>(null)
+  const caretEl = useRef<HTMLSpanElement>(null)
+  // Where the caret is, and whether this row has it. State rather than a ref
+  // because the mention menu renders from it — this is the one place in the app
+  // where a caret position is not purely a handle on a DOM node.
+  const [caret, setCaret] = useState(-1)
+  // The mention already settled, by index of its `@`. Picking leaves the caret
+  // inside the handle it just wrote, so without this the menu reopens onto the
+  // name you have chosen and sits there — a picker that will not take yes for an
+  // answer. Cleared on the next keystroke, because editing a handle is exactly
+  // when the list should come back.
+  const settled = useRef<number | null>(null)
   // The first row keeps `#prompt`. Everything that reaches for the prompt by id
   // — the stray-key focus in App.tsx, the checks, the Enter binding — is asking
   // for "the box you write in", and that is still this one.
   const id = n === 0 ? 'prompt' : `shot-${shot.id}`
   const write = (line: string) => { s.patchShot(shot.id, { line }) }
+
+  const found = caret < 0 ? null : mentionAt(shot.line, caret)
+  const mention: Mention | null = found && settled.current === found.at ? null : found
+
+  /** Settle the mention on a handle and put the caret after it. */
+  const pick = (handle: string) => {
+    if (!mention) return
+    const w = complete(shot.line, mention, handle)
+    write(w.value)
+    settled.current = mention.at
+    setCaret(w.caret)
+    // After the commit, for the reason `applyWrite` waits: the field is controlled
+    // and a range set now would range over text React has not painted yet.
+    requestAnimationFrame(() => {
+      const el = area.current
+      el?.focus()
+      el?.setSelectionRange(w.caret, w.caret)
+    })
+  }
 
   const hint = n > 0
     ? 'What happens next…'
@@ -131,6 +162,25 @@ function Row({ shot, n, at, many, onSubmit }: {
     }
   }
 
+  // The caret sink and this row want the same five events, and both have to run.
+  // Spreading `caretProps` and then declaring one of its names above it silently
+  // drops that handler — a later prop wins — which would take ⌥←/→ with it. So the
+  // sink is built once and each override calls through to it.
+  const sink = caretProps('prompt', write)
+  /** Five events, for the reason `caretProps` needs five: focus alone misses a
+   *  click that only moves the caret, and keyup alone misses a mouse selection. */
+  const track = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    setCaret(e.currentTarget.selectionStart ?? -1)
+  }
+  const also = (
+    key: 'onKeyUp' | 'onClick' | 'onSelect' | 'onFocus',
+    extra?: () => void,
+  ) => (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    sink[key](e)
+    extra?.()
+    track(e)
+  }
+
   return (
     <div className={`trow${shot.id === s.shotSel ? ' sel' : ''}`}>
       {many && (
@@ -140,7 +190,11 @@ function Row({ shot, n, at, many, onSubmit }: {
       )}
       <div className="tbox">
         <div className="mk-mirror" ref={mirror} aria-hidden="true">
-          <Painted line={shot.line} />
+          {/* The mirror is a glyph-for-glyph copy of the textarea, so a zero-width
+              span inside it sits exactly where the caret sits — which is the only
+              way anything on this page can know that. Emitted only while a mention
+              is open, so the copy behind the box is otherwise untouched. */}
+          <Painted line={shot.line} mark={mention?.at ?? null} markRef={caretEl} />
           {/* Load-bearing empty span — a mirror that ends exactly at its last
               character loses the newline just typed, and the copy behind the box
               stops matching the box by one line. */}
@@ -150,17 +204,21 @@ function Row({ shot, n, at, many, onSubmit }: {
                   onScroll={(e) => {
                     if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop
                   }}
-                  onChange={(e) => { write(e.target.value) }}
+                  onChange={(e) => { settled.current = null; write(e.target.value); track(e) }}
                   onKeyDown={keys}
-                  // Spread first, then extend the one event this row also needs.
-                  // `caretProps` carries its own `onFocus` and a later prop wins,
-                  // so declaring one above it would silently drop the caret sink
-                  // and take ⌥←/→ with it.
-                  {...caretProps('prompt', write)}
-                  onFocus={(e) => {
-                    caretProps('prompt', write).onFocus(e)
-                    s.selectShot(shot.id)
-                  }} />
+                  onKeyUp={also('onKeyUp')}
+                  onClick={also('onClick')}
+                  onSelect={also('onSelect')}
+                  onFocus={also('onFocus', () => { s.selectShot(shot.id) })}
+                  // Closed on blur rather than left standing: the menu is about
+                  // where the caret is, and a caret that has left the box is not
+                  // anywhere. `-1` rather than `null` so `mentionAt` is never asked
+                  // about a position that does not exist.
+                  onBlur={() => { setCaret(-1) }} />
+        {mention && (
+          <MentionMenu anchorRef={caretEl} mention={mention} onPick={pick}
+                       onClose={() => { setCaret(-1) }} />
+        )}
       </div>
     </div>
   )
@@ -179,22 +237,43 @@ function Row({ shot, n, at, many, onSubmit }: {
  * the failure it prevents reads as the model ignoring you: `@ava` compiles to
  * those literal characters, which the encoder renders as nothing at all.
  */
-function Painted({ line }: { line: string }) {
+function Painted({ line, mark, markRef }: {
+  line: string
+  /** Index of the `@` a mention menu is open on, or null. */
+  mark: number | null
+  markRef: React.RefObject<HTMLSpanElement | null>
+}) {
   const cast = useStore((st) => st.scene.cast)
   const known = new Set(cast.map((c) => handleOf(c.name)).filter(Boolean))
   const out: React.ReactNode[] = []
   const re = /@([a-z0-9_]+)/gi
   let at = 0
+  /** Everything up to `to`, with the caret marker spliced in if it falls inside. */
+  const plain = (to: number) => {
+    if (mark === null || mark < at || mark >= to) {
+      if (to > at) out.push(line.slice(at, to))
+    } else {
+      if (mark > at) out.push(line.slice(at, mark))
+      out.push(<span key="mk" className="tcaret" ref={markRef} />)
+      if (to > mark) out.push(line.slice(mark, to))
+    }
+    at = to
+  }
   for (const m of line.matchAll(re)) {
     const i = m.index
-    if (i > at) out.push(line.slice(at, i))
+    plain(i)
+    // A mention being typed carries the marker at its own `@`, which is where the
+    // menu wants to hang — left-aligned with the name rather than with the caret,
+    // so the list does not walk sideways as you type into it.
+    const isMark = mark === i
     out.push(
-      <span key={i} className={`men${known.has(m[1]!.toLowerCase()) ? '' : ' miss'}`}>
+      <span key={i} className={`men${known.has(m[1]!.toLowerCase()) ? '' : ' miss'}`}
+            ref={isMark ? markRef : undefined}>
         {m[0]}
       </span>,
     )
     at = i + m[0].length
   }
-  out.push(line.slice(at))
+  plain(line.length)
   return <>{out}</>
 }

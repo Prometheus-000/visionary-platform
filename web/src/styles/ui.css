@@ -545,6 +545,110 @@ svg{width:100%;height:100%;display:block}
    does not exist. Same rule `.chip` and `.shot-back` already follow. */
 @media (hover:none){.tline.many .trow{min-height:44px;align-items:center}}
 
+/* Where the caret is, inside a textarea. Zero-width and invisible: the mirror is
+   a glyph-for-glyph copy of the box, so a span spliced into it at the caret's
+   index sits exactly where the caret does — which is the only way anything on
+   this page can answer that question. */
+.tcaret{display:inline-block;width:0;height:1em;vertical-align:text-bottom}
+
+/* The picker you get by typing `@`. Above the caret, never below: on glass the
+   keyboard takes the bottom half of the screen and the console is already pinned
+   to the bottom of the stage. Fixed and portalled — a child of the console would
+   be clipped by the `overflow:auto` that stops a full console pushing the canvas
+   out of frame. */
+.tment{position:fixed;z-index:70;min-width:190px;max-width:280px;padding:4px;
+  background:var(--lift);border:1px solid var(--lift-line);border-radius:var(--r-panel);
+  box-shadow:0 18px 48px rgba(0,0,0,.6)}
+.tment button{display:flex;align-items:baseline;gap:8px;width:100%;text-align:left;
+  border:0;background:none;color:var(--fg);font-size:13px;padding:6px 9px;
+  border-radius:var(--r-inner);cursor:pointer}
+.tment button.on{background:var(--wash-3)}
+.tment .hint{margin-left:auto;color:var(--dim);font-size:11px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── the cast chip ─────────────────────────────────────────────────────────
+   `.chip` already draws a name with something at the end of it, which is what
+   both of the rail's new chips are — so they share it rather than getting a
+   second drawing. Three kinds of chip on one rail is the point; three
+   stylesheets for them would be how a console stops reading as one surface. */
+.chip.cast{padding:0 12px;gap:7px;cursor:pointer}
+.chip.cast:hover{background:var(--sel)}
+.chip.cast.on{background:var(--sel);border-color:var(--line-2)}
+/* Filled once something is attached — the one fact about a cast member the rail
+   can carry without opening, because a name with no picture behind it compiles to
+   prose rather than to a `<Subject N>`. */
+.chip.cast .d{width:5px;height:5px;border-radius:50%;flex:none;
+  box-shadow:0 0 0 1px var(--dim) inset}
+.chip.cast .d.full{background:var(--fg);box-shadow:none}
+
+/* ── the cast card ─────────────────────────────────────────────────────────
+   Rooted on its chip and floating over the canvas, so five slots per member and
+   eight members costs the console nothing. Fixed and portalled for the same
+   clipping reason the mention menu is. */
+.tcard{position:fixed;z-index:60;width:236px;padding:9px;
+  background:var(--lift);border:1px solid var(--lift-line);border-radius:var(--r-panel);
+  box-shadow:0 18px 48px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:8px}
+.tcard-h{display:flex;align-items:center;gap:5px}
+.tcard-h .at{color:var(--dim)}
+.tcard .tname{flex:1;min-width:0;background:none;border:0;padding:2px 0;
+  font-weight:600;letter-spacing:-.01em;border-radius:0}
+.tcard .tname:focus{border:0;box-shadow:none}
+.tcard .x{border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
+  line-height:1;padding:0 4px;border-radius:var(--r-mark)}
+.tcard .x:hover{background:var(--wash-3);color:var(--fg)}
+.tcard .tnote{background:var(--wash-2);border:1px solid var(--line);
+  border-radius:var(--r-inner);padding:5px 8px;font-size:12px}
+/* Five columns for a character and two for a place, from one rule: the slot table
+   is the shape, and `auto-fill` reads it rather than restating it per kind. */
+.tslots{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:5px}
+/* **A file over a slot that cannot take it does not highlight.** The dashed edge
+   is the invitation and its absence is the whole rejection — cheaper than a toast
+   and, unlike one, it arrives before the drop. */
+.tslot{position:relative;aspect-ratio:1;border:1px dashed var(--line);
+  border-radius:var(--r-inner);background:var(--wash-2);overflow:hidden;padding:0;
+  display:grid;place-items:center;cursor:pointer;color:#5a5a5a}
+.tslot:hover{border-color:var(--line-2);color:var(--mut)}
+.tslot.set{border-style:solid;border-color:var(--line)}
+.tslot.hot{border-color:var(--line-2);background:var(--wash-3);border-style:solid}
+.tslot img{width:100%;height:100%;object-fit:cover;display:block}
+.tslot .lb{font-size:9px;line-height:1.1;text-align:center;padding:2px;
+  -webkit-user-select:none;user-select:none}
+/* A clip and a sound file have no thumbnail worth 38px, so the role is the tile —
+   which is the one fact a picture would have been standing in for anyway. */
+.tslot .lb.full{color:var(--fg);background:var(--wash-3);width:100%;height:100%;
+  display:grid;place-items:center}
+
+/* ── the field's trailing edge ─────────────────────────────────────────────
+   `.neg-t` has had this corner to itself since it took it from the resize grip.
+   On Wan both it and the doors are present, so they share one row rather than
+   sitting on top of each other; on H3 there is no negative branch and the doors
+   have it; on the image side it is `.neg-t` alone, exactly as it was. */
+.fedge-row{position:absolute;top:5px;right:7px;z-index:2;
+  display:flex;align-items:center;gap:3px}
+.fedge{display:flex;align-items:center;gap:1px}
+.neg-t{position:static;top:auto;right:auto}
+/* **Composition, not settings, and the glyph is affordable because the home is
+   where you already are.** An icon cannot announce a destination — that is why
+   `Shot` carries a word in the settings bar — but on the edge of the box you are
+   typing in, each of these acts on the sentence underneath it, and the first is a
+   gesture you have already made by typing `@`. */
+.fdoor{width:22px;height:20px;display:grid;place-items:center;border:0;
+  background:var(--wash-2);border-radius:var(--r-mark);color:#5a5a5a;
+  font-size:11px;line-height:1;cursor:pointer;padding:0}
+.fdoor:hover:not(:disabled){background:var(--wash-3);color:var(--fg)}
+.fdoor.on{background:var(--wash-3);color:var(--fg)}
+.fdoor:disabled{opacity:.35;cursor:default}
+.fdoor>.gl{width:20px;height:14px;opacity:.9}
+.fdoor .gl *{animation-play-state:paused;animation-delay:-1.2s}
+.fdoor:hover .gl *,.fdoor:focus-visible .gl *{animation-play-state:running}
+/* The gutter the edge needs, on the first row only — it is the only one the
+   corner overlaps. Written twice because the two states are different widths and
+   a single value would either crowd the doors or waste a third of the line. */
+.field .tline .trow:first-child .mk-mirror,
+.field .tline .trow:first-child textarea{padding-right:78px}
+.field.has-neg .tline .trow:first-child .mk-mirror,
+.field.has-neg .tline .trow:first-child textarea{padding-right:140px}
+
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —
    while a separate strip below carried every control. They are one row now:
    the chip says what you are making and the rest of the line says how. */

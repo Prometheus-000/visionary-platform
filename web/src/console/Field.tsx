@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 
 import { caretProps } from '../lora/caret'
 import { negAllowed, useStore } from '../store'
+import { Doors } from '../scene/Doors'
 import { Shots } from '../scene/Shots'
 import { Duration } from './Duration'
 import { growField } from './fieldMax'
@@ -25,10 +26,14 @@ import { moveClause } from './moveClause'
 export function Field({
   consoleEl,
   onSubmit,
+  onPalette,
   children,
 }: {
   consoleEl: React.RefObject<HTMLDivElement | null>
   onSubmit: () => void
+  /** The shot palette, opened from the video side's field-edge door. One popover
+   *  shared by both strips — see `Doors`. */
+  onPalette: (e: React.MouseEvent<HTMLElement>) => void
   children: React.ReactNode
 }) {
   const s = useStore()
@@ -143,6 +148,14 @@ export function Field({
                 value={s.negative}
                 onChange={(e) => s.setNegative(e.target.value)}
                 onKeyDown={keys(s.negative, s.setNegative)} />
+      {/* **The trailing edge carries composition, and the corner is shared.**
+          `.neg-t` has had this corner to itself since it took it from the resize
+          grip, and on Wan both are present — so they sit in one row rather than on
+          top of each other. On H3 there is no negative branch at all and the doors
+          have the corner; on the image side it is `.neg-t` alone, exactly as it
+          was. */}
+      <span className="fedge-row">
+      {s.kind === 'video' && <Doors onPalette={onPalette} />}
       {ok && (
         <button type="button" id="neg-toggle"
                 className={`neg-t${s.negative.trim() ? ' filled' : ''}`}
@@ -155,6 +168,7 @@ export function Field({
           {s.negOn ? 'negative' : 'positive'}
         </button>
       )}
+      </span>
 
       {/* Under the sentence and above the strip, because it acts on the sentence
           and is reached right after writing one. Empty until there is prose, so
