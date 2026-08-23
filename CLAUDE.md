@@ -34,11 +34,18 @@ the next one. Concretely:
   the prompt rewrite was to blame, because it was the newest thing on that path.
   It was 48 MB of PNG references crossing the wire.
 
-  A feature was nearly retired for another feature's cost. **So anything that
-  can take minutes says which minutes they are**: the phase names the step
-  ("reloading the volume", "staging 9 attachments · 48 MB"), the log stamps when
-  the job was accepted and how long the unbounded steps took, and the parts
-  whose cost the person controls report the number they control.
+  A feature was nearly retired for another feature's cost. **And the logs were
+  as silent as the page, which is worse** — the logs are the escape hatch, so
+  what somebody sees after giving up on the screen is ComfyUI's own output
+  either side of an eight-minute hole with nothing of ours in it.
+
+  **So anything that can take minutes says which minutes they are, on both
+  surfaces.** The phase names the step ("reloading the volume", "staging 9
+  attachments · 48 MB"). The log stamps `[api] spawned in Ns` when the route
+  hands the job to Modal, `accepted` when the container is given it — the gap
+  between those two is the hop a large body actually travels, and it could not
+  be seen at all — then the unbounded steps by name. And the parts whose cost
+  the person controls report the number they control.
 
 - **Stops are cooperative — and a cooperative stop has to be readable and
   read.** Jobs check a flag between steps and unwind cleanly, so the container

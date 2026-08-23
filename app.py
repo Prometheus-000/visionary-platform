@@ -1443,6 +1443,29 @@ def _attachment_weight(params: dict[str, Any]) -> tuple[int, float]:
     return len(blobs), sum(len(b) for b in blobs) / 1_000_000
 
 
+def _log_spawn(kind: str, job_id: str, payload: dict[str, Any],
+               t0: float) -> None:
+    """
+    Close the last dark segment: browser -> web container -> Modal.
+
+    **The logs were as silent as the page**, which is worse, because the logs
+    are the escape hatch — somebody who cannot tell what the app is doing opens
+    the dashboard, and what was there was ComfyUI's own output either side of an
+    eight-minute hole with nothing of ours in it at all. The GPU container's
+    lines cover it from `accepted` onward; this covers what happens *before*
+    that, which is where a 48 MB body actually travels: parsed here, then handed
+    to Modal, which puts anything past a couple of megabytes into blob storage
+    before the GPU container can be given it.
+
+    The gap between this line and the container's `accepted` is that hop, and it
+    could not be seen at all.
+    """
+    n, mb = _attachment_weight(payload)
+    print(f"[api] {job_id} spawned in {time.time() - t0:.1f}s"
+          + (f", {n} attachment{'' if n == 1 else 's'} / {mb:.1f} MB" if n else ""),
+          flush=True)
+
+
 def _stop_key(job_id: str) -> str:
     return f"stop:{job_id}"
 
@@ -11091,6 +11114,7 @@ def web():
 
     @api.post("/api/generate")
     def generate(payload: dict) -> dict[str, Any]:
+        t_route = time.time()
         prompt = str(payload.get("prompt") or "").strip()
         regions = payload.get("regions") or []
         # A document is prose too, so it satisfies this the way a box does. The
@@ -11182,6 +11206,7 @@ def web():
             "scheduler": str(payload.get("scheduler") or IMAGE_DEFAULTS["scheduler"]),
             "shift": num("shift", 1.15, float),
         })
+        _log_spawn("image", job_id, payload, t_route)
         return {"ok": True, "job_id": job_id}
 
     @api.post("/api/video")
@@ -11199,6 +11224,7 @@ def web():
         costs a cold H100 and tens of gigabytes of loading first, and surfaces
         as a dead job rather than a form error.
         """
+        t_route = time.time()
         prompt = str(payload.get("prompt") or "").strip()
         if not prompt:
             return {"error": "A prompt is required."}
@@ -11368,6 +11394,7 @@ def web():
             "first_frame": first,
             "last_frame": last,
         })
+        _log_spawn("video", job_id, payload, t_route)
         return {"ok": True, "job_id": job_id, "model": model, "mode": task}
 
     @api.get("/api/gallery")
