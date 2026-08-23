@@ -209,12 +209,29 @@ depends on either feature existing:
   prompt, then an arrow, then bullets explaining itself — helpfulness in the one
   place it is indistinguishable from failure, because the answer went into the
   box. An instruction not to preamble is a request.
-- **The rewriter can be the encoder.** Krea 2 reads its prompt through
-  Qwen3-VL-4B, a decoder model already resident, so the rewrite ran warm in
-  2.2-9.2s on weights already paid for. Nobody else does this because Flux's
-  encoder is T5-XXL and SD's is CLIP and both are encoder-only. That trick is
-  still in the tree: `comfy_nodes/visionary_rewrite` and `_rewrite_generator`
-  are what `/api/motion` runs on.
+- **The rewriter can be the encoder — and the bill for that is a shared queue.**
+  Krea 2 reads its prompt through Qwen3-VL-4B, a decoder model already resident,
+  so the rewrite ran warm in 2.2-9.2s on weights already paid for. Nobody else
+  does this because Flux's encoder is T5-XXL and SD's is CLIP and both are
+  encoder-only. The trick is still in the tree — `comfy_nodes/visionary_rewrite`
+  and `_rewrite_generator` are what `/api/motion` runs on.
+
+  **What it costs is the thing the ten-minute render was really about.** Riding
+  the generator means riding its `@modal.concurrent(max_inputs=1)`, so a rewrite
+  in flight is a `generate` that cannot even be *delivered* to the container —
+  and on a cold one, that rewrite is itself queued behind ComfyUI's serial
+  queue. Pressing Enhance therefore delayed a clip by the whole of its own
+  cold start, and nothing anywhere said so. The person's own reading was that
+  Enhance was to blame, and it was; the mechanism was not the one anybody would
+  have guessed, and the payload theory that looked obvious was wrong — the same
+  references were attached to the runs that were fast.
+
+  So the load is **lazy now**, which inverts what this file used to say. Warming
+  at `enter` was right while the rewrite was on every prompt; it posts a *graph*
+  to do it, so every cold container spent 132 seconds refusing to render for a
+  button that might never be pressed. One video-only panel is not worth that.
+  The first press pays the load, a render never does, and the node's
+  module-level `_READY` makes it once per container either way.
 
 **What is left, and it is the useful half.** `tools/judge_prompts.py` marks a
 rewrite against what the person said on four criteria — subject, tone, space,

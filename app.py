@@ -1764,6 +1764,10 @@ RELOAD_INSIST_BACKOFF = (0.15, 0.35)
 # per gallery miss and the log would be reloads.
 RELOAD_SLOW_S = 2.0
 
+# Above this, a request is worth a line. Under it the log would be `/api/status`
+# at 400ms, which is a log made of polls and no more use than no log at all.
+REQUEST_SLOW_S = 2.0
+
 
 def _reload_volume_locked() -> bool:
     try:
@@ -5834,53 +5838,6 @@ def _krea2_graph(
     return graph
 
 
-# Load the rewrite model during a cold start that is already happening, on both
-# generator containers, so it is resident before anybody asks for it.
-#
-# **The ordering problem this exists to fix.** Enhance runs *before* a
-# generation and lived on the container that only exists *because of* one, so
-# the first thing anyone does in a session was the one thing with no warm host.
-# Worse, the load was lazy and the "one-time ~20s" this claimed was wrong twice
-# over: ~8 GB read off a *network* volume plus a CPU construction the node
-# prices at forty seconds, all of it charged to whoever pressed the button
-# first.
-#
-# **The memory objection was checked rather than deferred to.** 9 GiB beside
-# 42.5 GB of H3 on an 80 GB card leaves 28.5 GB — and 42.5 GB is itself the
-# number the int8 repackage was chosen for, precisely so the model stays
-# resident instead of offloading every request. Sizing a rewrite out of a card
-# that was specified to hold its own model comfortably was caution pointed at
-# the wrong number.
-#
-# A thread rather than an inline await, because `@modal.enter` gates the first
-# request: ComfyUI can render the moment it has started, so the load rides
-# alongside rather than in front, and a generate never waits on a rewrite's
-# weights. The one cost is that a render arriving inside the warm window queues
-# behind it in ComfyUI's own queue — acceptable, because that window only
-# exists on a container that is about to load a 35 GB checkpoint anyway.
-#
-# Swallowed, always. A warm-up that failed is a slow first press, which is what
-# the situation was before it existed; raising here would turn it into a
-# container that refuses to start and takes renders down with it.
-def _warm_rewrite(comfy: "_Comfy", where: str) -> None:
-    def go() -> None:
-        started = time.time()
-        try:
-            comfy.run_text({"rw": {"class_type": "VisionaryRewrite",
-                                   "inputs": {"prose": "", "instruction": "",
-                                              "max_tokens": 16,
-                                              "warm_only": True}}},
-                           timeout=600.0)
-            print(f"[rewrite] {where} model resident in "
-                  f"{time.time() - started:.0f}s", flush=True)
-        except Exception as exc:
-            print(f"[rewrite] {where} warm-up failed after "
-                  f"{time.time() - started:.0f}s, first press pays it: {exc}",
-                  flush=True)
-
-    threading.Thread(target=go, daemon=True).start()
-
-
 @app.cls(
     image=comfy_image, gpu=GPU, cpu=4.0, timeout=60 * 60,
     volumes={"/workspace": volume},
@@ -9398,7 +9355,20 @@ class VideoGenerator:
         # the first symptom is otherwise a rewrite rejected for an unknown
         # class_type — minutes into a session, with the traceback long scrolled.
         self._comfy.require_nodes("VisionaryRewrite")
-        _warm_rewrite(self._comfy, "video")
+        # **No warm-up here, and the reasoning inverted rather than changed.**
+        # Warming eagerly was right when the rewrite was on every prompt: the
+        # load is ~8 GB off a network volume plus a CPU construction the node
+        # prices at forty seconds, and charging it to whoever pressed first was
+        # the worse trade. It posts a ComfyUI *graph* to do it, though, and that
+        # queue is serial — so every cold container spent 132 seconds refusing
+        # to render while it loaded weights for a button.
+        #
+        # `/api/motion` is the only caller left. It is a panel somebody opens
+        # and waits for, on the video side only, and it may never be opened at
+        # all — so the first press pays the load and a render never does. The
+        # node keeps the model in a module-level `_READY`, so it is once per
+        # container either way; the only question was who waits, and it should
+        # not be the person who asked for a clip.
 
     @modal.method()
     def rewrite(self, prose: str, instruction: str,
@@ -9417,8 +9387,16 @@ class VideoGenerator:
 
         It is not the video encoder. H3 reads its own and Wan reads umT5, so
         unlike the image side there is nothing resident here to reuse — this is
-        Qwen3-VL loaded beside them at `enter`, 9 GiB against the 28.5 GB this
-        card has spare once H3's 42.5 GB is in. See `_warm_rewrite`.
+        Qwen3-VL, 9 GiB against the 28.5 GB this card has spare once H3's
+        42.5 GB is in, loaded **on the first call rather than at `enter`**. The
+        node holds it in a module-level `_READY` afterwards, so it is once per
+        container either way; loading it eagerly meant posting a graph to a
+        serial queue and every cold render waiting 132 seconds behind it.
+
+        **This holds `max_inputs=1` while it runs, and that is the trap.** The
+        slot it takes is the same one `generate` needs, so a panel opened on a
+        cold container delays a clip that has nothing to do with it — which is
+        how a ten-minute wait got blamed on the wrong feature.
         """
         graph = {"rw": {"class_type": "VisionaryRewrite",
                         "inputs": {"prose": prose, "instruction": instruction,
@@ -9723,6 +9701,28 @@ def web():
     from fastapi.staticfiles import StaticFiles
 
     api = FastAPI()
+
+    # **The first thing that happens to a request, and the last thing that was
+    # visible.** `t_route` inside a handler starts after FastAPI has read the
+    # body off the wire and parsed it — so a 48 MB upload spent its whole life
+    # before any line this file prints. Somebody who gave up on the screen and
+    # opened the dashboard found ComfyUI's own output either side of a gap with
+    # nothing of ours in it, and this is the near end of that gap.
+    #
+    # Only the slow ones. `/api/status` is polled every 400ms and a line per
+    # request would be a log made of polls — which is the same failure as no
+    # log, arrived at from the other side.
+    @api.middleware("http")
+    async def _timed(request: Request, call_next):
+        t0 = time.time()
+        response = await call_next(request)
+        took = time.time() - t0
+        if took >= REQUEST_SLOW_S:
+            n = request.headers.get("content-length")
+            size = f", {int(n) / 1_000_000:.1f} MB in" if n and n.isdigit() else ""
+            print(f"[api] {request.method} {request.url.path} took "
+                  f"{took:.1f}s{size}", flush=True)
+        return response
 
     # Where the build landed. A constant rather than a search, because a page
     # that cannot be found should say which path was empty — the same reason
