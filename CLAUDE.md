@@ -1098,12 +1098,19 @@ two domains, and the page follows the domains.
   metadata sheet and restored by Reuse. A generation knows its own seed forever;
   what is gone is only the input box filling itself in.
 
-  **If it comes back, the question to answer first is what says "I am iterating"
-  rather than "I am starting something".** The document was that signal and it
-  was a bad one — it meant "you used a feature", not "you meant to hold this
-  frame". A gesture is the better shape: the number is already on screen, so
-  clicking it into the field costs one click and never changes a field under
-  somebody's hand.
+  **The condition for bringing it back is a surface where editing an image is
+  the thing you are doing**, and their reasoning is what names it: the question
+  a pin has to answer is *"is this person iterating, or starting something"*,
+  and the document was a bad proxy for it — it meant "you used a feature", not
+  "you meant to hold this frame". An edit surface answers it by construction.
+  Changing one thing about a picture that already exists cannot be the start of
+  something new, so there is nothing left to infer and the seed simply holds.
+
+  There is no such surface yet. Inpainting is sketched under Phase 6 and the
+  krea2edit compose exists for scene and outfit plates, but neither is somebody
+  sitting in front of a render changing one thing about it. **Until that exists,
+  a pin has no honest trigger** — which is why this is deleted rather than left
+  behind a flag.
 
   **And a pin is never cleared when the size or the model changes.** Considered
   and rejected, and recorded because it looks like a bug for as long as it is
