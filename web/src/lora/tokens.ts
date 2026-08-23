@@ -50,9 +50,6 @@ export type LoraChip = {
    *  weight — duplicating that here would freeze today's default into every
    *  chip ever saved. */
   textEncoder: number | null
-  /** Video side. Null means read it off the filename, which `vidExpert` gets
-   *  right nearly always; this is the override. */
-  expert: 'high' | 'low' | 'both' | null
 }
 
 
@@ -72,8 +69,8 @@ export type LoraFile = {
   stem: string
   file: string
   /** The shortest name that still points at one file. A volume with one
-   *  `k3nan.safetensors` gets `<lora:k3nan:1>`; the matched Wan speed pairs,
-   *  whose files are both called `high`, get the folder that tells them apart. */
+   *  `k3nan.safetensors` gets `<lora:k3nan:1>`; two files that are both called
+   *  `high` get the folder that tells them apart. */
   token: string
   /** The phrase this LoRA's training bound everything to — from the training
    *  sidecar, or from the catalogue for the Krea style set. Empty when nobody
@@ -170,25 +167,7 @@ export function chipFrom(l: LoraFile, region = false): LoraChip {
     rel: l.token,
     strength: region ? 1.3 : (l.strength ?? 1),
     textEncoder: null,
-    expert: null,
   }
-}
-
-/** The matched speed pairs are named `high` and `low` inside one folder, so the
- *  file already says which expert it belongs to. Reading it beats making you
- *  write the same fact twice, and beats the silent quality loss of crossing
- *  them. `chip.expert` is the override; null means read the name. */
-export function vidExpert(experts: string[], chip: LoraChip): string {
-  if (chip.expert && experts.includes(chip.expert)) return chip.expert
-  const n = chip.rel.toLowerCase()
-  const read = /(^|\/)high|high_noise/.test(n) ? 'high'
-    : /(^|\/)low|low_noise/.test(n) ? 'low' : 'both'
-  // Clamped to what this model actually has. The filename read is a heuristic
-  // for Wan's matched speed pairs, where `high`/`low` is the whole naming
-  // scheme — on a model with one expert it is just a word somebody used, and
-  // `high_detail.safetensors` on H3 was being tagged `high` and refused by the
-  // route with a message about noise experts that model does not have.
-  return experts.includes(read) ? read : 'both'
 }
 
 /** The image stack. `text_encoder` is left null when unset on purpose: the
@@ -201,9 +180,15 @@ export function readChips(chips: LoraChip[], max: number) {
   }))
 }
 
-export function readVidChips(chips: LoraChip[], max: number, experts: string[]) {
+/** The video stack. One number, because the only video family has one expert —
+ *  there was an `expert` tag here while a mixture-of-experts pair needed each
+ *  LoRA to say which half it patched, and it was read off the filename, which
+ *  meant `high_detail.safetensors` got tagged `high` and refused by a route
+ *  talking about noise experts nothing had. Deleted rather than defaulted: a
+ *  field whose only value is "both" is a sidecar implying a choice nobody had. */
+export function readVidChips(chips: LoraChip[], max: number) {
   return chips.slice(0, max).map((c) => ({
-    path: c.path, unet: c.strength, expert: vidExpert(experts, c),
+    path: c.path, unet: c.strength,
   }))
 }
 
@@ -231,7 +216,10 @@ export function loraChips(
       rel: hit.token,
       strength: l.unet ?? 1,
       textEncoder: video ? null : (l.text_encoder ?? null),
-      expert: video ? ((l.expert as LoraChip['expert']) ?? null) : null,
+      // `l.expert` is not read back. Clips made while a mixture-of-experts
+      // family existed still record one and `MetaSheet` still shows it — a
+      // reader that drops a field makes every run that has one unreadable —
+      // but there is nowhere left to put it on a chip.
     }]
   })
 }

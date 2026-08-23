@@ -148,7 +148,6 @@ export type AppState = {
   models: ModelEntry[]
   loras: LoraEntry[]
   video_models: VideoModel[]
-  wan_experts: string[]
   max_loras: number
   max_refs: number
   max_ref_videos: number

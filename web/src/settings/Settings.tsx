@@ -45,7 +45,7 @@ export function Settings({
 
   // Grouped by family, in catalogue order. Twenty-odd flat cards is a wall you
   // scroll rather than a list you read, and the group is the unit you actually
-  // decide in: you want the Wan stack or you do not.
+  // decide in: you want the video stack or you do not.
   const families = useMemo(() => {
     const out: { name: string; items: ModelEntry[] }[] = []
     for (const m of state?.models ?? []) {
@@ -68,7 +68,7 @@ export function Settings({
   const removeLora = (l: LoraEntry) => {
     // The dialog is the entire safety net: the route unlinks and there is
     // nothing behind it. So it says how much is going, and whether it can come
-    // back — two different sentences, because a Wan speed pair is a download
+    // back — two different sentences, because a catalogue LoRA is a download
     // and a LoRA you trained is however many hours that run took.
     const n = l.files.length
     const ok = confirm(
@@ -255,7 +255,7 @@ export function Settings({
                   {/* One short shows no button at all, because that is what its
                       own Download already is. */}
                   {/* The primary action of this screen, and now the only `.b` on it.
-                      A family is the unit you decide in — you want the Wan stack or
+                      A family is the unit you decide in — you want the stack or
                       you do not — so this is the press that matters, and the per-file
                       buttons below are the escape hatch. */}
                   {left.length > 1 && (

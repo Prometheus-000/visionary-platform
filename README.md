@@ -23,8 +23,8 @@ runs while you are not using it.
 
 **Generate stills and video in one workspace.** Image and video share a prompt,
 a canvas and a gallery. Duration is the switch: `Still` runs Krea 2, any length
-runs MiniMax-H3 or Wan 2.2. The controls on screen follow the model you pick, so
-you only ever see the ones that model actually reads.
+runs MiniMax-H3. The controls on screen follow the model, so you only ever see
+the ones it actually reads.
 
 **Write prompts as pills, not paragraphs.** Camera moves, framing, lighting,
 tone and audio come from a palette of animated tiles — a tile *shows* you a
@@ -88,13 +88,12 @@ deployed URL, click the gear, and pick what you need.
 | ---------------------------- | -----: | ----- | ----------------------------------------- |
 | Krea 2 — images              |  62 GB | yes   | training + still generation               |
 | MiniMax-H3 — video           |  64 GB | no    | video **with a soundtrack**, references   |
-| Wan 2.2 — video              |  76 GB | no    | silent video, CFG, LoRA support           |
-| Wan 2.2 speed LoRAs          |   5 GB | no    | fewer steps per clip                      |
+| MiniMax-H3 speed LoRAs       |   3 GB | no    | fewer steps per clip                      |
 | Krea 2 style LoRAs           |   4 GB | no    | Krea's own nine styles, for the prompt    |
 
-You do not need a whole family. The smallest useful video setup is **Wan 2.2
-TI2V 5B at 18 GB** — the 5B checkpoint, umT5-XXL and the 2.2 VAE — which does
-both text-to-video and image-to-video on its own.
+You do not need a whole family. Video without references is the base set — the
+fl2va transformer, the text encoder and the two VAEs — and the ref2va
+transformer is one extra file on top of it rather than a second stack.
 
 The **style LoRAs** are the cheapest way to see regional prompting work: put two
 styles in two boxes and the hard seam between them — ink wash on one side,
@@ -144,19 +143,18 @@ them — exactly what the trainer reads.
 **Generate stills.** Krea 2 inference through a driven ComfyUI, with LoRA
 stacking and regional multi-character LoRA.
 
-**Generate video.** Two families through the same driven ComfyUI:
+**Generate video.** MiniMax-H3 through a driven ComfyUI — sound and picture in
+one pass, from text, from a first and/or last frame, or from up to twelve
+references (pictures, video and audio) through the ref2va transformer. It is
+guidance-distilled, so there is no CFG and no negative prompt; LoRAs load
+through `LoraLoaderModelOnly` like anything else, including MiniMax's own
+Lightning distillations.
 
-|                | MiniMax-H3              | Wan 2.2                    |
-| -------------- | ----------------------- | -------------------------- |
-| Audio          | yes, same latent        | silent                     |
-| CFG / negative | no — guidance-distilled | yes                        |
-| LoRAs          | no                      | yes                        |
-| References     | ref2va checkpoint       | no                         |
-| Experts        | one                     | two on A14B, one on the 5B |
-
-Both video families reuse one container, the warm ComfyUI process and one job
-contract; what differs per family is a graph builder and a row of capabilities —
-the same row the UI reads to decide which controls to show.
+A second family (Wan 2.2) shared this path for a while and was removed. What it
+proved is worth keeping: the container, the warm ComfyUI process and the job
+contract are family-agnostic, so what a family costs is a graph builder and a
+row of capabilities — the same row the UI reads to decide which controls to
+show.
 
 ---
 
@@ -220,14 +218,12 @@ python3 tools/smoke_pins.py         # every pinned wheel still resolves, before 
 
 Being honest about coverage, since "it deploys" is not "it works":
 
-- **Wan 2.2 TI2V 5B** — text-to-video and image-to-video verified on an H100,
-  output inspected frame by frame.
 - **MiniMax-H3** — text-to-video run end to end on an H100. The compiler output
-  is checked against the published format by `smoke_prompt.py`. Still unverified
-  by ear: whether `non_diegetic_music: N/A` actually silences the soundtrack.
-- **Wan 2.2 A14B** — graphs validate structurally. The two-expert handover can
-  only be confirmed by a real run — wrong noise flags give a washed-out clip
-  rather than an error.
+  is checked against the published format by `smoke_prompt.py` and scored 1.00
+  against MiniMax's own format grader. Still unverified by ear: whether
+  `non_diegetic_music: N/A` actually silences the soundtrack.
+- **The scene composer** — driven and read, never measured against a render.
+  `tools/prompt_ab.py` is the measurement that is not a proxy and has not run.
 
 ---
 

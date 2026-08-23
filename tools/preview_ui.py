@@ -193,7 +193,7 @@ DATASETS = [
     # both — so without one here the filter row's five-button state, the
     # two-number count line and the clip tile's own treatment are all
     # unreachable from this server.
-    {"name": "wan_takes", "count": 9, "videos": 6, "uncaptioned": 4, "cover": "0.png",
+    {"name": "roof_takes", "count": 9, "videos": 6, "uncaptioned": 4, "cover": "0.png",
      "trigger_word": "k3nan", "saved": True},
     {"name": "beach_walk", "count": 12, "uncaptioned": 3, "cover": "0.png",
      "trigger_word": "", "saved": False},
@@ -228,25 +228,25 @@ STATE = {
         # so on its own it left the button, its queue and its Cancel unreachable
         # here. This is the case the button exists for: a stack of files that are
         # only useful together, which is why the group is the unit you decide in.
-        {"key": "wan_high", "label": "Wan 2.2 A14B high", "note": "high-noise expert",
-         "family": "Wan 2.2 — video", "repo_id": "Comfy-Org/Wan_2.2", "present": False,
-         "approx_gb": 14.3, "gated": False},
-        {"key": "wan_low", "label": "Wan 2.2 A14B low", "note": "low-noise expert",
-         "family": "Wan 2.2 — video", "repo_id": "Comfy-Org/Wan_2.2", "present": False,
-         "approx_gb": 14.3, "gated": False},
-        {"key": "wan_vae", "label": "Wan VAE", "note": "",
-         "family": "Wan 2.2 — video", "repo_id": "Comfy-Org/Wan_2.2", "present": False,
+        {"key": "h3_dit", "label": "MiniMax-H3 DiT", "note": "fl2va transformer",
+         "family": "MiniMax-H3 — video", "repo_id": "MiniMaxAI/MiniMax-H3", "present": False,
+         "approx_gb": 21.0, "gated": False},
+        {"key": "h3_ref_dit", "label": "MiniMax-H3 ref DiT", "note": "ref2va transformer",
+         "family": "MiniMax-H3 — video", "repo_id": "MiniMaxAI/MiniMax-H3", "present": False,
+         "approx_gb": 21.0, "gated": False},
+        {"key": "h3_vae", "label": "MiniMax-H3 VAE", "note": "",
+         "family": "MiniMax-H3 — video", "repo_id": "MiniMaxAI/MiniMax-H3", "present": False,
          "approx_gb": 0.5, "gated": False},
-        {"key": "umt5", "label": "UMT5 XXL", "note": "text encoder",
-         "family": "Wan 2.2 — video", "repo_id": "Comfy-Org/Wan_2.2", "present": True,
+        {"key": "h3_te", "label": "Qwen3-VL-4B", "note": "text encoder",
+         "family": "MiniMax-H3 — video", "repo_id": "MiniMaxAI/MiniMax-H3", "present": True,
          "size_gb": 6.7, "approx_gb": 6.7, "gated": False},
     ],
     # Four shapes, because `<lora:…>` has to name each of them unambiguously:
     # a trained LoRA with epoch checkpoints, a bare file dropped at the top of
-    # loras/ (which is what a Google Drive pull with no folder produces), the
-    # matched Wan speed pairs — whose files are BOTH called high/low, so they
-    # are the case that proves the picker qualifies a colliding name with its
-    # folder instead of silently offering the wrong expert — and two files whose
+    # loras/ (which is what a Google Drive pull with no folder produces), two
+    # matched pairs whose files are BOTH called high/low — the case that proves
+    # the picker qualifies a colliding name with its folder instead of silently
+    # offering the wrong one — and two files whose
     # names differ only in case, which is what a Drive pull and a training run
     # disagreeing about capitalisation leaves behind. Both of the last two have
     # to stay typeable: resolution is exact-first for exactly this reason.
@@ -301,20 +301,25 @@ STATE = {
          "bytes": 1_790_000_000, "catalogue": "Krea 2 — images", "files": [
             {"path": "/workspace/loras/krea2_identity_edit_v1_2.safetensors",
              "name": "krea2_identity_edit_v1_2.safetensors"}]},
-        {"name": "wan22-speed-t2v", "trigger_word": "",
-         "root": "/workspace/loras/wan22-speed-t2v", "bytes": 1_060_000_000,
-         "catalogue": "Wan 2.2 speed LoRAs", "files": [
-            {"path": "/workspace/loras/wan22-speed-t2v/high.safetensors", "name": "high"},
-            {"path": "/workspace/loras/wan22-speed-t2v/low.safetensors", "name": "low"}]},
-        {"name": "wan22-speed-i2v", "trigger_word": "",
-         "root": "/workspace/loras/wan22-speed-i2v", "bytes": 1_060_000_000,
-         "catalogue": "Wan 2.2 speed LoRAs", "files": [
-            {"path": "/workspace/loras/wan22-speed-i2v/high.safetensors", "name": "high"},
-            {"path": "/workspace/loras/wan22-speed-i2v/low.safetensors", "name": "low"}]},
+        # Two folders whose files collide on the *same* two names, which is the
+        # only arrangement that forces the picker to qualify. A matched pair of
+        # speed LoRAs is where this arrives from in practice; the shape is what
+        # matters, not the family it came from.
+        {"name": "speed-a", "trigger_word": "",
+         "root": "/workspace/loras/speed-a", "bytes": 1_060_000_000,
+         "catalogue": "", "files": [
+            {"path": "/workspace/loras/speed-a/high.safetensors", "name": "high"},
+            {"path": "/workspace/loras/speed-a/low.safetensors", "name": "low"}]},
+        {"name": "speed-b", "trigger_word": "",
+         "root": "/workspace/loras/speed-b", "bytes": 1_060_000_000,
+         "catalogue": "", "files": [
+            {"path": "/workspace/loras/speed-b/high.safetensors", "name": "high"},
+            {"path": "/workspace/loras/speed-b/low.safetensors", "name": "low"}]},
     ],
-    # One of each shape the composer has to redraw for: audio + references and
-    # no CFG (H3), the two-expert pair (A14B), and the single-expert 5B. A stub
-    # with only one of them cannot catch a control that fails to appear.
+    # One family, because there is one. This held three while there were two
+    # more, on the rule that a stub with only one shape cannot catch a control
+    # that fails to appear — still true, and the way to honour it now is a
+    # *task* that is not downloaded rather than a family that does not exist.
     # `supports` is filled from app.py below rather than written here — see the
     # VIDEO set in `_from_app.py`. What stays hand-written is what the stub is
     # *for*: which tasks are ready, and which weights are pretend-downloaded.
@@ -327,38 +332,15 @@ STATE = {
          "schedulers": ["simple", "normal", "beta"],
          "defaults": {"steps": 20, "sampler": "res_multistep",
                       "scheduler": "simple", "tier": "full", "seconds": 5},
+         # ref2va deliberately not downloaded: attaching a reference here should
+         # disable Generate and name the missing transformer, which is the state
+         # most worth being able to look at and is unreachable from a stub where
+         # everything is present.
          "tasks": {"fl2va": {"ready": True, "missing": []},
-                   "ref2va": {"ready": True, "missing": []}},
-         "ready": True},
-        {"key": "wan14b", "label": "Wan 2.2 A14B",
-         "note": "Two experts · silent",
-         "tiers": {"full": "720p", "draft": "480p draft"},
-         "lengths": [2, 3, 4, 5],
-         "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
-         "schedulers": ["simple", "normal", "beta"],
-         "defaults": {"steps": 20, "cfg": 3.5, "shift": 8.0, "sampler": "euler",
-                      "scheduler": "simple", "tier": "full", "seconds": 5},
-         # i2v deliberately not downloaded: attaching a first frame here should
-         # disable Generate and name the missing pair, which is the state most
-         # worth being able to look at.
-         "tasks": {"t2v": {"ready": True, "missing": []},
-                   "i2v": {"ready": False,
-                           "missing": ["Wan 2.2 I2V · high noise",
-                                       "Wan 2.2 I2V · low noise"]}},
-         "ready": True},
-        {"key": "wan5b", "label": "Wan 2.2 TI2V 5B",
-         "note": "24 fps · silent",
-         "tiers": {"full": "704p", "draft": "480p draft"},
-         "lengths": [2, 3, 4, 5],
-         "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
-         "schedulers": ["simple", "normal", "beta"],
-         "defaults": {"steps": 30, "cfg": 5.0, "shift": 8.0, "sampler": "euler",
-                      "scheduler": "simple", "tier": "full", "seconds": 5},
-         "tasks": {"t2v": {"ready": True, "missing": []},
-                   "i2v": {"ready": True, "missing": []}},
+                   "ref2va": {"ready": False,
+                              "missing": ["MiniMax-H3 ref DiT"]}},
          "ready": True},
     ],
-    "wan_experts": ["both", "high", "low"],
     # shot_vocab / shot_langs / shot_roles are added per request — see app_api().
     "max_loras": 6, "max_refs": 9, "max_ref_videos": 3,
     "max_regions": 8,
@@ -382,10 +364,10 @@ STATE = {
              "video": {"options": ["H100", "H200"], "default": "H100"}},
 }
 
-# One of each shape the composer redraws for — H3, the A14B pair, the 5B — with
-# their capabilities taken from the deployment rather than remembered. This ran
-# as a hand-written table until H3 grew LoRAs and the preview kept rendering the
-# composer without the button.
+# The capabilities come from the deployment rather than being remembered. This
+# ran as a hand-written table until H3 grew LoRAs and the preview kept rendering
+# the composer without the button — which is the whole argument for pulling them:
+# a stub that omits a menu is a preview of a control that does not exist.
 _VIDEO = pull(VIDEO)["VIDEO_MODELS"]
 for _m in STATE["video_models"]:
     _m["supports"] = dict(_VIDEO[_m["key"]]["supports"])
@@ -999,9 +981,6 @@ class Handler(BaseHTTPRequestHandler):
             if p.get("kind") == "image":
                 return self.reply(
                     {"prompt": api["_compile_image_prompt"](typed, pills)})
-            if str(p.get("model") or "h3") != "h3":
-                return self.reply(
-                    {"prompt": api["_compile_wan_prompt"](typed, pills)})
             try:
                 seconds = float(p.get("seconds") or 5)
             except (TypeError, ValueError):

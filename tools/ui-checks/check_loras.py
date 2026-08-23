@@ -15,7 +15,7 @@ is now carried by structure instead — see `docs/design-notes/loras-are-not-tex
   * **Nothing writes into the prompt.** Picking used to insert a token, a
     strength and the trigger phrase — three edits to your sentence from one
     press. The box must be untouched.
-  * **The composer is per-kind.** A Krea 2 LoRA is not a Wan LoRA. Switching used
+  * **The composer is per-kind.** A Krea 2 LoRA is not an H3 LoRA. Switching used
     to carry one across and load it into a run that could not use it, silently.
 """
 import sys

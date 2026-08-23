@@ -158,25 +158,24 @@ check("and loses to one chosen after it",
       [p["key"] for p in G["_validate_shot"](
           [{"key": "score.silent"}, {"key": "score.piano"}])], ["score.piano"])
 
-# --- the silent families --------------------------------------------------
-# The rail is shared across models, so what a silent one is handed is decided
-# here and nowhere else. Dialogue is the case that breaks the obvious rule: it
-# lives in the *visual* description and is still audio, so a filter by field
-# would have posted `<d>[English] …</d>` to umT5, which reads angle brackets as
-# angle brackets.
-print("\nsilent families", flush=True)
+# --- the audio groups reach the one family that reads them ------------------
+# There was a silent family here — Wan — and the rail is shared, so what a
+# silent model was handed was decided in the compiler and nowhere else.
+# Dialogue is the case that broke the obvious rule: it lives in the *visual*
+# description and is still audio, so a filter by field would have posted
+# `<d>[English] …</d>` to umT5, which reads angle brackets as angle brackets.
+#
+# Nothing is silent now, so the assertion inverts: every audio group has to
+# arrive. `_shot_phrases(..., audio=False)` is still there and is still the
+# mechanism a silent family would use, which is why this keeps testing that H3
+# gets all of it rather than being deleted with the family.
+print("\naudio groups", flush=True)
 silent = G["_validate_shot"]([
     {"key": "say.dialogue", "value": "Hello there", "lang": "English"},
     {"key": "say.screen", "value": "EXIT"},
     {"key": "framing.cu"}, {"key": "camera.pushin"},
     {"key": "sound.rain"}, {"key": "score.piano"}])
-wan = G["_compile_wan_prompt"]("He walks in", silent)
-check("a spoken line never reaches a silent model", "<d>" in wan, False)
-check("on-screen text does — it is a picture of words", "EXIT" in wan, True)
-check("neither foley nor score does",
-      ("rain" in wan) or ("piano" in wan), False)
-check("the camera move still does", "pushes in" in wan, True)
-check("and H3 gets all of it",
+check("H3 gets all of it",
       all(s in G["_compile_h3_prompt"](typed="He walks in", pills=silent,
                                        task="t2va", seconds=5)
           for s in ("<d>[English] Hello there</d>", "EXIT", "rain", "piano")), True)

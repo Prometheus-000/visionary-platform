@@ -460,8 +460,8 @@ anything" rather than "this listing has an opinion about directory layout." A
 file a run can load is a file the picker has to offer.
 
 This is also why a LoRA is **named by the shortest unambiguous name**. One
-`k3nan.safetensors` on the volume is `k3nan`; the matched Wan speed pairs, whose
-files are both called `high` and `low`, are qualified by their folder.
+`k3nan.safetensors` on the volume is `k3nan`; two folders whose files are both
+called `high` and `low` are qualified by their folder.
 
 That rule used to be about *typing* — it decided what `<lora:…>` you could write
 and the note said which files a name matched when it matched several. LoRAs are
@@ -851,7 +851,7 @@ nobody has looked at.
   failed.
 
 - **A family downloads itself; there is no button for the whole catalogue.**
-  The group is the unit you decide in — you want the Wan stack or you do not —
+  The group is the unit you decide in — you want the video stack or you do not —
   and clicking its files one at a time meant watching a 4 GB file finish to be
   allowed to start the next, which is a queue kept in a person rather than in
   the program. `download_missing_job` already walked a list sequentially, so
@@ -1250,7 +1250,7 @@ two domains, and the page follows the domains.
   per-kind.** This used to say the prompt survives the switch too, because a
   shot described as a still is the same sentence you would describe as a clip.
   True of the sentence and false of everything around it: a Krea 2 LoRA is not a
-  Wan LoRA, and carrying one across loaded it into a run that could not use it —
+  H3 LoRA, and carrying one across loaded it into a run that could not use it —
   silently, because the note warns about names that resolve to nothing and about
   models that read no LoRAs at all, and a LoRA for the wrong architecture is
   neither. Prompt, negative, the pill rail and the chips now swap with the kind,
@@ -1307,8 +1307,9 @@ two domains, and the page follows the domains.
   that box says without any syntax.
 
   So a chip: the name, then a circle carrying the strength, with the second value
-  — text-encoder weight on image, Wan expert on video — disclosed on a click,
-  because both are omitted far more often than not. They fold behind
+  — text-encoder weight on image, and on video nothing, because H3's stack is
+  one number — disclosed on a click, because it is omitted far more often than
+  not. They fold behind
   `▸ 4 LoRAs`, a disclosure built as one more `#shot-peek`: zero pixels at rest,
   in flow so nothing sits on top of a render, and it does not close on scroll,
   which `Popover` does and which disqualifies it for a box you type numbers into.
@@ -1983,10 +1984,6 @@ line is the format.
 - **Blocking is not reachable from it.** `_stage_*` and `_stage_boxes` are live
   in the compiler and nothing fills them in, which is exactly the state the scene
   itself was in before this. `web/src/blocking/` is still the throwaway probe.
-- **Wan gets the timeline and cannot read it.** `/api/video` compiles a scene
-  only for H3; on Wan the rows join into prose. Nothing on screen says so, and by
-  the rule that a control present but ignored is worse than one absent, something
-  should.
 - **`retention` reaches the document at its default and no control sets it.**
   That is a default that reaches the output rather than a `ties` — but the moment
   it wants a control, it wants one on the cast card and not in a panel.
@@ -1999,70 +1996,46 @@ line is the format.
 2. Image inference + datasets and captioning — done
 3. Video inference via ComfyUI — done
    - MiniMax-H3: t2v, i2v, first/last frame, ref2va, native soundtrack
-   - Wan 2.2: A14B t2v/i2v/first-last and TI2V 5B, with LoRA stacking
+   - Wan 2.2 lived here too and was removed — see below
 4. Image inference onto the same ComfyUI, with regional multi-character
    LoRA — done. One backend, one image, two GPU classes.
    - A box per character, each LoRA masked to its own rectangle
    - Scene and outfit transfer, when the identity-edit LoRA is downloaded
-5. Video LoRA training — Wan 2.2 was the target, which is why phase 3 loads
-   LoRAs. **Tabled, and the reason is a number** — see below.
+5. Video LoRA training — **not started, and the trainer is not musubi.** H3
+   trains under AI Toolkit; see below.
 6. **The Dynamic Canvas** — next, and sketched rather than specified below
 
 The end state is one application where a generated still flows into a clip
 without a round trip through the filesystem — the "Animate" and "As reference"
 buttons on a finished image are the first piece of that.
 
-### Phase 5 — Wan LoRA training, and why it is tabled
+### Phase 5 — video LoRA training, and the trainer it needs
 
-The pipeline is nearly free and the weights are not. That is the whole finding,
-and it is recorded here because everything above it argues the opposite — phase
-3 loads LoRAs *so that* this could happen, and the trainer already runs musubi.
+**Wan 2.2 was the target and Wan 2.2 is gone.** It was tabled here on a bill —
+musubi cannot train the `fp8_scaled` weights this platform downloaded, so it
+wanted a second 53 GB copy of the 14B pair at bf16 plus an 11 GB bf16 T5, about
+64 GB of duplicate weights on a volume whose only way to reclaim space is the
+Modal CLI. That bill never got paid, and then the whole family was removed for
+being a second of everything — see "One video family" below.
 
-`train_job` is already the exact three-step shape Wan wants. Only the names change:
+So the phase survives and its shape changed completely. The video side is H3,
+and **H3 trains under AI Toolkit rather than musubi.** That is the fact that
+matters, because the Wan plan was a *rename* — `train_job` is already the exact
+three-step cache-latents / cache-text / train shape, and only the script names
+would have changed. A second trainer is not a rename. It is a second image, a
+second set of pins, and a second recipe to keep working.
 
-| | Krea 2, today | Wan 2.2 |
-|---|---|---|
-| latents | `krea2_cache_latents.py --vae` | `wan_cache_latents.py --vae` |
-| text | `krea2_cache_text_encoder_outputs.py --text_encoder` | `wan_cache_text_encoder_outputs.py --t5` |
-| train | `krea2_train_network.py`, `networks.lora_krea2` | `wan_train_network.py`, `networks.lora_wan`, `--task t2v-A14B` |
+Two things follow, and both outlive the decision to wait:
 
-The A14B pair trains in one run rather than two — `--dit <low>
---dit_high_noise <high> --timestep_boundary 0.875` — so it extends the existing
-job/status/stop contract with a recipe parameter and invents nothing. By the
-rule against building a second way to do the first thing, this is the shape it
-should take whenever it happens.
-
-**What stops it: musubi cannot train the weights this platform downloads.** Its
-Wan doc is explicit that *"fp8_scaled models are not supported even with
-`--fp8_scaled`"*, and every 14B DiT in `MODELS` is `fp8_scaled` because that is
-the right choice for inference. The text encoder is the same story — we hold
-`umt5_xxl_fp8_e4m3fn_scaled.safetensors`, musubi wants
-`models_t5_umt5-xxl-enc-bf16.pth`. Only the VAE is shared, and it is shared
-exactly: `wan_2.1_vae.safetensors` is the file musubi's own doc names.
-
-So training needs a second copy of models already on the volume, at a precision
-inference does not want:
-
-- `wan2.2_t2v_{high,low}_noise_14B_fp16.safetensors` — 26.6 GB each, 53.2 GB the pair
-- the bf16 T5 `.pth` from `Wan-AI/Wan2.1-I2V-14B-720P` — about 11 GB
-
-Roughly 64 GB, of which 53 is a duplicate at a different dtype. At 244 MB/s
-that is four minutes of transfer, so the cost is storage rather than time — but
-it is storage on a volume whose only way to reclaim space is the Modal CLI.
-
-Two things follow, and they outlive the decision to wait:
-
-- **The catalogue's one-entry-per-model assumption does not survive training.**
-  Whenever this is picked up, those entries have to say why two precisions of
-  one weight exist, or the next person reading the list deletes the one that
-  looks redundant.
-- **"Downloaded" and "trainable" become different questions.** A Train surface
-  offering Wan cannot check `present` — it has to check for the training-capable
-  file specifically, or it offers a run that dies after the dataset is cached.
-
-Tabled rather than abandoned: nothing above is a blocker, it is a bill, and it
-should be paid deliberately rather than by a pull request that quietly adds
-64 GB to a catalogue.
+- **"Downloaded" and "trainable" are different questions**, and they were
+  different for Wan too. A Train surface offering video cannot check `present` —
+  it has to check for whatever the trainer actually loads, or it offers a run
+  that dies after the dataset is cached.
+- **The dataset side is already done.** A set counts its clips, the sidecar
+  layout is identical (`{clip}.txt` beside `{clip}.mp4`), and nothing about the
+  storage contract changes for whichever trainer arrives. That was true when the
+  target was Wan and it is still true now, which is the argument for having built
+  it that way.
 
 ### Phase 6 — The Dynamic Canvas
 
@@ -2204,8 +2177,8 @@ revealed. "No hover" is not "remove the shortcuts".
 
 **A prompt is a compilation target, not something the user writes.** Nobody
 should have to learn a text encoder. Every model arrives with its own grammar —
-H3 wants a six-field document, Wan wants prose, Krea 2 wants prose with the
-camera clauses dropped — and asking a person to hold three formats in their head
+H3 wants a six-field document, Krea 2 wants prose with the camera clauses
+dropped, and the silent family that used to sit between them wanted plain prose — and asking a person to hold three formats in their head
 so a checkpoint can be fed correctly is the tool making its problem into theirs.
 The user says what they want; the app knows what each model needs; the prompt
 itself is an implementation detail they should never have to see.
@@ -2338,23 +2311,32 @@ right.
 is month four, when something does not fit cleanly and the cheapest fix is a
 panel. That is the moment this becomes a node graph with better typography.
 
-### Two video families, one path
+### One video family, and what the second one proved
 
-Adding Wan did not add a backend. It reuses the container, the warm ComfyUI
-process, the job/status/stop contract and the output layout; what is per-family
-is a graph builder and a row in `VIDEO_MODELS`. That is the payoff of driving
-ComfyUI rather than porting its model code, and it is the shape any third
-family should take.
+**Wan 2.2 was here and is gone.** It shared the container, the warm ComfyUI
+process, the job/status/stop contract and the output layout; what was
+per-family was a graph builder and a row in `VIDEO_MODELS`. That is worth
+recording as a *result* rather than a regret — it is the payoff of driving
+ComfyUI instead of porting its model code, it was demonstrated rather than
+argued, and it is the shape a third family should take.
 
-They are not interchangeable, and the UI says so rather than averaging them:
+Removing it cost about 700 lines and no contract. `requires` is still per task,
+`supports` is still per model, and `run()` still dispatches nothing it does not
+have to. That is the half worth keeping.
 
-|                | MiniMax-H3           | Wan 2.2                     |
-| -------------- | -------------------- | --------------------------- |
-| Audio          | yes, same latent     | silent                      |
-| CFG / negative | no — guidance-distilled | yes                      |
-| LoRAs          | yes                  | yes                         |
-| References     | ref2va — pictures, videos and audio | no           |
-| Experts        | one                  | two on A14B, one on the 5B  |
+**What it cost while it was here** is the honest other half, and it is the
+reason it went. Every question the console asked, it asked twice: a CFG box and
+a flow shift and an expert-switch step that H3 reads none of, a negative prompt
+on a guidance-distilled path, two tier tables, two frame grids, two compilers,
+two graph builders, half the model catalogue, and a `needs` column on the shot
+vocabulary whose only job was dimming audio pills for a silent model. The scene
+composer landed on top of all of that and could only compile for one of them —
+so the timeline was collected on both sides and flattened into prose on one,
+with nothing on screen saying so. A second family that reads none of the first
+one's grammar is not a second option, it is a second product.
+
+Four facts about it are kept below, because each one cost a measurement and none
+of them depends on Wan existing.
 
 **The LoRA row said "no ecosystem for the int8 repackage" and was wrong on both
 halves.** `LoraLoaderModelOnly` is architecture-agnostic weight patching — what
@@ -2440,16 +2422,21 @@ upscaling a dropped file**, and not by a little. The method's whole advantage is
 the original context, and a sidecar still holds the prompt, the shot pills and
 the references. An external video arrives with none of that.
 
-The A14B pair is the one thing with no image-side analogue: it is *two*
-checkpoints split by noise level, sampled in sequence by two `KSamplerAdvanced`
-nodes handing an unfinished latent over. So a video LoRA row carries an expert,
-and the `wan22-speed-*` folders hold a matched `high`/`low` pair.
+A mixture-of-experts pair was the one thing here with no image-side analogue:
+*two* checkpoints split by noise level, sampled in sequence by two
+`KSamplerAdvanced` nodes handing an unfinished latent over. It is why a video
+LoRA row used to carry an `expert`, and why `readVidChips` now deliberately
+sends one number — a field whose only value is "both" is a sidecar implying a
+choice nobody had. Clips rendered while it existed still record theirs, and the
+metadata sheet still reads it: **a reader that drops a field makes every run
+that has one unreadable.**
 
 ### One vocabulary, three destinations
 
 `SHOT_VOCAB` is a table, not three tables. Each group declares which side reads
-it and where its clause lands, and the three compilers differ only in what they
-do with the result:
+it and where its clause lands, and the compilers differ only in what they do
+with the result. There are two now and there were three; the middle one is kept
+in this list because it is the case that shaped `needs`:
 
 - **H3** gets the document — an alignment instruction and three named fields, or
   the six-field reference form when pictures are attached. `H3_ALIGN` holds the
@@ -2460,13 +2447,15 @@ do with the result:
   to `ref2va` or `fl2va`, which is right for which checkpoint loads and too
   coarse for the alignment instruction, where first-only, last-only and both are
   three different sentences about where a picture sits in time.
-- **Wan** gets prose, and gets it with the audio pills dropped — the same way a
+- **A silent family** got prose with the audio pills dropped — the same way a
   negative prompt is dropped for H3, because a sidecar recording an input the
   model never read is a sidecar that lies. Dropped by `needs`, not by field:
   dialogue is the case that breaks the simpler rule, landing in the *visual*
-  description and still being audio, and `<d>[English] …</d>` arriving at umT5
-  is a pair of angle brackets in the prompt rather than a line anyone says.
-  `needs` is therefore per item as well as per group.
+  description and still being audio, and `<d>[English] …</d>` arriving at a
+  text-only encoder is a pair of angle brackets in the prompt rather than a line
+  anyone says. `needs` is therefore per item as well as per group. Nothing dims
+  today — H3 reads every group — and the column is kept as the one a second
+  family arrives on, with `_shot_phrases(..., audio=False)` still the mechanism.
 - **Krea 2** gets prose with camera, action and both audio groups filtered out
   by `image` in the table. Filtered, not silently dropped — the palette dims
   what the thing in front of you cannot read, and the group heading says why.

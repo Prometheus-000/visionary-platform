@@ -21,8 +21,8 @@ import { useStore } from '../store'
  * > **Duration starts at zero.** A still is the default and time is added. Someone
  * > who wants one image should finish and leave without learning that motion exists.
  *
- * Which is what this is. At `Still` the run is Krea 2; pick a number and it is H3 or
- * Wan. Video stops being a place you navigate to and becomes a value you set — and
+ * Which is what this is. At `Still` the run is Krea 2; pick a number and it is H3.
+ * Video stops being a place you navigate to and becomes a value you set — and
  * that is what makes it findable, because a control reading "Still" invites a press
  * in a way an unlabelled photo glyph never did, while somebody who only wants a
  * picture never has to learn what the other values are for.

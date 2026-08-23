@@ -18,10 +18,11 @@ What the cases are chosen to pin, beyond coverage:
     so a `k3nan` trigger word is never capitalised into a different token.
     `TYPED` therefore includes a lowercase fragment, an already-closed
     sentence, and one written across two lines.
-  * **`needs`, which is per item and not only per group.** Wan is silent, so
-    audio pills are dropped — but `dialogue` lands in the *visual* field while
-    still being audio, which is the case a group-level rule gets wrong. Both
-    are in the matrix on both sides.
+  * **`needs`, which is per item and not only per group.** A silent family
+    dropped the audio pills — but `dialogue` lands in the *visual* field while
+    still being audio, which is the case a group-level rule gets wrong. Nothing
+    is silent now, so the matrix pins that every group arrives; the per-item
+    rule is what a second family would land on.
   * **The four H3 alignment sentences.** first-only, last-only, both and refs
     are four different instructions, and `_h3_task()` reads them more finely
     than `/api/video` does. One case each.
@@ -108,9 +109,6 @@ def cases(vocab):
         for pname, pills in picks:
             yield f"image/{tname}/{pname}", {
                 "kind": "image", "prompt": typed, "shot": pills}
-            for model in ("wan14b", "wan5b"):
-                yield f"{model}/{tname}/{pname}", {
-                    "kind": "video", "model": model, "prompt": typed, "shot": pills}
             yield f"h3/{tname}/{pname}", {
                 "kind": "video", "model": "h3", "prompt": typed, "shot": pills}
 

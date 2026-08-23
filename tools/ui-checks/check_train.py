@@ -281,7 +281,7 @@ with sync_playwright() as pw:
     pg.click(".sheet-bar #ds-back")
     pg.wait_for_selector("#ds-list", timeout=10_000)
     pg.wait_for_timeout(600)
-    pg.click("#ds-list >> text=wan_takes")
+    pg.click("#ds-list >> text=roof_takes")
     pg.wait_for_timeout(1300)
     count = pg.text_content("#ds-count") or ""
     check("a mixed set counts images and clips apart",

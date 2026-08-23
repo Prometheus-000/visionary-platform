@@ -9,14 +9,16 @@
  *
  * The rule it was protecting is worth keeping exactly: *a value you chose is yours
  * and survives a model change; a value that was only the previous model's default
- * is not.* Without it, switching from H3 to Wan kept res_multistep — a sampler
- * nobody picked, quietly overriding the euler Wan's own templates use — because it
- * happened to be in both lists.
+ * is not.* Without it, switching video families kept res_multistep — a sampler
+ * nobody picked, quietly overriding the euler the other family's own templates use
+ * — because it happened to be in both lists.
  *
  * The other half is validation, and it is what the flag alone never gave: a chosen
- * value is kept **only if the new model offers it**. A sampler you picked on H3
- * that Wan does not have falls back to Wan's default rather than being sent to a
- * checkpoint that will reject it.
+ * value is kept **only if the new model offers it**. A sampler you picked on one
+ * model that the next does not have falls back to that model's default rather than
+ * being sent to a checkpoint that will reject it. There is one video family today,
+ * so neither half fires there — this is the image side's rule as much as the video
+ * side's, and it is the machinery a second family arrives onto.
  */
 import type { Store, VideoComposer } from '../store'
 import { videoModel } from '../store'
@@ -29,8 +31,6 @@ export type ResolvedVid = {
   /** Placeholders, not values: an empty box means "the model's default", which
    *  stays right when the default changes under it. */
   stepsPlaceholder: string
-  cfgPlaceholder: string
-  shiftPlaceholder: string
 }
 
 const keep = (value: string, options: string[], fallback: string | undefined): string =>
@@ -47,8 +47,6 @@ export function resolveVid(s: Pick<Store, 'state' | 'vid'>): ResolvedVid {
     sampler: keep(s.vid.sampler, m?.samplers ?? [], d.sampler),
     scheduler: keep(s.vid.scheduler, m?.schedulers ?? [], d.scheduler),
     stepsPlaceholder: d.steps != null ? String(d.steps) : 'auto',
-    cfgPlaceholder: d.cfg != null ? String(d.cfg) : 'auto',
-    shiftPlaceholder: d.shift != null ? String(d.shift) : 'auto',
   }
 }
 
@@ -104,10 +102,11 @@ export function dropUnsupported(
   return Object.keys(out).length ? out : null
 }
 
-/** `steps`, `cfg`, `shift`, `switchAt`, `seed`, `sampler`, `scheduler` — whether
- *  any of them is an override. The resolved numbers alone cannot say whether you
- *  chose them or the checkpoint did, and "why is this 12 steps" is a question you
- *  ask days later off a gallery card. */
+/** `steps`, `seed`, `sampler`, `scheduler` — whether any of them is an override.
+ *  The resolved numbers alone cannot say whether you chose them or the
+ *  checkpoint did, and "why is this 12 steps" is a question you ask days later
+ *  off a gallery card. CFG, shift and the expert switch were in this list while
+ *  a family read them. */
 export function vidEdited(v: VideoComposer): boolean {
-  return !!(v.steps || v.cfg || v.shift || v.switchAt || v.sampler || v.scheduler)
+  return !!(v.steps || v.sampler || v.scheduler)
 }

@@ -2,7 +2,7 @@
  * Which pills the thing in front of you can actually read.
  *
  * Two different reasons a pill might not be read, and they are worth different
- * words: the image side has no camera and no soundtrack, and Wan is silent.
+ * words: the image side has no camera and no soundtrack.
  *
  * **Per item as well as per group**, because one item disagrees with its group and
  * it is the one that matters: on-screen text is a picture of words and every model

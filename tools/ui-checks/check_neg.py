@@ -124,13 +124,15 @@ with sync_playwright() as pw:
     pg.wait_for_timeout(350)
     check("hidden again at CFG blank", state()["toggleHidden"], True)
 
+    # The video side has no negative branch at all now. It had one while a
+    # second family read CFG, and this pair of assertions was the contrast that
+    # made the rule legible: the toggle is a property of the model, not of the
+    # side. One family, guidance-distilled, so there is one answer — and the
+    # assertion is worth keeping precisely because it is the one that would fail
+    # if a negative prompt ever crept back onto a path that cannot read it.
     print("\nvideo / MiniMax-H3 (guidance-distilled)")
     side(False)
-    pick_model("v", "MiniMax-H3")
-    check("toggle hidden on H3", state()["toggleHidden"], True)
-    print("\nvideo / Wan 2.2 A14B (takes CFG)")
-    pick_model("v", "A14B")
-    check("toggle shown on Wan", state()["toggleHidden"], False)
+    check("toggle hidden on the video side", state()["toggleHidden"], True)
 
     print("\nthe field grows and then stops")
     side(True)

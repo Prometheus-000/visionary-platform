@@ -3,7 +3,7 @@ Smoke test for every graph this app builds — all variants, on CPU, no weights.
 
     modal run tools/smoke_graphs.py
 
-Checks that every graph `_krea2_graph`, `_h3_graph` and `_wan_graph` can emit is
+Checks that every graph `_krea2_graph` and `_h3_graph` can emit is
 structurally valid against the ComfyUI build pinned in `comfy_image`: every
 `class_type` exists, every input key is a real input on that node, and every
 link points at a node in the same graph.
@@ -29,9 +29,9 @@ boundary of what it proves:
 - It DOES catch a wrong node name, a wrong or misspelled input, a dangling
   link, and a required input the builder forgot.
 - It DOES catch a wrong value in a fixed combo — `CLIPLoader.type` having to be
-  "minimax" or "wan", a sampler or scheduler this deployment offers that
-  ComfyUI does not have, `ref_image_size`, the two-expert noise flags. Those
-  lists are compiled in, so they are populated with no weights present.
+  "minimax" or "krea2", a sampler or scheduler this deployment offers that
+  ComfyUI does not have, `ref_image_size`. Those lists are compiled in, so they
+  are populated with no weights present.
 - It DOES catch a model-sampling node whose baked-in multiplier disagrees with
   the checkpoint's own config. That one is checked against
   `comfy.supported_models` rather than against a name, because it is the shape
@@ -45,10 +45,9 @@ boundary of what it proves:
   separates the two cases, and it is what this skips on: `_require_models()`
   covers the file combos, and it covers them before the GPU is rented.
 - It does not run a sampler, so it says nothing about whether a clip looks
-  right. The two-expert handover flags in particular (`add_noise`,
-  `return_with_leftover_noise`) are structurally valid whatever they are set
-  to; getting them wrong produces a washed-out clip, not an error, and only a
-  real run will show it.
+  right. Sampling flags are structurally valid whatever they are set to;
+  getting one wrong produces a washed-out clip, not an error, and only a real
+  run will show it.
 
 A pass here means the graphs are wired to nodes that exist. It does not mean
 the video is good.
@@ -76,9 +75,6 @@ from app import (  # noqa: E402
     _h3_frames,
     _h3_graph,
     _krea2_graph,
-    _wan_canvas,
-    _wan_frames,
-    _wan_graph,
     comfy_image,
 )
 
@@ -100,9 +96,8 @@ def _variants() -> list[tuple[str, dict]]:
 
     One graph per branch, not per parameter: the point is to reach every
     `class_type` the code can emit — the keyframe nodes, the first/last node,
-    the reference node, the two-expert pair, the 5B single expert — because a
-    node name is what goes stale, and a branch never built is a name never
-    checked.
+    the reference node — because a node name is what goes stale, and a branch
+    never built is a name never checked.
     """
     out: list[tuple[str, dict]] = []
     seed, steps = 1, 4
@@ -183,34 +178,6 @@ def _variants() -> list[tuple[str, dict]]:
                                     ref_size="match")),
     ]
 
-    # ── Wan 2.2 ───────────────────────────────────────────────────────────
-    stack = [{"name": "hi.safetensors", "unet": 1.0, "expert": "high"},
-             {"name": "lo.safetensors", "unet": 1.0, "expert": "low"},
-             {"name": "both.safetensors", "unet": 0.8, "expert": "both"}]
-    for fam in ("14b", "5b"):
-        d = VIDEO_MODELS["wan14b" if fam == "14b" else "wan5b"]["defaults"]
-        w, h = _wan_canvas("16:9", "draft", fam)
-        n = _wan_frames(2, fam)
-        base = dict(family=fam, prompt="a smoke test", negative_prompt="blurry",
-                    width=w, height=h, frames=n, seed=seed, steps=steps,
-                    cfg=d["cfg"], shift=d["shift"], switch_at=steps // 2,
-                    sampler="euler", scheduler="simple")
-        out += [
-            (f"wan {fam} t2v", _wan_graph(**base)),
-            (f"wan {fam} t2v + loras", _wan_graph(**base, loras=stack)),
-            (f"wan {fam} i2v", _wan_graph(**base, first_frame="a.png")),
-        ]
-        # Only the A14B pair advertises a last frame; the 5B has no node for it
-        # and the API refuses one, so building it here would test a request the
-        # product does not make.
-        if VIDEO_MODELS["wan14b"]["supports"]["last_frame"] and fam == "14b":
-            out += [
-                (f"wan {fam} first+last",
-                 _wan_graph(**base, first_frame="a.png", last_frame="b.png")),
-                # Last alone still has to reach WanFirstLastFrameToVideo — the
-                # i2v node has no end_image input at all.
-                (f"wan {fam} last only", _wan_graph(**base, last_frame="b.png")),
-            ]
     return out
 
 
@@ -276,11 +243,12 @@ def _check_menus(schema: dict) -> list[str]:
 
     for key, spec in VIDEO_MODELS.items():
         # H3 picks its sampler through KSamplerSelect and its scheduler through
-        # BasicScheduler; Wan takes both as widgets on KSamplerAdvanced.
+        # BasicScheduler. This was a branch while a second family took both as
+        # widgets on KSamplerAdvanced, and the loop is kept because the menus
+        # are still per model — a family that samples differently changes where
+        # its names are validated, not whether they are.
         where = {"sampler": ("KSamplerSelect", "sampler_name"),
-                 "scheduler": ("BasicScheduler", "scheduler")} if key == "h3" else {
-                 "sampler": ("KSamplerAdvanced", "sampler_name"),
-                 "scheduler": ("KSamplerAdvanced", "scheduler")}
+                 "scheduler": ("BasicScheduler", "scheduler")}
         for field, (cls, inp) in where.items():
             options = _combo(
                 (schema.get(cls, {}).get("input", {}).get("required", {}) or {}).get(inp)
@@ -300,24 +268,26 @@ SAMPLING_MULTIPLIER = {"ModelSamplingSD3": 1000, "ModelSamplingAuraFlow": 1.0}
 
 # The model config each family's graph is sampling. Named here because the
 # check below has to read `sampling_settings` off the right one, and nothing in
-# a graph says which checkpoint it is for. WAN22_T2V declares only a shift and
-# inherits the rest from WAN21_T2V, which declares no multiplier at all — so it
-# falls through to ModelSamplingDiscreteFlow's own default of 1000, which is
-# what ModelSamplingSD3 bakes in. Krea 2 is the one that asks for 1.0.
-GRAPH_MODEL_CLASS = {"krea2": "Krea2", "wan": "WAN22_T2V"}
+# a graph says which checkpoint it is for. Krea 2 is the one that asks for 1.0;
+# most video configs declare no multiplier at all and fall through to
+# ModelSamplingDiscreteFlow's own default of 1000, which is what
+# ModelSamplingSD3 bakes in — which is exactly how the wrong node got copied.
+GRAPH_MODEL_CLASS = {"krea2": "Krea2"}
 
 
 def _check_model_sampling(_schema: dict) -> list[str]:
     """
     The check that only ever fails silently: a valid node with the wrong number.
 
-    `timestep(sigma) = sigma * multiplier` is what the DiT is handed, and the
-    Krea 2 and Wan configs disagree about that multiplier — 1.0 against 1000.
-    Both nodes exist, both take a `shift`, both validate, and the graph runs to
-    completion at the right step count and the right speed. Send Krea 2 the
-    1000 and every render is coloured noise, on every sampler, with and without
-    LoRAs, and nothing anywhere raises. That happened, from copying the node off
-    the Wan path where it is correct.
+    `timestep(sigma) = sigma * multiplier` is what the DiT is handed, and model
+    configs disagree about that multiplier — Krea 2 asks for 1.0 where most
+    video families inherit 1000. Both nodes exist, both take a `shift`, both
+    validate, and the graph runs to completion at the right step count and the
+    right speed. Send Krea 2 the 1000 and every render is coloured noise, on
+    every sampler, with and without LoRAs, and nothing anywhere raises. That
+    happened, by copying the node off a neighbouring video graph where it was
+    correct — a graph since deleted, which is why this check now has one family
+    in it and is still worth every line.
 
     Nothing about that is reachable by checking names, which is what the rest of
     this file does — so it is checked against the model config itself rather
@@ -344,8 +314,7 @@ def _check_model_sampling(_schema: dict) -> list[str]:
 
     bad: list[str] = []
     for graph_name, graph in _variants():
-        family = "krea2" if graph_name.startswith("krea2") else (
-            "wan" if graph_name.startswith("wan") else None)
+        family = "krea2" if graph_name.startswith("krea2") else None
         if family is None:          # H3 sets no shift node at all
             continue
         cfg = getattr(comfy.supported_models, GRAPH_MODEL_CLASS[family], None)

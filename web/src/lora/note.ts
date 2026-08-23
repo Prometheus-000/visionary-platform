@@ -54,7 +54,7 @@ export function loraNote(s: Store): string {
 
   // **The composer is per-kind now, so this is no longer about a stack left
   // behind by the other side** — a Krea 2 chip cannot follow you to video at
-  // all. What it still catches is a Wan stack under a model that reads none.
+  // all. What it still catches is a stack under a model that reads none.
   if (s.kind === 'video' && !supports(s).loras && s.loras.length) {
     bits.push(`${videoModel(s)?.label ?? 'This model'} takes no LoRAs — `
       + 'the ones on the canvas are ignored.')

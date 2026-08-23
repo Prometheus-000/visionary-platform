@@ -5,16 +5,17 @@ import { status, stop, video } from '../api/routes'
 import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { readVidChips, stripLoras } from '../lora/tokens'
-import { negAllowed, readShot, supports, useStore, type Store } from '../store'
+import { readShot, useStore, type Store } from '../store'
 import { readScene, typedProse } from '../scene/model'
 import { resolveVid } from '../console/resolve'
 
 /**
  * One clip, from press to playback.
  *
- * The same job/status/stop contract the image side uses, at the same 400ms — adding
- * Wan did not add a backend and neither does this: what is per-family is a graph
- * builder on the server and a row in `VIDEO_MODELS`.
+ * The same job/status/stop contract the image side uses, at the same 400ms. A second
+ * video family lived on this exact contract for a while without adding a backend,
+ * which is the claim worth keeping: what is per-family is a graph builder on the
+ * server and a row in `VIDEO_MODELS`, and nothing here.
  *
  * The one thing that differs from `useGenerate` is what the phase says while nothing
  * is sampling yet. The first minutes of a video run are 42.5 GB loading onto the card,
@@ -66,24 +67,16 @@ export function videoBody(s: Store): Record<string, unknown> {
     ...(s.doc !== null && { prompt_compiled: s.doc }),
     model: s.vid.model,
     prompt,
-    negative_prompt: negAllowed(s) ? s.negative : '',
+    // No negative prompt, no CFG and no flow shift: H3 is guidance-distilled
+    // and reads none of them. They were here for a second family that did.
     aspect: s.vid.aspect,
     tier: r.tier,
     seconds: r.seconds,
     steps: s.vid.steps,
     seed: s.vid.seed,
-    cfg: s.vid.cfg,
-    shift: s.vid.shift,
-    switch_at: s.vid.switchAt,
     sampler: r.sampler,
     scheduler: r.scheduler,
-    // The expert list is per *model*, not global: `wan_experts` describes the
-    // A14B pair, and handing it to a one-expert model invites a tag that model
-    // has no branch for.
-    loras: readVidChips(s.loras, s.state?.max_loras ?? 6,
-                        supports(s).experts
-                          ? (s.state?.wan_experts ?? ['both', 'high', 'low'])
-                          : ['both']),
+    loras: readVidChips(s.loras, s.state?.max_loras ?? 6),
     shot: readShot(s.shot),
     ref_roles: sc ? [] : s.refRoles.slice(0, s.refs.length),
     first_frame: s.keyframe.first,

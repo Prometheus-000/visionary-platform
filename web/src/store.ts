@@ -29,7 +29,7 @@
  * Same rule, flag deleted: a value you chose is yours and survives a model
  * change, a value that was only the previous model's default is not — and it
  * survives *only if the new model offers it*, which is what stopped
- * res_multistep quietly overriding the euler that Wan's own templates use.
+ * res_multistep quietly overriding a sampler the model's own templates use.
  */
 import { create } from 'zustand'
 
@@ -157,9 +157,6 @@ export type VideoComposer = {
   sampler: string
   scheduler: string
   steps: string
-  cfg: string
-  shift: string
-  switchAt: string
   seed: string
   /** `match` scales every reference to the clip's own pixel area; `max` hands
    *  over as much as the run allows. The one control in the sources row that
@@ -199,7 +196,7 @@ const VIDEO: VideoComposer = {
   model: '',
   aspect: '16:9',
   tier: '', seconds: '', sampler: '', scheduler: '',
-  steps: '', cfg: '', shift: '', switchAt: '', seed: '',
+  steps: '', seed: '',
   refSize: 'match',
 }
 
@@ -220,8 +217,8 @@ export type Store = {
    *
    * This used to say the prompt survives the switch, on the grounds that a shot
    * described as a still is the same sentence you would describe as a clip. True
-   * of the sentence and false of everything around it: a Krea 2 LoRA is not a
-   * Wan LoRA, and carrying one across loaded it into a run that could not use it
+   * of the sentence and false of everything around it: a Krea 2 LoRA is not an
+   * H3 LoRA, and carrying one across loaded it into a run that could not use it
    * — silently, because `loraNote` warns about names that resolve to nothing and
    * about models that read no LoRAs at all, and a LoRA for the wrong
    * architecture is neither.
@@ -703,15 +700,21 @@ export function supports(s: Pick<Store, 'state' | 'vid'>): Record<string, boolea
 /**
  * Whether this model reads a negative prompt at all.
  *
- * On the video side the model says so. On the image side nothing did, and that
- * is the gap this closes: Krea 2 Turbo is distilled to CFG 1.0, where a negative
- * prompt is not weak but *unread*, and the box sat at the top of Advanced
- * regardless. Read off the effective CFG rather than the checkpoint name, so a
- * Turbo run with CFG typed up to 5 gets the control back — the rule is about the
- * number the sampler uses, not about which file is loaded.
+ * **Never on video.** H3 is guidance-distilled, so a negative prompt there is
+ * not weak but *unread* — and a sidecar that records one is a sidecar that lies
+ * about how the clip was made. This asked the model while there were two video
+ * families and one of them took CFG; there is one now, and the answer is a
+ * constant rather than a lookup.
+ *
+ * On the image side nothing said so either, and that is the gap this closes:
+ * Krea 2 Turbo is distilled to CFG 1.0, where the same thing is true, and the
+ * box sat at the top of Advanced regardless. Read off the effective CFG rather
+ * than the checkpoint name, so a Turbo run with CFG typed up to 5 gets the
+ * control back — the rule is about the number the sampler uses, not about which
+ * file is loaded.
  */
 export function negAllowed(s: Pick<Store, 'state' | 'kind' | 'img' | 'vid'>): boolean {
-  if (s.kind === 'video') return !!supports(s).negative
+  if (s.kind === 'video') return false
   const typed = parseFloat(s.img.cfg)
   const def = s.state?.krea2_defaults?.[s.img.model]?.cfg
   const cfg = Number.isFinite(typed) ? typed : def

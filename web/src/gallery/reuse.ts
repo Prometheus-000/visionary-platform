@@ -112,17 +112,19 @@ export function reuse(it: GalleryItem): void {
     return
   }
 
-  // The model first, because it decides which controls exist: restoring a CFG into a
-  // panel built for a family that reads none is a value written to a box that is about
-  // to be hidden.
+  // The model first, because it decides which controls exist.
+  //
+  // **A sidecar outlives the feature that wrote it.** Clips made while a second
+  // video family existed carry `cfg_scale`, `shift` and `switch_at`, and those
+  // are read and shown by `MetaSheet` exactly as before — a reader that drops a
+  // field makes every run that has one unreadable. What is gone is only the
+  // *write*: there is nowhere to put them, so restoring one would be a value
+  // written to a control that does not exist.
   const model = s.state?.video_models.find((m) => m.key === it.model && m.ready)
   s.setVid({
     ...(model ? { model: model.key } : {}),
     seed: set(it.seed),
     steps: set(it.steps),
-    cfg: set(it.cfg_scale),
-    shift: set(it.shift),
-    switchAt: set(it.switch_at),
     // Explicit rather than left blank, so restoring a clip's settings and then attaching
     // a frame does not quietly hand them back to the model's defaults.
     sampler: set(it.sampler),

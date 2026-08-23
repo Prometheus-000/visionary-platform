@@ -722,105 +722,6 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "gated": False,
         "approx_gb": 0.6,
     },
-    # ── Wan 2.2 video ──────────────────────────────────────────────────────
-    #
-    # Comfy-Org's repackage again, and for the same reason the H3 entries use
-    # one: these are the split single-file weights ComfyUI's loaders take, not
-    # the diffusers layout Wan-AI publishes.
-    #
-    # The A14B models are a mixture of two experts, and it is a *storage*
-    # mixture, not a runtime one: high-noise denoises the early steps, low-noise
-    # the rest, and they are separate 14 GB checkpoints. So a 14B task is always
-    # two files, never one, and the pair is what the run needs — half of it
-    # downloaded is not a model that runs at half quality, it is a model that
-    # does not run. `fp8_scaled` rather than the 28.6 GB fp16: two experts plus
-    # the encoder is 35 GB this way against 68 GB, which is the difference
-    # between holding both resident on one H100 and swapping every switch.
-    "wan_t2v_high": {
-        "label": "Wan 2.2 T2V · high noise",
-        "note": "14B fp8 — early steps",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
-        "dest": MODELS / "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
-        "gated": False,
-        "approx_gb": 14.3,
-    },
-    "wan_t2v_low": {
-        "label": "Wan 2.2 T2V · low noise",
-        "note": "14B fp8 — late steps",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
-        "dest": MODELS / "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
-        "gated": False,
-        "approx_gb": 14.3,
-    },
-    "wan_i2v_high": {
-        "label": "Wan 2.2 I2V · high noise",
-        "note": "14B fp8 — early steps",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
-        "dest": MODELS / "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
-        "gated": False,
-        "approx_gb": 14.3,
-    },
-    "wan_i2v_low": {
-        "label": "Wan 2.2 I2V · low noise",
-        "note": "14B fp8 — late steps",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
-        "dest": MODELS / "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
-        "gated": False,
-        "approx_gb": 14.3,
-    },
-    # The 5B is not a smaller A14B — it is a single dense model with its own
-    # VAE at 16x spatial compression (48 latent channels against 16), which is
-    # why it needs `wan2.2_vae` and the 14B pair needs `wan_2.1_vae`. One file,
-    # one expert, no switch step: it is the whole Wan stack for 10 GB, and it
-    # covers text-to-video and image-to-video from the same checkpoint.
-    "wan_ti2v_5b": {
-        "label": "Wan 2.2 TI2V 5B",
-        "note": "Single 5B DiT — t2v and i2v, 24 fps",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
-        "dest": MODELS / "wan2.2_ti2v_5B_fp16.safetensors",
-        "gated": False,
-        "approx_gb": 10.0,
-    },
-    "wan_te": {
-        "label": "umT5-XXL",
-        "note": "Wan text encoder, fp8 scaled",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-        "dest": MODELS / "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-        "gated": False,
-        "approx_gb": 6.7,
-    },
-    "wan_vae": {
-        "label": "Wan 2.1 VAE",
-        "note": "Required by the 14B pair",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/vae/wan_2.1_vae.safetensors",
-        "dest": MODELS / "wan_2.1_vae.safetensors",
-        "gated": False,
-        "approx_gb": 0.25,
-    },
-    "wan_vae_22": {
-        "label": "Wan 2.2 VAE",
-        "note": "Required by the 5B",
-        "family": "Wan 2.2 — video",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/vae/wan2.2_vae.safetensors",
-        "dest": MODELS / "wan2.2_vae.safetensors",
-        "gated": False,
-        "approx_gb": 1.4,
-    },
     # ── MiniMax-H3 speed LoRAs ─────────────────────────────────────────────
     #
     # MiniMax's own Lightning distillations, in the repo the H3 weights already
@@ -884,59 +785,6 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "approx_gb": 2.0,
     },
 
-    # ── Wan 2.2 speed LoRAs ────────────────────────────────────────────────
-    #
-    # These land in loras/, not models/, because that is what they are: they
-    # show up in the LoRA picker beside anything you trained, and nothing
-    # special-cases them. They are here rather than left to a manual upload
-    # because they are the 14B path's draft tier — 4 steps instead of 20, at
-    # CFG 1, which is a bigger lever than resolution and the reason the LoRA
-    # stack below is worth having on day one.
-    #
-    # Paired per expert, and the pair is not interchangeable: the high-noise
-    # LoRA on the low-noise expert is a silent quality loss, not an error. The
-    # folder holds both files so the picker shows them as `high` and `low` of
-    # one thing.
-    "wan_speed_t2v_high": {
-        "label": "Wan 2.2 T2V speed · high",
-        "note": "LightX2V 4-step LoRA",
-        "family": "Wan 2.2 speed LoRAs",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
-        "dest": LORAS / "wan22-speed-t2v" / "high.safetensors",
-        "gated": False,
-        "approx_gb": 1.2,
-    },
-    "wan_speed_t2v_low": {
-        "label": "Wan 2.2 T2V speed · low",
-        "note": "LightX2V 4-step LoRA",
-        "family": "Wan 2.2 speed LoRAs",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
-        "dest": LORAS / "wan22-speed-t2v" / "low.safetensors",
-        "gated": False,
-        "approx_gb": 1.2,
-    },
-    "wan_speed_i2v_high": {
-        "label": "Wan 2.2 I2V speed · high",
-        "note": "LightX2V 4-step LoRA",
-        "family": "Wan 2.2 speed LoRAs",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
-        "dest": LORAS / "wan22-speed-i2v" / "high.safetensors",
-        "gated": False,
-        "approx_gb": 1.2,
-    },
-    "wan_speed_i2v_low": {
-        "label": "Wan 2.2 I2V speed · low",
-        "note": "LightX2V 4-step LoRA",
-        "family": "Wan 2.2 speed LoRAs",
-        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
-        "filename": "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
-        "dest": LORAS / "wan22-speed-i2v" / "low.safetensors",
-        "gated": False,
-        "approx_gb": 1.2,
-    },
 }
 
 # Krea's own style LoRAs — nine repos, one 0.47 GB file each, ungated.
@@ -1007,24 +855,14 @@ VIDEO_MODEL_KEYS = ("h3_dit", "h3_te", "h3_vae", "h3_audio_vae")
 # on top of the base set rather than a second stack.
 VIDEO_REF_MODEL_KEYS = ("h3_ref_dit", "h3_te", "h3_vae", "h3_audio_vae")
 
-# What each Wan run needs, keyed by (family, task). Written out per task rather
-# than as "the Wan models" because the t2v and i2v 14B pairs are 57 GB together
-# and there is no reason to make a text-to-video run wait on the i2v weights —
-# _require_models() names only the pair the requested run actually loads.
-WAN_MODEL_KEYS: dict[tuple[str, str], tuple[str, ...]] = {
-    ("14b", "t2v"): ("wan_t2v_high", "wan_t2v_low", "wan_te", "wan_vae"),
-    ("14b", "i2v"): ("wan_i2v_high", "wan_i2v_low", "wan_te", "wan_vae"),
-    ("5b", "t2v"): ("wan_ti2v_5b", "wan_te", "wan_vae_22"),
-    ("5b", "i2v"): ("wan_ti2v_5b", "wan_te", "wan_vae_22"),
-}
 
 def _catalogue_lora_roots() -> dict[str, str]:
     """
     {listing row -> family} for every catalogue weight that lands in loras/.
 
     Keyed on the row rather than on the dest, because those are not the same
-    thing: the identity-edit weight is a loose file at the top of loras/ and each
-    Wan speed pair is a folder holding two files, and it is the folder that one
+    thing: the identity-edit weight is a loose file at the top of loras/ while a
+    trained LoRA is a folder holding its epochs, and it is the folder that one
     line of the LoRA listing stands for.
 
     What reads it is the delete confirmation. Deleting a LoRA you trained costs
@@ -1138,9 +976,9 @@ def _caption_presets() -> dict[str, dict[str, Any]]:
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"}
-# A dataset holds clips too. Nothing trains on them yet — see the TODO at
-# `train_job` — but a set you are building for Wan is a set you build before the
-# trainer exists, and a file the volume already accepts should not be invisible
+# A dataset holds clips too. Nothing trains on them — there is no video trainer
+# here and no checkpoint to be one — but a file the volume already accepts
+# should not be invisible
 # to the page that lists what is in the folder. Counting them and telling them
 # apart is the whole of it: the sidecar layout is identical, `{clip}.txt` beside
 # `{clip}.mp4`, so nothing about the storage contract changes when the trainer
@@ -1481,8 +1319,6 @@ def _pretty_model(name: str) -> str:
     for raw, shown in (("MiniMaxH3VideoVAE", "the video VAE"),
                        ("MiniMaxH3TEModel_", "the text encoder"),
                        ("MiniMaxH3", "MiniMax-H3"),
-                       ("WAN21", "the Wan VAE"),
-                       ("WanTEModel", "the text encoder"),
                        ("AutoencodingEngine", "the VAE"),
                        ("Krea2", "Krea 2")):
         if name.startswith(raw):
@@ -1875,8 +1711,8 @@ def _sizes_on_disk(dests: Any) -> dict[Path, int]:
     invalidating a name we have already asked about. That is exactly why Krea 2
     was always reported correctly and the video weights were not — the Krea
     files were on the volume before any of these containers started, so nothing
-    negative was ever cached for them, while Wan and H3 were downloaded into a
-    deployment that had already been asked whether they were there. The symptom
+    negative was ever cached for them, while the video weights were downloaded
+    into a deployment that had already been asked whether they were there. The symptom
     was being told to download 18 GB that were sitting on the volume.
 
     Reading the parent directory sidesteps it: readdir reports what the
@@ -2865,11 +2701,13 @@ def train_job(
     Spawning it twice is two cards on the board and two bills, and no state to
     coordinate.
 
-    TODO: video. `train_job` is the exact three-step shape Wan wants — only the
-    script names change — but musubi cannot train the fp8_scaled weights this
-    platform downloads, so it needs a second copy of the 14B pair at bf16 and
-    the bf16 T5. About 64 GB. See "Phase 5" in CLAUDE.md: a dataset already
-    counts its clips, and this is the only piece missing.
+    TODO: video, and the trainer is not this one. musubi trains Krea 2 and Wan;
+    **H3 trains under AI Toolkit**, so a video branch here is a second trainer
+    rather than a fourth script name in `train_job` — which is the opposite
+    shape from the one the Wan plan had, where only the script names changed.
+    That makes it a real piece of work rather than a rename, and it is why a
+    dataset already counts its clips: the storage contract does not change for
+    whichever trainer arrives.
     """
     if not NAME_RE.match(job_id) or not NAME_RE.match(lora_name):
         raise ValueError("job_id and lora_name must be 1-64 chars of [A-Za-z0-9_-].")
@@ -3365,9 +3203,9 @@ COMFY_STAGED_RE = re.compile(
 # unconditionally would be chrome on the graph.
 #
 # It stops being equivalent the moment a distilled LoRA is loaded: 20 steps down
-# to 4 wants a different curve, and this is the only lever for one. Same rule
-# the Wan builder already records — the shift is the last word on the sampling
-# curve, so it goes *after* the LoRAs, never before.
+# to 4 wants a different curve, and this is the only lever for one. The shift is
+# the last word on the sampling curve, so it goes *after* the LoRAs, never
+# before.
 H3_SHIFT_VIDEO = 12.0
 H3_SHIFT_AUDIO = 3.0
 
@@ -3435,8 +3273,8 @@ class _Comfy:
         self._proc = subprocess.Popen(
             ["python", "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
              "--disable-auto-launch", "--disable-metadata",
-             # Safe on both paths, for different reasons. H3 and Wan never pass
-             # an attention mask. Krea 2 does, but only through the regional
+             # Safe on both paths, for different reasons. H3 never passes an
+             # attention mask. Krea 2 does, but only through the regional
              # node, and that node installs itself as
              # `optimized_attention_override` and runs its own FlexAttention
              # kernel for exactly the masked case — sageattention is what it
@@ -5316,7 +5154,7 @@ def _validate_loras(raw: Any) -> list[dict[str, Any]]:
             "path": str(path),
             "name": path.relative_to(LORAS.resolve()).as_posix(),
             "unet": unet,
-            # Krea 2's text encoder takes LoRA weights, unlike Wan's — so this
+            # Krea 2's text encoder takes LoRA weights, unlike H3's — so this
             # stack keeps the second number the video one has no use for.
             # Defaulted to the UNet weight here rather than in the client, so
             # today's default is not frozen into every prompt ever saved.
@@ -5665,8 +5503,8 @@ def _krea2_graph(
         "vae": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
         # Krea 2's latent format is `Wan21`: 16 channels, and
         # `latent_dimensions = 3`, so the sampler works on [B, 16, T, H/8, W/8].
-        # `length: 1` gives ((1-1)//4)+1 = 1 frame — the same node the Wan path
-        # builds its latents with, asked for a single frame.
+        # `length: 1` gives ((1-1)//4)+1 = 1 frame — a video latent node asked
+        # for a single frame.
         #
         # `EmptySD3LatentImage` also works and is what the node pack's own
         # example workflow uses: `common_ksampler` runs every latent through
@@ -5712,9 +5550,9 @@ def _krea2_graph(
     # Sending the SD3 one gives the model timestep ~535 where it expects ~0.53,
     # every step, so nothing denoises and the render completes at the right step
     # count, the right speed, with no error anywhere, and returns coloured
-    # noise. The Wan path two sections down *does* want ModelSamplingSD3 — its
-    # config takes the 1000 default — which is exactly why this looked like a
-    # line worth copying. Check the model config, not the neighbouring graph.
+    # noise. Other video families *do* want ModelSamplingSD3 — their configs
+    # take the 1000 default — which is exactly why this looked like a line worth
+    # copying. Check the model config, not the neighbouring graph.
     graph["shift"] = {"class_type": "ModelSamplingAuraFlow",
                       "inputs": {"model": model_src, "shift": shift}}
     model_src = ["shift", 0]
@@ -6402,7 +6240,7 @@ def _h3_graph(
                             "format": "auto", "codec": "auto"}},
     }
 
-    # The LoRA stack, chained onto the DiT exactly as the Wan graph does it —
+    # The LoRA stack, chained onto the DiT the way the video graph does it —
     # `LoraLoaderModelOnly` is architecture-agnostic weight patching, so what
     # decides whether a given file does anything is whether its keys map onto
     # this DiT, not whether ComfyUI knows the family. That is why an unmatched
@@ -6492,65 +6330,26 @@ def _h3_graph(
 
 
 # --------------------------------------------------------------------------
-# Video — Wan 2.2 through the same ComfyUI
+# What a video model is allowed to ask for
 #
-# Same container, same warm process, same job/status/stop contract. Wan is a
-# second family in the existing video path rather than a second video path,
-# which is the whole reason the backend was a driven ComfyUI rather than ported
-# model code: adding a family is a graph and a table, not an image.
+# **There is one video family, and there was briefly two.** Wan 2.2 lived beside
+# H3 here — same container, same warm process, same job/status/stop contract,
+# a graph builder and a table row apart — which was the proof of the claim this
+# backend rests on: driving ComfyUI rather than porting model code means a
+# second family costs a graph and a table, not an image.
 #
-# What Wan is *for*, next to H3: it reads CFG and a negative prompt, which H3 —
-# guidance-distilled — does not, and phase 4 trains against it. Silent video is
-# the cost.
+# It is gone because it was not worth its room. Everything it was *for* had
+# been overtaken: CFG and a negative prompt are levers H3 does not need, the
+# LoRA argument that once justified it was wrong in both directions (MiniMax
+# ship their own Lightning distillations), and its own training path was tabled
+# on a 64 GB duplicate-weights bill nobody was going to pay. What it left
+# behind is silent video, half the catalogue, and a console asking every
+# question twice.
 #
-# This used to say Wan was the one that took LoRAs, on the grounds that H3's
-# int8-convrot repackage had "no LoRA ecosystem to speak of". Both halves were
-# wrong: `LoraLoaderModelOnly` patches any MODEL, and MiniMax ship their own
-# Lightning distillations in the repo the H3 weights already come from.
+# The dispatch it proved is still here — `requires` is per task, `supports` is
+# per model, and the run is family-agnostic. A second family is a row and a
+# graph builder, and that is the sentence this section exists to keep true.
 # --------------------------------------------------------------------------
-
-# Two families under one name. `14b` is the A14B mixture of experts, two 14 GB
-# transformers split by noise level; `5b` is the single dense TI2V checkpoint
-# with its own higher-compression VAE. They differ in fps, latent stride and
-# frame budget, so nothing below is a shared constant by accident.
-WAN_FPS = {"14b": 16, "5b": 24}
-
-# Latent stride. The 14B pair uses the 2.1 VAE at 8x spatial, so 16-aligned
-# pixels; the 5B's VAE is 16x, so 32-aligned. Feed either an unaligned canvas
-# and the encode silently crops.
-WAN_ALIGN = {"14b": 16, "5b": 32}
-
-# Both families decode 4n+1 frames — a leading frame then blocks of four.
-WAN_FRAME_STEP = 4
-WAN_FRAME_BASE = 1
-WAN_MIN_FRAMES = 17
-
-# Trained length, not maximum accepted length. Wan 2.2 is a five-second model
-# in both families: 81 at 16 fps and 121 at 24 fps are both 5.04 s. Longer runs
-# and then loops or drifts, so it is excluded rather than offered.
-WAN_MAX_FRAMES = {"14b": 81, "5b": 121}
-
-# Short edge per tier, the same shape as H3_TIERS. 720/480 are Wan's own two
-# resolution tiers; the 5B is trained at 704 and reuses 480 as its draft.
-WAN_TIERS = {
-    "14b": {"full": 720, "draft": 480},
-    "5b": {"full": 704, "draft": 480},
-}
-
-# Wan reads CFG, so these are real defaults rather than placeholders. 3.5 for
-# the 14B pair and 5.0 for the 5B are what Comfy's own templates ship, and the
-# shift is the 8.0 both model configs already carry — ModelSamplingSD3 is in
-# the graph so that a speed LoRA (which wants ~5.0) has somewhere to say so.
-WAN_DEFAULT_CFG = {"14b": 3.5, "5b": 5.0}
-WAN_DEFAULT_SHIFT = 8.0
-WAN_DEFAULT_STEPS = {"14b": 20, "5b": 30}
-
-# Which expert a LoRA row patches. The A14B pair is two checkpoints, so a LoRA
-# has to say — and it matters: the LightX2V pair ships one file per expert, and
-# crossing them is a silent quality loss rather than an error. "both" is the
-# default because a LoRA trained on the whole model is the common case, and it
-# is what the 5B always does since it has no second expert to choose.
-WAN_EXPERTS = ("both", "high", "low")
 
 
 # What the composer is allowed to ask for, per video model.
@@ -6558,11 +6357,12 @@ WAN_EXPERTS = ("both", "high", "low")
 # Served to the page rather than written into it, for the reason the GPU list
 # already is: which controls a model reads is a property of the model, and a
 # copy in the HTML is a second source of truth that drifts the first time one
-# of them changes. It is also the honest way to present two families that
-# genuinely differ — H3 is guidance-distilled and takes no CFG and no negative
-# prompt, Wan takes both; Wan takes LoRAs, H3's int8 repackage has no LoRA
-# ecosystem to offer. A control that is present but ignored is worse than one
-# that is absent, so absent is what the model says it wants.
+# of them changes. A control that is present but ignored is worse than one that
+# is absent, so absent is what the model says it wants — which is why the keys
+# here are the ones something actually reads. `cfg`, `negative` and `experts`
+# were in this table and are not any more: with one guidance-distilled family
+# they were three permanent `False`s, and a key whose only value is False is a
+# branch the page keeps for a model that is not there.
 VIDEO_MODELS: dict[str, dict[str, Any]] = {
     "h3": {
         "label": "MiniMax-H3",
@@ -6579,41 +6379,8 @@ VIDEO_MODELS: dict[str, dict[str, Any]] = {
         # entry used to encode ("no ecosystem for the int8 repackage") is an
         # argument about what other people publish, not about what the graph can
         # load, and it is the wrong reason to refuse somebody their own weights.
-        "supports": {"loras": True, "experts": False, "cfg": False,
-                     "negative": False, "references": True, "last_frame": True,
+        "supports": {"loras": True, "references": True, "last_frame": True,
                      "audio": True},
-    },
-    "wan14b": {
-        "label": "Wan 2.2 A14B",
-        "note": "Two experts · silent",
-        "requires": {"t2v": WAN_MODEL_KEYS[("14b", "t2v")],
-                     "i2v": WAN_MODEL_KEYS[("14b", "i2v")]},
-        "tiers": {"full": "720p", "draft": "480p draft"},
-        "lengths": [2, 3, 4, 5],
-        "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
-        "schedulers": ["simple", "normal", "beta"],
-        "defaults": {"steps": WAN_DEFAULT_STEPS["14b"], "cfg": WAN_DEFAULT_CFG["14b"],
-                     "shift": WAN_DEFAULT_SHIFT, "sampler": "euler",
-                     "scheduler": "simple", "tier": "full", "seconds": 5},
-        "supports": {"loras": True, "experts": True, "cfg": True,
-                     "negative": True, "references": False, "last_frame": True,
-                     "audio": False},
-    },
-    "wan5b": {
-        "label": "Wan 2.2 TI2V 5B",
-        "note": "24 fps · silent",
-        "requires": {"t2v": WAN_MODEL_KEYS[("5b", "t2v")],
-                     "i2v": WAN_MODEL_KEYS[("5b", "i2v")]},
-        "tiers": {"full": "704p", "draft": "480p draft"},
-        "lengths": [2, 3, 4, 5],
-        "samplers": ["euler", "uni_pc", "dpmpp_2m", "res_multistep"],
-        "schedulers": ["simple", "normal", "beta"],
-        "defaults": {"steps": WAN_DEFAULT_STEPS["5b"], "cfg": WAN_DEFAULT_CFG["5b"],
-                     "shift": WAN_DEFAULT_SHIFT, "sampler": "euler",
-                     "scheduler": "simple", "tier": "full", "seconds": 5},
-        "supports": {"loras": True, "experts": False, "cfg": True,
-                     "negative": True, "references": False, "last_frame": False,
-                     "audio": False},
     },
 }
 
@@ -6622,9 +6389,9 @@ def _video_model_status() -> list[dict[str, Any]]:
     """
     Every video model with what is actually on the volume for each of its tasks.
 
-    Per task, not per model, because a 14B t2v run and a 14B i2v run load
-    different 28.6 GB pairs — reporting one "Wan 2.2: missing" would send you to
-    download 57 GB when the run you are composing needs half of it.
+    Per task, not per model, because fl2va and ref2va load different
+    transformers — reporting one "MiniMax-H3: missing" would send you to
+    download 21 GB the run you are composing does not load.
     """
     sizes = _sizes_on_disk(
         MODEL_CATALOGUE[k]["dest"]
@@ -6648,38 +6415,6 @@ def _video_model_status() -> list[dict[str, Any]]:
             "ready": any(t["ready"] for t in tasks.values()),
         })
     return out
-
-
-def _wan_frames(seconds: float, family: str) -> int:
-    """Seconds at the family's fps, snapped up onto its 4n+1 grid."""
-    return _snap_frames(
-        seconds, fps=WAN_FPS[family], step=WAN_FRAME_STEP, base=WAN_FRAME_BASE,
-        lo=WAN_MIN_FRAMES, hi=WAN_MAX_FRAMES[family],
-    )
-
-
-def _wan_canvas(aspect: str, tier: str, family: str) -> tuple[int, int]:
-    """(width, height) for an aspect ratio at a Wan tier's short edge."""
-    if family not in WAN_TIERS:
-        raise ValueError(f"Unknown Wan family {family!r}. One of: {', '.join(WAN_TIERS)}")
-    if tier not in WAN_TIERS[family]:
-        raise ValueError(
-            f"Unknown tier {tier!r}. One of: {', '.join(WAN_TIERS[family])}"
-        )
-    return _canvas(aspect, short=WAN_TIERS[family][tier], align=WAN_ALIGN[family])
-
-
-def _wan_task(first_frame: Any, last_frame: Any) -> str:
-    """
-    Which Wan task a request is, read off what was attached rather than asked.
-
-    The same choice H3 makes, and for the same reason: text-to-video and
-    image-to-video are not two things you pick between, they are what you get
-    depending on whether you gave the clip a frame to start on. The difference
-    is that on the 14B they are genuinely different weights, so this also
-    decides which 28.6 GB pair loads.
-    """
-    return "i2v" if (first_frame or last_frame) else "t2v"
 
 
 # --------------------------------------------------------------------------
@@ -6790,10 +6525,12 @@ SHOT_REF_ROLES = {
 #   field  which of H3's three audio/visual fields it compiles into.
 #   image  whether Krea 2 reads it at all. Camera, action and both audio groups
 #          do not exist on the image side.
-#   needs  a `supports` key the video model must carry. Wan is silent, so its
-#          sound and score pills dim rather than disappear — the established
-#          rule from the keyframes/references row. An item may carry its own,
-#          which then stands in for the group's: see `say.dialogue`.
+#   needs  a `supports` key the video model must carry, so a pill the model
+#          cannot read dims rather than disappearing — the established rule from
+#          the keyframes/references row. Nothing dims today, because H3 reads
+#          every group; it is the column a second family would arrive on. An
+#          item may carry its own, which then stands in for the group's: see
+#          `say.dialogue`.
 #   glyph  the CSS class that animates the shared tile skeleton. Not a drawing:
 #          forty bespoke SVGs would drift apart, one skeleton plus a class per
 #          move does not.
@@ -8991,23 +8728,6 @@ def _shot_meta(params: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _compile_wan_prompt(typed: str, pills: list[dict[str, Any]]) -> str:
-    """
-    The same pills as prose again, for the family that reads no document.
-
-    Wan is the middle case and it is worth naming rather than folding into one
-    of the other two: it takes the camera and action pills the image side has no
-    use for, and it is silent, so the sound and score pills are dropped here the
-    same way a negative prompt is dropped for H3 — a sidecar that records an
-    input the model never read is a sidecar that lies about how the clip was
-    made. Dropped by `needs`, not by field: dialogue is the case that breaks the
-    simpler rule, landing in the visual description and still being audio.
-    """
-    if not pills:
-        return typed
-    return _shot_body(typed, _shot_phrases(pills, side="video", audio=False))
-
-
 def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
     """
     Validate the video LoRA stack, and resolve each path to the name ComfyUI
@@ -9038,202 +8758,14 @@ def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             raise ValueError(f"LoRA strength must be a number: {path.name}")
 
-        expert = str(entry.get("expert") or "both")
-        if expert not in WAN_EXPERTS:
-            raise ValueError(
-                f"{path.name}: expert must be one of {', '.join(WAN_EXPERTS)}"
-            )
-
         out.append({
             "path": str(path),
             # Forward slashes, relative to loras/ — os.walk on Linux produces
             # exactly this, and it is what the combo is validated against.
             "name": path.relative_to(LORAS.resolve()).as_posix(),
             "unet": strength,
-            "expert": expert,
         })
     return out
-
-
-def _wan_graph(
-    *,
-    family: str,
-    prompt: str,
-    negative_prompt: str,
-    width: int,
-    height: int,
-    frames: int,
-    seed: int,
-    steps: int,
-    cfg: float,
-    shift: float,
-    switch_at: int,
-    sampler: str,
-    scheduler: str,
-    loras: list[dict[str, Any]] | None = None,
-    first_frame: str | None = None,
-    last_frame: str | None = None,
-) -> dict[str, Any]:
-    """
-    Build ComfyUI's API-format graph for one Wan 2.2 clip.
-
-    Wiring follows Comfy's `video_wan2_2_14B_{t2v,i2v}` and `video_wan2_2_5B_ti2v`
-    templates. Written as a dict here for the same reason `_h3_graph` is: a
-    wrong node name is a Python error next to the code that caused it, not a
-    workflow JSON that has to be re-exported from a GUI when a parameter moves.
-
-    The 14B path is two KSamplerAdvanced calls, not one sampler with a switch.
-    That is the only way to express the mixture: the high-noise expert runs
-    steps 0..switch_at and hands the *unfinished* latent over
-    (`return_with_leftover_noise`), and the low-noise expert picks it up without
-    re-noising it (`add_noise: disable`). Get either flag wrong and the graph
-    still runs — it just produces a clip that is subtly washed out or doubly
-    noised, with nothing in the log to say so.
-    """
-    task = _wan_task(first_frame, last_frame)
-    keys = WAN_MODEL_KEYS[(family, task)]
-    te = MODEL_CATALOGUE["wan_te"]["dest"].name
-    vae = MODEL_CATALOGUE["wan_vae_22" if family == "5b" else "wan_vae"]["dest"].name
-    fps = WAN_FPS[family]
-
-    graph: dict[str, Any] = {
-        # type="wan" selects umT5's tokenizer and Wan's conditioning layout.
-        "clip": {"class_type": "CLIPLoader",
-                 "inputs": {"clip_name": te, "type": "wan", "device": "default"}},
-        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
-        "pos": {"class_type": "CLIPTextEncode",
-                "inputs": {"clip": ["clip", 0], "text": prompt}},
-        # Unlike H3 there is a negative branch, because Wan is not
-        # guidance-distilled — an empty one is still a real, weighed branch.
-        "neg": {"class_type": "CLIPTextEncode",
-                "inputs": {"clip": ["clip", 0], "text": negative_prompt}},
-    }
-
-    def expert(tag: str, key: str) -> str:
-        """
-        Loader → LoRA chain → shift. Returns the node the sampler reads.
-
-        `tag` is "main" for the single-expert 5B, and that is not cosmetic: it
-        means no row can be filtered out by an expert that does not exist here.
-        A LoRA the user added and the graph quietly skipped is indistinguishable
-        from a LoRA with no effect, so on the 5B every row applies and the API
-        is what refuses a per-expert row it cannot honour.
-        """
-        loader = f"dit_{tag}"
-        graph[loader] = {
-            "class_type": "UNETLoader",
-            "inputs": {"unet_name": MODEL_CATALOGUE[key]["dest"].name,
-                       "weight_dtype": "default"},
-        }
-        src = loader
-        # Stacked in the order given: each loader patches the model the
-        # previous one returned, so the order shown in the UI is the order
-        # they apply, the same as the image side.
-        for i, lora in enumerate(loras or []):
-            if tag != "main" and lora["expert"] not in ("both", tag):
-                continue
-            node = f"lora_{tag}_{i}"
-            graph[node] = {
-                "class_type": "LoraLoaderModelOnly",
-                "inputs": {"model": [src, 0], "lora_name": lora["name"],
-                           "strength_model": lora["unet"]},
-            }
-            src = node
-        # After the LoRAs, not before: a speed LoRA changes the schedule it
-        # wants, and the shift has to be the last word on the sampling curve.
-        graph[f"shift_{tag}"] = {
-            "class_type": "ModelSamplingSD3",
-            "inputs": {"model": [src, 0], "shift": shift},
-        }
-        return f"shift_{tag}"
-
-    if family == "5b":
-        model = expert("main", keys[0])
-        graph["latent"] = {
-            "class_type": "Wan22ImageToVideoLatent",
-            "inputs": {"vae": ["vae", 0], "width": width, "height": height,
-                       "length": frames, "batch_size": 1},
-        }
-        if first_frame:
-            graph["first"] = {"class_type": "LoadImage",
-                              "inputs": {"image": first_frame}}
-            graph["latent"]["inputs"]["start_image"] = ["first", 0]
-        pos, neg, latent = ["pos", 0], ["neg", 0], ["latent", 0]
-        stages = [(model, 0, steps, "enable", "disable")]
-    else:
-        high, low = expert("high", keys[0]), expert("low", keys[1])
-        if first_frame and last_frame:
-            # Both ends given is its own node, not the i2v node with an extra
-            # input: the mask it builds pins the tail frames as well as the
-            # head, and WanImageToVideo has no way to express that.
-            cond: dict[str, Any] = {"class_type": "WanFirstLastFrameToVideo"}
-        elif first_frame or last_frame:
-            cond = {"class_type": "WanImageToVideo"}
-        else:
-            cond = {}
-
-        if cond:
-            graph["cond"] = cond
-            cond["inputs"] = {
-                "positive": ["pos", 0], "negative": ["neg", 0], "vae": ["vae", 0],
-                "width": width, "height": height, "length": frames, "batch_size": 1,
-            }
-            if first_frame:
-                graph["first"] = {"class_type": "LoadImage",
-                                  "inputs": {"image": first_frame}}
-                cond["inputs"]["start_image"] = ["first", 0]
-            if last_frame:
-                graph["last"] = {"class_type": "LoadImage",
-                                 "inputs": {"image": last_frame}}
-                # A last frame alone still needs the first-last node; the i2v
-                # node has no end_image input at all.
-                if not first_frame:
-                    cond["class_type"] = "WanFirstLastFrameToVideo"
-                cond["inputs"]["end_image"] = ["last", 0]
-            # The node rewrites both conditioning branches with the encoded
-            # keyframe, so the sampler must read its outputs and not the raw
-            # text encodes — wiring `pos` straight through is a graph that runs
-            # and ignores the image.
-            pos, neg, latent = ["cond", 0], ["cond", 1], ["cond", 2]
-        else:
-            graph["latent"] = {
-                "class_type": "EmptyHunyuanLatentVideo",
-                "inputs": {"width": width, "height": height,
-                           "length": frames, "batch_size": 1},
-            }
-            pos, neg, latent = ["pos", 0], ["neg", 0], ["latent", 0]
-
-        stages = [
-            (high, 0, switch_at, "enable", "enable"),
-            (low, switch_at, steps, "disable", "disable"),
-        ]
-
-    prev = latent
-    for i, (model, start, end, add_noise, leftover) in enumerate(stages):
-        node = f"sample{i}"
-        graph[node] = {
-            "class_type": "KSamplerAdvanced",
-            "inputs": {
-                "model": [model, 0], "add_noise": add_noise, "noise_seed": seed,
-                "steps": steps, "cfg": cfg, "sampler_name": sampler,
-                "scheduler": scheduler, "positive": pos, "negative": neg,
-                "latent_image": prev, "start_at_step": start, "end_at_step": end,
-                "return_with_leftover_noise": leftover,
-            },
-        }
-        prev = [node, 0]
-
-    graph["frames"] = {"class_type": "VAEDecode",
-                       "inputs": {"samples": prev, "vae": ["vae", 0]}}
-    # No audio input: Wan is silent. CreateVideo takes it optionally, so the
-    # difference between the two families is one absent key rather than a
-    # second save path.
-    graph["video"] = {"class_type": "CreateVideo",
-                      "inputs": {"images": ["frames", 0], "fps": fps}}
-    graph["save"] = {"class_type": "SaveVideo",
-                     "inputs": {"video": ["video", 0], "filename_prefix": "visionary",
-                                "format": "auto", "codec": "auto"}}
-    return graph
 
 
 @app.cls(
@@ -9274,13 +8806,14 @@ class VideoGenerator:
     @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
         """
-        Run one clip, whichever family it is.
+        Run one clip.
 
-        Everything outside the graph is the same job for H3 and for Wan — the
-        record, the staging directory, the stop check, the file that lands on
-        the volume and the sidecar beside it. Only the graph and the numbers
-        that describe it are per-family, so only those are dispatched. That is
-        the same contract the image side uses, extended rather than duplicated.
+        Everything outside the graph — the record, the staging directory, the
+        stop check, the file that lands on the volume and the sidecar beside it
+        — is the same contract the image side uses, extended rather than
+        duplicated. It was written to dispatch on family and carried two for a
+        while; the dispatch is gone and the contract is not, which is the half
+        worth keeping if a second family ever arrives.
         """
         started = time.time()
         # **The first line, and it is the one that was missing.** A ten-minute
@@ -9328,7 +8861,7 @@ class VideoGenerator:
                                     f"{'' if n_att == 1 else 's'}"
                                     f" · {mb:.0f} MB" if n_att else "staging"))
             t_plan = time.time()
-            plan = (self._plan_h3 if model == "h3" else self._plan_wan)(params, stage)
+            plan = self._plan_h3(params, stage)
             graph, info = plan["graph"], plan["info"]
             print(f"[video] ready to queue after {time.time() - started:.1f}s "
                   f"({time.time() - t_plan:.1f}s staging {n_att} attachments, "
@@ -9465,70 +8998,6 @@ class VideoGenerator:
             "meta": meta,
         }
 
-    @staticmethod
-    def _plan_wan(params: dict[str, Any], stage: Any) -> dict[str, Any]:
-        """Graph and shot description for a Wan 2.2 take."""
-        family = "5b" if str(params.get("model")) == "wan5b" else "14b"
-
-        keyframes: dict[str, str] = {}
-        for slot in ("first_frame", "last_frame"):
-            # The 5B latent node takes a start image only. Dropping a last
-            # frame silently would be a control that looks live and is ignored,
-            # so the UI hides it for this family and this is the backstop.
-            if params.get(slot) and not (family == "5b" and slot == "last_frame"):
-                keyframes[slot] = stage(params[slot], slot)
-
-        task = _wan_task(keyframes.get("first_frame"), keyframes.get("last_frame"))
-        _require_models(*WAN_MODEL_KEYS[(family, task)])
-
-        width, height = _wan_canvas(params["aspect"], params["tier"], family)
-        frames = _wan_frames(params["seconds"], family)
-        seed = params.get("seed")
-        seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
-        steps = int(params["steps"])
-        # Half the run each is Comfy's own split and the only defensible default
-        # without measuring the sigma boundary per checkpoint. Clamped into the
-        # interior: a switch at 0 or at `steps` is a one-expert run wearing the
-        # cost of loading two.
-        #
-        # `is None`, not a falsy test: an explicit 0 is a real request (give the
-        # low-noise expert everything), and `or` would silently answer it with
-        # the default instead.
-        asked = params.get("switch_at")
-        switch_at = steps // 2 if asked is None else max(1, min(steps - 1, int(asked)))
-
-        if "first_frame" in keyframes:
-            width, height = _fit_canvas(
-                COMFY / "input" / keyframes["first_frame"],
-                short=WAN_TIERS[family][params["tier"]], align=WAN_ALIGN[family],
-            )
-
-        loras = _validate_video_loras(params.get("loras"))
-        graph = _wan_graph(
-            family=family, prompt=params["prompt"],
-            negative_prompt=str(params.get("negative_prompt") or ""),
-            width=width, height=height, frames=frames, seed=seed, steps=steps,
-            cfg=float(params["cfg"]), shift=float(params["shift"]),
-            switch_at=switch_at, sampler=params["sampler"],
-            scheduler=params["scheduler"], loras=loras, **keyframes,
-        )
-        return {
-            "graph": graph,
-            "info": {"width": width, "height": height, "frames": frames,
-                     "seconds": round(frames / WAN_FPS[family], 2),
-                     "fps": WAN_FPS[family], "seed": seed, "steps": steps},
-            "meta": {"mode": task, "family": family,
-                     "cfg_scale": float(params["cfg"]),
-                     "shift": float(params["shift"]),
-                     # Only meaningful for the 14B pair, but recorded either way:
-                     # a sidecar that omits it for the 5B is a sidecar you have
-                     # to know the family to read.
-                     "switch_at": switch_at if family == "14b" else None,
-                     "sampler": params["sampler"], "scheduler": params["scheduler"],
-                     "negative_prompt": str(params.get("negative_prompt") or ""),
-                     "loras": [{"name": l["name"], "unet": l["unet"],
-                                "expert": l["expert"]} for l in loras]},
-        }
 
 
 # --------------------------------------------------------------------------
@@ -9754,7 +9223,6 @@ def web():
             # what is on the volume for each of its tasks, are properties of
             # the deployment. The composer builds itself from this.
             "video_models": _video_model_status(),
-            "wan_experts": list(WAN_EXPERTS),
             # The shot palette builds itself from these, for the same reason
             # the composer builds itself from `video_models`: a copy of the
             # vocabulary in the front end would be a second source of truth, and
@@ -10885,9 +10353,6 @@ def web():
 
         if str(payload.get("kind") or "video") == "image":
             return {"prompt": _compile_image_prompt(typed, shot)}
-        if str(payload.get("model") or "h3") != "h3":
-            return {"prompt": _compile_wan_prompt(typed, shot)}
-
         d = VIDEO_MODELS["h3"]["defaults"]
         try:
             seconds = float(payload.get("seconds") or d["seconds"])
@@ -11077,25 +10542,11 @@ def web():
             stack = _validate_video_loras(payload.get("loras")) if supports["loras"] else []
         except ValueError as exc:
             return {"error": str(exc)}
-        if stack and not supports["experts"]:
-            # One model, so there is no expert to target. Refusing beats
-            # applying it anyway (a high-noise speed LoRA on a dense checkpoint
-            # is a quality loss you would never be told about) and beats
-            # dropping it (a row that does nothing looks like a row that did).
-            crossed = [l["name"] for l in stack if l["expert"] != "both"]
-            if crossed:
-                return {"error": f"{spec['label']} has one expert, so it cannot "
-                                 f"target high or low noise: {', '.join(crossed)}."}
-
         aspect = str(payload.get("aspect") or "16:9")
         tier = str(payload.get("tier") or spec["defaults"]["tier"])
         try:
-            if model == "h3":
-                task = "ref2va" if (refs or vids or auds) else "fl2va"
-                _h3_canvas(aspect, tier)  # raises with the valid set named
-            else:
-                task = _wan_task(first, last)
-                _wan_canvas(aspect, tier, "5b" if model == "wan5b" else "14b")
+            task = "ref2va" if (refs or vids or auds) else "fl2va"
+            _h3_canvas(aspect, tier)  # raises with the valid set named
         except ValueError as exc:
             return {"error": str(exc)}
 
@@ -11137,13 +10588,10 @@ def web():
         # which checkpoint loads — first-only, last-only and both are the same
         # weights — and too coarse for the alignment instruction, where they are
         # three different sentences about where a picture sits in time.
-        if model == "h3":
-            compiled = _compile_h3_prompt(
-                typed=prompt, pills=shot, seconds=seconds, roles=roles,
-                scene=scene, task=_h3_task(first, last, refs, vids, auds),
-            )
-        else:
-            compiled = _compile_wan_prompt(prompt, shot)
+        compiled = _compile_h3_prompt(
+            typed=prompt, pills=shot, seconds=seconds, roles=roles,
+            scene=scene, task=_h3_task(first, last, refs, vids, auds),
+        )
 
         # **A document taken over by hand, and the one field that outranks the
         # compiler.** The page can open what would run as editable text — view
@@ -11186,24 +10634,22 @@ def web():
             "shot": shot,
             "scene": scene,
             "ref_roles": roles,
-            # Dropped rather than passed through for a model that cannot read
-            # it: a negative prompt that reaches a guidance-distilled checkpoint
-            # is not applied, and a sidecar that records one is a sidecar that
-            # lies about how the clip was made.
-            "negative_prompt": (str(payload.get("negative_prompt") or "")
-                                if supports["negative"] else ""),
+            # No negative prompt on this path at all. H3 is guidance-distilled,
+            # so one would not be applied — and a sidecar that records an input
+            # the model never read is a sidecar that lies about how the clip was
+            # made. It was a per-model question while there were two families.
             "aspect": aspect,
             "tier": tier,
             "seconds": seconds,
             "steps": max(1, min(60, num("steps", d["steps"], int))),
-            "cfg": num("cfg", d.get("cfg", 1.0), float),
-            "shift": num("shift", d.get("shift", WAN_DEFAULT_SHIFT), float),
-            "switch_at": num("switch_at", None, int),
             "seed": num("seed", None, int),
-            # H3's flow shifts, deliberately *not* read off the shared `shift`
-            # key above: that one falls back to WAN_DEFAULT_SHIFT, so reading it
-            # would put 8.0 on every H3 take against the model's own 12.0.
-            # None means "the model's default", which is the honest empty value.
+            # H3's flow shifts. `None` means "the model's default", which is the
+            # honest empty value — the node at rest is a no-op, and it stops
+            # being one under a distilled LoRA, which is the only reason it is
+            # in the graph. There was a shared `shift` key here for as long as
+            # there were two families, and it defaulted to Wan's 8.0; reading it
+            # on an H3 take put 8.0 against the model's own 12.0, which is the
+            # trap that made these two keys separate in the first place.
             "shift_video": num("shift_video", None, float),
             "shift_audio": num("shift_audio", None, float),
             "sampler": str(payload.get("sampler") or d["sampler"]),

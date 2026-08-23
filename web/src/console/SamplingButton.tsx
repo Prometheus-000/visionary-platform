@@ -1,6 +1,6 @@
 import { Popover, usePopover } from '../ui/Popover'
 import { NumInput } from '../ui/NumInput'
-import { supports, useStore, videoModel } from '../store'
+import { useStore, videoModel } from '../store'
 import { resolveVid, vidEdited } from './resolve'
 
 /**
@@ -140,7 +140,6 @@ export function VideoSampling() {
   const pop = usePopover()
   const m = videoModel(s)
   const r = resolveVid(s)
-  const sup = supports(s)
   const models = s.state?.video_models ?? []
 
   return (
@@ -176,37 +175,18 @@ export function VideoSampling() {
                       placeholder={r.stepsPlaceholder}
                       onValue={(steps) => s.setVid({ steps })} />
           </Row>
-          {/* A row the model does not read is not drawn. H3 is guidance-distilled,
-              so a CFG box on it is a promise the sampler will not keep. */}
-          {sup.cfg && (
-            <>
-              <Row label="CFG">
-                <NumInput value={s.vid.cfg} fine={0.1} bigStep={1} base={m?.defaults.cfg}
-                          placeholder={r.cfgPlaceholder}
-                          onValue={(cfg) => s.setVid({ cfg })} />
-              </Row>
-              <Row label="Shift" hint={SHIFT_HINT}>
-                <NumInput value={s.vid.shift} fine={0.1} bigStep={1} base={m?.defaults.shift}
-                          placeholder={r.shiftPlaceholder}
-                          onValue={(shift) => s.setVid({ shift })} />
-              </Row>
-            </>
-          )}
-          {sup.experts && (
-            <Row label="Expert switch"
-                 hint="Step at which the high-noise expert hands the latent to the low-noise one.">
-              <NumInput value={s.vid.switchAt} inputMode="numeric" bigStep={4} placeholder="auto"
-                        onValue={(switchAt) => s.setVid({ switchAt })} />
-            </Row>
-          )}
+          {/* CFG, Shift and Expert switch stood here, drawn only for a model
+              that read them — "a row the model does not read is not drawn". The
+              only video family is guidance-distilled with one expert, so all
+              three were permanently undrawn, and a conditional whose condition
+              is a constant is a branch kept for a model that is not there. */}
           <Row label="Seed" hint={SEED_HINT}>
             <NumInput value={s.vid.seed} inputMode="numeric" placeholder="random"
                       onValue={(seed) => s.setVid({ seed })} />
           </Row>
           <button className="sz-reset" type="button"
                   onClick={() => {
-                    s.setVid({ steps: '', cfg: '', shift: '', switchAt: '', seed: '',
-                               sampler: '', scheduler: '' })
+                    s.setVid({ steps: '', seed: '', sampler: '', scheduler: '' })
                     pop.close()
                   }}>
             Reset to the model’s defaults

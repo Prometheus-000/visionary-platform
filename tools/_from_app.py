@@ -68,7 +68,7 @@ SHOT = {
     "_shot_phrases", "_shot_text", "_shot_sentence", "_close", "_oneline",
     "_shot_join",
     "_first_sentence", "_shot_audio", "_shot_body",
-    "_compile_h3_prompt", "_compile_image_prompt", "_compile_wan_prompt",
+    "_compile_h3_prompt", "_compile_image_prompt",
     # The scene. Pulled with the rest of the compiler rather than as its own
     # set, because `_compile_h3_prompt` delegates to it — a subset that had one
     # and not the other would be a compiler that raises `NameError` on the only
@@ -114,8 +114,6 @@ CAPTION = {
 # pulled in the same edit, or app.py raises NameError from inside the subset.
 VIDEO = {
     "VIDEO_MODELS", "VIDEO_MODEL_KEYS", "VIDEO_REF_MODEL_KEYS",
-    "WAN_MODEL_KEYS", "WAN_DEFAULT_STEPS", "WAN_DEFAULT_CFG",
-    "WAN_DEFAULT_SHIFT",
 }
 
 # The trainer's three menus and its dial defaults, for the same reason again:
