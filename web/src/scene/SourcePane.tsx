@@ -1,0 +1,92 @@
+import { useEffect, useRef } from 'react'
+
+import { useCompiled } from '../shot/useCompiled'
+import { useStore } from '../store'
+
+/**
+ * The compiled document, as view source.
+ *
+ * **The precedent is not a disclosure, it is devtools.** Reading the prompt was
+ * frame 6 of the console ladder and that was wrong: it made reading what you had
+ * compiled a *step in composing*. It is not one. The scene is the source and the
+ * document is what it compiles to, so this is the same relationship a page has
+ * to its markup — and four things follow from that rather than being chosen:
+ *
+ * - **No button says "inspect".** Devtools is a chord and a context menu and the
+ *   page never advertises it, so the console carries nothing for this and costs
+ *   not one pixel more than it did. ⌘⌥U, or right-click the console.
+ * - **It is not in the console budget, because it is not in the console.** It
+ *   takes the canvas the way devtools takes the window, and that is fine —
+ *   nobody is judging a render while reading a prompt. The surface that kept
+ *   breaking the budget stops competing for it.
+ * - **A textarea, not a `<pre>`.** Devtools is directly editable and the page
+ *   responds live; this is too, and the edit is what runs. Where the precedent
+ *   stops applying: a devtools edit evaporates on reload because the source file
+ *   is the truth you are expected to port back to, and here that would mean a
+ *   render you cannot reproduce. So editing **detaches** — one bit for the whole
+ *   document, visible in the header, one gesture back. Not per-field pinning:
+ *   that is six independent states nobody asked for, and an attempt to make a
+ *   derived surface partly authoritative. Either the scene is driving it or you
+ *   have taken it over, and you can always see which.
+ * - **It shows derivation.** Devtools names the rule behind a computed value;
+ *   put the caret in a `[Shot N]` block and that row lights up below.
+ *
+ * Reattaching recompiles and discards the edit, so the way back is exact — the
+ * thing you typed is gone and what you had before is what you had before.
+ */
+export function SourcePane() {
+  const s = useStore()
+  const area = useRef<HTMLTextAreaElement>(null)
+  // Only while attached. A detached document is yours, and refetching under it
+  // would be the compiler quietly arguing with an edit it has been told to stay
+  // out of — the request is also pointless work four times a second.
+  const compiled = useCompiled(s.docOpen && s.doc === null)
+  const text = s.doc ?? compiled
+
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') s.setDocOpen(false)
+    }
+    document.addEventListener('keydown', key)
+    return () => { document.removeEventListener('keydown', key) }
+  }, [s])
+
+  /**
+   * Which shot the caret is in, if any.
+   *
+   * The last `[Shot N]` marker at or before it — the same scan the document's own
+   * reader does. Only meaningful while attached: a detached document is arbitrary
+   * text and its markers are not claims about any row.
+   */
+  const derive = () => {
+    if (s.doc !== null) return
+    const at = area.current?.selectionStart ?? 0
+    let n = -1
+    for (const m of text.slice(0, at).matchAll(/\[Shot (\d+)\]/g)) n = Number(m[1]) - 1
+    const row = s.scene.shots[n]
+    if (row) s.selectShot(row.id)
+  }
+
+  return (
+    <div className="tsource">
+      <div className="tsource-h">
+        <span>{s.doc === null ? 'compiled' : 'edited'}</span>
+        {s.doc === null
+          // The task the document was built for. It is the one fact about a
+          // six-field block that is not visible by reading it, because the
+          // difference between ref mode and base mode is which fields are absent.
+          ? <span className="tag">{text.startsWith('subject_definitions') ? 'ref2va' : 'base'}</span>
+          : (
+            <button type="button" className="tag warn" onClick={() => { s.setDoc(null) }}>
+              reattach
+            </button>
+          )}
+        <button type="button" className="x" title="Close (Escape)"
+                onClick={() => { s.setDocOpen(false) }}>×</button>
+      </div>
+      <textarea id="doc-source" ref={area} spellCheck={false} value={text}
+                onChange={(e) => { s.setDoc(e.target.value) }}
+                onKeyUp={derive} onClick={derive} onSelect={derive} />
+    </div>
+  )
+}

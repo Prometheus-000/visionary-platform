@@ -131,7 +131,21 @@ export function Console({
     : ''
 
   return (
-    <div className="console" ref={box}>
+    <div className="console" ref={box}
+         // The discoverable half of view source, and the reason the composer can
+         // carry no button for it: devtools is a chord *and* a context menu, and
+         // one of the two has to be findable without being told. Only where there
+         // is a document to look at — on the image side the compiled prompt is a
+         // fold under the sentence, and `#shot-peek` is still that.
+         onContextMenu={image ? undefined : (e) => {
+           // Not over a control that has something of its own to offer: a
+           // right-click on a text field is the browser's spelling menu and on a
+           // picture it is Save Image, and taking either would be this page
+           // deciding it outranks the platform.
+           if ((e.target as Element).closest('input,textarea,select,img,video,a')) return
+           e.preventDefault()
+           s.setDocOpen(true)
+         }}>
       {/* `ErrorNote` rather than a bare err-box, so the server's own report rides
           under the sentence instead of being the sentence — see `ui/ErrorNote`. */}
       <ErrorNote err={err} />

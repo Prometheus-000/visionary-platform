@@ -284,6 +284,27 @@ export function App() {
     return () => window.removeEventListener('keydown', key)
   }, [])
 
+  /* **View source, and nothing on the page says so.** ⌘⌥U is the browser's own
+     chord for exactly this, which is the point — the composer advertises the
+     compiled document with no control at all, the way devtools is a chord and a
+     context menu rather than a button. The other half is `onContextMenu` on the
+     console. See `SourcePane` for why reading the prompt is not a step in
+     composing and therefore not a disclosure.
+
+     Video only: the image side's compiled prompt genuinely *is* a fold under the
+     sentence above it, and `#shot-peek` is still that. */
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'u' || !e.altKey || !(e.metaKey || e.ctrlKey)) return
+      const st = useStore.getState()
+      if (st.mode !== 'generate' || st.kind !== 'video') return
+      e.preventDefault()
+      st.setDocOpen(!st.docOpen)
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+
   /* ⌘/Ctrl+Enter generates from anywhere — the point being *from a region's prompt
      field*, which is what turns the edit-and-regenerate loop into one keystroke. The
      main prompt's own textarea already binds it (see Field), so the caret being there

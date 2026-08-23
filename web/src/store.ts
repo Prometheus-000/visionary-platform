@@ -374,6 +374,21 @@ export type Store = {
   /** Which rail chip has its card open, if any. Cast id, pill key or LoRA path:
    *  one rail, three kinds of chip, one open slot between them. */
   railOpen: string | null
+  /** The compiled document is on screen, taking the canvas. See `SourcePane` —
+   *  no control opens it, because devtools is a chord and a context menu. */
+  docOpen: boolean
+  /**
+   * The document, **taken over by hand**.
+   *
+   * `null` is the normal state and means the scene is driving it. A string means
+   * somebody edited it and that string is what runs — one bit for the whole
+   * document rather than a pin per field, because six independent states is an
+   * attempt to make a derived surface partly authoritative. Either the scene is
+   * driving it or you have taken it over, and you can always see which.
+   */
+  doc: string | null
+  setDocOpen: (on: boolean) => void
+  setDoc: (text: string | null) => void
   setScene: (patch: Partial<Scene>) => void
   /** The prose, one row per line. What `typedProse` joined, taken back apart —
    *  which is what makes Reuse a round trip rather than a re-parse. The cast is
@@ -534,6 +549,10 @@ export const useStore = create<Store>((set, get) => ({
   pool: {},
   shotSel: '',
   railOpen: null,
+  docOpen: false,
+  doc: null,
+  setDocOpen: (docOpen) => set({ docOpen }),
+  setDoc: (doc) => set({ doc }),
   setScene: (patch) => set((s) => ({ scene: { ...s.scene, ...patch } })),
   setProse: (text) => set((s) => {
     const lines = text.split('\n')

@@ -4,6 +4,7 @@ import { fileUrl } from '../api/routes'
 import { IconClose, IconExpand, IconPhoto, IconPlay } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
+import { SourcePane } from '../scene/SourcePane'
 import { attached, regionsLive, useStore } from '../store'
 import { layoutShots } from './layoutShots'
 import type { RunState } from './useGenerate'
@@ -131,6 +132,11 @@ export function Canvas({
 
   return (
     <div className="canvas" id="canvas" ref={canvasRef}>
+      {/* **It takes the canvas the way devtools takes the window**, and that is
+          fine: nobody is judging a render while reading a prompt. The surface
+          that kept breaking the console's 30% budget stops competing for it —
+          this costs the console nothing, because it is not in the console. */}
+      {s.docOpen && s.kind === 'video' && <SourcePane />}
       {/* No copy beyond the one line the caller passes. An empty frame above a focused
           prompt field is already the whole instruction, and a sentence telling you to
           type is a sentence that will be read on every visit forever to be useful once.

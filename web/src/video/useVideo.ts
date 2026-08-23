@@ -58,6 +58,12 @@ export function videoBody(s: Store): Record<string, unknown> {
   const sc = readScene(s.scene, s.pool)
   return {
     ...(sc && { scene: sc.scene }),
+    // **The edit is what runs.** A document taken over by hand travels in its own
+    // field rather than as `prompt`, because `prompt_typed` is the prose somebody
+    // wrote and only the receipt is being overridden — folded together, Reuse
+    // would load a six-field schema into the first shot's row and compile *that*
+    // on the next run. See `SourcePane`.
+    ...(s.doc !== null && { prompt_compiled: s.doc }),
     model: s.vid.model,
     prompt,
     negative_prompt: negAllowed(s) ? s.negative : '',

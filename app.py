@@ -11145,6 +11145,29 @@ def web():
         else:
             compiled = _compile_wan_prompt(prompt, shot)
 
+        # **A document taken over by hand, and the one field that outranks the
+        # compiler.** The page can open what would run as editable text — view
+        # source rather than a disclosure — and an edit there has to be what
+        # runs, or the surface is a lie about its own contents.
+        #
+        # It is a *separate* key from `prompt` on purpose, because the two halves
+        # of a run mean different things and this is exactly the case that
+        # separates them: `prompt_typed` stays the prose somebody wrote, and only
+        # the receipt is overridden. Folding it into `prompt` would put a
+        # six-field document into the sidecar's intent field, and Reuse would
+        # then load a schema into the first shot's row and compile *that* on the
+        # next run.
+        # Stripped, never collapsed. `_oneline` exists because a newline inside a
+        # *field* ends it early — and this is the document itself, where one field
+        # per line is the format. Running it through that would fold six fields
+        # into one.
+        override = str(payload.get("prompt_compiled") or "").strip()
+        if override:
+            if len(override) > MAX_H3_PROMPT and model == "h3":
+                return {"error": f"The document is {len(override)} characters and "
+                                 f"H3's prompt field holds {MAX_H3_PROMPT}."}
+            compiled = override
+
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
         runner().generate.spawn(job_id=job_id, params={

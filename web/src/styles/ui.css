@@ -649,6 +649,35 @@ svg{width:100%;height:100%;display:block}
 .field.has-neg .tline .trow:first-child .mk-mirror,
 .field.has-neg .tline .trow:first-child textarea{padding-right:140px}
 
+/* ── view source ───────────────────────────────────────────────────────────
+   It takes the canvas the way devtools takes the window, which is what keeps it
+   out of the console's 30% budget: it is not in the console. `inset:0` on
+   `.canvas`, which is already the positioned box the render fills, so the two
+   occupy exactly the same rectangle and nothing reflows on the way in. */
+.tsource{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;
+  background:#070707;border-radius:var(--r-card);overflow:hidden;
+  outline:1px solid var(--line-2);outline-offset:-1px}
+.tsource-h{display:flex;align-items:center;gap:9px;padding:7px 10px;
+  border-bottom:1px solid var(--line);font-size:11px;color:var(--dim);
+  letter-spacing:.06em;text-transform:uppercase}
+.tsource-h .tag{border:0;background:var(--wash-2);border-radius:var(--r-mark);
+  padding:2px 7px;color:var(--mut);font-size:10px;letter-spacing:.04em}
+/* Amber, because it is the one state where what runs is not what the scene says
+   — the same ink the console budget's own overrun mark uses. A button, not a
+   label: reattaching is one gesture and it is the way back. */
+.tsource-h .tag.warn{color:var(--warn);cursor:pointer;
+  box-shadow:0 0 0 1px rgba(251,191,36,.35) inset}
+.tsource-h .tag.warn:hover{background:rgba(251,191,36,.12)}
+.tsource-h .x{margin-left:auto;border:0;background:none;color:var(--dim);
+  cursor:pointer;font-size:16px;line-height:1;padding:0 4px;border-radius:var(--r-mark)}
+.tsource-h .x:hover{background:var(--wash-3);color:var(--fg)}
+/* A textarea, not a `<pre>`: devtools is directly editable and the page responds
+   live, and here the edit is what runs. */
+#doc-source{flex:1;min-height:0;width:100%;border:0;border-radius:0;background:none;
+  padding:12px 14px;resize:none;color:#9a9a9a;
+  font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+#doc-source:focus{border:0;box-shadow:none;color:var(--fg)}
+
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —
    while a separate strip below carried every control. They are one row now:
    the chip says what you are making and the rest of the line says how. */
