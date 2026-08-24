@@ -139,6 +139,18 @@ def _variants() -> list[tuple[str, dict]]:
         ("krea2 regional + molds", _krea2_graph(**krea, loras=[], regions=molded)),
         ("krea2 krea2edit", _krea2_graph(**krea, loras=[], regions=boxes,
                                          scene="s.png", outfit="o.png")),
+        # The free-role sockets and the style engine each name nodes no other
+        # branch reaches — the object plates ride extra_ref_3/4 on V12, and
+        # style is a different pack entirely (K2ST_*). Both were live features
+        # before they were smoke variants, which is exactly the gap this file's
+        # docstring warns about.
+        ("krea2 krea2edit + objects", _krea2_graph(
+            **krea, loras=[], regions=boxes, scene="s.png",
+            objects=[{"image": "obj1.png", "note": "a motorcycle she leans against"},
+                     {"image": "obj2.png", "note": "a paper lantern overhead"}])),
+        ("krea2 style reference", _krea2_graph(
+            **krea, loras=[], regions=[], style_refs=["style.jpg"],
+            style_strength=0.8)),
     ]
 
     # ── MiniMax-H3 ────────────────────────────────────────────────────────
@@ -176,6 +188,12 @@ def _variants() -> list[tuple[str, dict]]:
                                         ref_audios=["a0.wav"], ref_size="match")),
         ("h3 audio only", _h3_graph(**base, ref_audios=["a0.wav"],
                                     ref_size="match")),
+        # Motion continuation names four nodes from its own pack and rewires
+        # the guider and the video muxer — the save half rides every take, the
+        # load half only a continued one, so both need building.
+        ("h3 t2v + save context", _h3_graph(**base, save_context_as="vidsmoke")),
+        ("h3 continued", _h3_graph(**base, save_context_as="vidsmoke2",
+                                   load_context_from="vidsmoke")),
     ]
 
     return out

@@ -9251,6 +9251,13 @@ class VideoGenerator:
         # that failed to import leaves ComfyUI running happily without it, and
         # the first symptom is otherwise a rewrite rejected for an unknown
         # class_type — minutes into a session, with the traceback long scrolled.
+        # The call went missing once while the comment above survived — two
+        # sessions editing one tree — so the sentence and the check travel
+        # together now.
+        self._comfy.require_nodes(
+            "MiniMaxH3MotionContext", "MiniMaxH3MotionContextTrim",
+            "MiniMaxH3MotionContextSaveLatent",
+            "MiniMaxH3MotionContextLoadLatent")
         # **Nothing but ComfyUI starts here now.** This container held a second
         # model for a while — Qwen3-VL beside H3, for the prompt rewrite and
         # then for the motion panel — and it cost more than it returned. It
