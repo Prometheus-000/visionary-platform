@@ -3181,6 +3181,14 @@ SCHEDULERS = ["simple", "normal", "beta", "sgm_uniform", "karras", "exponential"
 # menu opens on the value the backend would have picked anyway — two places
 # spelling the same default is how they drift.
 IMAGE_DEFAULTS = {"sampler": "er_sde", "scheduler": "sgm_uniform"}
+# What a style-reference render falls back to when the sampler is untouched.
+# Measured, not preferred: at seed 42 the K/V engine under er_sde dropped the
+# prompt's dog entirely, and under the pack's own tested euler_ancestral/simple
+# kept it — its README locks a "tested route" and the sampler is part of it. A
+# sampler the user actually set still wins; this only replaces the *default*,
+# because a default is the app's own choice and the app should choose the one
+# that was measured working.
+STYLE_DEFAULTS = {"sampler": "euler_ancestral", "scheduler": "simple"}
 MAX_LORAS = 6
 
 # Per-checkpoint defaults, which used to live inside the Forge pipeline and be
@@ -6092,8 +6100,12 @@ class ImageGenerator:
             # during a run could fail the job that already produced the picture.
             loras = _validate_loras(params.get("loras"))
             shift = float(params.get("shift") or 1.15)
-            sampler = str(params.get("sampler") or IMAGE_DEFAULTS["sampler"])
-            scheduler = str(params.get("scheduler") or IMAGE_DEFAULTS["scheduler"])
+            # A style run's default sampler is the engine's tested route — see
+            # STYLE_DEFAULTS. The route resolves this too; here again because
+            # a job is reachable without the route's baking.
+            fallback = STYLE_DEFAULTS if style_refs else IMAGE_DEFAULTS
+            sampler = str(params.get("sampler") or fallback["sampler"])
+            scheduler = str(params.get("scheduler") or fallback["scheduler"])
             # Only None and "" are unset. `or 1.0` read a typed 0 as absent and
             # rewrote it to 1.0, so /api/generate recorded the zero the page
             # sent while the render used something else — a value replaced
@@ -11013,8 +11025,12 @@ def web():
             "steps": num("steps", None, int),
             "cfg_scale": num("cfg_scale", None, float),
             "seed": num("seed", None, int),
-            "sampler": str(payload.get("sampler") or IMAGE_DEFAULTS["sampler"]),
-            "scheduler": str(payload.get("scheduler") or IMAGE_DEFAULTS["scheduler"]),
+            "sampler": str(payload.get("sampler")
+                           or (STYLE_DEFAULTS if style_refs
+                               else IMAGE_DEFAULTS)["sampler"]),
+            "scheduler": str(payload.get("scheduler")
+                             or (STYLE_DEFAULTS if style_refs
+                                 else IMAGE_DEFAULTS)["scheduler"]),
             "shift": num("shift", 1.15, float),
         })
         _log_spawn("image", job_id, payload, t_route)
