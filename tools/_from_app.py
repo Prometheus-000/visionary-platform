@@ -87,7 +87,7 @@ SHOT = {
     "_stage_phrase", "_stage_arc",
     "_stage_move_note", "_stage_move_sentence", "STAGE_VERB",
     "_stage_clauses", "_validate_stage", "_stage_boxes", "STAGE_FIGURE_W",
-    "H3_CAST_KINDS", "H3_SLOT_MEDIA", "H3_SOUNDSCAPE_DEFAULT", "_H3_HANDLE",
+    "H3_SUBJECT", "H3_SLOT_MEDIA", "H3_LEGACY_SLOTS", "H3_SOUNDSCAPE_DEFAULT", "_H3_HANDLE",
     "_shot_groups", "_h3_clock", "_validate_scene", "_h3_handle",
     "_h3_handles", "_h3_subjects", "_h3_label", "_h3_speakers",
     "_h3_resolve", "_h3_task_types", "_h3_shot_text", "_compile_h3_scene",

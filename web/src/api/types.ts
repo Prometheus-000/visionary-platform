@@ -151,6 +151,7 @@ export type AppState = {
   max_loras: number
   max_refs: number
   max_ref_videos: number
+  max_ref_audios: number
   max_regions: number
   samplers: string[]
   schedulers: string[]

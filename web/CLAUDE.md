@@ -998,12 +998,47 @@ rather than one, and it is the rule to check first if any of it is ever moved.
   second arithmetic. Measured at 1512x982 with three shots and the source row
   showing: 287px, 29.2%.
 
-- **The slot is the role**, and a file over a slot that cannot take it does not
-  highlight. The rejection is the absence of an invitation, which arrives before
-  the drop rather than after it; read off `dataTransfer.items` during the drag,
-  the one moment the answer is available and still useful. `DropTile` alerts
-  instead and is right to — its tiles all take images, so a wrong file there is
-  worth naming, and here the row *is* the table of what takes what.
+- **The file is the slot, and a form field is a closed vocabulary.** A character
+  had five labelled squares — Face, Wardrobe, Body, Voice, Motion — on the rule
+  that *the slot is the role*, and the rule was true and the surface was wrong.
+  Five squares means exactly five sayable things about a person: *"the coat she
+  is wearing in the other photo"* and *"her posture from the one on the stairs"*
+  were **structurally unsayable**, and H3's conditioner is an LLM text encoder
+  that parses grammar, so the way to say them is to say them. That is the *Prose,
+  not tags* rule in the root file, which was written about captions and is a UI
+  rule.
+
+  So one well takes anything the member can hold and the media picks the slot —
+  a picture is what they look like, a recording is what they sound like. See
+  `slotFor`. Anything else you want referenced is its own named thing, which is
+  what the guide means by a subject: *"visible content abstracted from reference
+  assets"*, not only people.
+
+  **Their face is what the rail draws.** The chip carried a 5px dot, filled or
+  hollow, as the one fact it could hold about somebody — a person reduced to a
+  monogram on a token, in a product whose strongest lever is that it can be
+  handed a photograph. The dot survives only where it was always right: a member
+  with a description and no picture, whom `_h3_label` compiles to prose rather
+  than to a `<Subject N>`.
+
+  **And the name is what you write with.** `Maya` is something you can remember
+  and build an action around; `<Subject 1>` is not. Both numberings are assigned
+  behind the surface — `<Picture N>` from upload position, `<Subject N>` from the
+  named thing — and neither is ever shown.
+
+  What survives from the five squares is the one rule worth keeping: a file the
+  member cannot take does not highlight. The rejection is the absence of an
+  invitation, which arrives before the drop rather than after it; read off
+  `dataTransfer.items` during the drag, the one moment the answer is available
+  and still useful. `DropTile` alerts instead and is right to — its tiles all
+  take images, so a wrong file there is worth naming.
+
+  **This made voice cloning reachable, and it had been built and invisible.**
+  `/api/video` already accepted `ref_audios`, staged them as `.wav` and fed them
+  to the graph; `H3_AUDIO_NOUN` already emitted `<Audio 1> is the voice-timbre
+  reference for <Subject 1>` as its own line with its own retention marker.
+  Nothing in the page had ever let anyone reach it. Two drops on one target now
+  do.
 
 - **One rail, three kinds of chip** — cast, shot pills, LoRAs. They were three
   mechanisms in two places and they are one tool: each is something attached to
@@ -1063,14 +1098,82 @@ It is stripped and never `_oneline`d — that function exists because a newline
 inside a *field* ends it early, and this is the document, where one field per
 line is the format.
 
+- **The caps are published, binding and were completely invisible.** Nine images,
+  three videos, three audio — and **twelve across all types**, which is the one
+  that actually binds and the one nothing ever said. Nine photographs plus three
+  voices is exactly twelve, so a fully cast scene has no room for a reference
+  video; three audio caps how many voices one generation can clone.
+
+  `/api/video` refuses past twelve with a named error before renting anything, so
+  the note is not protecting the run — it is protecting the *discovery*. Finding
+  out at Generate, after casting nine people, is finding out too late to be told
+  cheaply, which is the keyframe note's argument exactly.
+
+  It says nothing until something is wrong, like `loraNote`, and it lives in the
+  reserved 18px row so Generate does not move under a hand already reaching for
+  it. The per-type sentence comes first because it names the *silent* half:
+  `/api/video` slices `references` to nine **before** it sums the twelve, so
+  twelve photographs and three voices passes the total check with three pictures
+  quietly gone, and the refusal then arrives as a cast member pointing past what
+  was uploaded — a true error about the wrong thing.
+
+  **And it counts what will travel.** `VideoNote` read `refs`/`refVids` alone,
+  correct while those were the only way to attach a picture and blind from the
+  moment the composer arrived: nine photographs on nine cast members counted as
+  zero. `refBudget` follows `videoBody`'s rule — the cast's files when there is a
+  cast, the flat trays otherwise, never both.
+
+  Finding it also caught this file's one named failure mode in the act:
+  `max_ref_audios` was served by app.py and missing from `preview_ui.py`'s state
+  stub, so the front end would have developed against a limit that did not exist.
+
+### A scene is longer than a generation
+
+H3 tops out at `H3_MAX_FRAMES` — 345 frames at 24fps, about 14.4 seconds — so
+anything with more than one beat in it is several runs. Film granularity is
+*frame · shot · scene · sequence · act · film*; this platform is for the first
+three, and past a scene you are in an NLE and out of scope.
+
+**The model gives you frames and shots. The scene is ours, and it is not a
+capability.** `[Shot N]` with cut times already lives inside one generation. What
+turns several generations into one scene is that the cast, their photographs,
+their voices, the look and the LoRAs never belonged to a take in the first place
+— so the only thing asked of H3 on the next run is the same characters again,
+plus whoever is new. Chaining is context the person should never have to rebuild,
+not something the model has to learn.
+
+`Continue` on the canvas is the whole gesture. It reads the last frame out of the
+clip that just landed, hands it to `first_frame`, and clears the prose. Three
+things about that are worth stating:
+
+- **The last frame is read in the page, not on a GPU.** The bytes are already
+  served to a `<video>` on the canvas, so a route that decoded a frame
+  server-side would be a GPU-adjacent container doing work a decoder in the page
+  does for free. See `lastFrame` — `seekable.end` rather than `duration`, because
+  a fragmented MP4 reports `Infinity` for the latter and seeking to it hangs.
+- **It is best-effort.** A codec the browser will not decode yields no frame and
+  the next take opens cold rather than refusing to start. Continuity is the
+  point, not a precondition.
+- **`last_frame` is cleared on the way.** A first and a last together are
+  `fl2va`, which would pin the new take's *ending* to the old take's ending —
+  the exact opposite of continuing.
+
+What does not carry is the prose. A take is a beat, and reopening on the sentence
+you already rendered invites editing the last one rather than writing the next.
+
+`takes` lives on the store and deliberately **not** inside `scene`: that type
+mirrors `_validate_scene` and is the request body, so a record of what has
+already rendered would be results in the payload.
+
 ### What it does not do yet
 
-- **Blocking is not reachable from it.** `_stage_*` and `_stage_boxes` are live
-  in the compiler and nothing fills them in, which is exactly the state the scene
-  itself was in before this. `web/src/blocking/` is still the throwaway probe.
-- **`retention` reaches the document at its default and no control sets it.**
-  That is a default that reaches the output rather than a `ties` — but the moment
-  it wants a control, it wants one on the cast card and not in a panel.
+- **Blocking is not reachable from it, and that is now a decision rather than a
+  gap.** `_stage_*` and `_stage_boxes` stay live in the compiler with nothing
+  filling them in, and `web/src/blocking/` stays a throwaway probe. A ground
+  plane cannot express camera roll, a body that changes pose mid-shot, light as
+  a transition, or a location change inside one unbroken take — every one of
+  which a sentence carries for free. The exchange rate settles it: learn a camera
+  rig, gain five prepositional phrases.
 - **None of it has been measured against a render.** It has been driven and read.
   `tools/prompt_ab.py` is the measurement that is not a proxy and it has not run.
 

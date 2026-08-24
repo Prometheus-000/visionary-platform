@@ -105,7 +105,10 @@ with sync_playwright() as pw:
     check("the unapplied LoRA is named", "not applied" in d["warn"], repr(d["warn"]))
     check("only the unapplied one is named",
           "my_style" not in d["warn"] and "gone" in d["warn"], repr(d["warn"]))
-    check("the reason rides along", "(" in d["warn"], repr(d["warn"]))
+    # Not "(" any more: skipNote deliberately retired the parenthesized
+    # `gone (no matching keys)` form for a quoted name and a translated
+    # cause — see its comment. Assert the cause, not the punctuation.
+    check("the reason rides along", "keys don" in d["warn"], repr(d["warn"]))
 
     if errors:
         check("no page errors", False, str(errors[:2]))

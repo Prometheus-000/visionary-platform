@@ -207,7 +207,9 @@ svg{width:100%;height:100%;display:block}
   display:flex;flex-direction:column}
 /* Capped, so a console with everything open can never push the canvas out of
    the frame — past the cap it scrolls itself instead. */
-.console{flex:none;max-height:54dvh;overflow:auto;padding:13px 28px 15px;
+/* `position:relative` so the source pane can cover exactly this box and never
+   the canvas above it — see `.tsource`. */
+.console{position:relative;flex:none;max-height:54dvh;overflow:auto;padding:13px 28px 15px;
   border-top:1px solid var(--wash-3);background:rgba(255,255,255,.012)}
 /* Generate lives in the bar with the controls it acts on, not beside the
    prompt — so the prompt gets the console's full width, which is the thing
@@ -529,11 +531,40 @@ svg{width:100%;height:100%;display:block}
 /* The clip, divided. **A readout, not an input** — a shot's share is the length
    of what you wrote about it, so there is nothing to drag, nothing to miss with
    a thumb, and no reason for it to be thicker than a line. */
-.tstrip{display:flex;height:4px;margin:7px 9px 3px;border-radius:2px;overflow:hidden;
-  background:var(--wash-2);flex:none}
-.tstrip i{border-right:1px solid var(--bg);min-width:2px}
-.tstrip i:last-child{border-right:0}
-.tstrip i.sel{background:var(--line-2)}
+/* ── the timeline ──────────────────────────────────────────────────────────
+   Time runs left to right and is dragged, not derived. A fixed scale rather
+   than fit-to-width: fitting would move every bar while you pull one, and it
+   would make a five-minute scene unreachable — the two things this exists for.
+   See `Timeline`. */
+.tl{display:flex;flex-direction:column;gap:2px;margin:5px 2px 6px;min-width:0}
+.tl-track{display:flex;align-items:stretch;gap:3px;overflow-x:auto;overflow-y:hidden;
+  padding-bottom:2px;scrollbar-width:thin}
+.tl-track::-webkit-scrollbar{height:3px}
+.tl-track::-webkit-scrollbar-thumb{background:var(--line)}
+.tl-shot{position:relative;flex:none;min-width:30px;height:34px;border-radius:var(--r-inner);
+  background:var(--wash-2);border:1px solid transparent;display:flex;align-items:center;
+  gap:6px;padding:0 9px 0 7px;cursor:pointer;overflow:hidden;transition:background .12s}
+.tl-shot:hover{background:var(--wash-3)}
+.tl-shot.sel{background:var(--sel);border-color:var(--line-2)}
+.tl-n{font-size:9.5px;color:var(--dim);flex:none;font-variant-numeric:tabular-nums}
+.tl-line{flex:1;min-width:0;font-size:11.5px;color:var(--fg);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.tl-line i{color:var(--dim);font-style:normal}
+.tl-secs{font-size:9.5px;color:var(--dim);flex:none;font-variant-numeric:tabular-nums}
+/* The whole right edge. This is the control the derivation existed to avoid,
+   so it is 10px and it keeps its cursor past where the pointer left it. */
+.tl-pull{position:absolute;top:0;right:0;bottom:0;width:10px;cursor:col-resize;
+  touch-action:none}
+.tl-pull:hover,.tl.pulling .tl-pull{background:linear-gradient(90deg,transparent,var(--line-2))}
+.tl.pulling,.tl.pulling *{cursor:col-resize!important;user-select:none}
+/* Where one generation ends and the next picks up. Arithmetic, not a setting. */
+.tl-cut{position:absolute;top:0;right:-3px;bottom:0;width:3px;background:var(--warn)}
+.tl-add{flex:none;width:26px;height:34px;border-radius:var(--r-inner);border:1px dashed var(--line);
+  background:none;color:var(--dim);cursor:pointer;font-size:14px;line-height:1}
+.tl-add:hover{color:var(--fg);border-color:var(--line-2)}
+.tl-rule{position:relative;height:11px;flex:none;pointer-events:none}
+.tl-tick{position:absolute;top:0;font-size:9px;color:#3a3a40;transform:translateX(-1px);
+  font-variant-numeric:tabular-nums}
 
 /* **Every row takes the chrome, including the only one.** It was gated on there
    being two, so a fresh scene was a bare textarea and the timeline was a feature
@@ -585,6 +616,10 @@ svg{width:100%;height:100%;display:block}
 /* Filled once something is attached — the one fact about a cast member the rail
    can carry without opening, because a name with no picture behind it compiles to
    prose rather than to a `<Subject N>`. */
+/* Their face, at chip scale. The dot below is for a member with no picture,
+   where it is still exactly right — that name compiles to prose, not a subject. */
+.chip.cast .av{width:17px;height:17px;border-radius:50%;object-fit:cover;flex:none;
+  margin-left:-4px}
 .chip.cast .d{width:5px;height:5px;border-radius:50%;flex:none;
   box-shadow:0 0 0 1px var(--dim) inset}
 .chip.cast .d.full{background:var(--fg);box-shadow:none}
@@ -621,34 +656,38 @@ svg{width:100%;height:100%;display:block}
   color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:0 4px;
   border-radius:var(--r-mark)}
 .tcard>.x:hover{background:var(--wash-3);color:var(--fg)}
-/* Three across for a character's five and two for a place's two — the slot table
-   is the shape, and `auto-fill` would put five 38px tiles in a row nobody can
-   read the labels of. */
-.tslots{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
-.tslots.wide{grid-template-columns:repeat(3,1fr)}
-/* **A file over a slot that cannot take it does not highlight.** The dashed edge
-   is the invitation and its absence is the whole rejection — cheaper than a toast
-   and, unlike one, it arrives before the drop. */
-.tslot{position:relative;aspect-ratio:1;border:1px dashed var(--line);
-  border-radius:var(--r-inner);background:var(--wash-2);overflow:hidden;padding:0;
-  display:grid;place-items:center;cursor:pointer;color:var(--dim)}
-.tslot:hover{border-color:var(--line-2);color:var(--fg)}
-.tslot.set{border-style:solid;border-color:var(--line)}
-.tslot.hot{border-color:var(--line-2);background:var(--wash-3);border-style:solid}
-.tslot img{width:100%;height:100%;object-fit:cover;display:block}
-.tslot .lb{font-size:10px;line-height:1.15;text-align:center;padding:2px;
-  -webkit-user-select:none;user-select:none}
-/* A clip and a sound file have no thumbnail worth a 70px tile, so the role is the
-   tile — which is the one fact a picture would have been standing in for. */
-.tslot .lb.full{color:var(--fg);background:var(--wash-3);width:100%;height:100%;
-  display:grid;place-items:center}
-
-/* The gutter `.neg-t` needs, on the first row only — it is the only one the
-   corner overlaps. The doors were up here too for a version and are not any
-   more: three unlabelled 22px marks in a corner is a destination announced by an
-   icon, which is the one thing an icon cannot do. See `Doors`. */
-.field.has-neg .tline .trow:first-child .mk-mirror,
-.field.has-neg .tline .trow:first-child textarea{padding-right:66px}
+/* **The face leads, and the file decides what it is.** Five labelled squares —
+   Face, Wardrobe, Body, Voice, Motion — were a drawing of `H3_CAST_KINDS` and a
+   closed vocabulary besides: five squares means five sayable things about a
+   person. One well takes anything the member can hold, and everything else you
+   want referenced is its own named thing, said in a sentence. See `Material`. */
+/* **One row per reference, and a well that always takes the next file.** The
+   guide is explicit that a subject may be built from several assets and that
+   what each one provides is *prose*, not a slot name — so a second picture is
+   another row with a field for the one thing only the person knows. See
+   `Material`. */
+.tmat{display:flex;flex-direction:column;gap:5px;min-width:0}
+.tref{display:flex;align-items:center;gap:7px;min-width:0}
+.tref img,.tref .tkind{width:34px;height:34px;border-radius:var(--r-inner);flex:none;
+  object-fit:cover;display:grid;place-items:center;background:var(--wash-2);
+  border:1px solid var(--line);font-size:13px;color:var(--dim)}
+.trefnote{flex:1;min-width:0;font-size:11.5px;padding:4px 7px;border-radius:var(--r-inner);
+  border:1px solid var(--line);background:var(--wash-2);color:var(--fg)}
+.trefnote::placeholder{color:#3a3a40}
+.trefnote:focus{border-color:var(--line-2);outline:none}
+.tref .x{flex:none;border:0;background:none;color:var(--dim);cursor:pointer;
+  padding:0 3px;font-size:13px}
+.tref .x:hover{color:var(--fg)}
+/* A file this subject cannot take does not highlight — the rejection is the
+   absence of an invitation, and it arrives before the drop. */
+.twell{display:flex;align-items:center;gap:7px;width:100%;min-height:34px;
+  padding:0 8px;border:1px dashed var(--line);border-radius:var(--r-inner);
+  background:none;color:var(--dim);cursor:pointer;font-size:11.5px}
+.twell.more{min-height:26px;justify-content:center}
+.twell:hover{color:var(--fg);border-color:var(--line-2)}
+.twell.hot{border-style:solid;border-color:var(--line-2);background:var(--wash-3)}
+.twell .tplus{font-size:13px;line-height:1;-webkit-user-select:none;user-select:none}
+.twell b{font-weight:400}
 
 /* ── the rail, and the three doors at its head ─────────────────────────────
    **A row is affordable when it carries content, and never when it carries one
@@ -686,7 +725,10 @@ svg{width:100%;height:100%;display:block}
    only as tall as the document in it. `inset:0` was the first version and a
    six-line document then sat in a 680px box with five hundred pixels of black
    under it, which is the whole of what "it takes the canvas" bought. */
-.tsource{position:absolute;left:0;right:0;bottom:0;max-height:100%;z-index:8;
+/* Over the console, never over the canvas. `.console` is the positioned
+   ancestor, so `inset:0` here is exactly the bar's own box — the render above
+   it stays visible while you read what it is being given. */
+.tsource{position:absolute;inset:0;z-index:8;
   display:flex;flex-direction:column;
   background:#070707;border-radius:var(--r-card);overflow:hidden;
   outline:1px solid var(--line-2);outline-offset:-1px}
@@ -1561,6 +1603,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    terminal would tell you: the bar, tqdm's numbers, and the dials that are the
    only difference between two cards training the same set. */
 #sess-board{display:flex;flex-direction:column;min-height:0}
+/* Continue carries a word. The two marks beside it act on the picture in front
+   of you; this one goes somewhere, and a destination cannot be announced by a
+   glyph — the same rule that took `#g-shot` off a bare icon. */
+#canvas-chain.wide{width:auto;padding:0 12px;font-size:12px;letter-spacing:.01em;
+  gap:6px;white-space:nowrap}
+#canvas-chain:disabled{opacity:.5;cursor:default}
+
 .board-head{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
   padding:14px 28px 11px;background:var(--bg);border-bottom:1px solid var(--line)}
 /* A second head under the first one is not sticky and owns no gutter: it labels

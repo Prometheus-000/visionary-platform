@@ -1,24 +1,17 @@
 import { useEffect, useRef } from 'react'
 
-import { IconArrange, IconOutfit, IconPhoto, IconScene, IconTrash } from '../icons'
+import { IconArrange, IconPhoto, IconTrash } from '../icons'
 import { Menu } from '../ui/Menu'
 import { NumInput } from '../ui/NumInput'
 import { usePopover } from '../ui/Popover'
 import { DropTile } from '../media/DropTile'
 import { shrinkB64 } from '../media/files'
 import { caretProps, dropCaret } from '../lora/caret'
-import { NEED_EDIT_LORA, regionNote } from '../lora/note'
+import { regionNote } from '../lora/note'
 import { chipFrom, loraIndex } from '../lora/tokens'
 import { attached, regionsLive, useStore, type EditMode, type Region } from '../store'
 import { takeResumeFocus } from './focus'
 import { clamp01, distribute, readRegions } from './geometry'
-
-const PLATE_TITLE = {
-  scene: 'Scene photo. The picture is generated inside it — lighting, perspective '
-    + 'and shadows integrate.',
-  outfit: 'Outfit or object photo. Transferred onto the subjects rather than pasted '
-    + 'into the frame.',
-} as const
 
 /**
  * The box, opened.
@@ -168,11 +161,18 @@ function BoxCard(
             Words only. This used to take the same `<lora:…>` syntax as the main
             field, on the argument that one notation at two scopes needs nothing to
             explain which is which — true, and it made the field do two jobs. The
-            LoRA is the dropdown below, which says *which box* by being on it. */}
+            LoRA is the dropdown below, which says *which box* by being on it.
+
+            "e.g." because the example was read as content: a screenshot arrived
+            with "the box is missing Scene | Outfit" and the placeholder quoted
+            back as the user's own sentence. And the tooltip names the other two
+            surfaces, because this field is where someone who cannot find them is
+            already looking — the card can announce a capability where an icon
+            cannot. */}
         <div className="opt wide">
           <input id="r-prompt" ref={field} value={r.prompt}
-                 placeholder="a man in a denim jacket, laughing"
-                 title="This performer only — who they are and what they are doing. The scene, the light and the lens go in the prompt below; where they stand is the box. Do not write a position here, it is already said."
+                 placeholder="e.g. a man in a denim jacket, laughing"
+                 title="This performer only — who they are and what they are doing. Their face is the Photo or LoRA below; a scene or outfit photo for the whole frame goes on the frame card, behind the corner button. Where they stand is the box — do not write a position here, it is already said."
                  onChange={(e) => s.patchRegion(i, { prompt: e.target.value })}
                  {...caretProps('region', (v) => useStore.getState().patchRegion(
                    useStore.getState().rsel, { prompt: v }))} />
@@ -181,7 +181,7 @@ function BoxCard(
 
       <div className="rins-row">
         <DropTile id="r-ref" label="Photo" value={attached(r, 'identity')} glyph={<IconPhoto />}
-                  title="A photo of this character. Pulls the box toward that likeness during sampling — stacks with the LoRA, and works without one."
+                  title="Character reference — a photo of this person. Pulls the box toward that likeness during sampling; stacks with the LoRA, and works without one. Not for clothing or places — an outfit or scene photo goes on the frame card."
                   onFile={async (f) => {
                     const b64 = await shrinkB64(f)
                     if (b64) s.attach(i, 'identity', b64)
@@ -339,30 +339,13 @@ function FrameCard({ drag }: { drag: boolean }) {
   return (
     <div className={`rins frame-card${drag ? ' dragging' : ''}`} id="frame-inspector">
       <div className="rins-row">
-        {/* The plates ride on two conditions, not one: regions on, and the weight they
-            need actually downloaded. The two get different treatments, and the split
-            is the point. Regions off: this card does not exist, because there is
-            nothing to put a scene behind. Weight missing: the tiles are *locked and
-            dimmed*, because an install without the edit LoRA is one download away from
-            scene and outfit transfer and had no way of learning either existed. A
-            model-gated control the model will never read stays hidden; a weight-gated
-            control is not that — it is a purchase you have not made yet, and hiding it
-            hides the decision rather than the capability.
-
-            Region photos ride on neither: a mold is not an extra_ref plate, so it
-            needs no edit LoRA and never switches paths. */}
-        {(['scene', 'outfit'] as const).map((slot) => (
-          <DropTile key={slot} id={`g-drop-${slot}`} label={slot === 'scene' ? 'Scene' : 'Outfit'}
-                    value={attached(s.frame, slot)} locked={!s.state?.edit_lora}
-                    glyph={slot === 'scene' ? <IconScene /> : <IconOutfit />}
-                    title={s.state?.edit_lora ? PLATE_TITLE[slot] : NEED_EDIT_LORA}
-                    onFile={async (f) => {
-                      const b64 = await shrinkB64(f)
-                      if (b64) s.attach('frame', slot, b64)
-                    }}
-                    onClear={() => s.attach('frame', slot, null)} />
-        ))}
-
+        {/* The Scene and Outfit tiles are gone from here — they live in the
+            console's `PlateRow` now, visible at rest. The card kept them for a
+            version and they were two undiscovered gestures deep: the whole
+            feature was filed as broken with the engine healthy underneath it.
+            What stays is what only means something over the boxes: the weight
+            every box is multiplied by, the arrangement, and the note that says
+            which engine this run takes. */}
         <div className="opt n" id="g-region-base-wrap" data-lb="Global">
           <span className="lead">Global</span>
           <NumInput id="g-region-base" value={s.regionWeight} fine={0.05} bigStep={0.25}

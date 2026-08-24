@@ -3,8 +3,8 @@ import { createPortal } from 'react-dom'
 
 import { useSettled } from '../ui/gesture'
 import { useStore } from '../store'
-import { Slot } from './Slot'
-import { RETENTION, RETENTION_LABEL, SLOTS, handleOf, type CastMember } from './model'
+import { Material } from './Material'
+import { RETENTION, RETENTION_LABEL, handleOf, type CastMember } from './model'
 
 /**
  * What a cast member is made of, disclosed only for the chip you touched.
@@ -90,7 +90,6 @@ export function CastCard({ member }: { member: CastMember }) {
     if (!member.name) name.current?.focus()
   }, [member.name])
 
-  const slots = SLOTS[member.kind]
   return createPortal(
     <div className="tcard" ref={box}
          style={{ left: at?.left ?? 0, top: at?.top ?? 0,
@@ -99,14 +98,20 @@ export function CastCard({ member }: { member: CastMember }) {
       <button type="button" className="x" title={`Remove @${member.name || member.kind}`}
               onClick={() => { s.dropCast(member.id) }}>×</button>
 
-      <label htmlFor={`cast-name-${member.id}`}>Name</label>
-      {/* The `@` is inside the field's edge because it is part of the value, not a
-          label on it: this string *is* the handle a shot mentions them by, and
-          renaming rewrites it across every row as a visible find-and-replace. */}
+      {/* The name first, then what it is, then what you have of it. The face
+          led here for one version, which was right while `Material` was a single
+          well and wrong the moment it became a list — a stack of references is
+          not a headshot to sit a name beside. */}
+      {/* The `@` is inside the field's edge because it is part of the value, not
+          a label on it: this string *is* the handle a shot mentions it by, and
+          renaming rewrites it across every row as a visible find-and-replace.
+          **The name is what you write with** — `Maya` is something you can
+          remember and build an action around, `<Subject 1>` is not, so the
+          numbering is assigned behind this and never surfaces. */}
       <div className="tname-row">
         <span className="at">@</span>
         <input id={`cast-name-${member.id}`} ref={name} className="tname"
-               value={member.name} spellCheck={false} placeholder={member.kind}
+               value={member.name} spellCheck={false} placeholder="name"
                onChange={(e) => { s.patchCast(member.id, { name: handleOf(e.target.value) }) }} />
       </div>
 
@@ -119,19 +124,25 @@ export function CastCard({ member }: { member: CastMember }) {
           word "sam". */}
       <input id={`cast-note-${member.id}`} className="tnote" value={member.note}
              spellCheck={false}
-             placeholder={member.kind === 'character'
-               ? 'who they are — a phrase, not a paragraph'
-               : 'what it is'}
+             // One placeholder, because there is one kind — and the guide's own
+             // example is exactly this shape: "<Subject 1> is *the young woman*
+             // in <Picture 1>". Whether it is a person, a room or a coat is
+             // something this sentence says, not something a menu asked first.
+             placeholder="what it is — the young woman, a rain-slick alley, an olive coat"
              onChange={(e) => { s.patchCast(member.id, { note: e.target.value }) }} />
 
       <label>References</label>
-      <div className={`tslots${slots.length > 2 ? ' wide' : ''}`}>
-        {slots.map((sl) => (
-          <Slot key={sl.key} member={member} slot={sl.key}
-                label={sl.label} takes={sl.takes} />
-        ))}
-      </div>
+      <Material member={member} />
 
+      {/* **Only once there is something to retain.** This sat on the card from
+          the moment a name existed — a control asking how much of a reference
+          has to survive, shown to somebody who has attached no reference. That
+          is the empty state this file's own rule forbids: nothing exists until
+          you make it, and a member with no picture has nothing for the marker
+          to be about. It compiles to nothing either, since `retention_analysis`
+          only ever names a subject. Found by opening the card and reading it
+          as a first-timer rather than by reading the compiler. */}
+      {member.refs.length > 0 && <>
       <label htmlFor={`cast-hold-${member.id}`}>Retain</label>
       {/* How much of the reference has to survive into the render — the marker in
           `retention_analysis`. It reached the document at the strictest value with
@@ -143,6 +154,7 @@ export function CastCard({ member }: { member: CastMember }) {
           <option key={r} value={r} title={r}>{RETENTION_LABEL[r]}</option>
         ))}
       </select>
+      </>}
     </div>,
     document.body,
   )

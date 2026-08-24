@@ -35,34 +35,35 @@ export type PoolFile = {
 
 // ── the cast ────────────────────────────────────────────────────────────────
 
-export type CastKind = 'character' | 'place' | 'thing'
+/**
+ * There is one kind, because the guide has one label.
+ *
+ * `<Subject N>` covers "People, animals, or objects / Scenes, backgrounds, or
+ * environments / Clothing, props, interfaces, or visual effects / Styles,
+ * actions, expressions, or poses" (ref-en §2.1) — four *examples* of what can be
+ * a subject, not four types of one. character/place/thing was ours, and it was
+ * the closed-vocabulary failure again: three kinds means three sayable things,
+ * and a style, a pose or an expression is a legal subject with no box to go in.
+ *
+ * The type survives as a single member so the payload keeps its shape for a
+ * server that still reads the field.
+ */
+export type CastKind = 'subject'
 
 /**
- * Slots per kind, and the media each one takes.
+ * What a subject can be given, by channel.
  *
- * This table *is* the file validation — a file over a slot that cannot take it
- * simply does not highlight, so the rejection is the absence of an invitation
- * rather than a toast after the fact. It mirrors `H3_CAST_KINDS` and
- * `H3_SLOT_MEDIA`, and the server asserts it again because a stale tab is a
- * client that can send anything.
+ * A slot is the media and nothing else. `face`, `wardrobe` and `body` were three
+ * ways of saying "a picture of them", and what a given picture is *for* is a
+ * sentence now — see `CastRef.note` and the guide's own construction:
+ *
+ *     <Subject 1> is the woman whose appearance comes from <Picture 1> and
+ *     whose walking motion comes from <Video 1>.
  */
-export const SLOTS: Record<CastKind, { key: string; label: string; takes: Media }[]> = {
-  character: [
-    { key: 'face', label: 'Face', takes: 'image' },
-    { key: 'wardrobe', label: 'Wardrobe', takes: 'image' },
-    { key: 'body', label: 'Body', takes: 'image' },
-    { key: 'voice', label: 'Voice', takes: 'audio' },
-    { key: 'motion', label: 'Motion', takes: 'video' },
-  ],
-  place: [
-    { key: 'establishing', label: 'Establishing', takes: 'image' },
-    { key: 'style', label: 'Style', takes: 'image' },
-  ],
-  thing: [
-    { key: 'object', label: 'Object', takes: 'image' },
-    { key: 'style', label: 'Style', takes: 'image' },
-  ],
-}
+export const TAKES: Media[] = ['image', 'audio', 'video']
+
+export const slotFor = (_kind: CastKind, media: Media): string | null =>
+  (TAKES.includes(media) ? media : null)
 
 /**
  * What a reference *video* is doing, and what an `<Audio N>` is doing.
@@ -82,6 +83,20 @@ export const AUDIO_ROLES = ['reference', 'reuse'] as const
 export type CastRef = {
   fileId: string
   slots: string[]
+  /**
+   * What *this* asset provides, in the person's own words.
+   *
+   * The guide's construction, and the reason a role name is not needed:
+   *
+   *     <Subject 1> is the woman whose appearance comes from <Picture 1> and
+   *     whose walking motion comes from <Video 1>.
+   *
+   * Empty is the normal state — one photograph of somebody needs no gloss, and
+   * `member.note` already says what the subject *is*. This says what a second
+   * or third picture is *for*, which is the thing five labelled slots were
+   * trying to express with a fixed vocabulary of five.
+   */
+  note?: string
   /** Only read for video and audio — see `VIDEO_ROLES`. Left at `reference`,
    *  which is what both tables default to and what the server assumes. */
   role?: string
@@ -127,6 +142,10 @@ export type CastMember = {
 }
 
 // ── the timeline ────────────────────────────────────────────────────────────
+
+/** What a new shot runs for until somebody drags it. Four seconds is a beat you
+ *  can see rather than a placeholder, and it is well inside one generation. */
+export const SHOT_SECONDS = 4
 
 export type Say = {
   who: string[]
@@ -232,6 +251,23 @@ export const rename = (line: string, from: string, to: string) =>
 export const named = (cast: CastMember[]) => cast.filter((c) => handleOf(c.name))
 
 /**
+ * The photograph a member is drawn as, if they have one.
+ *
+ * The rail used to carry a 5px dot, filled or hollow, as the one fact it could
+ * hold about somebody — a person reduced to a monogram on a token, in a product
+ * whose strongest lever is that it can be handed a face. The dot survives for the
+ * case it was always right about: a member with a description and no picture,
+ * whom `_h3_label` compiles to prose rather than to a `<Subject N>`.
+ */
+export const faceOf = (c: CastMember, pool: Record<string, PoolFile>) => {
+  for (const r of c.refs) {
+    const f = pool[r.fileId]
+    if (f && f.kind === 'image') return f
+  }
+  return null
+}
+
+/**
  * The pool ids that travel, per category, in the order the server will number
  * them.
  *
@@ -267,24 +303,32 @@ export function assets(sc: Scene, kind: Media, pool: Record<string, PoolFile>) {
  * share is zero — a tick with no width on the strip, and a cut time identical to
  * its neighbour's, which is the one thing `_h3_shot_text` refuses to compile.
  */
-const MIN_EXTENT = 20
 
 /**
- * How the clip divides, by shot.
+ * How long each shot runs, in seconds.
  *
- * **The share is a readout, not an input.** A shot's slice of the clip is the
- * length of what you wrote about it — write more about shot 1 and it gets more
- * of the clip — which removes a 9px drag target rather than enlarging it to a
- * thumb-sized one. `beats` overrides it where somebody has dragged, and that is
- * the escape hatch a region's four coordinates are.
+ * **Authored, not derived — and this reverses a rule that shipped.** A shot's
+ * slice of the clip used to be the length of what you wrote about it, on the
+ * argument that extent drives prominence and it removes a 9px drag target. The
+ * owner's objection retires it, and it is not a matter of taste:
  *
- * Dialogue counts toward the extent because a line of it *is* the shot: a row
- * whose whole content is somebody speaking would otherwise sit at the floor
- * while the shot beside it, describing the same beat in prose, took the clip.
+ * > Time is not derived from the description because doing so is impossible. If
+ * > I'm a director, maybe I want a 5 minute scene where the protagonist sits in
+ * > a chair. The director decides, not the model.
+ *
+ * Nothing about "he sits in the chair" implies five seconds or five minutes, so
+ * a readout there invented the one number a director is least likely to be
+ * delegating. The 9px drag target the old rule was avoiding is answered by
+ * giving time its own axis instead — see `Timeline`, where a shot is a bar you
+ * pull rather than a hairline between two rows.
+ *
+ * `beats` keeps its name and its place in the payload because the server
+ * arithmetic already lands: `_compile_h3_scene` spans each shot at
+ * `beats / total * seconds`, so with `seconds` sent as the sum of the bars,
+ * every span comes out as exactly the number that was dragged.
  */
 export function shares(shots: Shot[]): number[] {
-  return shots.map((s) => s.beats ?? Math.max(
-    MIN_EXTENT, s.line.trim().length + s.say.text.trim().length))
+  return shots.map((s) => s.beats ?? SHOT_SECONDS)
 }
 
 /**
@@ -301,6 +345,24 @@ export function shares(shots: Shot[]): number[] {
  */
 export const typedProse = (sc: Scene) =>
   sc.shots.map((s) => s.line.trim()).filter(Boolean).join('\n')
+
+/**
+ * How long the whole scene runs — the sum of the bars.
+ *
+ * **The timeline is the clip's length, not the duration menu.** Once a shot's
+ * seconds are dragged rather than derived, a separate control saying how long
+ * the clip is is a second authority over the same number, and the two disagree
+ * the moment anybody touches either. So the menu keeps the one job it can still
+ * hold honestly — still or motion — and the total comes from the track.
+ *
+ * Null when the scene is not live, which is what preserves the degrade: one
+ * shot, nothing else chosen, and the run is the menu's length and the typed
+ * sentence, exactly as before there was a timeline.
+ */
+export const sceneSeconds = (sc: Scene): number | null =>
+  sc.shots.length > 1 || sc.shots.some((x) => x.beats != null)
+    ? shares(sc.shots).reduce((n, x) => n + x, 0)
+    : null
 
 /** Seconds each shot occupies, as [start, end], from the shares. */
 export function times(shots: Shot[], seconds: number): [number, number][] {
@@ -368,6 +430,7 @@ export function readScene(
       if (!f) return []
       const index = at(f.id, f.kind)
       return index < 0 ? [] : [{ kind: f.kind, index, slots: r.slots,
+                                 ...(r.note ? { note: r.note } : {}),
                                  role: r.role ?? 'reference' }]
     }),
   }))

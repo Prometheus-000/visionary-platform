@@ -4,7 +4,6 @@ import { fileUrl } from '../api/routes'
 import { IconClose, IconExpand, IconPhoto, IconPlay } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
-import { SourcePane } from '../scene/SourcePane'
 import { attached, regionsLive, useStore } from '../store'
 import { layoutShots } from './layoutShots'
 import type { RunState } from './useGenerate'
@@ -42,6 +41,8 @@ export function Canvas({
   onHandoff,
   onFirstFrame,
   onClear,
+  onChain,
+  chaining,
   blank,
 }: {
   run: RunState
@@ -52,6 +53,9 @@ export function Canvas({
   /** A picture dropped on the video canvas is the frame the clip starts on. */
   onFirstFrame: (f: File) => Promise<void> | void
   onClear: () => void
+  /** The next generation of the same scene — see `useVideo.chain`. */
+  onChain: () => void
+  chaining: boolean
   blank: React.ReactNode
 }) {
   const s = useStore()
@@ -132,11 +136,6 @@ export function Canvas({
 
   return (
     <div className="canvas" id="canvas" ref={canvasRef}>
-      {/* **It takes the canvas the way devtools takes the window**, and that is
-          fine: nobody is judging a render while reading a prompt. The surface
-          that kept breaking the console's 30% budget stops competing for it —
-          this costs the console nothing, because it is not in the console. */}
-      {s.docOpen && s.kind === 'video' && <SourcePane />}
       {/* No copy beyond the one line the caller passes. An empty frame above a focused
           prompt field is already the whole instruction, and a sentence telling you to
           type is a sentence that will be read on every visit forever to be useful once.
@@ -192,6 +191,25 @@ export function Canvas({
                   }}>
             <IconExpand />
           </button>
+          {/* **A scene is longer than a generation.** H3 tops out around 14.4
+              seconds, so anything with more than one beat in it is several runs,
+              and what makes them one scene rather than unrelated clips is that
+              the cast, the look and the last frame survive between them. This is
+              the whole of chaining and none of it is a model capability — it is
+              context the person should never have to rebuild.
+
+              A word rather than a glyph, and the icon rule is what says so: the
+              two beside it act on the picture you are looking at, and this one
+              goes somewhere. That is a destination, and a destination cannot be
+              announced by a mark. */}
+          {!image && (
+            <button className="ico wide" id="canvas-chain" type="button"
+                    disabled={chaining}
+                    title="Write the next beat. The cast, the look and this last frame carry over."
+                    onClick={onChain}>
+              {chaining ? 'Linking…' : `Continue${s.takes.length > 1 ? ` · ${String(s.takes.length)}` : ''}`}
+            </button>
+          )}
           <button className="ico" id="canvas-clear" title="Clear the canvas — ⌫" type="button"
                   onClick={onClear}>
             <IconClose />

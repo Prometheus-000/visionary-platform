@@ -1,228 +1,228 @@
 {
  "h3/closed/all:87": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/closed/all:angle": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot on a canted Dutch angle.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. Shot on a canted Dutch angle.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:camera": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. The camera is locked off and does not move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:framing": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. In a first-person point-of-view shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:light": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:say": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:score": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/closed/all:sound": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
  },
  "h3/closed/all:tone": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/audio:dialogue-only": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/audio:groups-only": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/closed/audio:sound+dialogue": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/closed/image-illegal": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/closed/none": {
   "prompt": "A dancer turns under a streetlight."
  },
  "h3/closed/one:angle": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot at eye level.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. Shot at eye level.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:camera": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. The camera pushes in slowly, a small and steady move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:framing": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. In an extreme wide shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:light": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. Lit by soft daylight from a window.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:say": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:score": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:sound": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/closed/one:tone": {
-  "prompt": "integrated_multimodal_description: A dancer turns under a streetlight. Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns under a streetlight. Shot with documentary realism.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:87": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/empty/all:angle": {
-  "prompt": "integrated_multimodal_description: Shot on a canted Dutch angle.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] Shot on a canted Dutch angle.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:camera": {
-  "prompt": "integrated_multimodal_description: The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] The camera is locked off and does not move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:framing": {
-  "prompt": "integrated_multimodal_description: In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] In a first-person point-of-view shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:say": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:score": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: N/A\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/empty/all:sound": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
  },
  "h3/empty/all:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/audio:dialogue-only": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/audio:groups-only": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/empty/audio:sound+dialogue": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/empty/image-illegal": {
-  "prompt": "integrated_multimodal_description: The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/empty/none": {
   "prompt": ""
  },
  "h3/empty/one:angle": {
-  "prompt": "integrated_multimodal_description: Shot at eye level.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] Shot at eye level.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:camera": {
-  "prompt": "integrated_multimodal_description: The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] The camera pushes in slowly, a small and steady move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:framing": {
-  "prompt": "integrated_multimodal_description: In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] In an extreme wide shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:light": {
-  "prompt": "integrated_multimodal_description: Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] Lit by soft daylight from a window.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:say": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:score": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:sound": {
-  "prompt": "integrated_multimodal_description: \noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] \noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/empty/one:tone": {
-  "prompt": "integrated_multimodal_description: Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] Shot with documentary realism.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:87": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/fragment/all:angle": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot on a canted Dutch angle.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. Shot on a canted Dutch angle.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:camera": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. The camera is locked off and does not move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:framing": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. In a first-person point-of-view shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:light": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:say": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:score": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/fragment/all:sound": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/all:tone": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/audio:dialogue-only": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/audio:groups-only": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/audio:sound+dialogue": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/image-illegal": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/none": {
   "prompt": "a portrait of k3nan"
  },
  "h3/fragment/one:angle": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot at eye level.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. Shot at eye level.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:camera": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. The camera pushes in slowly, a small and steady move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:framing": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. In an extreme wide shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:light": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. Lit by soft daylight from a window.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:say": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:score": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:sound": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/fragment/one:tone": {
-  "prompt": "integrated_multimodal_description: a portrait of k3nan. Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] a portrait of k3nan. Shot with documentary realism.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/action": {
-  "prompt": "subject_definitions: <Subject 1> is the action in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its the motion and its timing.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the action in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its the motion and its timing.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/identity": {
-  "prompt": "subject_definitions: <Subject 1> is the person in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its facial structure, hair and build.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the person in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its facial structure, hair and build.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/location": {
-  "prompt": "subject_definitions: <Subject 1> is the location in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its architecture, materials and layout.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the location in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its architecture, materials and layout.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/mixed": {
-  "prompt": "subject_definitions: <Subject 1> is the person in <Picture 1>. <Subject 2> is the location in <Picture 2>. <Subject 3> is the visual style in <Picture 3>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its facial structure, hair and build. <Subject 2> must retain its architecture, materials and layout. <Subject 3> must retain its palette, contrast and grain.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the person in <Picture 1>. <Subject 2> is the location in <Picture 2>. <Subject 3> is the visual style in <Picture 3>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its facial structure, hair and build. <Subject 2> must retain its architecture, materials and layout. <Subject 3> must retain its palette, contrast and grain.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/none": {
   "prompt": "a portrait of k3nan"
  },
  "h3/roles/partial": {
-  "prompt": "subject_definitions: <Subject 1> is the person in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its facial structure, hair and build.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the person in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its facial structure, hair and build.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/prop": {
-  "prompt": "subject_definitions: <Subject 1> is the prop in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its shape, material and markings.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the prop in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its shape, material and markings.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/style": {
-  "prompt": "subject_definitions: <Subject 1> is the visual style in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its palette, contrast and grain.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the visual style in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its palette, contrast and grain.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/roles/wardrobe": {
-  "prompt": "subject_definitions: <Subject 1> is the wardrobe in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its garments, their cut and colour.\ndetailed_description: a portrait of k3nan.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "subject_definitions: <Subject 1> is the wardrobe in <Picture 1>.\nsummary: a portrait of k3nan.\nretention_analysis: <Subject 1> must retain its garments, their cut and colour.\ndetailed_description: [Shot 1] a portrait of k3nan.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/task/fl2va": {
   "prompt": "a portrait of k3nan"
@@ -252,70 +252,70 @@
   "prompt": "a portrait of k3nan"
  },
  "h3/twoline/all:87": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle. The camera is locked off and does not move.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/twoline/all:angle": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot on a canted Dutch angle.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. Shot on a canted Dutch angle.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:camera": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. The camera is locked off and does not move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. The camera is locked off and does not move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:framing": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. In a first-person point-of-view shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. In a first-person point-of-view shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:light": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:say": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:score": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: The soundtrack is solo piano, sustained strings, a synth pad, percussion, acoustic guitar, at a slow tempo, at a mid tempo, at a driving tempo, swelling through the clip, holding a steady level, fading out towards the end."
  },
  "h3/twoline/all:sound": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone, footsteps on the floor, wind moving through the space, rain falling steadily, distant traffic, a low crowd murmur, audible breathing, cloth rustling with every movement, running water, a fire crackling.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/all:tone": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. Shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/audio:dialogue-only": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/audio:groups-only": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/audio:sound+dialogue": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/image-illegal": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. The camera pushes in slowly, a small and steady move.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/none": {
   "prompt": "A dancer turns.\nThe street is wet."
  },
  "h3/twoline/one:angle": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot at eye level.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. Shot at eye level.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:camera": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. The camera pushes in slowly, a small and steady move.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. The camera pushes in slowly, a small and steady move.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:framing": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. In an extreme wide shot.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. In an extreme wide shot.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:light": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Lit by soft daylight from a window.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. Lit by soft daylight from a window.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:say": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:score": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:sound": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet.\noverall_soundscape: The scene carries quiet room tone.\nnon_diegetic_music: N/A"
  },
  "h3/twoline/one:tone": {
-  "prompt": "integrated_multimodal_description: A dancer turns. The street is wet. Shot with documentary realism.\noverall_soundscape: N/A\nnon_diegetic_music: N/A"
+  "prompt": "integrated_multimodal_description: [Shot 1] A dancer turns. The street is wet. Shot with documentary realism.\noverall_soundscape: Ambient sound consistent with the scene continues throughout the video.\nnon_diegetic_music: N/A"
  },
  "image/closed/all:87": {
   "prompt": "A dancer turns under a streetlight. Lit by soft daylight from a window, lit by low golden-hour sun, lit by flat overcast daylight, lit by hard direct sunlight with sharp shadows, lit by coloured neon, lit by warm, flickering candlelight, lit by practical lamps visible in the frame, backlit so the subject reads as a silhouette, lit from directly above, shot with documentary realism, in high-contrast film noir, on grainy 16mm film, on anamorphic widescreen lenses, high-key and bright, desaturated, close to monochrome, in high contrast with deep blacks. In a first-person point-of-view shot, shot on a canted Dutch angle."

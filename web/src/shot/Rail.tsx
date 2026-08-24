@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
 import { Doors } from '../scene/Doors'
+import { faceOf } from '../scene/model'
 import { NumInput } from '../ui/NumInput'
 import { shotGroup, shotItem, useStore } from '../store'
 import { Glyph } from './Glyph'
@@ -55,17 +56,25 @@ export function Rail({ onPalette }: {
           the version of these that had no words. */}
       {video && <Doors onPalette={onPalette} />}
       <div className="wrap" id="shot-rail">
-      {video && s.scene.cast.map((c) => (
-        <button key={c.id} type="button" data-cast={c.id}
-                className={`chip cast${s.railOpen === c.id ? ' on' : ''}`}
-                onClick={() => { s.setRailOpen(s.railOpen === c.id ? null : c.id) }}>
-          {/* The dot is filled once something is attached, which is the one fact
-              about a cast member the rail can carry without opening: a name with no
-              picture behind it compiles to prose rather than to a `<Subject N>`. */}
-          <i className={`d${c.refs.length ? ' full' : ''}`} />
-          {c.name || c.kind}
-        </button>
-      ))}
+      {video && s.scene.cast.map((c) => {
+        // **Their face, not a dot.** The chip carried a 5px circle, filled or
+        // hollow, which was the one fact it could hold about somebody — and it is
+        // the wrong fact and the wrong drawing: a person reduced to a monogram, in
+        // a product whose strongest lever is that it can be handed a photograph.
+        // The dot stays for a member with no picture, where it is still exactly
+        // right: that name compiles to prose rather than to a `<Subject N>`.
+        const face = faceOf(c, s.pool)
+        return (
+          <button key={c.id} type="button" data-cast={c.id}
+                  className={`chip cast${s.railOpen === c.id ? ' on' : ''}`}
+                  onClick={() => { s.setRailOpen(s.railOpen === c.id ? null : c.id) }}>
+            {face
+              ? <img className="av" src={face.url} alt="" draggable={false} />
+              : <i className={`d${c.refs.length ? ' full' : ''}`} />}
+            {c.name || c.kind}
+          </button>
+        )
+      })}
       {s.shot.map((p) => {
         const g = shotGroup(vocab, p.key)
         const it = shotItem(vocab, p.key)

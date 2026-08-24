@@ -696,7 +696,7 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
           unambiguous and whose home you are already in. */}
       {!!regions.length && mode === 'geometry' && (
         <button className={`rframe-btn${rsel < 0 ? ' on' : ''}`} type="button" id="g-frame"
-                title="The frame — scene, outfit, and how hard every box pushes"
+                title="The frame's card — drop a scene to generate inside, an outfit to dress the subjects in, and set how hard every box pushes. Pressed with the card already on the frame, it returns to the first box."
                 onClick={() => {
                   select(rsel < 0 ? 0 : -1)
                   // The press that got here closed the card on its way through the

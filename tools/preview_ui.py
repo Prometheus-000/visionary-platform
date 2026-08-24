@@ -342,7 +342,11 @@ STATE = {
          "ready": True},
     ],
     # shot_vocab / shot_langs / shot_roles are added per request — see app_api().
-    "max_loras": 6, "max_refs": 9, "max_ref_videos": 3,
+    # `max_ref_audios` was missing here while app.py served it, which is this
+    # file's one named failure mode — a stub that omits a field is a preview of a
+    # control that does not exist, and it fails silently. The reference-budget
+    # note reads all three.
+    "max_loras": 6, "max_refs": 9, "max_ref_videos": 3, "max_ref_audios": 3,
     "max_regions": 8,
     # ComfyUI's spellings, which is what the image side sends into a graph now.
     # The old Forge labels ("Euler a", "Automatic") were not a different way of

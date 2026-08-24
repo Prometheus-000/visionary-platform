@@ -566,6 +566,10 @@ comfy_image = (
         f"{COMFY_NODES_DIR}/visionary_free_regional",
         remote_path=f"{COMFY}/custom_nodes/visionary_free_regional",
     )
+    .add_local_dir(
+        f"{COMFY_NODES_DIR}/visionary_edit_arity",
+        remote_path=f"{COMFY}/custom_nodes/visionary_edit_arity",
+    )
 )
 
 
@@ -4903,6 +4907,13 @@ def _infotext(
         molds = sum(1 for r in regions if r.get("ref"))
         if molds:
             add("Region refs", molds)
+        # Which plates the compose ran around. The mode already says krea2edit;
+        # without this line an outfit render and a scene render carried the
+        # same sheet, and neither said what the whole frame was regenerated
+        # against. Older records have no `plates` — the get() is the tolerance.
+        plates = report.get("plates") or []
+        if plates:
+            add("Plates", ", ".join(plates))
         # The caption goes in as a field rather than as the infotext's first
         # line, because that line is the prompt and A1111's format says so —
         # a reader pasting this back expects to get the sentence they wrote,
@@ -5288,6 +5299,20 @@ def _validate_regions(raw: Any) -> list[dict[str, Any]]:
             "ref": ref or "",
         })
     return out
+
+
+def _armed_regions(regions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    The rows the edit path will actually arm: a LoRA or a reference photo.
+
+    Mirrors the node's own predicate — `has_lora(r) or has_ref(r)` on V9's
+    edit path — because that filter decides whether V12's unified attention
+    arms at all, and a plate composed around zero armed boxes is the
+    "V12 unified attention was not armed" RuntimeError. Reads the validated
+    rows, so `lora` is a name or "None" and `ref` is a string.
+    """
+    return [r for r in regions
+            if r.get("lora") not in (None, "", "None") or r.get("ref")]
 
 
 # Where a box sits and how big it is, said in words. The vocabulary is mirrored
@@ -5689,6 +5714,15 @@ def _krea2_graph(
 
         graph["v12"] = {"class_type": KREA2_REGIONAL_NODE, "inputs": v12}
         sampler_model, positive, negative = ["v12", 0], ["v12", 1], ["v12", 2]
+        if scene or outfit:
+            # Only the plate path registers the fixed-arity edit wrappers this
+            # adapts — see comfy_nodes/visionary_edit_arity for the host change
+            # that made them un-callable. The plain path's session wrappers are
+            # *args-safe and go through untouched, so the node would be a no-op
+            # there; not wiring it keeps the graph a record of what mattered.
+            graph["arity"] = {"class_type": "VisionaryEditArity",
+                              "inputs": {"model": ["v12", 0]}}
+            sampler_model = ["arity", 0]
     else:
         graph["pos"] = {"class_type": "CLIPTextEncode",
                         "inputs": {"text": prompt, "clip": clip_src}}
@@ -5752,7 +5786,7 @@ class ImageGenerator:
         # wrong, minutes into a warm GPU, when the traceback that explains it
         # scrolled past during startup.
         self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
-                                  "VisionaryFreeRegional")
+                                  "VisionaryFreeRegional", "VisionaryEditArity")
         # **One model in this container, which is how it started.** A second
         # lived here for a while — Qwen3-VL for the prompt rewrite — loaded at
         # `enter` as a *ComfyUI graph*, which holds the single queue for the 132
@@ -5799,6 +5833,19 @@ class ImageGenerator:
                         raise ValueError(
                             f"A {slot} reference needs at least one region — "
                             "the scene is composed around the boxes."
+                        )
+                    if not _armed_regions(regions):
+                        # The edit path only arms boxes that hold a LoRA or a
+                        # photo (`has_lora(r) or has_ref(r)` in the node), so a
+                        # plate over described-only boxes dies in V12's own
+                        # assertion — "V12 unified attention was not armed" —
+                        # nine seconds after a cold model load. Observed live
+                        # on job gen202608241321556c9e. The structural zero
+                        # belongs here, where it is a form error.
+                        raise ValueError(
+                            f"A {slot} reference needs a box holding an "
+                            "identity — a LoRA or a photo. Boxes with only a "
+                            "description cannot anchor the compose."
                         )
                     _require_models("krea2_edit")
                     plates[slot] = self._comfy.stage(job_id, params[slot], slot)
@@ -5916,6 +5963,13 @@ class ImageGenerator:
             # Which engine ran, because the three are not the same picture and
             # the numbers beside them do not say which one produced it.
             "mode": ("krea2edit" if plates else "regional") if regions else "plain",
+            # And which plates it composed around — same rule as `ref` above:
+            # the slot names, never the photos. Without this a krea2edit run's
+            # record said the engine and not the reason, so an outfit render
+            # was not distinguishable from a scene one; verified missing on job
+            # gen2026082413552761e9. Older records lack the field and every
+            # reader must keep tolerating that.
+            **({"plates": sorted(plates)} if plates else {}),
             **info,
         }
         names = []
@@ -6001,9 +6055,16 @@ H3_MAX_FRAMES = 345
 H3_TIERS = {"full": 768, "draft": 544}
 
 # ref2va's limits: 9 images, 3 videos of 2-15 s, 3 standalone audio clips, and
-# 12 across all types. Standalone audio is not wired up; a video's own
-# soundtrack rides along with it and does not count against the audio budget
-# here because it is packed as that video's, not as its own <Audio n>.
+# 12 across all types. A video's own soundtrack rides along with it and does not
+# count against the audio budget here, because it is packed as that video's
+# rather than as its own <Audio n>.
+#
+# **12 is the binding one and it is the one nothing surfaces.** Nine photographs
+# plus three voices is exactly the total, so a fully cast scene has no room left
+# for a reference video at all. Three audio also caps how many *voices* one
+# generation can clone — two people in a diner is fine, add the waitress and you
+# are at the ceiling. A scene longer than one generation gets its own three per
+# link, which is one of the things chaining buys.
 MAX_H3_REFS = 9
 MAX_H3_REF_VIDEOS = 3
 # `<Audio N>`. Three, from the node's own `ref_audios` autogrow template, and it
@@ -7125,29 +7186,43 @@ H3_AUDIO_ROLES = {"reference": ("audio reference", "reference"),
 # <Picture M>` — and `retain` builds the clause after the relationship marker.
 # This is `SHOT_REF_ROLES` with a kind above it, because a place has no face
 # and a character has no architecture, and a flat role list cannot say so.
-H3_CAST_KINDS = {
-    "character": {"noun": "person", "slots": {
-        "face": "facial structure, hair and build",
-        "wardrobe": "garments, their cut and colour",
-        "body": "build and posture",
-        "voice": "vocal timbre and delivery",
-        "motion": "the motion and its timing",
-    }},
-    "place": {"noun": "location", "slots": {
-        "establishing": "architecture, materials and layout",
-        "style": "palette, contrast and grain",
-    }},
-    "thing": {"noun": "object", "slots": {
-        "object": "shape, material and markings",
-        "style": "palette, contrast and grain",
-    }},
-}
+# **There is one label, and the guide says so outright.** `<Subject N>` covers
+# "People, animals, or objects / Scenes, backgrounds, or environments / Clothing,
+# props, interfaces, or visual effects / Styles, actions, expressions, or poses"
+# (ref-en §2.1) — four *examples* of what can be a subject, not four types of
+# subject. The character/place/thing split that used to live here was ours, and
+# it was the closed-vocabulary failure this codebase keeps finding: three kinds
+# means three sayable things, and a style, a pose or an expression is a perfectly
+# legal subject with no box to go in.
+#
+# What the kinds were buying was a noun in the definition line — `is the person
+# in <Picture 1>` — standing exactly where the guide puts the *description*:
+#
+#     <Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue
+#     cardigan, and a thin silver necklace.
+#
+# So the description does that work now, and a subject with no description says
+# only that it is shown, which is the honest amount to claim about a photograph
+# nobody has said anything about.
+H3_SUBJECT = "subject"
 
-# Which channel a slot's file has to arrive on. The page expresses this as "the
-# slot does not highlight"; it is asserted again here because a stale tab is a
-# client that can send anything, and a voice dropped into a face slot is a
-# picture the model is told to read as a timbre.
-H3_SLOT_MEDIA = {"voice": "audio", "motion": "video"}
+# A slot is the media and nothing else. The guide is equally explicit that the
+# relationship is prose rather than a schema — "One subject may be defined by
+# multiple reference assets, and one reference asset may provide multiple
+# subjects" — with per-asset roles written as a clause:
+#
+#     <Subject 1> is the woman whose appearance comes from <Picture 1> and whose
+#     walking motion comes from <Video 1>.
+#
+# which is why a reference carries a `note` and no longer a role name.
+H3_SLOT_MEDIA = {"image": "image", "audio": "audio", "video": "video"}
+
+# The named slots that used to exist, mapped to the channel they arrived on.
+# Kept so a stale tab still validates rather than 400-ing on a vocabulary that
+# was retired under it — the same courtesy `lora_path` gets one route up.
+H3_LEGACY_SLOTS = {"face": "image", "wardrobe": "image", "body": "image",
+                   "establishing": "image", "object": "image", "style": "image",
+                   "voice": "audio", "motion": "video"}
 
 # An audio reference is a *sibling* of the subject, not a property of it. The
 # guide's own construction is `<Audio 1> is the voice-timbre reference for
@@ -7249,10 +7324,10 @@ def _validate_scene(raw: Any, *, n_refs: int, n_vids: int, n_auds: int = 0,
     for entry in cast_in:
         if not isinstance(entry, dict):
             raise ValueError(f"Not a cast member: {entry!r}")
-        kind = str(entry.get("kind") or "character")
-        if kind not in H3_CAST_KINDS:
-            raise ValueError(f"No such cast kind: {kind!r}. "
-                             f"One of: {', '.join(H3_CAST_KINDS)}")
+        # There is one kind, because the guide has one label. Whatever a client
+        # sends is normalised rather than refused: character/place/thing was our
+        # vocabulary and a stale tab still speaks it.
+        kind = H3_SUBJECT
         handle = _h3_handle(str(entry.get("name") or ""))
         if not handle:
             raise ValueError("A cast member needs a name — it is the @handle "
@@ -7279,15 +7354,18 @@ def _validate_scene(raw: Any, *, n_refs: int, n_vids: int, n_auds: int = 0,
                 raise ValueError(f"@{handle} has a file with no slot. The slot "
                                  f"is the role — a file with none is a picture "
                                  f"the model is not told what to do with.")
+            # A named slot is folded to the channel it arrived on. `face` and
+            # `wardrobe` were two ways of saying "a picture of them", and what
+            # each picture actually provides is a sentence now — see `note`.
+            slots = [H3_LEGACY_SLOTS.get(sl, sl) for sl in slots]
             for slot in slots:
-                if slot not in H3_CAST_KINDS[kind]["slots"]:
+                if slot not in H3_SLOT_MEDIA:
                     raise ValueError(
-                        f"@{handle} is a {kind} and has no {slot!r} slot. "
-                        f"One of: {', '.join(H3_CAST_KINDS[kind]['slots'])}")
-                want = H3_SLOT_MEDIA.get(slot, "image")
-                if want != media:
+                        f"@{handle} has a {slot!r} reference. "
+                        f"One of: {', '.join(H3_SLOT_MEDIA)}")
+                if slot != media:
                     raise ValueError(
-                        f"@{handle}'s {slot} slot takes {want}, not {media}.")
+                        f"@{handle}'s {slot} reference takes {slot}, not {media}.")
             index = int(ref.get("index") or 0)
             have = {"video": n_vids, "audio": n_auds}.get(media, n_refs)
             if not 0 <= index < have:
@@ -7301,7 +7379,16 @@ def _validate_scene(raw: Any, *, n_refs: int, n_vids: int, n_auds: int = 0,
             if media == "audio" and role not in H3_AUDIO_ROLES:
                 raise ValueError(f"No such audio role: {role!r}. "
                                  f"One of: {', '.join(H3_AUDIO_ROLES)}")
+            # **What this asset provides, in the person's words.** The guide's
+            # own construction, and the reason a role name is not needed:
+            #   <Subject 1> is the woman whose appearance comes from <Picture 1>
+            #   and whose walking motion comes from <Video 1>.
+            note = _oneline(str(ref.get("note") or ""))
+            if len(note) > SHOT_VALUE_MAX:
+                raise ValueError(f"@{handle}'s note on {media} {index + 1} is "
+                                 f"{len(note)} characters; at most {SHOT_VALUE_MAX}.")
             refs.append({"kind": media, "index": index, "slots": slots,
+                         "note": note,
                          "role": role})
         cast.append({"id": cid, "kind": kind, "handle": handle,
                      "note": _oneline(str(entry.get("note") or "")),
@@ -7451,17 +7538,51 @@ H3_SOUNDSCAPE_DEFAULT = ("Ambient sound consistent with the scene continues "
                          "throughout the video.")
 
 
-def _h3_subjects(cast: list[dict[str, Any]]) -> dict[str, int]:
+def _h3_subjects(cast: list[dict[str, Any]],
+                 shots: "list[dict[str, Any]] | None" = None) -> dict[str, int]:
     """
     `<Subject N>` by cast id — and only for cast that carry a reference.
 
     A subject label is a claim that something in the target video comes from an
     uploaded asset. Somebody described in the prose and nowhere else is not one,
     and giving them a label points the model at a picture that does not exist.
+
+    **Numbered by order of first mention, not by the order the cast was built
+    in.** These are different films:
+
+        two men fight inside a corridor that is constantly rotating
+        a spinning corridor bounces two men around as they fight
+
+    Same three subjects, same world, same photographs. What differs is which
+    noun the sentence opens on — and in the second one the men are not even
+    agents, they are things that get bounced. Nobody has to be asked which the
+    scene is *about*, because the sentence already said, and `[Shot N]` is read
+    in order top to bottom. Numbering off the cast array threw that away and
+    handed `<Subject 1>` to whoever happened to be created first, which on the
+    composer is whichever `@` you typed first *anywhere* — so writing shot two
+    before shot one silently inverted it.
+
+    Anyone visible but never mentioned still gets a number, appended in cast
+    order: a location carrying an establishing photograph earns a subject label
+    without any line naming it, and so does a character who only ever speaks.
+
+    `shots` is optional so the ordering is a refinement rather than a
+    precondition — a caller with no timeline still gets the old, stable answer
+    instead of an exception.
     """
     visible = [c for c in cast
                if any(r["kind"] != "audio" for r in c["refs"])]
-    return {c["id"]: i + 1 for i, c in enumerate(visible)}
+    if not shots:
+        return {c["id"]: i + 1 for i, c in enumerate(visible)}
+    by_handle = {c["handle"]: c["id"] for c in visible}
+    order: list[str] = []
+    for shot in shots:
+        for handle in _h3_handles(shot["line"]):
+            cid = by_handle.get(handle)
+            if cid is not None and cid not in order:
+                order.append(cid)
+    order += [c["id"] for c in visible if c["id"] not in order]
+    return {cid: i + 1 for i, cid in enumerate(order)}
 
 
 def _h3_label(member: dict[str, Any], subjects: dict[str, int]) -> str:
@@ -8211,8 +8332,11 @@ def _validate_stage(raw: Any, *, cast_ids: "set[str] | None",
                       # that earns this whole feature and it is nonsense on a
                       # light fixture — "the bulb, facing the lens" is the
                       # arithmetic answering a question nobody asked of it.
-                      "faces": True if kinds is None
-                      else kinds.get(who) == "character",
+                      # Every mark has a front. This used to read the cast
+                      # kind — `character` faced the lens and a `thing` did
+                      # not — and that table is gone, so a caller that knows
+                      # better passes `faces` and nothing else guesses.
+                      "faces": bool(entry.get("faces", True)),
                       "prompt": _oneline(str(entry.get("prompt") or "")),
                       "lora": entry.get("lora") or None,
                       "strength": entry.get("strength")})
@@ -8360,7 +8484,9 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
     come before the body that spends it.
     """
     cast, shots = scene["cast"], scene["shots"]
-    subjects = _h3_subjects(cast)
+    # The timeline decides the numbering, not the order the cast was built in.
+    # See `_h3_subjects`: the sentence already says what the scene is about.
+    subjects = _h3_subjects(cast, shots)
     speakers = spk = _h3_speakers(shots)
 
     # Spans, not starts. A camera move needs the shot's *duration* to state a
@@ -8402,19 +8528,48 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
     if ref_mode:
         # ── subject_definitions ─────────────────────────────────────────────
         defs: list[str] = []
-        for member in cast:
-            n = subjects.get(member["id"])
-            if not n:
-                continue
+        # **In subject order, not cast order.** Numbering moved to order of
+        # first mention and this loop did not, so a cast built location-first
+        # emitted `<Subject 2>` above `<Subject 1>` — a field whose whole job is
+        # to define a label before anything spends it, listing them out of
+        # sequence. The guide's examples run 1, 2, 3 and there is no reason to
+        # differ. Audio siblings below still follow the cast, because each hangs
+        # off a subject already defined rather than introducing a number.
+        in_order = sorted((c for c in cast if subjects.get(c["id"])),
+                          key=lambda c: subjects[c["id"]])
+        for member in in_order:
+            n = subjects[member["id"]]
             # One entry per subject listing every asset it is built from —
             # `<Subject 2> is the Samoyed in <Picture 2>, <Picture 3> and
             # <Picture 4>` — rather than one entry per asset. A subject is a
             # content unit; the files are where it came from.
-            labels = _h3_list([_h3_asset(r) for r in member["refs"]
-                               if r["kind"] != "audio"])
-            defs.append(f"<Subject {n}> is the {H3_CAST_KINDS[member['kind']]['noun']}"
-                        + (f" in {labels}" if labels else "")
-                        + (f", {member['note']}" if member["note"] else "") + ".")
+            visual = [r for r in member["refs"] if r["kind"] != "audio"]
+            # **The description carries what it is.** This used to open with a
+            # noun off our own kind table — `is the person in <Picture 1>` —
+            # standing exactly where the guide puts the description:
+            #
+            #   <Subject 1> is the young woman in <Picture 1>, with long dark
+            #   hair, a blue cardigan, and a thin silver necklace.
+            #
+            # With nothing written about them there is nothing to claim, so the
+            # line says only that they are shown.
+            what = member["note"] or "shown"
+            # Where a picture has its own note, the guide's per-asset form wins,
+            # because it says which asset provides which half of the subject.
+            told = [r for r in visual if r.get("note")]
+            rest = [r for r in visual if not r.get("note")]
+            labels = _h3_list([_h3_asset(r) for r in rest])
+            line = f"<Subject {n}> is {what}" + (f" in {labels}" if labels else "") + "."
+            # Each noted asset gets its own sentence rather than the guide's
+            # `whose X comes from` clause. That form needs a bare noun and what
+            # a person types is a noun *phrase* — "the olive field coat" — which
+            # came out as "whose the olive field coat comes from <Picture 3>".
+            # A sentence takes whatever they wrote and stays grammatical, and
+            # the guide asks only that the definition explain what each asset
+            # provides, not that it be one sentence.
+            for r in told:
+                line += f" {_h3_cap(r['note'])} comes from {_h3_asset(r)}."
+            defs.append(line)
         for member in cast:
             n = subjects.get(member["id"])
             for ref in member["refs"]:
@@ -8461,19 +8616,34 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
                      if member["handle"] in _h3_handles(s["line"])
                      or any(m["castId"] == member["id"]
                             for m in ((s.get("stage") or {}).get("marks") or []))]
-            slots = H3_CAST_KINDS[member["kind"]]["slots"]
-            # Visual slots only. A `voice` slot's retain clause belongs to the
-            # `<Audio N>` line, which says it with an audio marker; claiming it
-            # here as well makes the subject retain a timbre a picture does not
-            # carry, and says the same thing twice under two different markers.
-            what = [slots[s] for r in member["refs"] if r["kind"] != "audio"
-                    for s in r["slots"]]
-            what = list(dict.fromkeys(what)) or ["appearance"]
+            # Visual references only. An audio reference's retain clause belongs
+            # to the `<Audio N>` line, which says it with an audio marker;
+            # claiming it here too makes the subject retain a timbre a picture
+            # does not carry, under two different markers.
+            #
+            # What is retained is what the person said each picture provides,
+            # and "appearance" where they said nothing — the same fallback the
+            # slot phrases used to reach when a subject had no slot filled.
+            visual_refs = [r for r in member["refs"] if r["kind"] != "audio"]
+            what = [r["note"] for r in visual_refs if r.get("note")]
+            # A picture nobody annotated is still there for their appearance, so
+            # noting *one* of several must not delete what the others are for.
+            if any(not r.get("note") for r in visual_refs) or not what:
+                what.append("appearance")
+            what = list(dict.fromkeys(what))
             keep.append(
                 f"<Subject {n}>"
                 + (f" (appears in {', '.join(where)})" if where else "")
-                + f": {member['retention']} - its "
-                + "; ".join(what) + " are retained.")
+                # `its` only where the phrase has no determiner of its own.
+                # The slot table's phrases were bare nouns — "facial structure,
+                # hair and build" — and what a person writes is a noun phrase:
+                # "its the olive field coat is retained".
+                + f": {member['retention']} - "
+                + "; ".join(w if re.match(r"^(the|a|an|his|her|their)\b", w, re.I)
+                            else f"its {w}" for w in what)
+                # "its appearance are retained" — the plural was safe while
+                # every phrase came from the slot table and read as a list.
+                + (" are retained." if len(what) > 1 else " is retained."))
         # `(Sx)` is deliberately absent from every line here — the guide says so
         # outright, and the audio lines are where it would leak in, because the
         # definition above legitimately carries one.
@@ -10438,6 +10608,15 @@ def web():
             if payload.get(slot) and not regions:
                 return {"error": f"A {slot} reference needs at least one region — "
                                  "the scene is composed around the boxes."}
+            # Same fact the job checks, caught while the plate is on screen:
+            # the edit path only arms boxes holding a LoRA or a photo, and a
+            # plate over described-only boxes is a dead job after a cold load
+            # ("V12 unified attention was not armed").
+            if payload.get(slot) and not _armed_regions(regions):
+                return {"error": f"A {slot} reference needs a box holding an "
+                                 "identity — a LoRA or a photo. Boxes with "
+                                 "only a description cannot anchor the "
+                                 "compose."}
 
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(ImageGenerator, payload.get("gpu"), IMAGE_GPUS, GPU)

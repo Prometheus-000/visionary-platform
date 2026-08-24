@@ -3,7 +3,7 @@ import { usePopover } from '../ui/Popover'
 import { Glyph } from '../shot/Glyph'
 import { chipFrom, loraIndex } from '../lora/tokens'
 import { useStore } from '../store'
-import { SLOTS, type CastKind } from './model'
+
 
 /**
  * Cast, shot and LoRA — the three doors into the composer, at the head of the rail.
@@ -39,21 +39,26 @@ export function Doors({ onPalette }: {
   onPalette: (e: React.MouseEvent<HTMLElement>) => void
 }) {
   const s = useStore()
-  const cast = usePopover()
   const lora = usePopover()
   const index = loraIndex(s.state)
   const on = new Set(s.loras.map((l) => l.path))
 
-  const add = (kind: CastKind) => {
-    const member = s.addCast(kind, '')
+  const add = () => {
+    const member = s.addCast('subject', '')
     s.setRailOpen(member.id)
   }
 
   return (
     <span className="tdoors">
-      <button type="button" id="v-cast" className={`tdoor${cast.open ? ' on' : ''}`}
-              title="Somebody or something in the scene. Typing @ in a shot does the same."
-              onClick={cast.toggle}>+ Character</button>
+      {/* **`+ Subject`, and there is no menu behind it any more.** It read
+          `+ Character` and opened a three-item list — character, place, thing —
+          which was our vocabulary asked as a question. ref-en §2.1 has one
+          label, `<Subject N>`, covering people, environments, clothing, styles
+          and poses alike, so there is nothing to pick between: the door makes
+          one and what it *is* goes in its description. */}
+      <button type="button" id="v-cast" className="tdoor"
+              title="Anyone or anything the clip should keep — a person, a place, a coat, a look. Typing @ in a shot does the same."
+              onClick={() => { add() }}>+ Subject</button>
       {/* The tile is the one place in this app where an icon can *teach* — a
           dolly-out is a thing neither the word nor a static picture shows you —
           so it keeps its glyph beside the word rather than instead of it, and it
@@ -67,13 +72,6 @@ export function Doors({ onPalette }: {
               disabled={!index.length} title="A LoRA, plugged into this clip."
               onClick={lora.toggle}>+ LoRA</button>
 
-      {cast.open && (
-        <Menu anchor={cast.anchor} onClose={cast.close}
-              items={(Object.keys(SLOTS) as CastKind[]).map((k) => ({
-                label: `New ${k}`,
-                run: () => { add(k) },
-              }))} />
-      )}
       {lora.open && (
         <Menu anchor={lora.anchor} onClose={lora.close}
               items={index.map((l) => ({

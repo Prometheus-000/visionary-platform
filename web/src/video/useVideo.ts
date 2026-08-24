@@ -1,13 +1,14 @@
 import { useCallback, useState } from 'react'
 
 import { everyMs, failed, type ApiError } from '../api/client'
-import { status, stop, video } from '../api/routes'
+import { fileUrl, status, stop, video } from '../api/routes'
 import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { readVidChips, stripLoras } from '../lora/tokens'
 import { readShot, useStore, type Store } from '../store'
-import { readScene, typedProse } from '../scene/model'
+import { readScene, sceneSeconds, typedProse } from '../scene/model'
 import { resolveVid } from '../console/resolve'
+import { lastFrame } from './lastFrame'
 
 /**
  * One clip, from press to playback.
@@ -71,7 +72,9 @@ export function videoBody(s: Store): Record<string, unknown> {
     // and reads none of them. They were here for a second family that did.
     aspect: s.vid.aspect,
     tier: r.tier,
-    seconds: r.seconds,
+    // The track is the clip's length once it has been authored. See
+    // `sceneSeconds` — the duration menu keeps still-or-motion and nothing else.
+    seconds: sceneSeconds(s.scene) ?? r.seconds,
     steps: s.vid.steps,
     seed: s.vid.seed,
     sampler: r.sampler,
@@ -95,6 +98,11 @@ export function videoBody(s: Store): Record<string, unknown> {
 
 export function useVideo(onLanded: (it: GalleryItem) => void) {
   const [run, setRun] = useState<VideoRun>(IDLE)
+  /** Reading the last frame out of the clip takes a decode, so it is a state a
+   *  button can show rather than a promise nobody can see. Declared here with
+   *  `run` rather than beside `chain`: every hook in this file is above the
+   *  first callback, which is the arrangement that cannot be misread. */
+  const [linking, setLinking] = useState(false)
 
   const finish = useCallback((st: JobStatus, jobId: string) => {
     const file = (st.files as string[] | undefined)?.[0] ?? null
@@ -115,6 +123,12 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
     if (file) {
       onLanded({ ...(st as Partial<GalleryItem>), job_id: jobId, kind: 'video',
                  files: [file], created: Date.now() / 1000 })
+      // And it joins the scene. Every generation is a link whether or not you go
+      // on to add another — a scene with one take in it is just a scene you have
+      // not continued yet, which is what keeps `Continue` from being a mode you
+      // enter.
+      const st2 = useStore.getState()
+      st2.addTake({ jobId, file, line: typedProse(st2.scene) })
     }
   }, [onLanded])
 
@@ -181,7 +195,44 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
   /** The canvas only. The prompt, the pills, the boxes and the settings are all still
    *  what you were working on — this clears the result, which is the one thing "clear"
    *  can mean when everything else is an input you are mid-edit of. */
-  const clear = useCallback(() => setRun(IDLE), [])
+  const clear = useCallback(() => { setRun(IDLE); useStore.getState().clearTakes() }, [])
 
-  return { run, start, cancel, clear }
+  /**
+   * The next generation of the same scene.
+   *
+   * **What carries is context, not a capability.** The cast, their photographs,
+   * their voices, the look and the LoRAs are all untouched — they belong to the
+   * scene and never belonged to a take — so the only thing asked of H3 is the
+   * same characters again, plus whoever is new. That is the whole of chaining.
+   *
+   * The last frame of what just rendered becomes the next take's first frame,
+   * which is what makes two generations read as one continuous scene instead of
+   * two clips of the same people. It also promotes the task to `i2va` on its own,
+   * through machinery that already existed and had nothing feeding it.
+   *
+   * **It is best-effort.** A codec the browser will not decode yields no frame,
+   * and the next take simply opens cold rather than refusing to start — the
+   * continuity is the point, not a precondition.
+   *
+   * What does *not* carry is the prose. A take is a beat, and reopening on the
+   * sentence you already rendered would invite editing the last one rather than
+   * writing the next.
+   */
+  const chain = useCallback(async () => {
+    const s = useStore.getState()
+    if (!run.jobId || !run.file) return
+    setLinking(true)
+    const frame = await lastFrame(fileUrl(run.jobId, run.file))
+    setLinking(false)
+    s.setKeyframe('first', frame)
+    // A first frame and a last frame together are `fl2va`, which would pin the
+    // new take's ending to the old take's ending — the opposite of continuing.
+    s.setKeyframe('last', null)
+    s.setProse('')
+    // After the commit, for the reason `applyWrite` waits: the field is
+    // controlled, and focusing now would focus a node React is about to replace.
+    requestAnimationFrame(() => document.getElementById('prompt')?.focus())
+  }, [run.jobId, run.file])
+
+  return { run, start, cancel, clear, chain, linking }
 }

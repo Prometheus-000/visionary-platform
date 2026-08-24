@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { useStore } from '../store'
-import { SLOTS, handleOf, type CastKind } from './model'
+import { handleOf } from './model'
 
 /**
  * The picker you get by typing `@`, and the only way most people will ever make
@@ -84,20 +84,23 @@ export function MentionMenu({ anchorRef, mention, onPick, onClose }: {
   // collision by appending a number, which is right for a second person genuinely
   // called Ava and absurd as the only row under an exact match.
   const taken = new Set(s.scene.cast.map((c) => c.name))
-  const makes = (Object.keys(SLOTS) as CastKind[])
-    .filter((k) => !(q && taken.has(q)) || k !== 'character')
-    .map((k) => ({
-      label: q ? `New ${k} “${q}”` : `New ${k}`,
-      note: '',
-      run: () => {
-        const member = s.addCast(k, q)
-        onPick(member.name)
-        // Opened straight onto its card, because a member made this way has a name
-        // and nothing else — and the slots are the only reason it is a cast member
-        // rather than a word in a sentence.
-        s.setRailOpen(member.id)
-      },
-    }))
+  // **One row, because there is one kind.** This offered three — New character,
+  // New place, New thing — which was our own vocabulary asked as a question:
+  // ref-en §2.1 has a single `<Subject N>` covering people, environments,
+  // clothing, styles and poses alike. Being made to classify a name before
+  // writing about it is the closed vocabulary in its purest form, and what the
+  // thing *is* belongs in its description, which is where the guide puts it.
+  const makes = q && taken.has(q) ? [] : [{
+    label: q ? `New subject “${q}”` : 'New subject',
+    note: '',
+    run: () => {
+      const member = s.addCast('subject', q)
+      onPick(member.name)
+      // Opened straight onto its card, because a member made this way has a name
+      // and nothing else, and a photograph is what turns the name into a subject.
+      s.setRailOpen(member.id)
+    },
+  }]
   const items = [...hits, ...makes]
 
   useLayoutEffect(() => {

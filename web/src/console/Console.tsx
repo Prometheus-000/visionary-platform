@@ -5,11 +5,14 @@ import { usePopover } from '../ui/Popover'
 import { LoraBox } from '../lora/LoraBox'
 import { LoraButton } from '../lora/LoraButton'
 import { loraNote } from '../lora/note'
+import { PlateRow } from '../regions/PlateRow'
+import { budgetNote, refBudget } from '../video/refBudget'
 import { Palette } from '../shot/Palette'
 import { Peek } from '../shot/Peek'
 import { ShotDoor } from '../shot/ShotDoor'
 import { Rail } from '../shot/Rail'
 import { CastCard } from '../scene/CastCard'
+import { SourcePane } from '../scene/SourcePane'
 import { SourceRow } from '../video/SourceRow'
 import { supports, useStore } from '../store'
 import { Field } from './Field'
@@ -211,6 +214,11 @@ export function Console({
           moved into the field: this is a row of pictures, not a row of controls, and it
           is the one thing that could not follow. */}
       {!image && <SourceRow />}
+      {/* The image side's picture row — the Scene and Outfit plates, at rest.
+          They lived only on the frame card, two undiscovered gestures deep,
+          and the whole feature was filed as broken with the engine healthy
+          underneath it. See `regions/PlateRow`. */}
+      {image && <PlateRow />}
       {/* Image only. On the video side a LoRA is a chip on the one rail beside the
           cast and the pills — the disclosure is a fold under a *prompt box*, and
           that side no longer has one. */}
@@ -233,6 +241,14 @@ export function Console({
           a warning arrived — which is mid-typing for the LoRA notes and mid-attach for
           the keyframe one, exactly when a hand is over Generate. A button that moves
           as you reach for it costs more than the 17px this holds at rest. */}
+      {/* **Never over the canvas.** This took the canvas the way devtools takes
+          the window, on the argument that nobody is judging a render while
+          reading a prompt. The owner's correction is simpler and holds without
+          the argument: the canvas is the film, and chrome does not live there.
+          So it covers the console instead — the surface that *is* controls —
+          and the render stays visible the whole time you are reading what it
+          will be given. */}
+      {s.docOpen && s.kind === 'video' && <SourcePane />}
       <p className="muted warn" id="console-notes">
         <span id="lora-note">{note}</span>
         {!image && <VideoNote />}
@@ -286,9 +302,27 @@ function GenerateButton({ id, busy, ready, onGenerate, onStop }: {
  *  already made unfindable — a warning about something you do not have, pointing
  *  at somewhere you cannot see. A span in the reserved note line, so appearing
  *  costs no layout. */
+/**
+ * What is wrong about this run's pictures, and nothing else.
+ *
+ * Two things share the span and the budget wins, because it is the one that
+ * changes what the model receives: past the caps a photograph is dropped before
+ * the run ever sees it, while the keyframe note describes something merely
+ * ignored. Only one sentence at a time — the row is 18px and reserved, and the
+ * whole reason it is reserved is that Generate must not move under a hand
+ * already reaching for it.
+ *
+ * **It counts what will travel.** This used to read `refs`/`refVids` alone,
+ * which was correct while those were the only way to attach a picture and went
+ * blind the moment the composer arrived: nine photographs on nine cast members
+ * counted as zero. `refBudget` follows `videoBody`'s rule instead — the cast's
+ * files when there is a cast, the flat trays otherwise, never both.
+ */
 function VideoNote() {
   const s = useStore()
-  const n = s.refs.length + s.refVids.length
+  const over = budgetNote(s)
+  if (over) return <span id="vid-note">{over}</span>
+  const n = refBudget(s).total
   const framed = !!(s.keyframe.first || s.keyframe.last)
   const text = n
     ? (framed ? `${n} reference${n > 1 ? 's' : ''} — keyframes are ignored for this run.` : '')

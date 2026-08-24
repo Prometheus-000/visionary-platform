@@ -116,3 +116,14 @@ down is why they are shaped that way, in the rules files above.
 **The front end is built into the image, not mounted from your disk.** That is
 what keeps `modal deploy app.py` the entire install. Node is a build-time
 dependency of the image; nothing at runtime needs it.
+
+## Documentation discipline
+
+- Do not create .md files unless I explicitly ask for one.
+- Never write session artifacts: no PLAN.md, SUMMARY.md, PHASE_*.md,
+  *_COMPLETE.md, MIGRATION_NOTES.md, IMPLEMENTATION_*.md. Report that in chat.
+- Docs live in exactly three places: README.md, CLAUDE.md, and docs/.
+  Nothing else at repo root.
+- If a change affects something already documented, edit the existing file.
+  Do not add a new one alongside it.
+- Before writing any .md, state which existing doc you considered editing instead.

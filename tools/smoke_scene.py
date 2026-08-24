@@ -150,10 +150,34 @@ check("shot numbers are sequential from 1",
 
 print("\nlabels")
 defs = field(doc, "subject_definitions")
-check("<Picture N> is the upload index, not the cast order",
-      re.findall(r"<Picture (\d)>", defs), ["1", "2", "3"])
-check("the place is <Subject 1> because it is first in the cast",
-      defs.startswith("<Subject 1> is the location in <Picture 1>."))
+# **Two counters over one cast, and they are allowed to disagree.** This used to
+# read the picture numbers down the defs and expect 1, 2, 3 — which only held
+# because the defs happened to be in cast order and so did the uploads, so the
+# two counters coincided and the test could not tell them apart. Now that
+# subjects are numbered by first mention, the cafe is <Subject 2> and still
+# <Picture 1>, because a picture number is a position in `references[]` and
+# nothing else. Asserted directly rather than through an ordering proxy.
+check("<Picture N> stays the upload index however the subjects are numbered",
+      "<Subject 2> is shown in <Picture 1>." in defs)
+check("so a subject's number and its picture's number need not match",
+      "<Subject 1> is shown in <Picture 2>." in defs)
+# **Numbered by order of first mention, not by cast order.** The cast here is
+# built location-first, the way the guide's own example is, and shot 1 reads
+# "@ava sits in the @cafe" — so Ava is <Subject 1> and the cafe is <Subject 2>.
+# Cast order is *creation* order, which on the composer is whichever `@` was
+# typed first anywhere, so writing shot two before shot one used to invert this
+# silently. The sentence already says what the scene is about.
+# **One label.** ref-en §2.1 lists people, environments, clothing, styles and
+# poses as things `<Subject N>` covers — examples, not types — so the
+# character/place/thing table that used to put a noun here is gone, and the
+# description does that work. With none written, the line claims only that it
+# is shown.
+check("the subject mentioned first is <Subject 1>, whatever order the cast was built in",
+      defs.startswith("<Subject 1> is shown in <Picture 2>."))
+check("and the one mentioned after it is <Subject 2>",
+      "<Subject 2> is shown in <Picture 1>." in defs)
+check("<Picture N> is unmoved by it — it is the upload index, a separate counter",
+      "<Picture 1>" in defs.split("\n")[1])
 check("one entry per subject, however many files it is built from",
       len([l for l in defs.split("\n") if l.strip()]), 3)
 check("a subject built from two slots of one file lists it once",
@@ -168,7 +192,7 @@ check("a file shared by two subjects keeps one number",
 
 
 print("\nspeakers")
-check("(S1) goes to whoever speaks first", "<Subject 2> (S1)" in body)
+check("(S1) goes to whoever speaks first", "<Subject 1> (S1)" in body)
 check("(S2) to the next", "<Subject 3> (S2)" in body)
 check("an ID is stable across shots", body.count("(S1)"), 2)
 check("(Sx) never appears in retention_analysis",
@@ -194,7 +218,7 @@ print("\ndialogue")
 check("a line survives byte-for-byte inside <d>",
       "<d>[English] He just likes cookies more than me.</d>" in body)
 check("the language tag is inside the block, the speaker outside",
-      re.search(r"<Subject 2> \(S1\) says: <d>\[English\] ", body) is not None)
+      re.search(r"<Subject 1> \(S1\) says: <d>\[English\] ", body) is not None)
 
 check("<scenetrans> marks the shot the line leaves",
       "</d> <scenetrans> The line continues seamlessly across the cut."
@@ -219,7 +243,7 @@ check("every line carries a marker from the closed set",
       all(any(f": {m} - " in l for m in G["H3_RETENTION"])
           for l in ret.split("\n") if l.strip()))
 check("(appears in …) names the shots the handle is actually in",
-      "<Subject 2> (appears in [Shot 1], [Shot 3])" in ret)
+      "<Subject 1> (appears in [Shot 1], [Shot 3])" in ret)
 check("a marker outside the set is refused",
       "No such retention marker" in refused(
           lambda: build({**three_shots(), "cast": [
@@ -260,9 +284,9 @@ check("two sound pills take the plural verb",
 
 print("\nmentions")
 check("a mention resolves to its subject label",
-      "<Subject 2> sits in <Subject 1>" in body)
+      "<Subject 1> sits in <Subject 2>" in body)
 check("the article in front of it is absorbed",
-      "in the <Subject 1>" not in body)
+      "in the <Subject 2>" not in body)
 one = {"cast": [{"id": "a", "kind": "character", "name": "ava",
                  "note": "a woman in her forties", "refs": []}],
        "shots": [{"line": "@ava at the window", "beats": 1}]}
@@ -287,11 +311,18 @@ check("a voice file in a face slot is named",
           lambda: build({**three_shots(), "cast": [
               {"id": "w", "kind": "character", "name": "Ava", "refs": [
                   {"kind": "audio", "index": 0, "slots": ["face"]}]}]})))
-check("a slot the kind does not have is named",
-      "has no 'face' slot" in refused(
-          lambda: build({**three_shots(), "cast": [
-              {"id": "p", "kind": "place", "name": "cafe", "refs": [
-                  {"kind": "image", "index": 0, "slots": ["face"]}]}]})))
+# A slot is the channel a file arrived on and nothing else, so `face` is simply
+# an old name for `image` and a picture on any subject is legal. What is still
+# refused is a name that is not a channel at all.
+def one_sub(slot):
+    return {"cast": [{"id": "p", "name": "cafe", "refs": [
+                {"kind": "image", "index": 0, "slots": [slot]}]}],
+            "shots": [{"line": "inside the @cafe", "beats": 1}]}
+check("a retired slot name still validates, because a stale tab still sends one",
+      refused(lambda: build(one_sub("face"), n_refs=1)), "")
+check("a slot that is not a channel is named",
+      "One of: image, audio, video" in refused(
+          lambda: build(one_sub("vibe"), n_refs=1)))
 check("two cast members with one handle are named",
       "Two in the cast are called @ava" in refused(
           lambda: build({**three_shots(), "cast": [
@@ -335,7 +366,7 @@ voiced["cast"][1]["refs"].append(
 vdoc = build(voiced, n_auds=1)
 vdefs, vret = field(vdoc, "subject_definitions"), field(vdoc, "retention_analysis")
 check("an audio gets its own definition line",
-      "<Audio 1> is the voice-timbre reference for <Subject 2> (S1)." in vdefs)
+      "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." in vdefs)
 check("and is not listed as one of the subject's pictures",
       "<Audio 1>" not in vdefs.split("\n")[1])
 check("<Audio N> numbers in its own category, not with the pictures",
@@ -585,7 +616,11 @@ print("\na subject is whatever the shot is about")
 # Every one of these was a standing adult by construction until a reference
 # arrived with a body on a floor and a ceiling light fixture in the same frame,
 # both of them subjects. `FIGURE_H`/`FIGURE_W`/`EYE_H` are defaults now.
-BULB = {"x": 0, "z": 0.35, "yaw": 180, "h": 0.15, "w": 0.15, "base": 2.7}
+# `faces: False` is now carried by the mark rather than inferred from a cast
+# kind. The kinds are gone — ref-en §2.1 has one label — so "a thing has no
+# front" is something the caller states, not something a table guesses.
+BULB = {"x": 0, "z": 0.35, "yaw": 180, "h": 0.15, "w": 0.15, "base": 2.7,
+        "faces": False}
 LYING = {"x": 0, "z": 0, "yaw": 90, "h": 0.4, "w": 1.8, "base": 0}
 
 see = G["_stage_see"]
@@ -698,8 +733,7 @@ def rig(cam, tilt, path=None):
     return G["_validate_stage"](
         {"camera": {**cam, "tilt": tilt},
          "marks": [{**LYING, "castId": "oscar"}, {**BULB, "castId": "bulb"}],
-         "path": path}, cast_ids=CAST, kinds={"oscar": "character",
-                                              "bulb": "thing"})
+         "path": path}, cast_ids=CAST)
 
 up = rig(POV, 78.0)
 check("riding a body makes the shot a point of view",

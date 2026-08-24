@@ -14,6 +14,7 @@
  */
 import type { Store } from '../store'
 import { attached, regionsLive, supports, videoModel } from '../store'
+import { readRegions, regionArmed } from '../regions/geometry'
 import { stripLoras } from './tokens'
 
 export function loraNote(s: Store): string {
@@ -29,6 +30,19 @@ export function loraNote(s: Store): string {
   // carries `trigger_word` per entry, which is where a check or an agent reads
   // the fact — what went is the nagging, not the information.
   if (s.loras.length > max) bits.push(`Only the first ${max} LoRAs are applied.`)
+
+  // The plates have a home at rest now (`PlateRow`), so a photo can arrive
+  // before any box exists — and with zero boxes the payload sends it as null.
+  // The note teaches the gesture that is missing, because the double-click is
+  // the least discoverable thing on the page and this is the one moment
+  // someone is looking for it.
+  if (s.kind === 'image' && !s.regions.length) {
+    for (const slot of ['scene', 'outfit'] as const) {
+      if (attached(s.frame, slot))
+        bits.push(`The ${slot} photo waits on a region — double-click the `
+          + 'canvas to place someone in it.')
+    }
+  }
 
   if (regionsLive(s)) {
     // The same LoRA on the canvas and in a box is the one combination that
@@ -50,6 +64,30 @@ export function loraNote(s: Store): string {
     // tells that render apart from one the LoRAs actually ran in.
     if (parseFloat(s.regionWeight) === 0 && boxed.size)
       bits.push('Region weight is 0 — every box\u2019s LoRA is switched off.')
+
+    // The payload drops boxes with no words, no LoRA and no photo, and the
+    // plates ride on what survives — `imageBody` sends `outfit: null` the
+    // moment the filtered list is empty. Found by driving the page: an outfit
+    // tile showing its jacket, a rectangle on the canvas, and a request
+    // carrying no outfit and no error, because the backend's own "needs at
+    // least one region" answer only fires on a plate it is actually sent.
+    if (!readRegions([], s.regions, true).length) {
+      for (const slot of ['scene', 'outfit'] as const) {
+        if (attached(s.frame, slot))
+          bits.push(`The ${slot} photo is not sent — every box is empty. `
+            + 'Give a box a sentence, a photo or a LoRA.')
+      }
+    } else if (!s.regions.some((r) => regionArmed([], r))) {
+      // The edit path only arms boxes holding a LoRA or a photo, so a plate
+      // over described-only boxes is a rejected run — the backend answers with
+      // the same sentence. Found live: "V12 unified attention was not armed",
+      // nine seconds after a cold model load.
+      for (const slot of ['scene', 'outfit'] as const) {
+        if (attached(s.frame, slot))
+          bits.push(`The ${slot} compose needs a box holding an identity — `
+            + 'a LoRA or a photo. Described-only boxes cannot anchor it.')
+      }
+    }
   }
 
   // **The composer is per-kind now, so this is no longer about a stack left
@@ -72,10 +110,30 @@ export function loraNote(s: Store): string {
  * mold on the fast path, so it never moves the run onto the slow one.
  */
 export function regionNote(s: Store, live: number): string {
-  if (!regionsLive(s) || !live) return ''
+  if (!regionsLive(s)) return ''
+  // Zero live boxes is not "nothing to say" — it is the one arrangement where
+  // the tiles above this note lie: they show their photos, and the payload
+  // sends neither, because the plates ride on the filtered region list. The
+  // frame card is where those tiles are, so the sentence belongs here too, not
+  // only under the main prompt.
+  if (!live) {
+    const held = (['scene', 'outfit'] as const).filter((p) => attached(s.frame, p))
+    return held.length
+      ? `Every box is empty — the ${held.join(' and ')} photo${held.length > 1 ? 's are' : ' is'} `
+        + 'not sent. Give a box a sentence, a photo or a LoRA.'
+      : ''
+  }
   const molds = s.regions.filter((r) => attached(r, 'identity')).length
   const tail = molds ? ` ${molds} with a reference photo.` : ''
   if (attached(s.frame, 'scene') || attached(s.frame, 'outfit')) {
+    // Promised only when a box can anchor it — the edit path arms boxes
+    // holding a LoRA or a photo, and the backend rejects a plate over
+    // described-only boxes, so this card saying "composed" while the console
+    // says "cannot anchor" was the same state described twice, differently.
+    if (!s.regions.some((r) => regionArmed([], r))) {
+      return 'The compose needs a box holding an identity — a LoRA or a '
+        + 'photo. Described-only boxes cannot anchor it.'
+    }
     return `${live} region${live > 1 ? 's' : ''} composed into the reference — `
       + `slower, and it re-renders the whole frame.${tail}`
   }

@@ -6,7 +6,8 @@ import { growRows } from '../console/fieldMax'
 import { resolveVid } from '../console/resolve'
 import { supports, useStore } from '../store'
 import { MentionMenu, complete, mentionAt, type Mention } from './Mentions'
-import { handleOf, shares, times, type Shot } from './model'
+import { Timeline } from './Timeline'
+import { handleOf, times, type Shot } from './model'
 
 /**
  * The timeline, where the video side's prompt box used to be.
@@ -48,34 +49,25 @@ export function Shots({ consoleEl, hide, onSubmit }: {
     growRows(box.current, consoleEl.current)
   })
 
+  // The selected shot is the one you are writing. One field, not a field per
+  // shot: with time on its own axis the rows were carrying two jobs — where a
+  // shot sits in the film, and what it says — and only the second one needs a
+  // textarea. Falls back to the first, because `shotSel` can name a row that a
+  // ⌫ removed.
+  const sel = shots.find((x) => x.id === s.shotSel) ?? shots[0]
+  const at = sel ? shots.indexOf(sel) : 0
+
   return (
     <div className={`tline${hide ? ' hide' : ''}`} ref={box}>
-      {/* A readout, not an input: a shot's share of the clip is the length of
-          what you wrote about it, so there is nothing to drag and nothing to
-          miss with a thumb. At one shot it is a full-width bar, which is the
-          honest picture of a clip with no cuts in it — and the thing that makes
-          the second shot dividing it legible when it arrives. */}
-      <Strip />
-      {shots.map((shot, i) => (
-        <Row key={shot.id} shot={shot} n={i} at={cuts[i]?.[0] ?? 0}
+      <Timeline />
+      {sel && (
+        <Row key={sel.id} shot={sel} n={at} at={cuts[at]?.[0] ?? 0}
              onSubmit={onSubmit} />
-      ))}
+      )}
     </div>
   )
 }
 
-function Strip() {
-  const s = useStore()
-  const w = shares(s.scene.shots)
-  return (
-    <div className="tstrip">
-      {s.scene.shots.map((shot, i) => (
-        <i key={shot.id} style={{ flex: w[i] }}
-           className={shot.id === s.shotSel ? 'sel' : undefined} />
-      ))}
-    </div>
-  )
-}
 
 /** `MM:SS.mmm` is the cut format the document takes; the gutter is a readout for
  *  a person, so it is the same instant at the precision a person reads. */
@@ -102,10 +94,11 @@ function Row({ shot, n, at, onSubmit }: {
   // answer. Cleared on the next keystroke, because editing a handle is exactly
   // when the list should come back.
   const settled = useRef<number | null>(null)
-  // The first row keeps `#prompt`. Everything that reaches for the prompt by id
-  // — the stray-key focus in App.tsx, the checks, the Enter binding — is asking
-  // for "the box you write in", and that is still this one.
-  const id = n === 0 ? 'prompt' : `shot-${shot.id}`
+  // **Always `#prompt`.** Everything that reaches for the prompt by id — the
+  // stray-key focus in App.tsx, the checks, the Enter binding — is asking for
+  // "the box you write in", and with one field per selection that is this one,
+  // whichever shot is selected.
+  const id = 'prompt'
   const write = (line: string) => { s.patchShot(shot.id, { line }) }
 
   const found = caret < 0 ? null : mentionAt(shot.line, caret)

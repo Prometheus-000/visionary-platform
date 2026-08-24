@@ -4,7 +4,7 @@ import { failed } from '../api/client'
 import { compile } from '../api/routes'
 import { resolveVid } from '../console/resolve'
 import { stripLoras } from '../lora/tokens'
-import { readScene, typedProse } from '../scene/model'
+import { readScene, sceneSeconds, typedProse } from '../scene/model'
 import { readShot, useStore } from '../store'
 
 /**
@@ -36,7 +36,8 @@ export function useCompiled(active: boolean): string {
         model: s.vid.model,
         prompt: stripLoras(s.kind === 'video' ? typedProse(s.scene) : s.prompt),
         shot: readShot(s.shot),
-        seconds: Number(resolveVid(s).seconds) || undefined,
+        seconds: sceneSeconds(s.scene)
+          ?? (Number(resolveVid(s).seconds) || undefined),
         ...(sc && { scene: sc.scene }),
         first_frame: !!s.keyframe.first,
         last_frame: !!s.keyframe.last,

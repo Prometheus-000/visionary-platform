@@ -815,6 +815,33 @@ bind.
   distilled LoRA. `shift_video` and `shift_audio` are their own keys, and
   reading `/api/video`'s shared `shift` would put 8.0 on every H3 take against
   the model's 12.0.
+- **`<Subject N>` is numbered by order of first mention, `<Picture N>` by upload
+  position, and the two are allowed to disagree.** These are different films:
+
+      two men fight inside a corridor that is constantly rotating
+      a spinning corridor bounces two men around as they fight
+
+  Same three subjects, same photographs. What differs is which noun the sentence
+  opens on — and in the second the men are not even agents, they are things that
+  get bounced. Nobody has to be *asked* what a scene is about, because the
+  sentence already said. Numbering off the cast array threw that away and handed
+  `<Subject 1>` to whoever was created first, which on the composer is whichever
+  `@` was typed first anywhere: writing shot two before shot one inverted it
+  silently. Anyone visible but never mentioned still gets a number, appended in
+  cast order — a location earns a label from its establishing photograph without
+  a line naming it.
+
+  `subject_definitions` is emitted in **subject** order for the same reason the
+  field exists: it defines a label before anything spends it, and listing
+  `<Subject 2>` above `<Subject 1>` is that job done backwards. That was a live
+  defect for the length of one edit and the assertion caught it.
+
+  A picture number is a position in `references[]` and nothing else, so a subject
+  and its picture routinely carry different numbers. `smoke_scene.py` used to
+  check this by reading the picture numbers down the defs and expecting 1, 2, 3 —
+  which held only while both counters happened to walk the cast in the same
+  order, so the test could not tell them apart. It asserts the claim directly now.
+
 - **`<Audio N>` is a sibling of the subject, not one of its sources.** It gets
   its own line in `subject_definitions` and `retention_analysis`, and the
   speaker ID is reused, never assigned. Somebody with only a voice attached is

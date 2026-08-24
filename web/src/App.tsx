@@ -545,6 +545,8 @@ export function App() {
                   i,
                 })}
                 onOpenVideo={(src) => lightbox(src, 'video')}
+                onChain={() => void vid.chain()}
+                chaining={vid.linking}
                 onHandoff={(jobId, file, as) => void handoff(jobId, file, as)}
                 onFirstFrame={async (f) => {
                   const b64 = await toB64(f)

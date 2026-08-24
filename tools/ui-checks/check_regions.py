@@ -568,8 +568,13 @@ with sync_playwright() as pw:
     check("the frame button opens the frame's card",
           pg.locator("#frame-inspector").count() == 1
           and pg.locator("#region-inspector").count() == 0)
-    check("the plates live there",
-          pg.locator("#g-drop-scene").count() == 1 and pg.locator("#g-drop-outfit").count() == 1)
+    # The tiles moved to the console's PlateRow — at rest, not behind the card
+    # — so this row asserts the new home and that the card did NOT keep a copy:
+    # two live homes for one attachment is the second-way failure.
+    check("the plates live in the console, at rest",
+          pg.locator("#g-plate-sec #g-drop-scene").count() == 1
+          and pg.locator("#g-plate-sec #g-drop-outfit").count() == 1
+          and pg.locator("#frame-inspector .drop").count() == 0)
     check("the map went with the row", pg.locator(".rmap").count() == 0)
     check("the row went too", pg.locator("#region-bar").count() == 0)
 
@@ -586,11 +591,23 @@ with sync_playwright() as pw:
     tap(0.17, 0.17)
     pg.fill("#r-prompt", "a dancer mid-turn")
     pg.wait_for_timeout(200)
+    # Described-only first, because that state changed: the edit path only
+    # arms boxes holding a LoRA or a photo, so a plate over words alone is a
+    # rejected run and the card has to say the requirement, not promise the
+    # compose. Then the box is armed with a photo and the promise comes back.
     landed = pg.evaluate(DROP_ON_CANVAS, [PNG, 0.75, 0.92])
     pg.wait_for_timeout(400)
     check("the drop reached bare canvas", landed == "bare canvas", landed)
     check("a scene dropped on bare canvas opens the frame's card",
           pg.locator("#frame-inspector").count() == 1)
+    note = pg.locator("#region-note").inner_text() if pg.locator("#region-note").count() else ""
+    check("an unarmed box is told the compose cannot anchor",
+          "needs a box holding an identity" in note, note[:64] or "(no note)")
+    armed_hit = pg.evaluate(DROP_ON_CANVAS, [PNG, 0.17, 0.17])
+    pg.wait_for_timeout(400)
+    check("the arming drop reached the box", armed_hit != "bare canvas", armed_hit)
+    pg.evaluate("() => document.querySelector('#g-frame')?.click()")
+    pg.wait_for_timeout(300)
     note = pg.locator("#region-note").inner_text() if pg.locator("#region-note").count() else ""
     check("and the card says the engine changed", "composed into the reference" in note,
           note[:64] or "(no note)")

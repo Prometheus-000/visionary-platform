@@ -169,6 +169,11 @@ export type { LoraChip }
 
 export type Keyframes = { first: string | null; last: string | null }
 
+/** One generation that has landed, as a link in a scene. `line` is the prose it
+ *  was made from, kept so the strip can say what a take was without refetching a
+ *  sidecar for something the page watched happen. */
+export type SceneTake = { jobId: string; file: string; line: string }
+
 /** Everything that is per-kind and lives at the root while its kind is showing.
  *  `shot` is in here because pills compile *into* the prompt — a rail left
  *  standing after a switch is pills belonging to a sentence no longer on screen. */
@@ -404,8 +409,28 @@ export type Store = {
    * driving it or you have taken it over, and you can always see which.
    */
   doc: string | null
+  /**
+   * The generations this scene is made of, in order.
+   *
+   * **A scene is longer than a generation, and that is the only reason this
+   * exists.** H3 tops out at `H3_MAX_FRAMES` — 345 frames at 24fps, about 14.4
+   * seconds — so anything with more than one beat in it is several runs, and the
+   * thing that turns several runs into a scene is not a model capability. It is
+   * that the cast, the look and the last frame survive from one to the next, so
+   * you are never rebuilding context you already gave.
+   *
+   * Deliberately **not** inside `scene`: that type mirrors `_validate_scene` and
+   * is the request body. A record of what has already rendered is not part of any
+   * request, and folding it in would put results in the payload.
+   */
+  takes: SceneTake[]
   setDocOpen: (on: boolean) => void
   setDoc: (text: string | null) => void
+  /** Append what just landed. Called from the run rather than by re-asking the
+   *  volume about work the page watched finish — see `useVideo.finish`. */
+  addTake: (t: SceneTake) => void
+  /** Start over. The cast stays: it belongs to the scene, not to a take. */
+  clearTakes: () => void
   setScene: (patch: Partial<Scene>) => void
   /** The prose, one row per line. What `typedProse` joined, taken back apart —
    *  which is what makes Reuse a round trip rather than a re-parse. The cast is
@@ -429,6 +454,13 @@ export type Store = {
    *  both the wardrobe and the body" one upload. */
   attachSlot: (castId: string, fileId: string, slot: string) => void
   detachSlot: (castId: string, slot: string) => void
+  /** A note on one attached file — what that picture or recording provides.
+   *  Keyed by file rather than by slot, because a slot is only the channel now
+   *  and two pictures of one subject share it. */
+  patchRef: (castId: string, fileId: string, patch: { note?: string }) => void
+  /** Remove one attached file. By file, not by slot: every picture shares the
+   *  `image` channel now, so removing by slot would take all of them. */
+  detachRef: (castId: string, fileId: string) => void
 
   /* ---- every picture the model can be given ----------------------------- */
   keyframe: Keyframes
@@ -575,6 +607,9 @@ export const useStore = create<Store>((set, get) => ({
   railOpen: null,
   docOpen: false,
   doc: null,
+  takes: [],
+  addTake: (t) => set((s) => ({ takes: [...s.takes, t] })),
+  clearTakes: () => set({ takes: [] }),
   setDocOpen: (docOpen) => set({ docOpen }),
   setDoc: (doc) => set({ doc }),
   setScene: (patch) => set((s) => ({ scene: { ...s.scene, ...patch } })),
@@ -654,18 +689,33 @@ export const useStore = create<Store>((set, get) => ({
   attachSlot: (castId, fileId, slot) => set((s) => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => {
       if (c.id !== castId) return c
-      // One file per slot, and one entry per file. Dropping onto an occupied
-      // slot replaces what was there rather than stacking, which is the same
-      // rule `setAttached` keeps for a region's plates.
-      const rest = c.refs
-        .map((r) => ({ ...r, slots: r.slots.filter((x) => x !== slot) }))
-        .filter((r) => r.slots.length || r.fileId === fileId)
-      const has = rest.find((r) => r.fileId === fileId)
-      return { ...c, refs: has
-        ? rest.map((r) => (r.fileId === fileId
-            ? { ...r, slots: [...r.slots.filter((x) => x !== slot), slot] } : r))
-        : [...rest, { fileId, slots: [slot] }] }
+      // Already here — a second drop of the same file is not a second entry.
+      if (c.refs.some((r) => r.fileId === fileId)) return c
+      // **Pictures stack; a voice replaces.** This kept one file per slot on the
+      // rule that the slot *was* the role, so dropping a second photograph
+      // silently replaced the first. With a slot collapsed to the channel, every
+      // picture shares `image`, and that rule became "a subject may have exactly
+      // one photograph" — which is the opposite of what the guide says: *"One
+      // subject may be defined by multiple reference assets."*
+      //
+      // Audio and video still replace, because a subject has one voice and one
+      // motion, and a second of either is a correction rather than an addition.
+      const many = slot === 'image'
+      const rest = many
+        ? c.refs
+        : c.refs.filter((r) => !r.slots.includes(slot))
+      return { ...c, refs: [...rest, { fileId, slots: [slot] }] }
     }) },
+  })),
+  detachRef: (castId, fileId) => set((s) => ({
+    scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id !== castId ? c : {
+      ...c, refs: c.refs.filter((r) => r.fileId !== fileId),
+    })) },
+  })),
+  patchRef: (castId, fileId, patch) => set((s) => ({
+    scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id !== castId ? c : {
+      ...c, refs: c.refs.map((r) => (r.fileId === fileId ? { ...r, ...patch } : r)),
+    })) },
   })),
   detachSlot: (castId, slot) => set((s) => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id === castId ? {
