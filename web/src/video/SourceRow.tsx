@@ -84,15 +84,35 @@ export function SourceRow() {
     else st.setRefVids(out)
   }
 
+  const motion = !!s.continueFrom
   return (
     <div className="opts" id="v-src-sec">
-      <DropTile id="v-drop-first" label="First frame" value={s.keyframe.first} off={!!n}
+      {/* **The Motion tile is the lever, and it is visible where every other
+          anchor lives.** Set by Continue when the finished take saved its
+          sampler latent: the next run opens with the previous clip's actual
+          motion and audio pinned as context, instead of restarting from a
+          still. One click clears it back to the frame — the tile row is the
+          whole choice of fidelity: motion, frame, or a cut, each one gesture
+          apart, none hidden inside the Continue button. Not a DropTile:
+          nothing can be dropped on it, because its value is a fact about the
+          last take rather than a file. */}
+      {motion && (
+        <button type="button" className="drop mini set" id="v-motion"
+                title={`Motion and audio continue from take ${s.continueFrom ?? ''}.`
+                       + ' Click to fall back to its last frame.'}
+                onClick={() => s.setContinueFrom(null)}>
+          <span className="lead">Motion ›</span>
+        </button>
+      )}
+      <DropTile id="v-drop-first" label="First frame" value={s.keyframe.first}
+                off={!!n || motion}
                 glyph={<IconFirst />}
                 title="The clip starts on this image. Drop or click; click again to clear."
                 onFile={async (f) => s.setKeyframe('first', await toB64(f))}
                 onClear={() => s.setKeyframe('first', null)} />
       {sup.last_frame && (
-        <DropTile id="v-drop-last" label="Last frame" value={s.keyframe.last} off={!!n}
+        <DropTile id="v-drop-last" label="Last frame" value={s.keyframe.last}
+                  off={!!n || motion}
                   glyph={<IconLast />}
                   title="The clip ends on this image. Drop or click; click again to clear."
                   onFile={async (f) => s.setKeyframe('last', await toB64(f))}

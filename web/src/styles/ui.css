@@ -2497,3 +2497,9 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
     content:'';position:absolute;left:50%;top:50%;
     transform:translate(-50%,-50%);width:32px;height:32px}
 }
+
+/* The object plates' rows borrow the cast row's classes; capped here because
+   `.trefnote` is flex:1 and inside a console-wide `.opts` an uncapped note
+   input ate the row. 260px holds the placeholder's example sentence. */
+#g-plate-sec .plate-obj{width:280px;flex:none}
+#g-plate-sec .plate-obj img{width:26px;height:26px}

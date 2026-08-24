@@ -17,6 +17,11 @@ import { attached, regionsLive, supports, videoModel } from '../store'
 import { readRegions, regionArmed } from '../regions/geometry'
 import { stripLoras } from './tokens'
 
+/** Every frame attachment that rides V12's extra_ref sockets. */
+const PLATE_SLOTS = ['scene', 'outfit', 'object1', 'object2'] as const
+/** What the warnings call a slot — the object roles are one word to a user. */
+const plateName = (slot: string) => (slot.startsWith('object') ? 'object' : slot)
+
 export function loraNote(s: Store): string {
   const max = s.state?.max_loras ?? 6
   const bits: string[] = []
@@ -37,9 +42,9 @@ export function loraNote(s: Store): string {
   // the least discoverable thing on the page and this is the one moment
   // someone is looking for it.
   if (s.kind === 'image' && !s.regions.length) {
-    for (const slot of ['scene', 'outfit'] as const) {
+    for (const slot of PLATE_SLOTS) {
       if (attached(s.frame, slot))
-        bits.push(`The ${slot} photo waits on a region — double-click the `
+        bits.push(`The ${plateName(slot)} photo waits on a region — double-click the `
           + 'canvas to place someone in it.')
     }
   }
@@ -72,9 +77,9 @@ export function loraNote(s: Store): string {
     // carrying no outfit and no error, because the backend's own "needs at
     // least one region" answer only fires on a plate it is actually sent.
     if (!readRegions([], s.regions, true).length) {
-      for (const slot of ['scene', 'outfit'] as const) {
+      for (const slot of PLATE_SLOTS) {
         if (attached(s.frame, slot))
-          bits.push(`The ${slot} photo is not sent — every box is empty. `
+          bits.push(`The ${plateName(slot)} photo is not sent — every box is empty. `
             + 'Give a box a sentence, a photo or a LoRA.')
       }
     } else if (!s.regions.some((r) => regionArmed([], r))) {
@@ -82,11 +87,41 @@ export function loraNote(s: Store): string {
       // over described-only boxes is a rejected run — the backend answers with
       // the same sentence. Found live: "V12 unified attention was not armed",
       // nine seconds after a cold model load.
-      for (const slot of ['scene', 'outfit'] as const) {
+      for (const slot of PLATE_SLOTS) {
         if (attached(s.frame, slot))
-          bits.push(`The ${slot} compose needs a box holding an identity — `
+          bits.push(`The ${plateName(slot)} compose needs a box holding an identity — `
             + 'a LoRA or a photo. Described-only boxes cannot anchor it.')
       }
+    }
+  }
+
+  // Style is the whole-frame engine and the boxes are the regional one; the
+  // route refuses the pair, so the note names the conflict while both are on
+  // screen — and says which one style would keep.
+  if (s.kind === 'image' && s.regions.length
+      && attached(s.frame, 'style1')) {
+    bits.push('Style references and region boxes are two engines — remove '
+      + 'one. Style applies to the whole frame.')
+  }
+
+  // Zero is not a weak style, it is the mechanism switched off: the LoRA is
+  // what lets the model consume the reference latents at all, and a render
+  // still comes back, placed by the prompt alone — indistinguishable from one
+  // the references ran in. The region-weight-zero lesson, same silence.
+  if (s.kind === 'image' && parseFloat(s.styleStrength) === 0
+      && attached(s.frame, 'style1')) {
+    bits.push('Style strength is 0 — the reference photo is switched off.')
+  }
+
+  // The backend refuses an object plate whose note is empty — a reference the
+  // prompt never mentions does close to nothing — so the same sentence shows
+  // here, next to the field that fixes it.
+  if (s.kind === 'image') {
+    for (const slot of ['object1', 'object2'] as const) {
+      const a = s.frame.attachments.find((x) => x.role === slot)
+      if (a && !(a.note ?? '').trim())
+        bits.push('The object photo needs a sentence saying what it is — '
+          + '\u201ca motorcycle she leans against\u201d.')
     }
   }
 
@@ -125,7 +160,7 @@ export function regionNote(s: Store, live: number): string {
   }
   const molds = s.regions.filter((r) => attached(r, 'identity')).length
   const tail = molds ? ` ${molds} with a reference photo.` : ''
-  if (attached(s.frame, 'scene') || attached(s.frame, 'outfit')) {
+  if (PLATE_SLOTS.some((slot) => attached(s.frame, slot))) {
     // Promised only when a box can anchor it — the edit path arms boxes
     // holding a LoRA or a photo, and the backend rejects a plate over
     // described-only boxes, so this card saying "composed" while the console

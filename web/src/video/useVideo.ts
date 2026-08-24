@@ -82,8 +82,14 @@ export function videoBody(s: Store): Record<string, unknown> {
     loras: readVidChips(s.loras, s.state?.max_loras ?? 6),
     shot: readShot(s.shot),
     ref_roles: sc ? [] : s.refRoles.slice(0, s.refs.length),
-    first_frame: s.keyframe.first,
-    last_frame: s.keyframe.last,
+    // One anchor at a time. A motion continuation already answers "where does
+    // this take open", so the first frame is withheld rather than sent beside
+    // it — the route refuses the pair, and the page should never be the stale
+    // tab that sends it. The frame is kept in the store as the fallback the
+    // Motion tile clears back to.
+    first_frame: s.continueFrom ? null : s.keyframe.first,
+    last_frame: s.continueFrom ? null : s.keyframe.last,
+    ...(s.continueFrom && { continue_from: s.continueFrom }),
     // The cast's files when there is a cast, and the flat trays otherwise. Never
     // both: `<Picture N>` is a *position* in this array, so a cast ref pointing
     // at index 1 and a tray photo also sitting at index 1 is a well-formed
@@ -222,8 +228,13 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
     const s = useStore.getState()
     if (!run.jobId || !run.file) return
     setLinking(true)
+    // The frame is still read, even though motion is the anchor that runs:
+    // it is what the Motion tile falls back to when cleared, and what the
+    // route's own degrade points at when a latent has gone missing. Cheap —
+    // the bytes are already in the <video> on the canvas.
     const frame = await lastFrame(fileUrl(run.jobId, run.file))
     setLinking(false)
+    s.setContinueFrom(run.jobId)
     s.setKeyframe('first', frame)
     // A first frame and a last frame together are `fl2va`, which would pin the
     // new take's ending to the old take's ending — the opposite of continuing.

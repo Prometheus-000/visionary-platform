@@ -22,8 +22,11 @@ import { slotFor, type CastMember, type PoolFile } from './model'
  *
  * **The two notes are different claims and the placeholders have to say so.**
  * `member.note` is what the subject *is* — the description the guide puts right
- * after the label. A `ref.note` is what one asset *provides*, and it is empty in
- * the ordinary case, because a single photograph of somebody needs no gloss.
+ * after the label. A `ref.note` is what one asset *provides*, and empty is the
+ * ordinary case: an unnoted picture is referenced whole. The placeholder still
+ * teaches on every row — *what to reference — face, clothing, style…* — because
+ * a photograph lending part of itself is a capability nothing else on the page
+ * can announce, and hiding it on the first row hid it where everyone starts.
  *
  * **The file decides the channel, and a file the subject cannot take never
  * lights the well.** Read off `dataTransfer.items` during the drag, which is the
@@ -64,7 +67,7 @@ export function Material({ member }: { member: CastMember }) {
 
   return (
     <div className="tmat">
-      {held.map(({ ref, file }, i) => (
+      {held.map(({ ref, file }) => (
         <div key={ref.fileId} className="tref">
           {file!.kind === 'image'
             ? <img src={file!.url} alt="" draggable={false} />
@@ -75,11 +78,18 @@ export function Material({ member }: { member: CastMember }) {
                 {file!.kind === 'audio' ? '♪' : '▸'}
               </span>}
           <input className="trefnote" value={ref.note ?? ''} spellCheck={false}
-                 // The first one needs no gloss — the subject's own description
-                 // already covers it — so only the second row onward asks.
-                 placeholder={i === 0
-                   ? (file!.kind === 'audio' ? 'how they sound' : 'what this shows')
-                   : 'what this one is for — the coat, her posture, the light'}
+                 // One line, and it is teaching rather than labelling: a
+                 // photograph can lend *part* of itself — the face, the coat,
+                 // the light — and nothing else on the page can say so. The
+                 // first row asked nothing for a version, on the argument that
+                 // one photo needs no gloss; true of the common case and it
+                 // hid the capability exactly where everyone starts. Empty is
+                 // still fine — an unnoted picture is referenced whole.
+                 placeholder={file!.kind === 'audio'
+                   ? 'the voice — tone, pace, accent…'
+                   : file!.kind === 'video'
+                     ? 'the motion — how they move…'
+                     : 'what to reference — face, clothing, style…'}
                  onChange={(e) => { s.patchRef(member.id, ref.fileId, { note: e.target.value }) }} />
           <button type="button" className="x" title={`Remove ${file!.name}`}
                   onClick={() => { s.detachRef(member.id, ref.fileId) }}>×</button>

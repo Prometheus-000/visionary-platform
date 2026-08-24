@@ -101,12 +101,19 @@ export const newRegion = (r: Partial<Region> = {}): Region => ({
  * masked; and neither needs a control that does not already exist. If it ever wants a
  * panel, this type was the wrong shape and the panel is the tell.
  */
-export type Role = 'identity' | 'scene' | 'outfit'
+export type Role =
+  'identity' | 'scene' | 'outfit' | 'object1' | 'object2' | 'style1'
 
 /** One picture, and what it is for. The bytes are base64 with no `data:` prefix,
  *  because that is what the wire takes and converting at the edges twice is how a
- *  prefix ends up inside a payload. */
-export type Attachment = { role: Role; image: string }
+ *  prefix ends up inside a payload.
+ *
+ *  `note` exists for the two object plates and nothing else: V12's sockets 3
+ *  and 4 take a photograph plus the user's own sentence about what it is —
+ *  "a motorcycle she leans against" — and an object with no sentence does
+ *  close to nothing, which is why the backend refuses one. It is the cast
+ *  row's `ref.note` wearing the image side's record. */
+export type Attachment = { role: Role; image: string; note?: string }
 
 /** Everything a picture can be given to. The frame is one of these, which is what stops
  *  "a photo on a box" and "a photo on the canvas" from being two systems. */
@@ -128,6 +135,15 @@ export const setAttached = (
   const rest = list.filter((a) => a.role !== role)
   return image ? [...rest, { role, image }] : rest
 }
+
+/** The object plates' sentence. Only an attachment that exists takes one —
+ *  a note with no photograph would be a row the payload cannot send. */
+export const setNote = (
+  list: Attachment[],
+  role: Role,
+  note: string,
+): Attachment[] =>
+  list.map((a) => (a.role === role ? { ...a, note } : a))
 
 /** Every value an image run is priced by. `''` is "the checkpoint decides", and
  *  is not the same as a zero: the route's `num()` falls back to its default on
@@ -296,6 +312,12 @@ export type Store = {
   /** Index, not id: `_pair_boxes` is positional and so is every readout. */
   rsel: number
   regionWeight: string
+  /** How hard the style LoRA is applied when style references are attached.
+   *  A string for the same reason `regionWeight` is — the field owns the
+   *  keystrokes, the route's num() owns the parse. 1 is the trained strength;
+   *  the live A/B at 1.0 pulled composition and even the subject's gender
+   *  toward the reference, which is what earned this its own number. */
+  styleStrength: string
   /** The frame is a place too, and the scene and outfit plates are its attachments.
    *  A record with a slot per plate was the same shape as a region's `ref` written
    *  twice more, and it is what made frame scope and box scope two systems. */
@@ -363,10 +385,14 @@ export type Store = {
   patchRegion: (i: number, patch: Partial<Region>) => void
   select: (i: number) => void
   setRegionWeight: (v: string) => void
+  setStyleStrength: (v: string) => void
   /** One picture onto one place. `where` is a region's index or the frame, and that
    *  argument is the entire difference between "this character" and "this scene" —
    *  same gesture, same record, different target. */
   attach: (where: number | 'frame', role: Role, image: string | null) => void
+  /** The sentence on an object plate — frame-scope only, because only the
+   *  frame's attachments carry notes. */
+  notePlate: (role: Role, note: string) => void
   setEdit: (m: EditMode) => void
   setBoxDrag: (on: boolean) => void
   setCardOpen: (on: boolean) => void
@@ -424,11 +450,23 @@ export type Store = {
    * request, and folding it in would put results in the payload.
    */
   takes: SceneTake[]
+  /**
+   * The take the next generation continues from — by motion, not by a still.
+   *
+   * Set by Continue when the finished take saved its sampler latent; the run
+   * then opens with the previous clip's actual motion and audio pinned as
+   * context rather than restarting from a frame. `null` is the normal state.
+   * One anchor at a time: while this is set, `keyframe.first` is not sent —
+   * two answers to "where does this take open" is a stale-tab bug the route
+   * refuses, not a state the page can reach.
+   */
+  continueFrom: string | null
   setDocOpen: (on: boolean) => void
   setDoc: (text: string | null) => void
   /** Append what just landed. Called from the run rather than by re-asking the
    *  volume about work the page watched finish — see `useVideo.finish`. */
   addTake: (t: SceneTake) => void
+  setContinueFrom: (jobId: string | null) => void
   /** Start over. The cast stays: it belongs to the scene, not to a take. */
   clearTakes: () => void
   setScene: (patch: Partial<Scene>) => void
@@ -574,6 +612,7 @@ export const useStore = create<Store>((set, get) => ({
   regions: [],
   rsel: -1,
   regionWeight: '1',
+  styleStrength: '1',
   frame: { attachments: [] },
   edit: 'geometry',
   boxDrag: false,
@@ -584,6 +623,7 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({ regions: s.regions.map((r, n) => (n === i ? { ...r, ...patch } : r)) })),
   select: (i) => set((s) => ({ rsel: i >= 0 && i < s.regions.length ? i : -1 })),
   setRegionWeight: (regionWeight) => set({ regionWeight }),
+  setStyleStrength: (styleStrength) => set({ styleStrength }),
   attach: (where, role, image) => set((s) => (
     where === 'frame'
       ? { frame: { attachments: setAttached(s.frame.attachments, role, image) } }
@@ -592,6 +632,9 @@ export const useStore = create<Store>((set, get) => ({
             ? { ...r, attachments: setAttached(r.attachments, role, image) }
             : r)),
         }
+  )),
+  notePlate: (role, note) => set((s) => (
+    { frame: { attachments: setNote(s.frame.attachments, role, note) } }
   )),
   setEdit: (edit) => set({ edit }),
   setBoxDrag: (boxDrag) => set({ boxDrag }),
@@ -608,8 +651,10 @@ export const useStore = create<Store>((set, get) => ({
   docOpen: false,
   doc: null,
   takes: [],
+  continueFrom: null,
+  setContinueFrom: (continueFrom) => set({ continueFrom }),
   addTake: (t) => set((s) => ({ takes: [...s.takes, t] })),
-  clearTakes: () => set({ takes: [] }),
+  clearTakes: () => set({ takes: [], continueFrom: null }),
   setDocOpen: (docOpen) => set({ docOpen }),
   setDoc: (doc) => set({ doc }),
   setScene: (patch) => set((s) => ({ scene: { ...s.scene, ...patch } })),

@@ -251,6 +251,50 @@ CLIFF_REPO = (
 # theatre.
 KREA2_REGIONAL_NODE = "Krea2RegionalMultiLoRAV12"
 
+# Motion continuation for H3 scene chaining. A scene is longer than one
+# generation (H3_MAX_FRAMES caps a take at ~14.4s), and what turns several
+# generations into one scene is that the next opens where the last stopped.
+# Opening on a *still* of the last frame loses the one thing a still cannot
+# carry — momentum — and restarts the audio dead. This pack slices the previous
+# clip's sampler latent (picture *and* sound) in as pinned context, so motion
+# and audio genuinely continue across the join.
+#
+# Pinned like CLIFF, installed not vendored, GPL-3.0 like ComfyUI itself (we
+# only talk to it over HTTP). Its runtime patches install lazily on the first
+# Motion Context run and self-test first, refusing to run when ComfyUI's
+# internals have moved — a named refusal, not silent wrong coordinates. Their
+# own README: quality compounds down a chain and audio dulls faster than
+# picture, so a long scene wants re-anchoring from references every few takes
+# rather than an unbounded chain.
+H3MC_SHA = "f80e36bc1d7887a143b12e6645313fd6b9cd2aee"  # 0.3.1, 2026-08-15
+H3MC_REPO = "https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context"
+
+# The pinned run sits at the head of the clip and is trimmed after decode, so a
+# continued take must ask for its seconds *plus* the context or the person gets
+# a clip shorter than the duration they set. 22 is the pack's default and its
+# own recommendation for near-seamless joins; the choices are 17n+5 aligned.
+H3MC_CONTEXT_FRAMES = 22
+H3MC_AUDIO_CONTEXT = 24  # one second on the model's 40 Hz audio grid
+
+# What a take's saved latent is called in its job directory on the volume.
+# ComfyUI's output folder is container disk, so the latent is harvested beside
+# the clip — a chain that only worked while the container stayed warm would be
+# a chain that breaks precisely on the long think between takes.
+H3MC_SIDECAR = "context.safetensors"
+
+# Style-by-reference: nkxx188's training-free K/V injection. This REPLACED the
+# ostris reference-LoRA path, and the decision was a measurement, not an
+# argument — tools/ab_style.py, same seed, two prompts: the ostris path leaked
+# reference content both times (a woman rendered male, monogram fabric
+# repeated onto dinner plates) while this one carried the style and kept the
+# prompt's own subject and scene. It also needs no weight at all and ran ~9s
+# against ~40s. Pinned for the same reason CLIFF_SHA is; single-author pack,
+# same arity-risk class — re-check on every COMFY_SHA bump.
+K2ST_SHA = "b30d495ab7e5626a2effc72a071430297643b718"  # 2026-07-21
+K2ST_REPO = "https://github.com/nkxx188/ComfyUI-Krea2-StyleTransfer"
+K2ST_REF_NODE = "Krea2StyleReference"
+K2ST_TRANSFER_NODE = "Krea2StyleTransfer"
+
 # Our own node next to the pack's — one shim, see comfy_nodes/visionary_boxes.
 COMFY_NODES_DIR = str(Path(__file__).parent / "comfy_nodes")
 
@@ -545,8 +589,12 @@ comfy_image = (
     # default and undo the cu130 wheel three steps up. `ultralytics` is left
     # out with the Detailer node it belongs to.
     .run_commands(
+        f"git clone {H3MC_REPO} {COMFY}/custom_nodes/h3_motion_context",
+        f"cd {COMFY}/custom_nodes/h3_motion_context && git checkout {H3MC_SHA}",
         f"git clone {CLIFF_REPO} {COMFY}/custom_nodes/krea2_regional",
         f"cd {COMFY}/custom_nodes/krea2_regional && git checkout {CLIFF_SHA}",
+        f"git clone {K2ST_REPO} {COMFY}/custom_nodes/krea2_styletransfer",
+        f"cd {COMFY}/custom_nodes/krea2_styletransfer && git checkout {K2ST_SHA}",
     )
     .env({"PYTHONUNBUFFERED": "1"})
     # Last, because add_local_dir invalidates nothing above it — the shim is
@@ -4914,6 +4962,11 @@ def _infotext(
         plates = report.get("plates") or []
         if plates:
             add("Plates", ", ".join(plates))
+    # Outside the regions block — style is the whole-frame engine and runs
+    # with no boxes at all.
+    if report.get("style_refs"):
+        add("Style refs", report["style_refs"])
+        add("Style strength", report.get("style_strength"))
         # The caption goes in as a field rather than as the infotext's first
         # line, because that line is the prompt and A1111's format says so —
         # a reader pasting this back expects to get the sentence they wrote,
@@ -5301,6 +5354,67 @@ def _validate_regions(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _validate_objects(raw: Any) -> list[dict[str, Any]]:
+    """
+    The free-role plates: V12's sockets 3 and 4, a photograph plus the user's
+    own sentence about what it is.
+
+    Two per render, because that is how many sockets the node has left after
+    the scene and the outfit — a cap set by hardware, not taste. The note is
+    required, and that is the outfit's own lesson generalised: krea2edit is
+    instruction-driven, so a reference the prompt never mentions is encoded
+    into the attention sequence and then does close to nothing. A no-op plate
+    that looks attached is worse than a refusal, so the refusal happens here,
+    in milliseconds, with the fix in the sentence.
+
+    Same stdlib-importable shape as `_validate_regions`, for the same reason:
+    a malformed object should be a form error, not a dead job on a warm H100.
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("Objects must be a list.")
+    if len(raw) > 2:
+        raise ValueError("Two object references per render — the node has "
+                         "two free sockets. Fold the rest into the prompt.")
+    out = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict) or not isinstance(entry.get("image"), str) \
+                or not entry.get("image"):
+            raise ValueError(f"Object {i + 1} is missing its photograph.")
+        note = str(entry.get("note") or "").strip()
+        if not note:
+            raise ValueError(
+                f"Object {i + 1} needs a sentence saying what it is — "
+                "\"a motorcycle she leans against\". A reference the prompt "
+                "never mentions does nothing."
+            )
+        out.append({"image": entry["image"], "note": note})
+    return out
+
+
+def _validate_style_refs(raw: Any) -> list[str]:
+    """
+    The style-by-reference photograph — one.
+
+    One because the K/V engine's tested, no-leakage route is single-reference;
+    the pack's own README calls its two-reference node an experiment. A cap
+    set by what has been proven, not by the plumbing.
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("Style references must be a list.")
+    if len(raw) > 1:
+        raise ValueError("One style reference — the engine's no-leakage route "
+                         "is single-reference; its two-ref mode is an "
+                         "experiment nothing here has proven.")
+    for i, r in enumerate(raw):
+        if not isinstance(r, str) or not r:
+            raise ValueError(f"Style reference {i + 1} is malformed.")
+    return list(raw)
+
+
 def _armed_regions(regions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     The rows the edit path will actually arm: a LoRA or a reference photo.
@@ -5486,6 +5600,9 @@ def _krea2_graph(
     regions: list[dict[str, Any]] | None = None,
     scene: str | None = None,
     outfit: str | None = None,
+    objects: list[dict[str, Any]] | None = None,
+    style_refs: list[str] | None = None,
+    style_strength: float = 1.0,
     region_weight: float = 1.0,
 ) -> dict[str, Any]:
     """
@@ -5680,6 +5797,12 @@ def _krea2_graph(
             "refs_json": json.dumps([
                 {"role": "scene"},
                 {"role": "object", "note": "outfit, worn by the subject"},
+                # Sockets 3 and 4 are the free-role plates: the user's own
+                # sentence about what each photograph is. The note is
+                # validated non-empty before this builds, because an
+                # unreferenced frame does close to nothing — the same lesson
+                # the outfit's fixed note above records.
+                *({"role": "object", "note": o["note"]} for o in (objects or [])),
             ]),
             # A *force* flag, not the switch. V9 computes
             # `use_edit = bool(extras) or use_krea2edit or force_edit_mode`, so
@@ -5711,10 +5834,21 @@ def _krea2_graph(
             # that, and a sub-box here would hard-paste an outfit photo into the
             # picture instead of transferring the garment.
             v12["extra_box_2"] = "0,0,1,1"
+        # Sockets 3 and 4, in list order — refs_json above appended their notes
+        # in the same order, and that pairing is positional, so these two loops
+        # must walk the same list the same way or a note lands on the wrong
+        # photograph.
+        for i, obj in enumerate(objects or []):
+            node = f"object{i + 1}"
+            graph[node] = {"class_type": "LoadImage", "inputs": {"image": obj["image"]}}
+            v12[f"extra_ref_{i + 3}"] = [node, 0]
+            # Full canvas for the same reason the outfit's is: a sub-box would
+            # hard-paste the photograph instead of composing the thing it shows.
+            v12[f"extra_box_{i + 3}"] = "0,0,1,1"
 
         graph["v12"] = {"class_type": KREA2_REGIONAL_NODE, "inputs": v12}
         sampler_model, positive, negative = ["v12", 0], ["v12", 1], ["v12", 2]
-        if scene or outfit:
+        if scene or outfit or objects:
             # Only the plate path registers the fixed-arity edit wrappers this
             # adapts — see comfy_nodes/visionary_edit_arity for the host change
             # that made them un-callable. The plain path's session wrappers are
@@ -5723,6 +5857,54 @@ def _krea2_graph(
             graph["arity"] = {"class_type": "VisionaryEditArity",
                               "inputs": {"model": ["v12", 0]}}
             sampler_model = ["arity", 0]
+    elif style_refs:
+        # The K/V injection path — tools/ab_style.py is the measurement that
+        # put it here over the ostris reference-LoRA. The reference is VAE-
+        # encoded at the target size and its attention K/V statistics are
+        # injected during sampling; no weight is loaded and the base model is
+        # untouched. One reference, because the pack's own README calls the
+        # two-ref node an experiment and its no-leakage claim is tested on one.
+        graph["styleimg"] = {"class_type": "LoadImage",
+                             "inputs": {"image": style_refs[0]}}
+        graph["styleref"] = {
+            "class_type": K2ST_REF_NODE,
+            "inputs": {"vae": ["vae", 0], "target_latent": ["latent", 0],
+                       "reference_image": ["styleimg", 0],
+                       "fit": "crop", "upscale_method": "lanczos"},
+        }
+        graph["pos"] = {"class_type": "CLIPTextEncode",
+                        "inputs": {"text": prompt, "clip": clip_src}}
+        # The pack's recommended route zeroes the positive rather than
+        # encoding an empty string — Turbo is CFG-free and this is the wiring
+        # its shipped workflow carries; the A/B rendered clean with it.
+        graph["neg"] = {"class_type": "ConditioningZeroOut",
+                        "inputs": {"conditioning": ["pos", 0]}}
+        graph["styletx"] = {
+            "class_type": K2ST_TRANSFER_NODE,
+            "inputs": {"model": model_src,
+                       "reference_latent": ["styleref", 0],
+                       "ref_conditioning": ["pos", 0],
+                       "mode": "recommended",
+                       # The page's one dial. The node's own tooltip gives it
+                       # the semantics the ostris LoRA never had: an overall
+                       # style mix where 0 genuinely disables the reference.
+                       "style_strength": style_strength,
+                       # The rest are the node's defaults, written out per the
+                       # optional-inputs rule; `recommended` mode governs them.
+                       "value_adain_strength": 0.65,
+                       "ref_value_mix": 1.0,
+                       "ref_k_strength": 1.06,
+                       "rf_mode": "flowturbo_pc",
+                       "gamma": 0.5,
+                       "beta": 2.5,
+                       "high_scale_start": 1.04,
+                       "high_scale_end": 0.0,
+                       "low_scale_start": 1.0,
+                       "low_scale_end": 1.10,
+                       "adain_strength": 0.85,
+                       "blocks": "7-27"},
+        }
+        sampler_model, positive, negative = ["styletx", 0], ["pos", 0], ["neg", 0]
     else:
         graph["pos"] = {"class_type": "CLIPTextEncode",
                         "inputs": {"text": prompt, "clip": clip_src}}
@@ -5786,7 +5968,8 @@ class ImageGenerator:
         # wrong, minutes into a warm GPU, when the traceback that explains it
         # scrolled past during startup.
         self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
-                                  "VisionaryFreeRegional", "VisionaryEditArity")
+                                  "VisionaryFreeRegional", "VisionaryEditArity",
+                                  K2ST_REF_NODE, K2ST_TRANSFER_NODE)
         # **One model in this container, which is how it started.** A second
         # lived here for a while — Qwen3-VL for the prompt rewrite — loaded at
         # `enter` as a *ComfyUI graph*, which holds the single queue for the 132
@@ -5822,35 +6005,71 @@ class ImageGenerator:
             _stop_gate(job_id, "the volume reload")
 
             regions = _validate_regions(params.get("regions"))
+            objects = _validate_objects(params.get("objects"))
+            style_refs = _validate_style_refs(params.get("style_refs"))
+            if style_refs and regions:
+                # Two engines, one graph slot: the ostris patch rewires the
+                # conditioning and V12 rewires the attention, and nothing has
+                # proven them composed. Refused rather than silently picking
+                # one — a render that quietly dropped your boxes or your style
+                # would be the worse answer.
+                raise ValueError(
+                    "Style references and region boxes are two engines — "
+                    "remove one. Style applies to the whole frame."
+                )
+            if style_refs:
+                style_refs = [
+                    self._comfy.stage(job_id, b64, f"style{i + 1}")
+                    for i, b64 in enumerate(style_refs)
+                ]
+                for name in style_refs:
+                    _fit_reference(COMFY / "input" / name,
+                                   REGION_REF_MAX_SIDE, "image")
             plates = {}
+            # Objects are plates too — the same sockets, the same engine, and
+            # therefore the same gates. The loop reads slot names so its
+            # errors keep naming the thing that was attached.
+            plate_slots = [s for s in ("scene", "outfit") if params.get(s)]
+            plate_slots += ["object"] * len(objects)
+            for slot in plate_slots:
+                if not regions:
+                    # The plates are inputs to V12 and V12 is only in the
+                    # graph when there are boxes. Silently ignoring one
+                    # would be a dropped reference image with a normal
+                    # picture to show for it.
+                    raise ValueError(
+                        f"A {slot} reference needs at least one region — "
+                        "the scene is composed around the boxes."
+                    )
+                if not _armed_regions(regions):
+                    # The edit path only arms boxes that hold a LoRA or a
+                    # photo (`has_lora(r) or has_ref(r)` in the node), so a
+                    # plate over described-only boxes dies in V12's own
+                    # assertion — "V12 unified attention was not armed" —
+                    # nine seconds after a cold model load. Observed live
+                    # on job gen202608241321556c9e. The structural zero
+                    # belongs here, where it is a form error.
+                    raise ValueError(
+                        f"A {slot} reference needs a box holding an "
+                        "identity — a LoRA or a photo. Boxes with only a "
+                        "description cannot anchor the compose."
+                    )
+            if plate_slots:
+                _require_models("krea2_edit")
             for slot in ("scene", "outfit"):
                 if params.get(slot):
-                    if not regions:
-                        # The plates are inputs to V12 and V12 is only in the
-                        # graph when there are boxes. Silently ignoring one
-                        # would be a dropped reference image with a normal
-                        # picture to show for it.
-                        raise ValueError(
-                            f"A {slot} reference needs at least one region — "
-                            "the scene is composed around the boxes."
-                        )
-                    if not _armed_regions(regions):
-                        # The edit path only arms boxes that hold a LoRA or a
-                        # photo (`has_lora(r) or has_ref(r)` in the node), so a
-                        # plate over described-only boxes dies in V12's own
-                        # assertion — "V12 unified attention was not armed" —
-                        # nine seconds after a cold model load. Observed live
-                        # on job gen202608241321556c9e. The structural zero
-                        # belongs here, where it is a form error.
-                        raise ValueError(
-                            f"A {slot} reference needs a box holding an "
-                            "identity — a LoRA or a photo. Boxes with only a "
-                            "description cannot anchor the compose."
-                        )
-                    _require_models("krea2_edit")
                     plates[slot] = self._comfy.stage(job_id, params[slot], slot)
                     _fit_reference(COMFY / "input" / plates[slot],
                                    REGION_REF_MAX_SIDE, "image")
+            # The staged filename replaces the bytes in place, which is the
+            # same shape `regions[i]["ref_image"]` takes below — the graph
+            # reads what the stager wrote, and the base64 never travels past
+            # this point.
+            for i, obj in enumerate(objects):
+                obj["image"] = self._comfy.stage(job_id, obj["image"],
+                                                 f"object{i + 1}")
+                _fit_reference(COMFY / "input" / obj["image"],
+                               REGION_REF_MAX_SIDE, "image")
 
             # Each region's own photo, staged the same way the plates are and
             # deliberately without their two gates: a mold is not an
@@ -5885,6 +6104,8 @@ class ImageGenerator:
             # has to reach the node intact rather than be rounded up on the way.
             raw_weight = params.get("region_weight")
             region_weight = 1.0 if raw_weight in (None, "") else float(raw_weight)
+            raw_style = params.get("style_strength")
+            style_strength = 1.0 if raw_style in (None, "") else float(raw_style)
 
             seed = params.get("seed")
             seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
@@ -5912,6 +6133,8 @@ class ImageGenerator:
                 seed=seed, steps=steps, cfg=cfg,
                 shift=shift, sampler=sampler, scheduler=scheduler,
                 loras=loras, regions=regions, region_weight=region_weight,
+                objects=objects, style_refs=style_refs,
+                style_strength=style_strength,
                 **plates,
             )
 
@@ -5962,14 +6185,23 @@ class ImageGenerator:
             **({"caption": caption} if caption != typed else {}),
             # Which engine ran, because the three are not the same picture and
             # the numbers beside them do not say which one produced it.
-            "mode": ("krea2edit" if plates else "regional") if regions else "plain",
+            "mode": ("krea2edit" if plates or objects else "regional")
+            if regions else ("style" if style_refs else "plain"),
+            # A count, not the photos — same rule as the region `ref` bool.
+            # Which pictures carried the style is not reconstructible from a
+            # count, and that is the plate lesson accepted rather than fixed:
+            # the bytes cannot live in a record polled every 400ms.
+            **({"style_refs": len(style_refs),
+                "style_strength": style_strength} if style_refs else {}),
             # And which plates it composed around — same rule as `ref` above:
             # the slot names, never the photos. Without this a krea2edit run's
             # record said the engine and not the reason, so an outfit render
             # was not distinguishable from a scene one; verified missing on job
             # gen2026082413552761e9. Older records lack the field and every
             # reader must keep tolerating that.
-            **({"plates": sorted(plates)} if plates else {}),
+            **({"plates": sorted(plates)
+                + [f"object: {o['note']}" for o in objects]}
+               if plates or objects else {}),
             **info,
         }
         names = []
@@ -6237,6 +6469,8 @@ def _h3_graph(
     loras: list[dict[str, Any]] | None = None,
     shift_video: float | None = None,
     shift_audio: float | None = None,
+    save_context_as: str | None = None,
+    load_context_from: str | None = None,
 ) -> dict[str, Any]:
     """
     Build ComfyUI's API-format graph for one H3 clip.
@@ -6300,6 +6534,51 @@ def _h3_graph(
                  "inputs": {"video": ["video", 0], "filename_prefix": "visionary",
                             "format": "auto", "codec": "auto"}},
     }
+
+    # ── motion continuation ─────────────────────────────────────────────────
+    # Every H3 take saves its sampler latent beside the clip, because the *next*
+    # take is the one that needs it and nothing knows at render time whether
+    # there will be one. Picture and audio come out of the same latent, so this
+    # single file is the whole context a continuation slices from.
+    if save_context_as:
+        graph["save_ctx"] = {
+            "class_type": "MiniMaxH3MotionContextSaveLatent",
+            "inputs": {"latent": ["sample", 0],
+                       "filename_prefix": f"h3_context/{save_context_as}",
+                       "clip_index": 0},
+        }
+    if load_context_from:
+        # Between the stock conditioning node and the guider — the pack's own
+        # stated wiring. The previous clip's latent supplies both picture and
+        # sound, sliced straight out with no decode/re-encode round trip; the
+        # pinned run lands at the head of this clip and Trim removes it after
+        # decode, matching the audio cut to the frame cut so a chain does not
+        # accumulate drift. Every optional input is spelled out — the house
+        # rule, because INPUT_TYPES defaults and run() defaults disagree in
+        # node packs more often than they should.
+        graph["ctx_lat"] = {
+            "class_type": "MiniMaxH3MotionContextLoadLatent",
+            "inputs": {"latent_path": f"h3_context/{load_context_from}",
+                       "clip_index": 0},
+        }
+        graph["mctx"] = {
+            "class_type": "MiniMaxH3MotionContext",
+            "inputs": {"conditioning": ["cond", 0], "vae": ["vae", 0],
+                       "latent": ["cond", 1],
+                       "context_length": str(H3MC_CONTEXT_FRAMES),
+                       "audio_context_length": H3MC_AUDIO_CONTEXT,
+                       "context_latent": ["ctx_lat", 0],
+                       "audio_vae": ["avae", 0]},
+        }
+        graph["guider"]["inputs"]["conditioning"] = ["mctx", 0]
+        graph["trim"] = {
+            "class_type": "MiniMaxH3MotionContextTrim",
+            "inputs": {"images": ["frames", 0], "trim_frames": ["mctx", 1],
+                       "audio": ["audio", 0], "fps": H3_FPS,
+                       "match_tail": True},
+        }
+        graph["video"]["inputs"]["images"] = ["trim", 0]
+        graph["video"]["inputs"]["audio"] = ["trim", 1]
 
     # The LoRA stack, chained onto the DiT the way the video graph does it —
     # `LoraLoaderModelOnly` is architecture-agnostic weight patching, so what
@@ -8577,8 +8856,16 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
                     continue
                 who = f"<Subject {n}>" if n else (member["note"] or member["handle"])
                 sid = spk.get(member["id"])
+                # The note rides the definition, because base-en §4.4 asks for
+                # exactly this — pitch, timbre, rate, accent — when a speaker
+                # first appears. It validated and travelled and was then
+                # dropped on the floor, which made the UI's "how they sound"
+                # field a lie: worse than hiding a capability is offering one
+                # that silently does nothing.
                 defs.append(f"{_h3_asset(ref)} is the {H3_AUDIO_NOUN} for "
-                            f"{who}{f' ({sid})' if sid else ''}.")
+                            f"{who}{f' ({sid})' if sid else ''}."
+                            + (f" {_h3_cap(ref['note'])}."
+                               if ref.get("note") else ""))
         # A source is its own label, never folded into a subject: the guide's
         # own line is `<Video 1> is the source video for the target video edit.`
         for key, idx in sources.items():
@@ -8629,7 +8916,10 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
             # A picture nobody annotated is still there for their appearance, so
             # noting *one* of several must not delete what the others are for.
             if any(not r.get("note") for r in visual_refs) or not what:
-                what.append("appearance")
+                # Leading, not appended: "its appearance and the olive field
+                # coat are retained" reads as a sentence, and the coat leading
+                # promoted one picture's note to the subject's headline.
+                what.insert(0, "appearance")
             what = list(dict.fromkeys(what))
             keep.append(
                 f"<Subject {n}>"
@@ -8639,8 +8929,11 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
                 # hair and build" — and what a person writes is a noun phrase:
                 # "its the olive field coat is retained".
                 + f": {member['retention']} - "
-                + "; ".join(w if re.match(r"^(the|a|an|his|her|their)\b", w, re.I)
-                            else f"its {w}" for w in what)
+                # `_h3_list`, not semicolons: "X; its Y are retained" is a
+                # mangled sentence the moment a person's note joins the list,
+                # and the guide's own retention lines read as prose.
+                + _h3_list([w if re.match(r"^(the|a|an|his|her|their)\b", w, re.I)
+                            else f"its {w}" for w in what])
                 # "its appearance are retained" — the plural was safe while
                 # every phrase came from the slot table and read as a list.
                 + (" are retained." if len(what) > 1 else " is retained."))
@@ -9031,7 +9324,7 @@ class VideoGenerator:
                                     f"{'' if n_att == 1 else 's'}"
                                     f" · {mb:.0f} MB" if n_att else "staging"))
             t_plan = time.time()
-            plan = self._plan_h3(params, stage)
+            plan = self._plan_h3(params, stage, job_id=job_id)
             graph, info = plan["graph"], plan["info"]
             print(f"[video] ready to queue after {time.time() - started:.1f}s "
                   f"({time.time() - t_plan:.1f}s staging {n_att} attachments, "
@@ -9063,6 +9356,22 @@ class VideoGenerator:
         # than asserting length: a save node that ever emitted a poster frame
         # beside the mp4 should cost the poster, not the take.
         shutil.copyfile(COMFY / "output" / out_names[0], out_dir / name)
+        # The take's motion context, harvested beside its clip. ComfyUI's
+        # output folder is container disk, and the take that needs this file is
+        # the *next* one — which arrives after exactly the kind of gap that
+        # scales a container to zero. Best-effort on purpose: a take whose
+        # latent did not save is a take you can only continue from its last
+        # frame, which is the degrade the page already handles, and failing a
+        # finished three-minute render over its sidecar would be the wrong
+        # trade twice.
+        ctx = COMFY / "output" / "h3_context" / f"{job_id}_00000.safetensors"
+        if ctx.exists():
+            shutil.copyfile(ctx, out_dir / H3MC_SIDECAR)
+            ctx.unlink()
+        else:
+            print(f"[video] {job_id} no motion context saved "
+                  f"(wanted {ctx}) — Continue will fall back to the last "
+                  f"frame", flush=True)
         _write_output_meta(
             out_dir, kind="video", job_id=job_id, model=model,
             prompt=params["prompt"], created=time.time(),
@@ -9079,7 +9388,8 @@ class VideoGenerator:
         return res
 
     @staticmethod
-    def _plan_h3(params: dict[str, Any], stage: Any) -> dict[str, Any]:
+    def _plan_h3(params: dict[str, Any], stage: Any,
+                 job_id: str = "") -> dict[str, Any]:
         """Graph and shot description for a MiniMax-H3 take."""
         refs_b64 = list(params.get("references") or [])[:MAX_H3_REFS]
         vids_b64 = list(params.get("ref_videos") or [])[:MAX_H3_REF_VIDEOS]
@@ -9090,6 +9400,32 @@ class VideoGenerator:
 
         width, height = _h3_canvas(params["aspect"], params["tier"])
         frames = _h3_frames(params["seconds"])
+
+        # A continued take asks for its seconds *plus* the pinned context,
+        # because the pinned run sits at the head of the clip and is trimmed
+        # after decode — without the bump the person sets 6s and gets ~5.1.
+        # `_h3_frames` clamps at H3_MAX_FRAMES, so a take already at the
+        # ceiling comes out shorter rather than refused, which is the right
+        # trade for a cap the duration menu already respects.
+        continue_from = str(params.get("continue_from") or "") or None
+        if continue_from:
+            src = OUTPUTS / continue_from / H3MC_SIDECAR
+            # Diagnose here, on this container, with the three facts that
+            # distinguish the causes: the job asked for, the path wanted, what
+            # is actually there. The web route already checked the volume, so
+            # reaching this means the file went away between the check and the
+            # render — a deleted generation, most likely.
+            if not src.exists():
+                raise FileNotFoundError(
+                    f"Motion context for {continue_from} is not on the volume "
+                    f"(wanted {src}). The take it belonged to was probably "
+                    f"deleted — clear the Motion tile to continue from its "
+                    f"last frame instead.")
+            dest = COMFY / "output" / "h3_context" / f"{continue_from}_00000.safetensors"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+            frames = _h3_frames(params["seconds"]
+                                + H3MC_CONTEXT_FRAMES / H3_FPS)
         seed = params.get("seed")
         seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
         steps = int(params["steps"])
@@ -9136,6 +9472,8 @@ class VideoGenerator:
             loras=loras,
             shift_video=params.get("shift_video"),
             shift_audio=params.get("shift_audio"),
+            save_context_as=job_id or None,
+            load_context_from=continue_from,
             **keyframes,
         )
         meta = {"mode": ("ref2va" if (references or ref_videos or ref_audios)
@@ -9160,10 +9498,18 @@ class VideoGenerator:
         # be minutes apart on this alone, and nothing said which was which.
         if references:
             meta["ref_size"] = ref_size
+        # The sidecar records the join, because a chained clip read years from
+        # now should say what it opens from — and the *delivered* length, not
+        # the sampled one: the pinned context is trimmed before the file is
+        # written, so `frames` here would overstate every continued take by
+        # H3MC_CONTEXT_FRAMES.
+        if continue_from:
+            meta["continued_from"] = continue_from
+        shown = frames - H3MC_CONTEXT_FRAMES if continue_from else frames
         return {
             "graph": graph,
-            "info": {"width": width, "height": height, "frames": frames,
-                     "seconds": round(frames / H3_FPS, 2), "fps": H3_FPS,
+            "info": {"width": width, "height": height, "frames": shown,
+                     "seconds": round(shown / H3_FPS, 2), "fps": H3_FPS,
                      "seed": seed, "steps": steps},
             "meta": meta,
         }
@@ -10596,23 +10942,34 @@ def web():
                     for b in _stage_boxes(stage)
                 ]
             regions = _validate_regions(regions)
+            objects = _validate_objects(payload.get("objects"))
+            style_refs = _validate_style_refs(payload.get("style_refs"))
             shot = _validate_shot(payload.get("shot"))
         except ValueError as exc:
             return {"error": str(exc)}
 
+        # The job refuses this too; here it is a form error while both
+        # attachments are on screen.
+        if style_refs and regions:
+            return {"error": "Style references and region boxes are two "
+                             "engines — remove one. Style applies to the "
+                             "whole frame."}
+
         # The plates are inputs to the regional node, so they mean nothing
         # without boxes. Caught here rather than in the job because the answer
         # is "draw a box", which is a thing to say while the reference image is
-        # still on screen.
-        for slot in ("scene", "outfit"):
-            if payload.get(slot) and not regions:
+        # still on screen. Objects are plates too — same sockets, same engine.
+        plated = [slot for slot in ("scene", "outfit") if payload.get(slot)]
+        plated += ["object"] * len(objects)
+        for slot in plated:
+            if not regions:
                 return {"error": f"A {slot} reference needs at least one region — "
                                  "the scene is composed around the boxes."}
             # Same fact the job checks, caught while the plate is on screen:
             # the edit path only arms boxes holding a LoRA or a photo, and a
             # plate over described-only boxes is a dead job after a cold load
             # ("V12 unified attention was not armed").
-            if payload.get(slot) and not _armed_regions(regions):
+            if not _armed_regions(regions):
                 return {"error": f"A {slot} reference needs a box holding an "
                                  "identity — a LoRA or a photo. Boxes with "
                                  "only a description cannot anchor the "
@@ -10640,6 +10997,9 @@ def web():
             # Base64, the same shape /api/video already takes its keyframes in.
             "scene": payload.get("scene"),
             "outfit": payload.get("outfit"),
+            "objects": objects,
+            "style_refs": style_refs,
+            "style_strength": num("style_strength", 1.0, float),
             "width": num("width", 1024, int),
             "height": num("height", 1024, int),
             "num_images": max(1, min(4, num("num_images", 1, int))),
@@ -10691,6 +11051,37 @@ def web():
         last = payload.get("last_frame") or None
         if last and not supports["last_frame"]:
             return {"error": f"{spec['label']} takes a first frame only."}
+
+        # Motion continuation — the previous take's sampler latent, sliced in as
+        # pinned context so motion and audio continue across the join instead of
+        # restarting from a still. Checked here, on CPU, before a GPU is rented:
+        # a missing latent is a form error, and the fix — clear the Motion tile,
+        # fall back to the frame — is a thing to say while the person is still
+        # at the controls. The job checks again at render time because the
+        # volume can change between the two.
+        continue_from = str(payload.get("continue_from") or "").strip() or None
+        if continue_from:
+            if not re.fullmatch(r"vid[0-9a-z]+", continue_from):
+                return {"error": f"Not a video job id: {continue_from!r}"}
+            if not (OUTPUTS / continue_from / H3MC_SIDECAR).exists():
+                _reload_volume()
+            if not (OUTPUTS / continue_from / H3MC_SIDECAR).exists():
+                return {"error":
+                        f"That take's motion context is no longer on the "
+                        f"volume ({continue_from}) — it was rendered before "
+                        f"chaining existed, or its generation was deleted. "
+                        f"Clear the Motion tile to continue from its last "
+                        f"frame instead."}
+            # A pinned context anchors the opening the way a first frame would,
+            # and the two are different transformers' jobs — sending both would
+            # be two answers to "where does this take open". The page never
+            # sends both; a stale tab might, and silence here would be the model
+            # ignoring one of them with nothing saying which.
+            if first:
+                return {"error": "A motion continuation already opens where "
+                                 "the last take ended — clear the first frame, "
+                                 "or clear the Motion tile, but not both ways "
+                                 "at once."}
 
         refs = [r for r in (payload.get("references") or []) if r][:MAX_H3_REFS]
         vids = [v for v in (payload.get("ref_videos") or []) if v][:MAX_H3_REF_VIDEOS]
@@ -10812,6 +11203,7 @@ def web():
             "prompt_original": str(payload.get("prompt_original") or ""),
             "shot": shot,
             "scene": scene,
+            "continue_from": continue_from,
             "ref_roles": roles,
             # No negative prompt on this path at all. H3 is guidance-distilled,
             # so one would not be applied — and a sidecar that records an input

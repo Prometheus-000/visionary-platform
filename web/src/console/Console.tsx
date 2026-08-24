@@ -322,6 +322,15 @@ function VideoNote() {
   const s = useStore()
   const over = budgetNote(s)
   if (over) return <span id="vid-note">{over}</span>
+  // Motion outranks the frame the way references outrank keyframes, and the
+  // note says so only while both are actually held — the keyframe note's own
+  // rule: a warning about something you do not have points at nothing.
+  if (s.continueFrom) {
+    return <span id="vid-note">{s.keyframe.first || s.keyframe.last
+      ? 'Motion continues from the last take — the frame tiles are ignored '
+        + 'until the Motion tile is cleared.'
+      : ''}</span>
+  }
   const n = refBudget(s).total
   const framed = !!(s.keyframe.first || s.keyframe.last)
   const text = n

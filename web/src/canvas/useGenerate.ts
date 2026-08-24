@@ -121,6 +121,19 @@ export function imageBody(s: Store): Record<string, unknown> {
     // holds an image into an error nobody could see the cause of.
     scene: regions.length ? attached(s.frame, 'scene') : null,
     outfit: regions.length ? attached(s.frame, 'outfit') : null,
+    // Sockets 3 and 4 — a photo and the user's sentence about it, compacted
+    // so removing the first object does not send a hole.
+    // Style rides with or without boxes — it is the no-boxes engine — and the
+    // route answers the conflicting pair with a form error the note has
+    // already explained.
+    style_refs: [attached(s.frame, 'style1')].filter(Boolean),
+    style_strength: s.styleStrength,
+    objects: regions.length
+      ? (['object1', 'object2'] as const)
+          .map((role) => s.frame.attachments.find((a) => a.role === role))
+          .filter(Boolean)
+          .map((a) => ({ image: a!.image, note: (a!.note ?? '').trim() }))
+      : null,
     width,
     height,
     num_images: s.img.n,
