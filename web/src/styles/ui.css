@@ -2552,6 +2552,9 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
    eat; gone the moment a box exists. */
 #region-layer .rl-invite{position:absolute;inset:0;display:grid;place-items:center;
   color:var(--dim);font-size:13px;pointer-events:none;
+  /* Centred when it wraps, too: a portrait frame is narrower than the sentence,
+     and a grid item centred as a block still sets its second line flush left. */
+  text-align:center;padding:0 24px;text-wrap:balance;
   -webkit-user-select:none;user-select:none}
 
 .wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}

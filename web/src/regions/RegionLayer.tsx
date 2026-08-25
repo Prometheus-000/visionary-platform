@@ -666,13 +666,24 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
       {/* The words CLAUDE.md promised the empty canvas — once, where the
           attention already is, and only while there is nothing else to say:
           no boxes, no render under the layer, no file being dragged (the drag
-          captions own that moment). One line, because the two gestures land on
-          the same rectangle and naming both is a tutorial; double-click is the
-          one that needs no modifier key to spell. Gone the moment a first box
-          exists, which is the no-tutorial rule's price of admission. */}
+          captions own that moment). Gone the moment a first box exists, which
+          is the no-tutorial rule's price of admission.
+
+          One gesture per capability, not one gesture per way in: ⌘-drag lands
+          on the same rectangle as the double-click and naming both is a
+          tutorial, so only the one that needs no modifier key is spelled. But
+          the character *is* only a fraction of what this surface takes — the
+          scene it is generated inside, the outfit transferred onto it and the
+          style the whole frame carries are three more, and an invitation that
+          names one of four is how the plates got filed as missing the first
+          time. The second clause names them by their tile labels, because a
+          word you can read on the thing you are being sent to is a direction
+          and a synonym is a riddle. It holds wherever this line can appear:
+          the invite is image-side and box-less, which is exactly when
+          `PlateRow` is on screen below it. */}
       {over === 'frame' && !regions.length && !fileOver && (
         <div className="rl-invite" aria-hidden="true">
-          Double-click to place a character
+          Double-click to place a character. Scene, outfit and style drop onto the tiles below.
         </div>
       )}
       {regions.map((r, i) => {
