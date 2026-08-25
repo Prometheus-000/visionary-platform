@@ -35,6 +35,7 @@ from app import (  # noqa: E402
     MODEL_CATALOGUE,
     _Comfy,
     _h3_graph,
+    _prefetch_weights,
     comfy_image,
     models_volume,
     volume,
@@ -69,11 +70,22 @@ def _throughput(path: Path, offset: int, workers: int) -> float:
     return total / (1 << 30) / (time.perf_counter() - t0)
 
 
-@cs.function(image=cs_image, gpu="H100", timeout=45 * 60,
+# cpu=4.0 to match the generator classes exactly — the first run of the
+# prefetch arm left it at Modal's default sliver, and eight reader threads on
+# an eighth of a core starved the ComfyUI boot they were meant to hide behind.
+# A harness that measures the app must rent what the app rents.
+@cs.function(image=cs_image, gpu="H100", cpu=4.0, timeout=45 * 60,
              volumes={"/workspace": volume, "/models": models_volume})
-def measure(steps: int, frames: int) -> dict:
+def measure(steps: int, frames: int, prefetch: bool = False) -> dict:
     t_start = time.time()
     out: dict[str, float] = {"remote_epoch": t_start}
+
+    # The same call, in the same place, as the generators' enter hooks —
+    # this measures the app's own behaviour, not a simulation of it.
+    stop = _prefetch_weights(
+        [MODEL_CATALOGUE[k]["dest"]
+         for k in ("h3_dit", "h3_te", "h3_vae", "h3_audio_vae",
+                   "h3_ref_dit")]) if prefetch else None
 
     t0 = time.perf_counter()
     comfy = _Comfy("video")
@@ -82,8 +94,12 @@ def measure(steps: int, frames: int) -> dict:
 
     # Throughput probes on the ref DiT, sequential first, distinct slices —
     # the second probe must not re-read bytes the first left in any cache.
+    # Skipped under prefetch: the probes read the file the prefetch is
+    # warming, and each would corrupt the other's number.
     ref = MODEL_CATALOGUE["h3_ref_dit"]["dest"]
-    if ref.exists() and ref.stat().st_size > (2 * READ_GB << 30):
+    if prefetch:
+        out["read_probe_s"] = 0.0
+    elif ref.exists() and ref.stat().st_size > (2 * READ_GB << 30):
         t0 = time.perf_counter()
         out["read_1way_gbps"] = round(_throughput(ref, 0, 1), 2)
         out["read_8way_gbps"] = round(_throughput(ref, READ_GB << 30, 8), 2)
@@ -99,6 +115,8 @@ def measure(steps: int, frames: int) -> dict:
 
     # Different seeds, or the second run is a ComfyUI cache hit rather than a
     # warm sample — the exact lie ab_sage.py told once.
+    if stop is not None:
+        stop.set()  # what generate() does on job arrival, mirrored
     t0 = time.perf_counter()
     comfy.run("cold", graph(41), what="video")
     out["first_run_s"] = round(time.perf_counter() - t0, 1)
@@ -119,9 +137,9 @@ def measure(steps: int, frames: int) -> dict:
 
 
 @cs.local_entrypoint()
-def main(steps: int = 4, frames: int = 124):
+def main(steps: int = 4, frames: int = 124, prefetch: bool = False):
     t_local = time.time()
-    r = measure.remote(steps, frames)
+    r = measure.remote(steps, frames, prefetch)
     r["spinup_s"] = round(r.pop("remote_epoch") - t_local, 1)
 
     print(f"\n== cold H3 take, {steps} steps, {frames} frames ==")

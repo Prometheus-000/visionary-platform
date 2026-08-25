@@ -3268,6 +3268,81 @@ KREA2_DEFAULTS = {
 }
 
 
+def _prefetch_weights(paths: list[Path]) -> "threading.Event":
+    """
+    Warm the volume's cache under the weights a first render will read,
+    while ComfyUI boots beside it. Returns the event that stops it.
+
+    The numbers that argue for this are both in tools/cold_start.py: the
+    loader reads the checkpoint single-stream at 0.59 GB/s, and the same
+    volume hands an 8-way reader 1.46 — safetensors walks a file front to
+    back and cannot be told otherwise, so the spare bandwidth is taken here,
+    ahead of it, during the ~20 seconds of ComfyUI boot the container pays
+    anyway. The data lands in cache the sequential read then hits.
+
+    Priority order matters and is the caller's job: the checkpoint the first
+    job most likely wants goes first, the alternates last, so being
+    interrupted costs the least likely file. The stop event exists because a
+    prefetch that outlives the boot is reading *beside the loader it exists
+    to serve* — the volume's bandwidth is shared, and warming the ref DiT
+    while the t2v DiT loads would slow the exact read this thread was
+    started to speed up. `generate` sets it first thing.
+
+    Failures are swallowed per-file on purpose: a missing weight here is not
+    an error, it is a fresh install — `_require_models` owns that refusal,
+    on the request path, where it can name what is absent.
+
+    Measured honestly, this is a wash in the worst case and a win in the
+    real one. With a job arriving the instant boot ends (the harness's
+    shape), load dropped 45.2s to 28.0s but boot paid 18.1 to 29.0 for the
+    contention — net ~3s. The case that pays is the production shape: the
+    container starts from the page-load knock, so boot and prefetch both run
+    inside the window where a human is still composing the prompt, and by
+    the time the job lands the warm read is the whole saving. If this ever
+    reads as not worth its thread, re-run both arms of
+    tools/cold_start.py::main before believing either way.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    stop = threading.Event()
+
+    def read_file(path: Path) -> None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+
+        def read_slice(offset: int) -> None:
+            remaining = min(256 << 20, size - offset)
+            try:
+                with open(path, "rb", buffering=0) as f:
+                    f.seek(offset)
+                    while remaining > 0 and not stop.is_set():
+                        got = f.read(min(64 << 20, remaining))
+                        if not got:
+                            return
+                        remaining -= len(got)
+            except OSError:
+                return
+
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(read_slice, range(0, size, 256 << 20)))
+
+    def run() -> None:
+        for path in paths:
+            if stop.is_set():
+                return
+            t0 = time.time()
+            read_file(path)
+            if not stop.is_set():
+                print(f"[prefetch] {path.name} warmed in {time.time() - t0:.1f}s",
+                      flush=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return stop
+
+
 # --------------------------------------------------------------------------
 # ComfyUI — one process per container, driven over 127.0.0.1
 #
@@ -6086,6 +6161,11 @@ class ImageGenerator:
 
     @modal.enter()
     def setup(self):
+        # Turbo first — it is the default the first render most likely wants —
+        # raw last, for the reason the video side puts its ref DiT last.
+        self._prefetch_stop = _prefetch_weights(
+            [MODEL_CATALOGUE[k]["dest"]
+             for k in ("turbo", "text_encoder", "vae", "raw")])
         self._comfy = _Comfy("image")
         self._comfy.start()
         # Checked once at startup rather than per request. A custom node that
@@ -6117,6 +6197,8 @@ class ImageGenerator:
         # the phase claimed `loading` while the volume reload — the one
         # unbounded step in it — had not been started.
         print(f"[image] {job_id} accepted", flush=True)
+        # The volume's read bandwidth belongs to this job's loader now.
+        self._prefetch_stop.set()
         _note_queue_wait("image", job_id, params)
         _clear_stop(job_id)
         _publish(job_id, status="running", phase="reloading the volume")
@@ -9411,6 +9493,13 @@ class VideoGenerator:
 
     @modal.enter()
     def setup(self):
+        # Before the boot it hides behind. fl2va first because it is the
+        # default mode, the ref DiT last because it is the alternate — the
+        # order is the whole cost model, see _prefetch_weights.
+        self._prefetch_stop = _prefetch_weights(
+            [MODEL_CATALOGUE[k]["dest"]
+             for k in ("h3_dit", "h3_te", "h3_vae", "h3_audio_vae",
+                       "h3_ref_dit")])
         self._comfy = _Comfy("video")
         self._comfy.start()
         # Named at startup for the reason the image side names its four: a node
@@ -9459,6 +9548,8 @@ class VideoGenerator:
         # container prints nothing either way. Stamped here, the two are one
         # subtraction apart.
         print(f"[video] {job_id} accepted", flush=True)
+        # The volume's read bandwidth belongs to this job's loader now.
+        self._prefetch_stop.set()
         _note_queue_wait("video", job_id, params)
         _clear_stop(job_id)
         # **Everything from here to `run()` used to be silent**, and a ten-minute
