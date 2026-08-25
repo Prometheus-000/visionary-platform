@@ -35,7 +35,6 @@ from app import (  # noqa: E402
     MODEL_CATALOGUE,
     _Comfy,
     _h3_graph,
-    _prefetch_weights,
     comfy_image,
     models_volume,
     volume,
@@ -70,22 +69,81 @@ def _throughput(path: Path, offset: int, workers: int) -> float:
     return total / (1 << 30) / (time.perf_counter() - t0)
 
 
-# cpu=4.0 to match the generator classes exactly — the first run of the
-# prefetch arm left it at Modal's default sliver, and eight reader threads on
-# an eighth of a core starved the ComfyUI boot they were meant to hide behind.
-# A harness that measures the app must rent what the app rents.
+def _prefetch(paths: list[Path]):
+    """
+    The prefetch experiment, kept as the record of why the app has none.
+
+    The idea: safetensors reads a checkpoint front-to-back single-stream at
+    0.59 GB/s while the volume hands an 8-way reader 1.46 — so warm the
+    files during ComfyUI's boot and the loader hits cache. It shipped
+    briefly (c4a4e2a) and was reverted on its own measurement — four runs,
+    all at the generators' cpu:
+
+        arm                          boot    load    total
+        no prefetch                  18.1    45.2     86.0
+        full list, flat 4 cpu        29.0    28.0     82.6
+        full list, (4,16) burst      31.3    48.2    102.2
+        primary DiT only, burst      24.4    35.3     81.6
+
+    Two identical configurations landed 28.0 and 48.2 on load: worker and
+    network variance is larger than any effect the prefetch has. The one
+    reproducible signal is the cost — boot pays 6-13s whenever it runs,
+    and the burst-cpu run proved that tax is shared *network* (the image's
+    lazy page loads), not cpu, which no core count fixes. The 28.0 that
+    motivated the feature was a fast worker, not warmth. The eviction
+    guess — warming 30 GB pushed the DiT back out of cache — fit the
+    third run and then could not beat the control in the fourth.
+
+    Rerun with --prefetch if volume caching visibly changes; beat the 45s
+    load reproducibly, twice, before wiring anything back into app.py.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    stop = threading.Event()
+
+    def read_file(path: Path) -> None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+
+        def read_slice(offset: int) -> None:
+            remaining = min(256 << 20, size - offset)
+            try:
+                with open(path, "rb", buffering=0) as f:
+                    f.seek(offset)
+                    while remaining > 0 and not stop.is_set():
+                        got = f.read(min(64 << 20, remaining))
+                        if not got:
+                            return
+                        remaining -= len(got)
+            except OSError:
+                return
+
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(read_slice, range(0, size, 256 << 20)))
+
+    def run() -> None:
+        for path in paths:
+            if stop.is_set():
+                return
+            t0 = time.time()
+            read_file(path)
+            print(f"[prefetch] {path.name} warmed in {time.time() - t0:.1f}s",
+                  flush=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return stop
+
+
 @cs.function(image=cs_image, gpu="H100", cpu=4.0, timeout=45 * 60,
              volumes={"/workspace": volume, "/models": models_volume})
 def measure(steps: int, frames: int, prefetch: bool = False) -> dict:
     t_start = time.time()
     out: dict[str, float] = {"remote_epoch": t_start}
 
-    # The same call, in the same place, as the generators' enter hooks —
-    # this measures the app's own behaviour, not a simulation of it.
-    stop = _prefetch_weights(
-        [MODEL_CATALOGUE[k]["dest"]
-         for k in ("h3_dit", "h3_te", "h3_vae", "h3_audio_vae",
-                   "h3_ref_dit")]) if prefetch else None
+    stop = _prefetch([MODEL_CATALOGUE["h3_dit"]["dest"]]) if prefetch else None
 
     t0 = time.perf_counter()
     comfy = _Comfy("video")
@@ -94,12 +152,8 @@ def measure(steps: int, frames: int, prefetch: bool = False) -> dict:
 
     # Throughput probes on the ref DiT, sequential first, distinct slices —
     # the second probe must not re-read bytes the first left in any cache.
-    # Skipped under prefetch: the probes read the file the prefetch is
-    # warming, and each would corrupt the other's number.
     ref = MODEL_CATALOGUE["h3_ref_dit"]["dest"]
-    if prefetch:
-        out["read_probe_s"] = 0.0
-    elif ref.exists() and ref.stat().st_size > (2 * READ_GB << 30):
+    if ref.exists() and ref.stat().st_size > (2 * READ_GB << 30):
         t0 = time.perf_counter()
         out["read_1way_gbps"] = round(_throughput(ref, 0, 1), 2)
         out["read_8way_gbps"] = round(_throughput(ref, READ_GB << 30, 8), 2)
@@ -116,7 +170,7 @@ def measure(steps: int, frames: int, prefetch: bool = False) -> dict:
     # Different seeds, or the second run is a ComfyUI cache hit rather than a
     # warm sample — the exact lie ab_sage.py told once.
     if stop is not None:
-        stop.set()  # what generate() does on job arrival, mirrored
+        stop.set()
     t0 = time.perf_counter()
     comfy.run("cold", graph(41), what="video")
     out["first_run_s"] = round(time.perf_counter() - t0, 1)
