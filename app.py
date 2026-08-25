@@ -141,13 +141,15 @@ LEGACY_TRASH_DIR = ".trash"
 THUMB_DIR = ".thumbs"
 MUSUBI = Path("/opt/musubi-tuner")
 
-# Both inference paths are Hopper now, and the reason is the image rather than
-# the model: SageAttention is compiled for sm_90 in comfy_image, so a card of
-# any other architecture loads the weights, finds no kernel, and silently runs
-# on the slow path. Krea 2 used to have an A100-40GB of its own, sized against a
+# Both inference paths are Hopper now, for one reason each. Video: SageAttention
+# is compiled for sm_90 in comfy_image, so a card of any other architecture
+# loads the weights, finds no kernel, and silently runs on the slow path.
+# Images: memory. Krea 2 used to have an A100-40GB of its own, sized against a
 # measured 29.26 GiB peak at 1024px — that headroom does not survive V12, whose
 # own regression notes record a 30.27 GiB block-mask build and a 17.88 GiB dense
-# score tensor at the sequence lengths reference frames produce.
+# score tensor at the sequence lengths reference frames produce. Sage stopped
+# being the image side's reason when `_krea2_graph` opted out of it; the
+# rebuild-forcing arch pin below is still shared, because the image is.
 GPU = os.environ.get("VISIONARY_IMAGE_GPU", "H100")
 
 # Video is still its own GPU class, and still for the original reason: the H3
@@ -3355,14 +3357,25 @@ class _Comfy:
         self._proc = subprocess.Popen(
             ["python", "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
              "--disable-auto-launch", "--disable-metadata",
-             # Safe on both paths, for different reasons. H3 never passes an
-             # attention mask. Krea 2 does, but only through the regional
-             # node, and that node installs itself as
-             # `optimized_attention_override` and runs its own FlexAttention
-             # kernel for exactly the masked case — sageattention is what it
-             # delegates *unmasked* blocks to. The one call that still reaches
-             # sage with a mask is ComfyUI's own fallback-per-call path, which
-             # is a slower call and not a wrong picture.
+             # For H3, and only H3 — this is argv on both containers because
+             # one `_Comfy` starts both, but the image graph opts back out
+             # with a `ModelAttentionBackend` node. Sage's win is a
+             # long-sequence win, and H3's packed video/text/audio sequence is
+             # the only place here that has one; what Krea 2 got out of the
+             # same flag was intermittent black blotches. The full account is
+             # at the node, in `_krea2_graph`.
+             #
+             # H3 never passes an attention mask, so nothing on this path
+             # depends on sage's mask support — which is as well, because it
+             # has none: `sageattn` takes no `attn_mask`, ComfyUI reads that
+             # off the signature into SAGE_ATTENTION_SUPPORTS_MASK, and a
+             # masked call falls back per-call to PyTorch. That is a fact
+             # about an upstream we clone unpinned, so it is a fact with a
+             # date on it: if `attn_mask` ever appears in that signature,
+             # masked calls stop falling back and start being quantized, and
+             # ComfyUI's own Lightricks model has `low_precision_attention=
+             # False, # sageattn mask support is unreliable` sitting next
+             # door as the review of that.
              "--use-sage-attention",
              # Not a tuning choice — the alternative is broken. ComfyUI's
              # `text_encoder_dtype()` ends in a bare `return torch.float16`
@@ -5692,11 +5705,51 @@ def _krea2_graph(
                               "length": 1, "batch_size": batch_size}},
     }
 
+    # Krea 2 renders on PyTorch attention, against the process-wide SageAttention.
+    #
+    # `--use-sage-attention` is argv on both containers and is argued for by H3
+    # alone: a 33B model running full self-attention over a packed video/text/
+    # audio sequence is where the 2x lives. Krea 2 collects none of it, and
+    # that is measured rather than assumed — `tools/ab_sage.py`, six matched
+    # renders at 1024px/8 steps, 3.23s median on PyTorch against 3.26s on
+    # sage. A 1024px render is ~4k tokens; attention is not the bill. So the
+    # flag was buying this path nothing, and charging it the following.
+    #
+    # On sm90 sage dispatches to
+    # `sageattn_qk_int8_pv_fp8_cuda_sm90`, which quantizes V to FP8 e4m3 with
+    # one scale per channel across the whole sequence, and it runs there with
+    # both of its outlier mitigations off: ComfyUI hardcodes `smooth_k=False`
+    # at the call, the kernel hardcodes `smooth_v=False` inside. One outlier
+    # token then sets the scale for every other token in its channel, and the
+    # tokens that lose their resolution are a contiguous block of the image —
+    # which is the shape of the intermittent black blotches this was reported
+    # for. Krea 2 hands that kernel the worst tensors in the building:
+    # `txtfusion` runs attention over the twelve RAW Qwen3-VL layers, the same
+    # very large activations that already cost us `--bf16-text-enc`. Different
+    # prompt, different outliers, which is why it was intermittent rather than
+    # obvious — and why the three prompts ab_sage.py runs did not reproduce
+    # it. **That attribution is unproven here.** What is proven is the price
+    # of ruling it out, and the price is nothing; upstream has this exact
+    # kernel on report for the same class of artefact — thu-ml/
+    # SageAttention#288, ComfyUI-WanVideoWrapper#1554 — which is enough to
+    # spend nothing on.
+    #
+    # A node rather than a change to argv, because argv is shared with the
+    # video container and H3 is the reason the flag is there. First on the
+    # model chain so everything downstream inherits it: V12 chains to the
+    # `previous` override rather than replacing it, and the style pack
+    # forwards transformer_options, so both land here. The text encoder and
+    # the VAE were never on this path — `optimized_attention_for_device(...,
+    # small_input=True)` and `vae_attention()` do not offer sage at all.
+    graph["attn"] = {"class_type": "ModelAttentionBackend",
+                     "inputs": {"model": ["dit", 0],
+                                "attention": "pytorch attention"}}
+
     # Prompt-level LoRAs are the whole canvas; a region's own LoRA is applied
     # by V12 inside its box and never appears in this chain. Both weights are
     # carried because Krea 2's text encoder takes LoRA patches — the video
     # side's model-only loader has no such second number.
-    model_src, clip_src = ["dit", 0], ["clip", 0]
+    model_src, clip_src = ["attn", 0], ["clip", 0]
     for i, lora in enumerate(loras):
         tag = f"lora{i}"
         graph[tag] = {

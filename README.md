@@ -193,7 +193,8 @@ Each job type picks its own class, and most are switchable in the UI:
 | Video generation | H100      | H100, H200 |
 
 Image and video generation share one image whose SageAttention kernels are
-compiled for Hopper, so both want an H100/H200 — an A100 would run slow.
+compiled for Hopper, so both want an H100/H200. Video would run slow on
+anything else; images want the card for the memory a regional render peaks at.
 
 Containers stay warm between requests (10 minutes for images, 15 for video) so
 consecutive takes skip the model load, then scale to zero. You are billed for
