@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
 
 import { ago, coverOf, fullUrl, type GalleryItem } from './types'
 import { IconMore, IconPhoto, IconPlay } from '../icons'
 import { useNearViewport } from '../media/inview'
+import { Thumb } from '../media/thumb'
 
 /**
  * One generation in a grid.
@@ -53,18 +54,6 @@ export function Card({
   const isVideo = item.kind === 'video'
   const near = useNearViewport(box, isVideo)
 
-  // A cover that lost the race with the mount 404s, and re-fetching the listing does
-  // not fix it: React re-renders this card with the same key and the same src, and the
-  // browser does not retry a failed image. One retry, once, with a buster so it is not
-  // answered out of the HTTP cache; a second failure paints nothing, as before.
-  const retried = useRef(false)
-  const [bust, setBust] = useState('')
-  const onError = () => {
-    if (retried.current) return
-    retried.current = true
-    setBust(`?r=${performance.now().toFixed(0)}`)
-  }
-
   const extra = item.files.length > 1 ? ` · ${item.files.length}` : ''
 
   // Dimmed and inert while its own delete is out. The menu closes on the click that starts
@@ -101,8 +90,11 @@ export function Card({
                    preload="metadata" muted playsInline onClick={onOpen} />
           : <div className="media" style={shape} onClick={onOpen} />
       ) : (
-        <img className="media" style={shape} src={`${coverOf(item)}${bust}`} alt=""
-             loading="lazy" onError={onError} onClick={onOpen} />
+        // Not a bare <img>: the Thumb queues the fetch — a page of covers
+        // fired at once is what starved the status poll during a run — and a
+        // failure retries with backoff before it is allowed to stay blank,
+        // where an <img> whose one request failed was blank forever.
+        <Thumb className="media" style={shape} url={coverOf(item)} onClick={onOpen} />
       )}
 
       <div className="foot">

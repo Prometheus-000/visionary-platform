@@ -21,7 +21,10 @@ import { useNearViewport } from './inview'
  * page, so a filter flip or a density change never refetches.
  */
 
-const MAX_INFLIGHT = 6
+/** Four, not six: the browser gives one origin about six connections, and the
+ *  two held back are for what must never queue behind pictures — the status
+ *  poll during a run, and a clip's range requests. */
+const MAX_INFLIGHT = 4
 const RETRY_MS = [800, 2500, 6000]
 
 let inflight = 0
@@ -49,9 +52,37 @@ const release = () => {
  *  once is a tile that stays loaded. A few hundred 320px JPEGs is megabytes. */
 const loaded = new Map<string, string>()
 
-export function Thumb({ url, className, onClick }: {
+/**
+ * A plain <img> that retries a failed load — and nothing else.
+ *
+ * For the pictures that must not queue behind covers: the canvas still that
+ * just finished rendering is the most important fetch on screen, so it keeps
+ * the browser's own scheduling and priorities. What it must not keep is the
+ * <img> element's silence on failure: one dropped response used to blank the
+ * render somebody just waited minutes for, until a full reload.
+ */
+export function RetryImg({ src, ...rest }: React.ImgHTMLAttributes<HTMLImageElement>) {
+  const tries = useRef(0)
+  const [bust, setBust] = useState(0)
+  const busted = bust && src
+    ? `${src}${src.includes('?') ? '&' : '?'}r=${bust}`
+    : src
+  return (
+    <img {...rest} src={busted}
+         onError={() => {
+           const wait = RETRY_MS[tries.current]
+           if (wait == null) return
+           tries.current += 1
+           window.setTimeout(() => setBust(performance.now()), wait)
+         }} />
+  )
+}
+
+export function Thumb({ url, className, style, onClick }: {
   url: string
   className?: string
+  /** The packed grid hands a card its aspect-ratio; passed through untouched. */
+  style?: React.CSSProperties
   onClick?: () => void
 }) {
   const el = useRef<HTMLImageElement>(null)
@@ -95,7 +126,7 @@ export function Thumb({ url, className, onClick }: {
   }, [near, src, failed, url])
 
   return (
-    <img ref={el} className={className} alt="" src={src ?? undefined}
+    <img ref={el} className={className} style={style} alt="" src={src ?? undefined}
          onClick={onClick}
          title={failed
            ? 'The thumbnail could not be loaded after several tries — the full-size view may still work.'

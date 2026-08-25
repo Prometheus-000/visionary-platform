@@ -1859,21 +1859,13 @@ def _reload_insist() -> bool:
     a view too old to hold the folder refuses to delete work that is sitting
     right there.
 
-    Listing is not. `/api/gallery` takes its item set from `_output_entries`,
-    which asks Modal rather than the mount, so a refused reload can no longer
-    make a result invisible — which is what it did, for as long as one warm
-    container lasted. What the reload still buys that route is the *mount*: the
-    sidecars it reads per item, and the covers the page asks for immediately
-    afterwards. So it stays, and `stale` narrows to mean the mount is behind
-    the listing rather than the listing being behind the volume.
-
-    What refuses the reload is worth naming, because it is us. Every `/api/file`
-    is a `FileResponse` holding a descriptor open on /workspace for the length
-    of the transfer, and the page paints the new stills and asks for the listing
-    in the same tick — so a gallery refresh manufactures the window that blocks
-    its own reload, and the more results there are to paint, the wider it gets.
-    Those transfers end on their own, which is what makes waiting the fix and
-    a few hundred milliseconds enough of it.
+    Listing does not call this any more, and neither does serving. The whole
+    gallery read path — entry set, sidecars, covers, files — reads committed
+    state by RPC and serves off the container's spool (see the block above
+    `_entries_by_rpc`), so there is no mount left in it to be behind, and no
+    descriptor of ours left on /workspace to refuse anyone's reload. What
+    remains here are the paths that mutate the mount and are asked about
+    something written seconds ago — deleting a result that just landed.
 
     Everywhere else keeps the single attempt. A reload is a freshness step, and
     for a route that is not being asked about something written seconds ago,
@@ -5385,6 +5377,108 @@ def _keep_entry(job: str, name: str) -> bool:
     )
 
 
+# ── results are served off the container, and the volume is the record ─────
+#
+# Every picture bug the gallery ever had traced back to one dependency:
+# serving bytes off the mount makes the page's freshness hang on
+# `volume.reload()`, and reload is refusable — by our own `FileResponse`
+# descriptors most of all, so painting pictures froze the view that the next
+# picture needed. The listing broke that dependency by asking Modal instead of
+# the mount (`_entries_by_rpc`); these helpers do the same for the bytes.
+# A file is pulled ONCE from the volume's committed state by RPC — which both
+# job writers commit immediately, and which no open descriptor can refuse —
+# onto the container's own disk, and served from there. Descriptors during a
+# transfer are then held on local disk, never on /workspace, so serving
+# pictures can no longer freeze anything. The mount stays for what it is:
+# writes, deletes, and the durable record.
+SPOOL = Path("/tmp/visionary-spool")
+# Local disk, not local memory, and capped: a busy video session is gigabytes.
+# Trimmed LRU so the spool follows the session around rather than growing with
+# the volume — which is the entire difference between it and the mount.
+SPOOL_MAX_BYTES = 4 << 30
+_SPOOL_TRIM_LOCK = threading.Lock()
+
+
+def _read_committed(rel: str):
+    """Chunks of one committed file by RPC. `listdir` answered volume-relative
+    paths for a rooted query in testing, so both spellings are tried here too —
+    one line, and it survives either convention."""
+    try:
+        yield from volume.read_file(rel)
+        return
+    except FileNotFoundError:
+        pass
+    yield from volume.read_file("/" + rel)
+
+
+def _volume_bytes(rel: str) -> bytes | None:
+    """One small committed file in memory — sidecars, cached covers."""
+    try:
+        return b"".join(_read_committed(rel))
+    except Exception:
+        return None
+
+
+def _spooled(rel: str) -> Path | None:
+    """
+    The container-local copy of one committed volume file, pulled once by RPC.
+
+    Staged then renamed, the `_download_weight` rule: a reader that arrives
+    mid-pull must see nothing rather than half a file. The temp name carries
+    the thread id because two requests for the same fresh file race the pull,
+    and two writers on one `.part` interleave; two whole files renaming over
+    each other just means the second wins.
+    """
+    local = SPOOL / rel
+    try:
+        if local.is_file():
+            # mtime is the spool's LRU clock; serving a file is what keeps it.
+            os.utime(local)
+            return local
+    except OSError:
+        pass
+    tmp = local.with_name(f"{local.name}.{threading.get_ident()}.part")
+    try:
+        local.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "wb") as out:
+            for chunk in _read_committed(rel):
+                out.write(chunk)
+        tmp.replace(local)
+        _trim_spool()
+        return local
+    except Exception as exc:
+        # A miss is a real answer (the file is not in committed state — never
+        # written, or just deleted); anything else is worth its line.
+        if not isinstance(exc, FileNotFoundError):
+            print(f"[spool] {rel}: {type(exc).__name__}: {exc}", flush=True)
+        tmp.unlink(missing_ok=True)
+        return None
+
+
+def _trim_spool() -> None:
+    """Oldest-served first, down to 90% of the cap, so one trim buys headroom
+    rather than running again on the next pull."""
+    with _SPOOL_TRIM_LOCK:
+        files = []
+        for dirpath, _, names in os.walk(SPOOL):
+            for n in names:
+                p = Path(dirpath) / n
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                files.append((st.st_mtime, st.st_size, p))
+        total = sum(s for _, s, _ in files)
+        if total <= SPOOL_MAX_BYTES:
+            return
+        files.sort()
+        for _, size, p in files:
+            p.unlink(missing_ok=True)
+            total -= size
+            if total <= SPOOL_MAX_BYTES * 0.9:
+                break
+
+
 def _entries_by_rpc() -> dict[str, list[tuple[str, float]]]:
     """
     {job_id: [(filename, mtime)]} asked of Modal, not of the mount.
@@ -5499,16 +5593,39 @@ def _gallery(limit: int = 200, before: float = 0.0) -> tuple[list[dict[str, Any]
     if before:
         rows = [r for r in rows if r[0] < before]
 
+    # Sidecars by RPC, like everything else this listing reads: the mount would
+    # need a reload to see a fresh run's sidecar, and reload is the dependency
+    # this route spent three redesigns removing. Cached per job because a job
+    # directory never changes after the run that wrote it — except the moments
+    # right after it lands, so an *empty* answer is only cached once the job is
+    # old enough that the sidecar is either committed or never coming. Serial,
+    # this was the page's whole wait: 200 sidecars one at a time.
+    page = rows[:limit]
+    need = [(job, modified) for modified, job, _ in page if job not in _META_CACHE]
+    if need:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def fetch(row: tuple[str, float]) -> tuple[str, float, dict[str, Any]]:
+            job, modified = row
+            raw = _volume_bytes(f"outputs/{job}/{OUTPUT_META}")
+            try:
+                return job, modified, json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return job, modified, {}
+
+        with ThreadPoolExecutor(max_workers=min(16, len(need))) as ex:
+            fetched = list(ex.map(fetch, need))
+        now = time.time()
+        for job, modified, meta in fetched:
+            if meta or now - modified > 300:
+                _META_CACHE[job] = meta
+        fresh_meta = {job: meta for job, _, meta in fetched}
+    else:
+        fresh_meta = {}
+
     out: list[dict[str, Any]] = []
-    for modified, job, names in rows[:limit]:
-        meta: dict[str, Any] = {}
-        try:
-            meta = json.loads((OUTPUTS / job / OUTPUT_META).read_text())
-        except (OSError, json.JSONDecodeError):
-            # A job the RPC can see whose sidecar the mount has not caught up
-            # to yet. The card is still complete — picture, kind and age all
-            # come from the listing — and Reuse fills in on the next reload.
-            pass
+    for modified, job, names in page:
+        meta = _META_CACHE.get(job, fresh_meta.get(job, {}))
         out.append({
             # The sidecar first, so the derived fields win. It used to be last,
             # where its `job_id` and `kind` overrode them and happened to agree.
@@ -5522,6 +5639,19 @@ def _gallery(limit: int = 200, before: float = 0.0) -> tuple[list[dict[str, Any]
             "modified": modified,
         })
     return out, total
+
+
+# Sidecars already read, for the life of the container. Safe because a job
+# directory is immutable once written; evicted on delete so a re-used id can
+# never wear a dead run's metadata.
+_META_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _forget_output(job_id: str) -> None:
+    """A deleted run takes its caches with it — the sidecar entry and the
+    spooled bytes — or a re-used id would wear a dead run's face."""
+    _META_CACHE.pop(job_id, None)
+    shutil.rmtree(SPOOL / "outputs" / job_id, ignore_errors=True)
 
 
 def _lora_path(raw_path: Any) -> Path:
@@ -11914,10 +12044,16 @@ def web():
         `limit` is clamped rather than trusted: the sidecar read is per item,
         so an unbounded page is an unbounded number of file reads on a route
         anyone can call.
+
+        No reload, and no `_reload_insist` sleeping in the handler: every part
+        of this listing — the entry set, the mtimes, the sidecars — now comes
+        off committed state by RPC, and the covers the page asks for next are
+        served off the spool the same way. `stale` is kept in the reply for
+        the page that still reads it, and it is now always false, because
+        there is no mount left in this path to be behind.
         """
-        fresh = _reload_insist()
         items, total = _gallery(limit=max(1, min(limit, 500)), before=before)
-        return {"items": items, "total": total, "stale": not fresh}
+        return {"items": items, "total": total, "stale": False}
 
     @api.get("/api/file/{job_id}/{name}")
     def output_file(job_id: str, name: str):
@@ -11934,35 +12070,33 @@ def web():
         Matching the whole filename, not its stem: `Path("../../x").stem` is
         "x", which passes NAME_RE while the joined path still escapes outputs/.
         The separators have to be visible to the regex to be rejected.
+
+        **Served off the spool, never the mount.** The mount needs a reload to
+        see a fresh run, reload is refusable — by this route's own descriptors
+        most of all — and every "broken picture on a run that is sitting on
+        the volume" traced back to that loop. The spool pulls committed bytes
+        by RPC, which no open file can refuse, so a render that has finished
+        is a render this route can serve, first ask included. It also puts a
+        clip's range requests on local disk: the browser re-asking for byte
+        ranges used to be a descriptor on /workspace per ask.
         """
         if not NAME_RE.match(job_id) or not OUTPUT_FILE_RE.match(name):
             return JSONResponse({"error": "Invalid name."}, status_code=400)
 
-        # Optimistic: look first, reload only on a miss.
-        #
-        # Reloading on every request was both slow and actively wrong here. A
-        # gallery is a grid, so opening it fires a dozen of these at once, and
-        # this container serves 20 concurrently — concurrent reloads of the same
-        # volume returned a 500 for one of two simultaneous requests in testing.
-        # A file that is already visible needs no reload at all; only a file
-        # written by the GPU container since this one last synced does, and that
-        # is exactly the miss case.
-        #
-        # The second look is not a second `is_file()`. The first one missed,
-        # which is what put a negative entry under the name — and a reload does
-        # not clear those, so asking the same way twice can 404 a file the
-        # reload just brought in.
-        #
-        # Both halves, because for a fresh run the name that misses is the job
-        # *directory*: `_listed` walks down to it by readdir, and
-        # `_sizes_on_disk` then answers for the file itself — filtering to
-        # regular files, so a directory that happened to match the name is a
-        # 404 here rather than a 500 out of FileResponse.
-        path = OUTPUTS / job_id / name
-        if not path.is_file():
-            _reload_volume()
-            if not (_listed(path.parent, OUTPUTS) and _sizes_on_disk([path])[path]):
-                return JSONResponse({"error": "Not found."}, status_code=404)
+        path = _spooled(f"outputs/{job_id}/{name}")
+        if path is None:
+            # The mount, for the one thing the spool cannot answer: bytes
+            # written on THIS container that were never committed, and any
+            # RPC failure. `_listed` + `_sizes_on_disk` rather than a second
+            # `is_file()` because the first miss cached a negative entry the
+            # reload does not clear.
+            mounted = OUTPUTS / job_id / name
+            if not mounted.is_file():
+                _reload_volume()
+                if not (_listed(mounted.parent, OUTPUTS)
+                        and _sizes_on_disk([mounted])[mounted]):
+                    return JSONResponse({"error": "Not found."}, status_code=404)
+            path = mounted
         return FileResponse(
             str(path),
             media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
@@ -12008,46 +12142,58 @@ def web():
                 {"error": "No cover for a clip: web_image has no ffmpeg."},
                 status_code=404)
 
-        img = OUTPUTS / job_id / name
-        # The same two-step miss as /api/file, and for the same reason: on a
-        # fresh run the name that misses is the job *directory*, a stat cached
-        # that miss below us, and `volume.reload()` does not clear a name
-        # already asked about. Asking the same way twice 404s a file that is
-        # there — which here would be a card in the grid whose picture never
-        # loads.
-        if not img.is_file():
-            _reload_volume()
-            if not (_listed(img.parent, OUTPUTS) and _sizes_on_disk([img])[img]):
-                return JSONResponse({"error": "Not found."}, status_code=404)
-
         # The size is in the cache name, which `thumb()` does not do and should.
         # Its invalidation compares the cached mtime against the source's, and
         # that knows nothing about THUMB_PX — so raising the constant leaves
         # every existing thumbnail at the old size, forever and silently. Here
         # the constant is part of the key, so a raise invalidates by
-        # construction and the orphans go with the folder on delete.
-        thumbs = img.parent / THUMB_DIR
-        cached = thumbs / f"{img.stem}@{THUMB_PX}.jpg"
+        # construction and the orphans go with the folder on delete. No mtime
+        # check beside it: a job directory never changes after the run that
+        # wrote it.
+        stem = Path(name).stem
+        cover_rel = f"outputs/{job_id}/{THUMB_DIR}/{stem}@{THUMB_PX}.jpg"
+        local = SPOOL / cover_rel
         try:
-            if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
-                thumbs.mkdir(exist_ok=True)
-                with Image.open(img) as im:
-                    # Upright even for our own renders: the viewer shows this
-                    # same file at full size and browsers rotate from EXIF while
-                    # PIL does not, so without this the card and the full-screen
-                    # view of one file disagree by 90°.
-                    im = _upright(im).convert("RGB")
-                    im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
-                    buf = io.BytesIO()
-                    im.save(buf, "JPEG", quality=78, optimize=True)
-                # Encoded before the file is touched, so the write is one call
-                # and no descriptor is held across a LANCZOS resample either.
-                cached.write_bytes(buf.getvalue())
-                # No volume.commit(), for the reason the dataset route gives:
-                # a cover is derived data, and a grid of them would be a grid
-                # of commits. A container dying before the write is durable
-                # costs one re-encode.
-            data = cached.read_bytes()
+            if not local.is_file():
+                # A cover an earlier container already paid for, off committed
+                # state by RPC — the cold-start case that used to re-encode a
+                # whole page of them.
+                data = _volume_bytes(cover_rel)
+                if data is None:
+                    src = _spooled(f"outputs/{job_id}/{name}")
+                    if src is None:
+                        # The mount as last resort, same two-step as /api/file.
+                        src = OUTPUTS / job_id / name
+                        if not src.is_file():
+                            _reload_volume()
+                            if not (_listed(src.parent, OUTPUTS)
+                                    and _sizes_on_disk([src])[src]):
+                                return JSONResponse({"error": "Not found."},
+                                                    status_code=404)
+                    with Image.open(src) as im:
+                        # Upright even for our own renders: the viewer shows
+                        # this same file at full size and browsers rotate from
+                        # EXIF while PIL does not, so without this the card and
+                        # the full-screen view of one file disagree by 90°.
+                        im = _upright(im).convert("RGB")
+                        im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
+                        buf = io.BytesIO()
+                        im.save(buf, "JPEG", quality=78, optimize=True)
+                    data = buf.getvalue()
+                    # Best-effort onto the volume for the next container. No
+                    # commit — a cover is derived data and a grid of them would
+                    # be a grid of commits; the session heartbeat's commit
+                    # carries them within a couple of minutes.
+                    try:
+                        vol_cache = OUTPUTS / job_id / THUMB_DIR
+                        vol_cache.mkdir(exist_ok=True)
+                        (vol_cache / f"{stem}@{THUMB_PX}.jpg").write_bytes(data)
+                    except OSError:
+                        pass
+                local.parent.mkdir(parents=True, exist_ok=True)
+                local.write_bytes(data)
+            else:
+                data = local.read_bytes()
         except Exception as exc:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
@@ -12071,6 +12217,7 @@ def web():
             return {"error": "Not found."}
         shutil.rmtree(d, ignore_errors=True)
         _forget_listed(job_id)
+        _forget_output(job_id)
         _drop_legacy_trash(OUTPUTS)
         volume.commit()
         return {"ok": True}
@@ -12105,6 +12252,7 @@ def web():
             if _listed(d, OUTPUTS):
                 shutil.rmtree(d, ignore_errors=True)
                 _forget_listed(job_id)
+                _forget_output(job_id)
                 removed += 1
             else:
                 missing.append(job_id)
@@ -12125,50 +12273,21 @@ def web():
     # where the second one is strictly slower, is the shape a future change
     # picks the wrong half of.
 
-    # Job ids whose completion this container has already reacted to. Bounded by
-    # replacing the set rather than growing it: nothing here needs history, only
-    # "have I already done the one-time thing for this job".
-    _warmed: set = set()
-
     @api.get("/api/status/{job_id}")
     def status(job_id: str) -> dict[str, Any]:
+        """
+        There was a "warm reload" here — the poll that first saw "completed"
+        pulled the volume forward so the canvas's first /api/file would not
+        miss, insisting through refusals with up to half a second of sleep on
+        the hot poll path. Retired with the mount, not just moved: the pixels
+        are served off the spool from committed state now, so the first ask
+        for a fresh run cannot miss, and nothing in the serving path needs a
+        reload to happen at all.
+        """
         try:
-            rec = jobs.get(job_id) or {"status": "unknown"}
+            return jobs.get(job_id) or {"status": "unknown"}
         except Exception as exc:
             return {"status": "unknown", "error": str(exc)}
-
-        # The poll that first sees "completed" is the last thing to happen before
-        # the client asks for the pixels, which makes it the free place to pull
-        # the volume forward. Without it the first /api/file of every run misses,
-        # reloads, and pays that latency in front of the image the user is
-        # waiting on — with it, the reload overlaps the client's own round trip
-        # and every still is served off a warm view.
-        if rec.get("status") == "completed" and job_id not in _warmed:
-            try:
-                # Insisting, not one attempt. This fires once per job, on the
-                # single poll the client is already blocked on, and what it is
-                # racing is the page's own media transfers — so a refusal here
-                # is the common case rather than the rare one, and losing it
-                # costs the canvas four concurrent misses, each paying the
-                # reload lock and a scan of outputs/ in front of the picture
-                # someone is waiting for. Half a second on one poll is the
-                # cheaper side of that trade; every other status poll is
-                # untouched.
-                warmed = _reload_insist()
-            except Exception as exc:
-                print(f"[status] warm reload failed for {job_id}: {exc}", flush=True)
-                warmed = False
-            # Marked only once it has actually happened. It used to be marked
-            # first, which made a refused reload permanent for that job: the
-            # set said the one-time thing was done and no later poll would try
-            # again. A refusal here is not rare — it is whatever media the page
-            # is streaming — and this is the reload the gallery leans on, so
-            # the flag has to record the reload rather than the attempt.
-            if warmed:
-                if len(_warmed) > 256:
-                    _warmed.clear()
-                _warmed.add(job_id)
-        return rec
 
     @api.post("/api/stop/{job_id}")
     def stop(job_id: str) -> dict[str, Any]:

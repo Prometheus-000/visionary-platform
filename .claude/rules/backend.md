@@ -539,6 +539,25 @@ nobody has looked at.
   Nothing shares a generator process now.
 
 
+- **Results are served off the container's spool; the volume is the record.**
+  Every picture bug the gallery ever had traced back to one dependency:
+  serving bytes off the mount makes the page's freshness hang on
+  `volume.reload()`, and reload is refusable — by our own `FileResponse`
+  descriptors most of all, so painting pictures froze the view the next
+  picture needed, and a render that had just finished 404'd on the canvas
+  while its files sat on the volume. The whole read path is off the mount
+  now: the listing's entry set (`_entries_by_rpc`), the sidecars
+  (`_volume_bytes`), the covers and the files themselves (`_spooled`) all
+  read the volume's *committed state* by RPC, which both job writers commit
+  immediately and which no open descriptor can refuse. A file is pulled once
+  onto local disk and served from there — so a clip's range requests land on
+  local disk too, and serving can no longer freeze anything. The spool is
+  LRU-trimmed at `SPOOL_MAX_BYTES` so it follows the session around instead
+  of growing with the volume, which is the entire difference between it and
+  the mount. The mount keeps what it is for: writes, deletes, and datasets —
+  which this container writes itself, so its own view of them is fresh by
+  construction.
+
 - **Reload through `_reload_volume()`, never `volume.reload()`.** Modal refuses
   a reload while anything on the volume is open, and a container holding a
   checkpoint always is — safetensors maps the weights straight off `/workspace`

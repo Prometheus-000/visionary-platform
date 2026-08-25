@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { fileUrl } from '../api/routes'
+import { RetryImg } from '../media/thumb'
 import { IconClose, IconExpand, IconPhoto, IconPlay, IconPlus } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
@@ -247,9 +248,12 @@ export function Canvas({
                       under a hand already over the strip. Omitted rather than zeroed
                       when the run has no request behind it, since `width="0"` would
                       reserve a ratio of nothing. */}
-                  <img src={fileUrl(run.jobId!, f)} alt="" decoding="async"
-                       width={run.w || undefined} height={run.h || undefined}
-                       fetchPriority={i === at ? 'high' : 'auto'} />
+                  {/* RetryImg, not <img>: a still that failed to load once is a
+                      finished render showing nothing, and the element never
+                      asks again on its own. */}
+                  <RetryImg src={fileUrl(run.jobId!, f)} alt="" decoding="async"
+                            width={run.w || undefined} height={run.h || undefined}
+                            fetchPriority={i === at ? 'high' : 'auto'} />
                   {/* Each still carries its own way into video. Two, because they are
                       genuinely different jobs: a first frame is the shot the clip starts
                       on, a reference is a subject the clip is about. */}
