@@ -24,7 +24,24 @@ export const SESSION = (() => {
   return s
 })()
 
-export const beat = () => ping(SESSION)
+/**
+ * The set currently on screen, module-level for the same reason SESSION is:
+ * the interval in `keepAlive` outlives any one render, and a beat that named
+ * a stale set would adopt a draft the person already left.
+ *
+ * Why the beat names it at all: a draft records the session that *created* it,
+ * and that id dies with its tab. A draft reopened in a later window was being
+ * kept alive by a marker nobody touched any more — the sweep deleted 80 images
+ * out from under a live curating session. The server adopts whatever draft the
+ * beat says is open, so looking at a set is what keeps it alive.
+ */
+let liveSet: string | null = null
+
+export const setLiveSet = (name: string | null) => {
+  liveSet = name
+}
+
+export const beat = () => ping(SESSION, liveSet)
 
 /**
  * Only while there is something to keep alive.

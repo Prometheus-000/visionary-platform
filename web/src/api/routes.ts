@@ -85,8 +85,11 @@ export const deleteLora = (path: string) => post<{ ok?: boolean }>('/api/loras/d
 /* ---- session --------------------------------------------------------- */
 
 /** A draft belongs to the window that made it; this is the heartbeat that
- *  keeps it from being swept after fifteen minutes of silence. */
-export const beat = (session: string) => post<{ ok?: boolean }>('/api/session', { session })
+ *  keeps it from being swept after fifteen minutes of silence. `open` names
+ *  the set on screen, so a draft you are looking at becomes this window's —
+ *  liveness follows attention, not authorship. */
+export const beat = (session: string, open?: string | null) =>
+  post<{ ok?: boolean }>('/api/session', { session, open: open || undefined })
 
 /* ---- datasets and drafts --------------------------------------------- */
 

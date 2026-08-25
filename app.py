@@ -396,7 +396,12 @@ web_image = (
     .pip_install(
         "fastapi==0.115.6",
         "python-multipart==0.0.20",
-        "pillow==11.1.0",
+        # 11.3, not 11.1: AVIF decode arrived in Pillow's wheels at 11.2, and
+        # `.avif` is in IMAGE_EXTS. On 11.1 every AVIF upload was invisible to
+        # PIL while the browser drew it fine — thumbnail 500 (an empty tile),
+        # no dimensions in the listing, no fingerprint for the duplicate scan —
+        # so the set looked broken everywhere except the full-screen viewer.
+        "pillow==11.3.0",
         "huggingface_hub[hf_transfer]==0.27.1",
         # Named as well as pulled by the extra above, matching caption_image:
         # the extra has been observed not to install it, and with the env var
@@ -4161,6 +4166,15 @@ def _sweep_drafts() -> int:
             continue
         if now - seen < DRAFT_GRACE_S:
             continue
+        # The one deletion nobody asks for by name, so it is the one that must
+        # explain itself in the log: what went, how much of it, whose window it
+        # belonged to and how long that window had been silent. 80 images
+        # vanishing mid-curation with no line anywhere is how this was learned.
+        held = sum(1 for p in d.iterdir()
+                   if p.suffix.lower() in IMAGE_EXTS | VIDEO_EXTS)
+        print(f"[sweep] retired draft {d.name!r}: {held} files, "
+              f"session {sid or 'none'} quiet {int((now - seen) / 60)}m",
+              flush=True)
         shutil.rmtree(d, ignore_errors=True)
         swept += 1
 
@@ -4532,7 +4546,9 @@ FINGERPRINT_FILE = "fingerprints.json"
 SCAN_BUDGET_S = 10.0
 # The cache is rewritten whole when this moves, rather than being migrated: it
 # is a decode cache, and a rescan is the only thing a wrong one costs.
-FINGERPRINT_VERSION = 4
+# 5: the decoder itself changed — Pillow 11.3 reads the AVIFs 11.1 could not,
+# so every entry (and every cached failure) measured under 11.1 is stale.
+FINGERPRINT_VERSION = 5
 # Which encoding to prefer when two files are the same picture at the same size
 # and the same weight. Lossless first: a PNG re-saved as JPEG can be recovered
 # from neither direction, and the tie only ever arises between an original and
@@ -4652,15 +4668,19 @@ def _fingerprint(img: Path) -> dict[str, Any] | None:
             rec = {"dhash": variants[0][0], "phash": variants[0][1],
                    "variants": variants, "sharpness": _sharpness(up)}
     except Exception:
-        # A file PIL cannot open is not a reason to fail the scan. It simply
-        # has no fingerprint, so it groups with nothing and stays where it is.
+        # A file PIL cannot open is not a reason to fail the scan — but it is
+        # never a normal state either: every extension the upload accepts is an
+        # extension this image's Pillow decodes, so a failure here means the
+        # two have drifted apart (AVIF sat in that gap for months, invisible to
+        # every group it belonged in). The caller caches the failure so it is
+        # not re-decoded every scan, counts it, and the count is reported.
         return None
     return {**rec, "sha": digest.hexdigest(), "bytes": st.st_size,
             "width": w, "height": h, "format": fmt, "mtime": st.st_mtime,
             "v": FINGERPRINT_VERSION, "stamp": [st.st_mtime_ns, st.st_size]}
 
 
-def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, int]:
+def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, int, list[str]]:
     """
     Every image in the set, measured once and cached beside the thumbnails.
 
@@ -4694,6 +4714,7 @@ def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, i
     changed = False
     pending = 0
     measured = 0
+    unreadable: list[str] = []
     deadline = None if budget_s is None else time.monotonic() + budget_s
     for img in images:
         try:
@@ -4704,6 +4725,8 @@ def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, i
         if (was and was.get("stamp") == [st.st_mtime_ns, st.st_size]
                 and was.get("v") == FINGERPRINT_VERSION):
             out[img.name] = was
+            if was.get("failed"):
+                unreadable.append(img.name)
             continue
         # Out of time: leave it out of `out` entirely rather than half-measured.
         # It is absent from the cache too, which is exactly what makes the next
@@ -4725,6 +4748,14 @@ def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, i
         changed = True
         if fp:
             out[img.name] = fp
+        else:
+            # Cached too, or a file that cannot be decoded is re-decoded on
+            # every scan forever. The marker carries the stamp so a replaced
+            # file is re-tried, and the version so a decoder upgrade (the AVIF
+            # case: Pillow 11.1 → 11.3) re-tries everything it used to fail.
+            out[img.name] = {"failed": True, "v": FINGERPRINT_VERSION,
+                             "stamp": [st.st_mtime_ns, st.st_size]}
+            unreadable.append(img.name)
     # A deleted image leaves its entry behind, which is why the rewrite is of
     # `out` rather than of `cached | out`: the cache must not grow forever on a
     # folder that is edited all day.
@@ -4735,7 +4766,8 @@ def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, i
             changed = True
         except OSError:
             pass
-    return out, changed, pending
+    good = {k: v for k, v in out.items() if not v.get("failed")}
+    return good, changed, pending, unreadable
 
 
 def _keep_rank(fp: dict[str, Any], name: str, captioned: bool) -> tuple:
@@ -4866,14 +4898,16 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
     is worth more than the edge it drops, because a name in two groups is a name
     you are asked about twice and can mark for deletion twice.
     """
-    prints, wrote, pending = _fingerprints(d, budget_s)
+    prints, wrote, pending, unreadable = _fingerprints(d, budget_s)
     if pending:
         # Half a folder groups into half the truth, and half the truth here is a
         # keeper suggested against copies that have not been looked at yet. So
         # nothing is grouped until everything is measured; what comes back is
         # the count, which is the only honest thing to draw.
-        return {"scanning": True, "measured": len(prints),
-                "total": len(prints) + pending, "groups": [], "images": len(prints),
+        return {"scanning": True, "measured": len(prints) + len(unreadable),
+                "total": len(prints) + len(unreadable) + pending,
+                "groups": [], "images": len(prints),
+                "unreadable": unreadable,
                 "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
                                "crop": CROP_MATCH},
                 "summary": {"duplicate_groups": 0, "duplicate_images": 0,
@@ -4969,6 +5003,11 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
     return {
         "scanning": False,
         "images": len(prints),
+        # Should always be empty: everything the upload accepts, the scan
+        # decodes. Reported by name rather than swallowed, because a file the
+        # scan cannot see is excluded from every group it belongs in — which
+        # reads as "the scan missed obvious duplicates", not as a decode fault.
+        "unreadable": unreadable,
         "groups": groups,
         "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
                        "crop": CROP_MATCH},
@@ -10275,11 +10314,18 @@ def web():
             return JSONResponse({"error": str(exc)}, 400)
         appending = raw.is_dir()
         raw.mkdir(parents=True, exist_ok=True)
+        sid = str(form.get("session") or "")
         if not appending:
             # Stamp the window before the first byte is written: an upload that
             # takes longer than the grace period would otherwise be writing into
             # a folder the sweep considers ownerless.
-            _write_dataset_meta(raw, session=str(form.get("session") or ""))
+            _write_dataset_meta(raw, session=sid)
+        elif sid and raw.parent == DRAFTS:
+            # Re-stamp on append too. A draft created in a closed tab keeps
+            # that tab's session id forever, so the window now uploading into
+            # it was not the window keeping it alive — and fifteen quiet
+            # minutes after the upload, the sweep took the whole set.
+            _write_dataset_meta(raw, session=sid)
 
         count, zips = 0, []
         for up in form.getlist("files"):
@@ -10353,7 +10399,24 @@ def web():
         """
         _reload_volume()
         DRAFTS.mkdir(parents=True, exist_ok=True)
-        _touch_session(str(payload.get("session") or ""))
+        sid = str(payload.get("session") or "")
+        _touch_session(sid)
+        # Liveness follows attention, not authorship. A draft records the
+        # session that *created* it, and that id dies with its tab — so a
+        # draft reopened in a later window was being kept alive by a marker
+        # nobody was touching, and the sweep took 80 images out from under the
+        # person curating them. The beat therefore names the set on screen,
+        # and a draft you are looking at becomes yours before anything sweeps.
+        opened = str(payload.get("open") or "")
+        if sid and opened and NAME_RE.match(sid) and NAME_RE.match(opened):
+            od = DRAFTS / opened
+            if od.is_dir():
+                try:
+                    cur = json.loads((od / "dataset.json").read_text()).get("session")
+                except (OSError, json.JSONDecodeError):
+                    cur = None
+                if cur != sid:
+                    _write_dataset_meta(od, session=sid)
         swept = _sweep_drafts()
         volume.commit()
         return {"ok": True, "swept": swept}
@@ -10557,45 +10620,61 @@ def web():
         if err:
             return err
 
+        from concurrent.futures import ThreadPoolExecutor
+
         from PIL import Image
 
-        items = []
-        # Images first, then clips: a mixed set is browsed by kind far more
-        # often than by name, and the filter above the grid is the same split.
-        for img in _dataset_images(d) + _dataset_videos(d):
+        # The scan already paid for most dimensions: reuse its cache where the
+        # stamp still matches, and read only the headers it has not covered.
+        prints: dict[str, Any] = {}
+        try:
+            prints = json.loads((d / THUMB_DIR / FINGERPRINT_FILE).read_text())
+        except (OSError, json.JSONDecodeError):
+            prints = {}
+
+        def measure(img: Path) -> dict[str, Any] | None:
             try:
                 st = img.stat()
             except OSError:
-                continue
+                return None
             if img.suffix.lower() in VIDEO_EXTS:
                 # No dimensions and no duration: both need a demuxer, and this
                 # container has none. The tile paints its own first frame out of
                 # bytes the browser fetches anyway — the same trade the gallery
                 # card makes for a clip.
-                items.append({"name": img.name, "kind": "video",
-                              "caption": _caption_of(img),
-                              "bytes": st.st_size, "mtime": st.st_mtime})
-                continue
+                return {"name": img.name, "kind": "video",
+                        "caption": _caption_of(img),
+                        "bytes": st.st_size, "mtime": st.st_mtime}
             # Pixel dimensions alongside filesize: together they are what
             # actually informs a keep/cut call. PIL parses the header only, so
             # this is a small read per file rather than a decode.
             w = h = None
-            try:
-                with Image.open(img) as im:
-                    # The size after orientation, which is the size the browser
-                    # draws and the size the bucketer will see. Reporting the
-                    # stored one labelled a portrait photo "4032×3024".
-                    w, h = _upright(im).size
-            except Exception:
-                pass
-            items.append({
-                "name": img.name,
-                "kind": "image",
-                "caption": _caption_of(img),
-                "bytes": st.st_size,
-                "width": w, "height": h,
-                "mtime": st.st_mtime,
-            })
+            was = prints.get(img.name)
+            if (was and was.get("stamp") == [st.st_mtime_ns, st.st_size]
+                    and was.get("width")):
+                w, h = was["width"], was["height"]
+            else:
+                try:
+                    with Image.open(img) as im:
+                        # The size after orientation, which is the size the
+                        # browser draws and the size the bucketer will see.
+                        # Reporting the stored one labelled a portrait photo
+                        # "4032×3024".
+                        w, h = _upright(im).size
+                except Exception:
+                    pass
+            return {"name": img.name, "kind": "image",
+                    "caption": _caption_of(img), "bytes": st.st_size,
+                    "width": w, "height": h, "mtime": st.st_mtime}
+
+        # Images first, then clips: a mixed set is browsed by kind far more
+        # often than by name, and the filter above the grid is the same split.
+        # Measured in parallel because each file is one FUSE round trip and the
+        # sidecar beside it is a second: read one at a time on a cold volume,
+        # an 80-image set held the sheet blank for ten-plus seconds.
+        files = _dataset_images(d) + _dataset_videos(d)
+        with ThreadPoolExecutor(max_workers=min(16, max(1, len(files)))) as ex:
+            items = [r for r in ex.map(measure, files) if r]
         return {**_dataset_stats(d), "images": items}
 
     @api.post("/api/datasets/{name}/meta")

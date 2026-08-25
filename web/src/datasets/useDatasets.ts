@@ -8,7 +8,7 @@ import {
 } from '../api/routes'
 import type { Insight } from '../api/types'
 import { useBusy } from '../ui/useBusy'
-import { SESSION, beat, keepAlive } from './session'
+import { SESSION, beat, keepAlive, setLiveSet } from './session'
 
 /**
  * The dataset list, the open set, and its insight.
@@ -119,6 +119,11 @@ export function useDatasets() {
     setEditError(null)
     setImages([])
     setInsight(null)
+    // The beat carries the open set and the server adopts it if it is a
+    // draft, so opening one makes it this window's *immediately* — not at the
+    // next interval, which could be two minutes after the sweep's deadline.
+    setLiveSet(name)
+    void beat()
     if (name) await loadTiles(name)
   }, [loadTiles])
 
@@ -128,8 +133,10 @@ export function useDatasets() {
     void beat()
   }, [])
 
-  // Only while there is something to keep alive.
-  const hasDrafts = rows.some((r) => !r.saved)
+  // Only while there is something to keep alive. `open` is in the gate as
+  // well as the rows: the listing can lag a save or a create, and the one
+  // set that must never miss a beat is the one on screen.
+  const hasDrafts = rows.some((r) => !r.saved) || !!open
   useEffect(() => {
     drafts.current = hasDrafts
     return keepAlive(hasDrafts)

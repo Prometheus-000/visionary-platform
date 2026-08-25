@@ -8,6 +8,7 @@ import {
 import { fmtFileSize } from '../format'
 import { IconSliders, IconTag, IconUpload } from '../icons'
 import { useNearViewport } from '../media/inview'
+import { Thumb } from '../media/thumb'
 import { useStore } from '../store'
 import { ErrorNote } from '../ui/ErrorNote'
 import { Masonry } from '../ui/Masonry'
@@ -468,9 +469,11 @@ function Frame({ set, item, onLightbox }: {
   const isVideo = item.kind === 'video'
   const near = useNearViewport(box, isVideo)
   if (!isVideo) {
+    // Not a bare <img>: the Thumb queues the fetch and retries a failure —
+    // see media/thumb.tsx for the two faults that made it exist.
     return (
-      <img loading="lazy" src={thumbUrl(set, item.name)} alt=""
-           onClick={() => onLightbox(imageUrl(set, item.name))} />
+      <Thumb url={thumbUrl(set, item.name)}
+             onClick={() => onLightbox(imageUrl(set, item.name))} />
     )
   }
   return (

@@ -2021,13 +2021,13 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .tile.thin textarea{border-top-color:rgba(245,158,11,.5)}
 .tile.notrig textarea{border-top-color:rgba(239,68,68,.55)}
 /* Duplicate review ------------------------------------------------------ */
-/* A duplicate is a comparison, not another contact sheet. The page gives the
-   comparison one group at a time and lets the images keep their useful size;
-   the overflow belongs on the horizontal axis because a too-narrow column is
-   a photo you cannot judge. */
+/* A duplicate is a comparison, not another contact sheet. Every group is on
+   one scroll — paging hid the size of the job and what was marked off screen —
+   and each keeps its images at a useful size; the overflow belongs on the
+   horizontal axis because a too-narrow column is a photo you cannot judge. */
 .dupes{min-width:0}
+.dupes-group{margin:0 0 26px}
 .dupes-bar{margin:0 0 12px}
-.dupes-at{white-space:nowrap;font-size:13px}
 .dupes-bar>#dupes-count{margin-left:4px}
 .dupes-summary{display:flex;gap:6px;flex-wrap:wrap;margin:-3px 0 12px}
 /* `capitalize` was here for SCREAMING_SNAKE class names lowercased into the
@@ -2043,7 +2043,6 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   background:var(--line);cursor:pointer}
 .dupes-rail .seg.cuts{background:rgba(248,113,113,.48)}
 .dupes-rail .seg.clean{background:rgba(74,222,128,.35)}
-.dupes-rail .seg.here{outline:1px solid rgba(255,255,255,.85);outline-offset:2px}
 .dupes-rail .seg:not(.seen){opacity:.45}
 .dupes-head{display:flex;align-items:baseline;gap:9px;margin:0 2px 10px;min-width:0}
 .dupes-head>b{font-size:14px;white-space:nowrap}

@@ -5,12 +5,23 @@ import { datasetDuplicates, imageUrl, removeImage, thumbUrl } from '../api/route
 import type { DupeGroup, DupeImage, DupeReport } from '../api/types'
 import { fmtFileSize } from '../format'
 import { IconExpand } from '../icons'
+import { Thumb } from '../media/thumb'
 import type { useDatasets } from './useDatasets'
 
 type Ds = ReturnType<typeof useDatasets>
 
 /**
- * Duplicate review: one group at a time, and you pick what survives.
+ * Duplicate review: every group on one scroll, and you pick what survives.
+ *
+ * It was one group at a time behind ‹ › paging, and that shape was retired on
+ * the owner's own report: "cycling between groups makes no sense to me". The
+ * paging hid the size of the job (a count in the bar is not eight groups you
+ * can see), hid what was marked everywhere but the group on screen, and made
+ * the filter dropdown silently renumber the position you were at. A scroll
+ * shows the whole blast radius at once, which is what the confirm dialog was
+ * having to describe in words. The rail survives as a map — one segment per
+ * group, filled where something is marked — because on a long scroll it is
+ * also the way to jump.
  *
  * **The selection is inverted, and that is the whole feature.** Every other
  * delete surface here asks you to name what goes, which is the wrong half of
@@ -46,14 +57,16 @@ export function Duplicates({ ds, onLightbox, onExit }: {
   const [report, setReport] = useState<DupeReport | null>(null)
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [at, setAt] = useState(0)
   const [deleting, setDeleting] = useState(false)
   /** Per group, who survives. Never empty for a group that exists. */
   const [keep, setKeep] = useState<Record<string, string[]>>({})
-  /** Groups you have actually had on screen, which the confirm dialog reports:
-   *  a suggestion you never looked at is still a suggestion, and a dialog that
-   *  does not distinguish the two is a dialog underselling its blast radius. */
+  /** Groups that have actually been on screen, which the confirm dialog
+   *  reports: a suggestion you never looked at is still a suggestion, and a
+   *  dialog that does not distinguish the two is a dialog underselling its
+   *  blast radius. On a scroll, "seen" means the group entered the viewport. */
   const [seen, setSeen] = useState<Set<string>>(new Set())
+  /** One element per group key, for the rail's jump. */
+  const groupEls = useRef(new Map<string, HTMLDivElement>())
 
   const name = ds.open
 
@@ -93,7 +106,6 @@ export function Duplicates({ ds, onLightbox, onExit }: {
       }
       setScanning(false)
       setReport(r)
-      setAt(0)
       // A rescan is a different set of groups, so the marks start again from
       // the suggestions rather than being carried onto keys that may not exist.
       // Only a duplicate group preselects: a similar group is two photographs
@@ -101,8 +113,7 @@ export function Duplicates({ ds, onLightbox, onExit }: {
       // all worth keeping, so it arrives whole with nothing to undo.
       setKeep(Object.fromEntries(r.groups.map((g) => [
         g.key, g.kind === 'duplicate' ? [g.suggest] : g.images.map((i) => i.name)])))
-      const first = r.groups[0]
-      setSeen(new Set(first ? [first.key] : []))
+      setSeen(new Set())
       return
     }
   }, [name])
@@ -112,16 +123,17 @@ export function Duplicates({ ds, onLightbox, onExit }: {
   const all = useMemo(() => report?.groups ?? [], [report])
   const groups = useMemo(
     () => all.filter((g) => mode === 'all' || g.kind === mode), [all, mode])
-  const group: DupeGroup | undefined = groups[Math.min(at, groups.length - 1)]
 
-  const go = useCallback((i: number) => {
-    if (!groups.length) return
-    const next = Math.max(0, Math.min(groups.length - 1, i))
-    const nextGroup = groups[next]
-    if (!nextGroup) return
-    setAt(next)
-    setSeen((s) => (s.has(nextGroup.key) ? s : new Set(s).add(nextGroup.key)))
-  }, [groups])
+  const markSeen = useCallback((key: string) => {
+    setSeen((s) => (s.has(key) ? s : new Set(s).add(key)))
+  }, [])
+
+  const jump = useCallback((key: string) => {
+    // Instant, not smooth: a jump from the map is about being there, and a
+    // smooth scroll is an animation the browser silently skips in a hidden
+    // tab — which is how "the rail does nothing" was reproduced.
+    groupEls.current.get(key)?.scrollIntoView({ block: 'start' })
+  }, [])
 
   const kept = useCallback((g: DupeGroup, k: Record<string, string[]>) =>
     k[g.key] ?? (g.kind === 'duplicate' ? [g.suggest] : g.images.map((i) => i.name)), [])
@@ -185,24 +197,17 @@ export function Duplicates({ ds, onLightbox, onExit }: {
   }
 
   /* ---- keys ------------------------------------------------------------ */
-  /* The panel is a thing you move through, so it takes the keyboard: arrows
-     step groups, a digit promotes or demotes that column, Enter accepts and
-     moves on. Held in a ref so the listener is bound once rather than rebound
-     on every mark. */
-  const live = useRef({ group, at, groups, toggle, go, onExit })
-  live.current = { group, at, groups, toggle, go, onExit }
+  /* The scroll is the navigation now, so the keyboard keeps only what the
+     scroll cannot do: Escape leaves. The arrow/digit chords went with the
+     paging — a digit meant "column N of the group on screen", and a scroll
+     has no single group on screen for it to mean. */
+  const live = useRef({ onExit })
+  live.current = { onExit }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return
-      const s = live.current
-      if (e.key === 'ArrowLeft') { e.preventDefault(); s.go(s.at - 1) }
-      else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); s.go(s.at + 1) }
-      else if (e.key === 'Escape') { e.preventDefault(); s.onExit() }
-      else if (/^[1-9]$/.test(e.key) && s.group) {
-        const img = s.group.images[Number(e.key) - 1]
-        if (img) { e.preventDefault(); s.toggle(s.group, img.name) }
-      }
+      if (e.key === 'Escape') { e.preventDefault(); live.current.onExit() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -243,15 +248,6 @@ export function Duplicates({ ds, onLightbox, onExit }: {
   return (
     <div className="dupes">
       <div className="opts dupes-bar">
-        {groups.length > 0 && (
-          <>
-            <button className="s" type="button" title="Previous group  ←"
-                    disabled={at === 0} onClick={() => go(at - 1)}>‹</button>
-            <b className="dupes-at">Group {at + 1} / {groups.length}</b>
-            <button className="s" type="button" title="Next group  →  or Enter"
-                    disabled={at >= groups.length - 1} onClick={() => go(at + 1)}>›</button>
-          </>
-        )}
         <span className="muted" id="dupes-count">
           {report
             ? `${groups.length} group${groups.length === 1 ? '' : 's'} of ${report.images} images`
@@ -261,8 +257,8 @@ export function Duplicates({ ds, onLightbox, onExit }: {
             screen — never what is marked, which is why the delete count is
             computed over every group rather than over this list. */}
         <div className="opt">
-          <select id="dupes-mode" value={mode} title="Which groups to step through"
-                  onChange={(e) => { setMode(e.target.value as typeof mode); setAt(0) }}>
+          <select id="dupes-mode" value={mode} title="Which groups to show"
+                  onChange={(e) => setMode(e.target.value as typeof mode)}>
             <option value="all">All groups</option>
             <option value="duplicate">Duplicates</option>
             <option value="similar">Similar</option>
@@ -307,6 +303,16 @@ export function Duplicates({ ds, onLightbox, onExit }: {
           <span>
             {report.reclaim ? `${fmtFileSize(report.reclaim)} recoverable` : 'nothing to reclaim'}
           </span>
+          {/* Should never render: everything the upload accepts, the scan
+              decodes. When it does, it is the difference between "the scan
+              missed obvious duplicates" and a named decode fault. */}
+          {!!report.unreadable?.length && (
+            <span className="review" title={report.unreadable.join(', ')}>
+              {report.unreadable.length} image{report.unreadable.length === 1 ? '' : 's'} could
+              not be decoded and {report.unreadable.length === 1 ? 'is' : 'are'} missing from
+              every group
+            </span>
+          )}
         </div>
       )}
 
@@ -321,35 +327,83 @@ export function Duplicates({ ds, onLightbox, onExit }: {
       ) : (
         <>
           {/* The rail is the map: one segment per group, filled where something
-              is marked, hollow where you have kept everything, outlined where
-              you are. It earns its row by being content rather than a control —
-              it is also how you jump to a group you remember. */}
+              is marked, hollow where you have kept everything. It earns its row
+              by being content rather than a control — and on a scroll it is
+              also how you jump to a group you remember. */}
           <div className="dupes-rail" id="dupes-rail">
             {groups.map((g, i) => {
               const cuts = g.images.length - kept(g, keep).length
               return (
                 <button key={g.key} type="button"
-                        className={['seg', i === at ? 'here' : '', cuts ? 'cuts' : 'clean',
+                        className={['seg', cuts ? 'cuts' : 'clean',
                                     seen.has(g.key) ? 'seen' : ''].filter(Boolean).join(' ')}
                         title={`Group ${i + 1} — ${g.kind}, ${g.images.length} images,`
                                + ` ${cuts} marked`}
-                        onClick={() => go(i)} />
+                        onClick={() => jump(g.key)} />
               )
             })}
           </div>
 
-          {group && <Group group={group} kept={kept(group, keep)}
-                           dataset={name!} onToggle={(img) => toggle(group, img)}
-                           onReset={() => setKeep((k) => ({
-                             ...k,
-                             [group.key]: group.kind === 'duplicate' ? [group.suggest]
-                               : group.images.map((i) => i.name),
-                           }))}
-                           onKeepAll={() => setKeep((k) => (
-                             { ...k, [group.key]: group.images.map((i) => i.name) }))}
-                           onLightbox={onLightbox} />}
+          {/* Every group, one scroll. What is marked anywhere is visible by
+              scrolling, which is the same fact the delete button's count
+              states — the two can be checked against each other. */}
+          {groups.map((g) => (
+            <SeenGate key={g.key} onSeen={() => markSeen(g.key)}
+                      refFor={(el) => {
+                        if (el) groupEls.current.set(g.key, el)
+                        else groupEls.current.delete(g.key)
+                      }}>
+              <Group group={g} kept={kept(g, keep)}
+                     dataset={name!} onToggle={(img) => toggle(g, img)}
+                     onReset={() => setKeep((k) => ({
+                       ...k,
+                       [g.key]: g.kind === 'duplicate' ? [g.suggest]
+                         : g.images.map((i) => i.name),
+                     }))}
+                     onKeepAll={() => setKeep((k) => (
+                       { ...k, [g.key]: g.images.map((i) => i.name) }))}
+                     onLightbox={onLightbox} />
+            </SeenGate>
+          ))}
         </>
       )}
+    </div>
+  )
+}
+
+/**
+ * Marks a group as seen once it has actually been in the viewport, for the
+ * confirm dialog's "N groups were never opened" caveat. Margin zero, unlike
+ * the thumbnail prefetch: "about to scroll in" is close enough to fetch a
+ * picture and not close enough to count as having looked at it.
+ */
+function SeenGate({ onSeen, refFor, children }: {
+  onSeen: () => void
+  refFor: (el: HTMLDivElement | null) => void
+  children: React.ReactNode
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const seenRef = useRef(onSeen)
+  seenRef.current = onSeen
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    if (typeof IntersectionObserver === 'undefined') {
+      seenRef.current()
+      return
+    }
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) {
+        seenRef.current()
+        io.disconnect()
+      }
+    })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
+  return (
+    <div ref={(el) => { box.current = el; refFor(el) }}>
+      {children}
     </div>
   )
 }
@@ -461,7 +515,7 @@ function Group({ group, kept, dataset, onToggle, onReset, onKeepAll, onLightbox 
                             : 'Mark this one for deletion')
                           : 'Keep this one too'}
                         onClick={() => onToggle(i.name)}>
-                  <img loading="lazy" alt="" src={thumbUrl(dataset, i.name)} />
+                  <Thumb url={thumbUrl(dataset, i.name)} />
                   <span className="mark">{on ? 'Keep' : 'Delete'}</span>
                   <span className="num">{n + 1}</span>
                 </button>
@@ -540,8 +594,7 @@ function Group({ group, kept, dataset, onToggle, onReset, onKeepAll, onLightbox 
       </div>
 
       <p className="muted dupes-keys">
-        Click a picture to move it between Keep and Delete · 1-9 the same ·
-        ← → between groups · Esc to leave.
+        Click a picture to move it between Keep and Delete · Esc to leave.
         {' '}The last Keep in a group cannot be dropped.
       </p>
     </div>

@@ -343,4 +343,9 @@ export type DupeReport = {
   /** Bytes accepting every suggestion would return. Duplicates only — nothing
    *  in a similar group is marked, so nothing in one is counted. */
   reclaim: number
+  /** Files the scan could not decode, by name. Should always be empty —
+   *  everything the upload accepts, the server decodes — so a name here is a
+   *  decode fault to surface, not a state to absorb: an unmeasured file is
+   *  silently missing from every group it belongs in. */
+  unreadable?: string[]
 }
