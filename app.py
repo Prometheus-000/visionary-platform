@@ -414,6 +414,28 @@ web_image = (
         # would mean a second build for a 200 kB pure-python package. The rule
         # is to split images when pins fight, not when responsibilities differ.
         "gdown==5.2.0",
+        # The similar class's eye: CLIP embeddings on CPU. onnxruntime rather
+        # than torch because this container's whole ML duty is one 85 MB int8
+        # encoder — a torch install is ~2 GB of image for the same matmul.
+        # numpy is named although onnxruntime would drag it in, because app.py
+        # imports it directly for the cosine matrix.
+        "onnxruntime==1.27.0",
+        "numpy==2.2.6",
+    )
+    # The model itself, pinned by revision and verified by checksum, baked at
+    # build time. Not a gear-menu download: the duplicate review must work on a
+    # fresh deploy with nothing chosen yet, and 85 MB is a dependency like a
+    # wheel, not a checkpoint anybody picks. Layered before the front end so
+    # editing a component does not re-pull it.
+    .run_commands(
+        "python -c \"import urllib.request; urllib.request.urlretrieve("
+        "'https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/"
+        "d15189d7028b43f1d3e65039190477f6af591c2a/onnx/vision_model_quantized.onnx',"
+        " '/opt/similar_clip_b32_q8.onnx')\"",
+        "python -c \"import hashlib; h = hashlib.sha256(open("
+        "'/opt/similar_clip_b32_q8.onnx', 'rb').read()).hexdigest(); "
+        "assert h == '583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0"
+        "ab9839299', h\"",
     )
     # The single biggest number in this file.
     #
@@ -4527,6 +4549,54 @@ CROP_SHARES = (0.9, 0.8)
 # nine variant pairs. Two names, so the next threshold argument moves only the
 # thing it is about.
 CROP_MATCH = {"dhash": 6, "phash": 16}
+
+# The similar class is measured by a learned embedding, and the hashes above
+# decide only the duplicate class. The two-class design survives; what moved is
+# which instrument reads the second class, and the lesson is worth its length:
+# **the editorial set the thresholds came from contained only exact copies**,
+# so SIMILAR_MATCH was drawn from data with no true near-duplicate in it — a
+# line calibrated on the wrong question. Measured against ground truth that
+# actually holds near-duplicates (INRIA Holidays, 500 groups of one scene
+# photographed from shifted viewpoints, 1,110,795 pairs), the hash band's best
+# case is 5% recall at 17 false pairs, and no threshold rescues it: at
+# d24/p26 recall is still 18% while false accepts pass 22,000. Gradient and
+# DCT hashes measure *storage* similarity, so they find copies and cannot find
+# the next shutter release — 199 of Holidays' same-scene pairs sit at cosine
+# 0.95+ with hash distances up to d40/p36, invisible to any band.
+#
+# 0.94, and both folders drew the line. Below it the embedding stops
+# separating "the same scene re-shot" from "the same shoot, different
+# content": on the 731-image editorial folder the band from 0.90 to 0.925
+# holds a pair of *different models* on one backdrop (0.923) and one model in
+# two *different looks* on one stage (0.925) — pairs the page must never call
+# alike, because a claim like that is how the classifier stops being believed
+# — and then nothing at all until the exact copies at 1.0. On Holidays, 0.94
+# still reads every burst-tier pair (the product's actual target) at a 7e-5
+# false rate; what it gives up is the walk-around-the-corner viewpoint band at
+# 0.86–0.93, where this instrument genuinely cannot tell a re-take from a
+# different photograph of the same trip — both folders put true and false
+# pairs at the same cosine there, so no line in that band is honest.
+#
+# Rerun the calibration before moving it: `tools/tune_dupes.py` for the hash
+# side, and a labelled folder (Holidays has groundtruth.json) for this one.
+SIMILAR_COSINE = 0.94
+
+# CLIP ViT-B/32's image encoder, int8 ONNX, baked into web_image at build time
+# from a pinned revision with its checksum asserted — see the layer in
+# `web_image`. Baked rather than downloaded under the gear because the
+# duplicate review must work on a fresh deploy with nothing chosen yet: 85 MB
+# is a dependency, not a checkpoint anybody picks. On a dev machine running
+# the tools the file is simply absent and `_embedder()` answers None — the
+# similar class then falls back to the hash band rather than disappearing.
+EMB_MODEL = "/opt/similar_clip_b32_q8.onnx"
+_EMB_MEAN = (0.48145466, 0.4578275, 0.40821073)
+_EMB_STD = (0.26862954, 0.26130258, 0.27577711)
+# One-slot cache: "session" appears after the first attempt, holding the ONNX
+# session or None. A dict rather than a global-with-lock so the tools can pull
+# this without seeding `threading`; the benign race is two threads building
+# one session each and the second assignment winning.
+_EMB_STATE: dict[str, Any] = {}
+
 FINGERPRINT_FILE = "fingerprints.json"
 # How long one scan request will spend measuring before it answers with what it
 # has and asks to be called again.
@@ -4548,7 +4618,8 @@ SCAN_BUDGET_S = 10.0
 # is a decode cache, and a rescan is the only thing a wrong one costs.
 # 5: the decoder itself changed — Pillow 11.3 reads the AVIFs 11.1 could not,
 # so every entry (and every cached failure) measured under 11.1 is stale.
-FINGERPRINT_VERSION = 5
+# 6: fingerprints grew the CLIP embedding the similar class now reads.
+FINGERPRINT_VERSION = 6
 # Which encoding to prefer when two files are the same picture at the same size
 # and the same weight. Lossless first: a PNG re-saved as JPEG can be recovered
 # from neither direction, and the tie only ever arises between an original and
@@ -4648,6 +4719,91 @@ def _crop_variants(im) -> list:
     return out
 
 
+def _embedder():
+    """
+    The ONNX session behind the similar class, or None where the model is not.
+
+    None is a mode, not an error: the tools run on machines whose python has no
+    onnxruntime and whose disk has no model, and they still have to classify —
+    they just fall back to the hash band for the similar class. The deployed
+    image always has both, so a None *there* is worth the printed line.
+    """
+    if "session" not in _EMB_STATE:
+        sess = None
+        try:
+            import onnxruntime
+
+            if Path(EMB_MODEL).is_file():
+                sess = onnxruntime.InferenceSession(
+                    EMB_MODEL, providers=["CPUExecutionProvider"])
+            else:
+                print(f"[dupes] no similarity model at {EMB_MODEL}; "
+                      "the similar class falls back to the hash band", flush=True)
+        except Exception as exc:
+            print(f"[dupes] similarity model unavailable ({exc}); "
+                  "the similar class falls back to the hash band", flush=True)
+        _EMB_STATE["session"] = sess
+    return _EMB_STATE["session"]
+
+
+def _embed(up) -> str | None:
+    """
+    A unit-normalised CLIP image embedding, quantised to int8 and base64ed.
+
+    Quantised because the fingerprint cache is JSON read and rewritten whole
+    per scan request: 512 floats print at ~4 KB an image where the int8 bytes
+    are 684 characters, and at 1/127 per dimension the quantisation moves a
+    cosine by less than a thousandth — nothing against a threshold of 0.90.
+
+    Takes the already-upright image `_fingerprint` is holding open, so the
+    embedding can never disagree with the hashes about which way is up.
+    """
+    sess = _embedder()
+    if sess is None:
+        return None
+    try:
+        import numpy as np
+        from PIL import Image
+
+        im = up.convert("RGB")
+        w, h = im.size
+        s = 224 / min(w, h)
+        im = im.resize((max(224, round(w * s)), max(224, round(h * s))),
+                       Image.BICUBIC)
+        w, h = im.size
+        left, top = (w - 224) // 2, (h - 224) // 2
+        x = np.asarray(im.crop((left, top, left + 224, top + 224)),
+                       dtype=np.float32) / 255.0
+        # float32 arrays, not the bare tuples: numpy promotes float32 minus a
+        # python tuple to float64, and the session refuses a double tensor.
+        x = ((x - np.asarray(_EMB_MEAN, np.float32))
+             / np.asarray(_EMB_STD, np.float32))
+        v = sess.run(None, {"pixel_values": x.transpose(2, 0, 1)[None]})[0][0]
+        v = v / (float(np.linalg.norm(v)) or 1.0)
+        q = np.clip(np.round(v * 127.0), -127, 127).astype(np.int8)
+        return base64.b64encode(q.tobytes()).decode("ascii")
+    except Exception as exc:
+        # An image the hashes could measure still fingerprints without its
+        # embedding; the grouping falls back for the whole set and says so.
+        print(f"[dupes] embedding failed: {exc}", flush=True)
+        return None
+
+
+def _emb_vec(rec: dict[str, Any]):
+    """The stored embedding back as a unit numpy vector, or None."""
+    b = rec.get("emb")
+    if not b:
+        return None
+    try:
+        import numpy as np
+
+        q = np.frombuffer(base64.b64decode(b), dtype=np.int8).astype(np.float32)
+        n = float(np.linalg.norm(q))
+        return q / n if n else None
+    except Exception:
+        return None
+
+
 def _fingerprint(img: Path) -> dict[str, Any] | None:
     """One image measured: its hashes, its bytes, its pixels, its encoding."""
     from PIL import Image
@@ -4667,6 +4823,9 @@ def _fingerprint(img: Path) -> dict[str, Any] | None:
             variants = [[_dhash(v), _phash(v)] for v in _crop_variants(up)]
             rec = {"dhash": variants[0][0], "phash": variants[0][1],
                    "variants": variants, "sharpness": _sharpness(up)}
+            emb = _embed(up)
+            if emb:
+                rec["emb"] = emb
     except Exception:
         # A file PIL cannot open is not a reason to fail the scan — but it is
         # never a normal state either: every extension the upload accepts is an
@@ -4909,7 +5068,7 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
                 "groups": [], "images": len(prints),
                 "unreadable": unreadable,
                 "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
-                               "crop": CROP_MATCH},
+                               "similar_cosine": SIMILAR_COSINE, "crop": CROP_MATCH},
                 "summary": {"duplicate_groups": 0, "duplicate_images": 0,
                             "similar_groups": 0, "similar_images": 0},
                 "reclaim": 0, "_wrote": wrote}
@@ -4923,6 +5082,24 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
             (tuple(tuple(v) for v in fp["variants"]), fp["sha"]), []).append(name)
     keys = list(by_print)
 
+    # The similar class reads the embeddings when every image has one — all or
+    # nothing, because a set half-measured by each instrument would group into
+    # two different definitions of "alike". A build without the model writes no
+    # embeddings, and the class falls back to the hash band it used to be.
+    reps = [by_print[k][0] for k in keys]
+    vecs = [_emb_vec(prints[r]) for r in reps]
+    cosmat = None
+    if vecs and all(v is not None for v in vecs):
+        import numpy as np
+
+        cosmat = np.stack(vecs) @ np.stack(vecs).T
+    elif any(v is not None for v in vecs):
+        missing = sum(1 for v in vecs if v is None)
+        print(f"[dupes] {missing} of {len(vecs)} fingerprints lack embeddings; "
+              "the similar class falls back to the hash band", flush=True)
+    emb_of = ({n: v for k, v in zip(keys, vecs) for n in by_print[k]}
+              if cosmat is not None else {})
+
     dup_edges: list[tuple[str, str]] = []
     sim_edges: list[tuple[str, str]] = []
     evidence: dict[tuple[str, str], dict[str, Any]] = {}
@@ -4934,6 +5111,17 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
         for j in range(i + 1, len(keys)):
             a, b = by_print[keys[i]][0], by_print[keys[j]][0]
             link = _link(prints[a], prints[b])
+            if cosmat is not None and link["kind"] != "duplicate":
+                # The embedding decides similar; the crop pass keeps its say
+                # because a hard crop moves the global embedding while the
+                # centre-crop hashes still land it. The hash similar band is
+                # deliberately *not* consulted here — it is the line calibrated
+                # on a set with no true near-duplicates in it.
+                cos = float(cosmat[i, j])
+                link["cosine"] = round(cos, 3)
+                link["kind"] = ("similar"
+                                if cos >= SIMILAR_COSINE
+                                or "cropped" in link["transforms"] else "")
             if not link["kind"]:
                 continue
             evidence[(a, b)] = link
@@ -4967,7 +5155,16 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
         for r in rows:
             link = (_link(prints[keeper["name"]], prints[r["name"]])
                     if r["name"] != keeper["name"] else None)
+            # The number that actually accepted an embedding-linked pair, so
+            # the Match row can quote it instead of quoting hash distances
+            # that rejected the pair — the crop rule's own lesson.
+            cos = None
+            if link is not None and emb_of:
+                va, vb = emb_of.get(keeper["name"]), emb_of.get(r["name"])
+                if va is not None and vb is not None:
+                    cos = round(float(va @ vb), 3)
             r.update(
+                cosine=cos,
                 dhash_distance=link["dhash"] if link else 0,
                 phash_distance=link["phash"] if link else 0,
                 same_file=bool(link and link["same_file"]),
@@ -5010,7 +5207,7 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
         "unreadable": unreadable,
         "groups": groups,
         "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
-                       "crop": CROP_MATCH},
+                       "similar_cosine": SIMILAR_COSINE, "crop": CROP_MATCH},
         "summary": {
             "duplicate_groups": len(dupes),
             "duplicate_images": sum(len(g["images"]) for g in dupes),

@@ -51,14 +51,23 @@ def main(argv: list[str]) -> int:
         return 2
 
     t0 = time.time()
-    prints, wrote, _ = APP["_fingerprints"](folder)
+    prints, wrote, _, unreadable = APP["_fingerprints"](folder)
     scan_s = time.time() - t0
     n = len(prints)
     if n < 2:
         print(f"{n} images — nothing to compare")
         return 2
     print(f"{n} images fingerprinted in {scan_s:.1f}s "
-          f"({'measured' if wrote else 'from cache'}, {scan_s / n * 1000:.0f}ms each)\n")
+          f"({'measured' if wrote else 'from cache'}, {scan_s / n * 1000:.0f}ms each)")
+    if unreadable:
+        print(f"{len(unreadable)} could not be decoded and are outside every "
+              f"number below: {', '.join(unreadable)}")
+    with_emb = sum(1 for v in prints.values() if v.get("emb"))
+    if with_emb < n:
+        print(f"{n - with_emb} of {n} lack embeddings, so the similar class "
+              "here runs on the hash band — the deployed image carries the "
+              "model and does not")
+    print()
 
     names = list(prints)
     dup, sim, crop, none_d, none_p, rejects = [], [], [], [], [], []

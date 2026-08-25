@@ -17,6 +17,7 @@ loudly rather than quietly hand back one function fewer.
 """
 
 import ast
+import base64
 import hashlib
 import json
 import math
@@ -54,7 +55,8 @@ def pull(names: set[str]) -> dict:
     # inside the functions that need it, so a caller with no Pillow can still
     # pull them and only pays when it calls one.
     ns: dict = {"Any": typing.Any, "Path": Path, "json": json,
-                "hashlib": hashlib, "math": math, "re": re, "time": time}
+                "hashlib": hashlib, "math": math, "re": re, "time": time,
+                "base64": base64}
     exec(compile(ast.Module(body=body, type_ignores=[]), str(APP), "exec"), ns)
     return ns
 
@@ -132,9 +134,11 @@ DUPES = {
     "IMAGE_EXTS", "THUMB_DIR", "FINGERPRINT_FILE", "FINGERPRINT_VERSION",
     "SCAN_BUDGET_S",
     "DUPLICATE_MATCH", "SIMILAR_MATCH", "CROP_SHARES", "CROP_MATCH",
+    "SIMILAR_COSINE", "EMB_MODEL", "_EMB_MEAN", "_EMB_STD", "_EMB_STATE",
     "_FORMAT_RANK",
     "_upright", "_dataset_images", "_caption_of",
     "_dhash", "_phash", "_sharpness", "_crop_variants",
+    "_embedder", "_embed", "_emb_vec",
     "_fingerprint", "_fingerprints", "_link", "_components",
     "_keep_rank", "_keep_reason", "_duplicate_groups",
 }

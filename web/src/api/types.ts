@@ -304,6 +304,10 @@ export type DupeImage = {
    *  the threshold that accepted the pair — these are what accepted it. */
   crop_dhash: number | null
   crop_phash: number | null
+  /** Embedding similarity to the keeper, when the scan ran with the model.
+   *  For a similar group this is the number that accepted the pair — the hash
+   *  distances beside it did not — so the Match row quotes it. */
+  cosine?: number | null
 }
 
 /**
@@ -333,7 +337,7 @@ export type DupeReport = {
   total?: number
   images: number
   groups: DupeGroup[]
-  thresholds: Record<string, { dhash: number; phash: number }>
+  thresholds: Record<string, { dhash: number; phash: number } | number>
   summary: {
     duplicate_groups: number
     duplicate_images: number

@@ -353,19 +353,33 @@ pairs to "possible" sent *most real duplicates* (exports at one size from one
 tool) into a review list where nothing is preselected, so the keeper flow never
 ran on the case it exists for.
 
-**Both hashes must agree, and they are not doing the same job.** dHash reads edge
-gradients, pHash reads low-frequency DCT energy, and they fail independently, so
-an AND is far tighter than either alone and much tighter than accepting on
-whichever is closer. On that same folder `dhash <= 6` *alone* isolates exactly
-the three real duplicates with a 7-bit gap to anything else — but the pair at
-that gap is `d7 p32`, two entirely unrelated photographs, which is precisely what
-the pHash half refuses. The pHash bound is then set by the other thing it has to
-survive: a re-grade barely moves dHash (a quarter-stop is 3 bits, 1.4x is 4)
-while pHash climbs to 16. Swept from 10 to 24 the duplicate count never leaves 3,
-so the loosening is free and is what makes "the same picture, exported brighter"
-read as a copy. The gap between the classes is therefore carried by dHash, 6
-against 12 — and every burst-shaped pair in that folder measures 8 to 11, which
-is the split the data drew rather than one chosen for it.
+**Both hashes must agree, and they decide only the duplicate class.** dHash
+reads edge gradients, pHash reads low-frequency DCT energy, and they fail
+independently, so an AND is far tighter than either alone and much tighter than
+accepting on whichever is closer. On that same folder `dhash <= 6` *alone*
+isolates exactly the three real duplicates with a 7-bit gap to anything else —
+but the pair at that gap is `d7 p32`, two entirely unrelated photographs, which
+is precisely what the pHash half refuses. The pHash bound is then set by the
+other thing it has to survive: a re-grade barely moves dHash (a quarter-stop is
+3 bits, 1.4x is 4) while pHash climbs to 16. Swept from 10 to 24 the duplicate
+count never leaves 3, so the loosening is free and is what makes "the same
+picture, exported brighter" read as a copy.
+
+**The similar class is read by an embedding, because the hashes cannot read
+it — and the calibration lesson is the part to keep.** The editorial folder
+the thresholds came from contained only exact copies, so `SIMILAR_MATCH` was a
+line drawn from data with no true near-duplicate in it. Measured against
+ground truth that has them (INRIA Holidays, 500 same-scene groups, 1.1M
+pairs), the hash band's best case is 5% recall, no threshold rescues it, and
+199 burst-tier pairs sit at hash distances up to d40/p36 — a hash measures
+*storage* similarity and cannot see the next shutter release. So similar is
+now cosine over a CLIP ViT-B/32 embedding (int8 ONNX on CPU, baked into
+`web_image` by pinned revision and checksum), at `SIMILAR_COSINE = 0.94`:
+below that line both calibration folders put true re-takes and false pairs —
+two different models on one backdrop at 0.923, one model in two looks at
+0.925 — at the same cosine, so no lower line is honest. The hash band
+survives only as the fallback where the model is absent (the tools on a dev
+machine), and `SIMILAR_MATCH` is its constant.
 
 **Crop matching is the spec's own scheme on a leash, and the leash is the whole
 reason it is safe.** Two centre crops per image, compared every way but

@@ -468,8 +468,16 @@ function Group({ group, kept, dataset, onToggle, onReset, onKeepAll, onLightbox 
         // reads "d undefined p undefined" — which is how this was found.
         : typeof i.crop_dhash === 'number'
           ? `${i.transforms.join(', ')} · crop d${i.crop_dhash} p${i.crop_phash}`
-          : [i.transforms.join(', ') || 'same framing',
-             `d${i.dhash_distance} p${i.phash_distance}`].join(' · ')
+          // A similar pair accepted by the embedding quotes the number that
+          // accepted it — its hash distances rejected the pair, and quoting
+          // only those reads as the page contradicting itself (the crop
+          // row's own rule). Duplicate pairs keep the hash story: those
+          // distances are what accepted them.
+          : !dup && typeof i.cosine === 'number'
+            ? [i.transforms.join(', ') || 'the same scene',
+               `${Math.round(i.cosine * 100)}% alike`].join(' · ')
+            : [i.transforms.join(', ') || 'same framing',
+               `d${i.dhash_distance} p${i.phash_distance}`].join(' · ')
 
   return (
     <div className="dupes-group" id="dupes-group">
