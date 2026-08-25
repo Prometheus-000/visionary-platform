@@ -250,7 +250,13 @@ VIDEO_GPUS = ("H100", "H200")
 # *trailing space*. What has no migration is the arithmetic. In the range this
 # bump crossed, `comfy/ldm/minimax/model.py` moved +150/-64 with every name
 # intact.
-COMFY_SHA = "783545f689a0af730065994b46b382ae24844c99"  # 2026-08-22, +110
+COMFY_SHA = "924743af083c151296cc16f925aeab113b6484e8"  # 2026-08-22, +111
+# The +1 over the previous pin is the entire point of the bump: it is the
+# "Minimax-H3: Add missing special tokens" fix (#15808), twelve lines in
+# comfy/text_encoders/minimax.py that end the gibberish speech mis-
+# tokenized audio conditioning produced. The eleven commits upstream of
+# it at bump time were partner nodes and dependency churn touching
+# nothing tools/upstream.py watches, so they stay unbought.
 COMFY = Path("/opt/comfyui")
 COMFY_PORT = 8188
 
