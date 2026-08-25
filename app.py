@@ -84,6 +84,18 @@ volume = modal.Volume.from_name(VOLUME_NAME, version=2, create_if_missing=True)
 # single-stream or 8-way alike, which priced a cold H3 start at 240 seconds of
 # its 300 reading the checkpoint. The same probe read this volume at 1.61.
 #
+# **1.61 is the steady-state number, not the first one.** A file freshly seeded
+# onto this volume reads once at roughly a tenth of that, then is fast forever
+# after. On 2026-08-25 the migration re-downloaded every weight, and Krea 2's
+# one slow read landed four hours later on a real render: 8.5 GB of text
+# encoder at 87 MB/s, then 24 GB of DiT at 81 MB/s — the second charged to step
+# 0 of 8, where comfy-aimdo shows it only as "Model Initializing" and the tqdm
+# bar sits at 0% for five minutes. Measured against the 1.61 above it read as a
+# regression, and three theories died before the next cold start came back
+# normal. H3 looked immune purely because tools/cold_start.py had already read
+# its weights that morning. **Read every weight once after seeding a volume**,
+# or the first person to render pays for it and gets no hint why.
+#
 # v2 is Beta, and Modal's own docs decline to promise no data loss — which is
 # exactly why *only* weights are here. A weight is a receipt: every file on
 # this volume re-downloads from the gear. Datasets, LoRAs and characters are
@@ -10081,10 +10093,15 @@ def web():
         for the same quota as the container that *is* about to be asked for
         something.
 
-        What it buys now is the only thing left worth buying: ComfyUI started
-        and the checkpoint resident, so the first Generate is not also a cold
-        start. It used to be described as staging the rewrite weights too, and
-        that is gone with them — this container loads one model again.
+        What it buys is exactly what `enter` does and nothing more: ComfyUI
+        started and its custom nodes checked, about 25 seconds. **It does not
+        leave the checkpoint resident** — this docstring claimed it did until
+        2026-08-25, when a cold start spent 400 seconds loading weights that a
+        page-load knock was supposed to have made resident. Weights load when
+        the first graph asks for them, and that is deliberate: `setup` above
+        carries the reason, which is that a model loaded at `enter` is loaded
+        as a ComfyUI graph and holds the single queue for as long as it takes,
+        at the exact moment a cold container is about to be asked for a render.
 
         `spawn`, so the page never waits, and errors are swallowed: a warm-up
         that fails is a slower first press, not something to put on screen.
