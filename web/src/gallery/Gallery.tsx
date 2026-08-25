@@ -138,6 +138,7 @@ export function Gallery({
   total,
   behind,
   open,
+  drawerOpen,
   onClose,
   onReload,
   onDropped,
@@ -151,6 +152,11 @@ export function Gallery({
   /** The listing stopped catching up. Said on the Refresh button and nowhere else. */
   behind: boolean
   open: boolean
+  /** Whether the drawer beside the canvas is showing. The drawer stays mounted
+   *  through the collapse so the reflow animates — but its two dozen covers
+   *  must not be fetched behind a closed panel: on the deployed container that
+   *  was ~25 requests on first paint, before the person did anything. */
+  drawerOpen: boolean
   onClose: () => void
   /** May hand back the reload it starts, and should: `remove` and `purge` stay busy until
    *  the listing has actually come back, and a caller that returns `void` ends that wait at
@@ -298,7 +304,9 @@ export function Gallery({
               <IconExpand />
             </button>
           </div>
-          <div id="drawer-grid" className="grid">{cards(items.slice(0, 24), items)}</div>
+          <div id="drawer-grid" className="grid">
+            {(drawerOpen || open) ? cards(items.slice(0, 24), items) : null}
+          </div>
           {/* A card's Delete is reachable from the drawer with the full gallery shut, and a
               failure rendered only inside `#gal-full` would then be painted behind a panel
               nobody is looking at — silence, which is what replacing the alert must not

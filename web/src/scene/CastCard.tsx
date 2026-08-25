@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { useSettled } from '../ui/gesture'
 import { useStore } from '../store'
+import { save } from './arsenal'
 import { Material } from './Material'
 import { RETENTION, RETENTION_LABEL, handleOf, type CastMember } from './model'
 
@@ -29,6 +30,10 @@ import { RETENTION, RETENTION_LABEL, handleOf, type CastMember } from './model'
  * own rect, and closing on nothing but a press outside it or Escape.
  */
 export function CastCard({ member }: { member: CastMember }) {
+  // 'idle' → 'saving' → 'saved', falling back to idle after a beat. A save is a
+  // network write; a button that gives no sign it worked teaches people to
+  // press it three times.
+  const [kept, setKept] = useState<'idle' | 'saving' | 'saved'>('idle')
   const s = useStore()
   const box = useRef<HTMLDivElement>(null)
   const name = useRef<HTMLInputElement>(null)
@@ -133,6 +138,28 @@ export function CastCard({ member }: { member: CastMember }) {
 
       <label>References</label>
       <Material member={member} />
+
+      {/* **Save is the Arsenal's whole write surface, and it is deliberate.**
+          "It never remembers unless told" — this button is the telling. The
+          character lands at characters/{name}/ on the volume as plain files
+          plus a note.txt, readable in a terminal with no app, and comes back
+          by typing @name in any future session. Only once there is a name and
+          something attached: a character with no files is a name, and a name
+          is already in your head. */}
+      {handleOf(member.name) !== '' && member.refs.length > 0 && (
+        <button type="button" className="tkeep" disabled={kept !== 'idle'}
+                title={`Save @${member.name} to the arsenal — recall them by typing @${member.name} in any session. Saving again replaces.`}
+                onClick={() => {
+                  setKept('saving')
+                  void save(member).then((err) => {
+                    if (err) { alert(err); setKept('idle'); return }
+                    setKept('saved')
+                    window.setTimeout(() => { setKept('idle') }, 1600)
+                  })
+                }}>
+          {kept === 'saving' ? 'Saving…' : kept === 'saved' ? 'Saved ✓' : 'Save to arsenal'}
+        </button>
+      )}
 
       {/* **Only once there is something to retain.** This sat on the card from
           the moment a name existed — a control asking how much of a reference

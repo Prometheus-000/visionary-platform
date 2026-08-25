@@ -98,17 +98,15 @@ export function SourcePane() {
   return (
     <div className="tsource">
       <div className="tsource-h">
-        <span>{s.doc === null ? 'compiled' : 'edited'}</span>
-        {s.doc === null
-          // The task the document was built for. It is the one fact about a
-          // six-field block that is not visible by reading it, because the
-          // difference between ref mode and base mode is which fields are absent.
-          ? <span className="tag">{text.startsWith('subject_definitions') ? 'ref2va' : 'base'}</span>
-          : (
-            <button type="button" className="tag warn" onClick={() => { s.setDoc(null) }}>
-              reattach
-            </button>
-          )}
+        {/* A sentence, not a status row. "COMPILED · REF2VA" was the devtools
+            costume the owner never asked for — what this header owes the
+            reader is whose words are running, said the way the app talks. */}
+        <span>{s.doc === null ? 'What the model reads' : 'What the model reads — your edit'}</span>
+        {s.doc !== null && (
+          <button type="button" className="tag warn" onClick={() => { s.setDoc(null) }}>
+            let the scene write it again
+          </button>
+        )}
         <button type="button" className="x" title="Close (Escape)"
                 onClick={() => { s.setDocOpen(false) }}>×</button>
       </div>

@@ -97,6 +97,18 @@ export type CastRef = {
    * trying to express with a fixed vocabulary of five.
    */
   note?: string
+  /**
+   * This picture is a labeled character reference sheet.
+   *
+   * A *typed* reference rather than a note, because the division of labour
+   * turns on it: templated instruction text — the sheet citation, the audio
+   * lines, the alignment sentences, the retention grammar — is the compiler's
+   * to write, and everything carrying intent is the person's, verbatim. The
+   * mark is the one bit that says which sentence this picture gets. Cast sets
+   * it automatically (the app made the sheet, so provenance is certain); a
+   * sheet arriving as a file is marked with one click on its row.
+   */
+  sheet?: boolean
   /** Only read for video and audio — see `VIDEO_ROLES`. Left at `reference`,
    *  which is what both tables default to and what the server assumes. */
   role?: string
@@ -431,6 +443,7 @@ export function readScene(
       const index = at(f.id, f.kind)
       return index < 0 ? [] : [{ kind: f.kind, index, slots: r.slots,
                                  ...(r.note ? { note: r.note } : {}),
+                                 ...(r.sheet ? { sheet: true } : {}),
                                  role: r.role ?? 'reference' }]
     }),
   }))

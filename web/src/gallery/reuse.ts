@@ -28,7 +28,13 @@ function restore(s: ReturnType<typeof useStore.getState>,
   // is two different shapes and `prompt_typed` is what both were written from.
   // The rows come back one per line, which is exactly how `typedProse` joined
   // them — a round trip rather than a re-parse.
-  if (s.kind === 'video') s.setProse(typed)
+  //
+  // Re-read, never `s.kind`: `s` is the snapshot from before `setKind`, so on
+  // a video reuse it still says 'image' — and the typed sentence went into the
+  // image buffer `setKind` had just stashed. The pills and the chips landed on
+  // the live side while the prose vanished into the other one, which read as
+  // "Reuse lost my prompt".
+  if (useStore.getState().kind === 'video') s.setProse(typed)
   else s.setPrompt(typed)
   useStore.setState({ loras: chips })
 }

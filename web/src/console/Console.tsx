@@ -136,10 +136,11 @@ export function Console({
   return (
     <div className="console" ref={box}
          // The discoverable half of view source, and the reason the composer can
-         // carry no button for it: devtools is a chord *and* a context menu, and
-         // one of the two has to be findable without being told. Only where there
-         // is a document to look at — on the image side the compiled prompt is a
-         // fold under the sentence, and `#shot-peek` is still that.
+         // carry no button for it: a chord *and* a context menu, and one of
+         // the two has to be findable without being told. Reading the document
+         // is the caret's job now on both sides — `#shot-peek` folds it inline,
+         // because a caret is a promise — so what the chord and this menu reach
+         // is the *editable* pane, where detaching is the point.
          onContextMenu={image ? undefined : (e) => {
            // Not over a control that has something of its own to offer: a
            // right-click on a text field is the browser's spelling menu and on a
@@ -202,6 +203,13 @@ export function Console({
           place for the dimming rules to drift. */}
       {pal.open && <Palette anchor={pal.anchor} onClose={pal.close} />}
 
+      {/* Image only — on the video side a LoRA is a chip on the one rail. Directly
+          under the strip that holds `+ LoRA`, because the disclosure is the whole
+          answer a pick gets: parked below the plates it appeared at the page's far
+          bottom-left corner, 400px from the menu that just closed, which reads as a
+          click that did nothing. */}
+      {image && <LoraBox />}
+
       {/* **Composition first, then what you can attach to it.** The rail is the
           composer — its doors make the cast, open the vocabulary and plug in a
           LoRA — so it reads directly under the timeline it acts on. The source
@@ -219,10 +227,6 @@ export function Console({
           and the whole feature was filed as broken with the engine healthy
           underneath it. See `regions/PlateRow`. */}
       {image && <PlateRow />}
-      {/* Image only. On the video side a LoRA is a chip on the one rail beside the
-          cast and the pills — the disclosure is a fold under a *prompt box*, and
-          that side no longer has one. */}
-      {image && <LoraBox />}
       {/* Rooted on its chip and floating over the canvas, so the depth costs the
           console nothing. A child of `.console` rather than of the rail, which is a
           masked scroller and would clip it. */}
@@ -333,10 +337,22 @@ function VideoNote() {
   }
   const n = refBudget(s).total
   const framed = !!(s.keyframe.first || s.keyframe.last)
+  // `autoFirst` is whether the frame was the app's doing — the kind-switch
+  // carrying the canvas still over. A warning about a decision the person
+  // never made has to name the actor, or it reads as a warning about a
+  // control they cannot find; and the courtesy itself is announced, because a
+  // silent attachment is a tile somebody discovers already filled.
   const text = n
-    ? (framed ? `${n} reference${n > 1 ? 's' : ''} — keyframes are ignored for this run.` : '')
+    ? (framed
+        ? `${n} reference${n > 1 ? 's' : ''} — `
+          + (s.autoFirst
+            ? 'your cast’s photos win over the still the switch carried in.'
+            : 'keyframes are ignored for this run.')
+        : '')
     : (s.keyframe.first
-        ? `${supports(s).references ? '' : 'Image-to-video. '}`
+        ? (s.autoFirst
+            ? 'Starting from your last still — clear its tile below to start cold. '
+            : `${supports(s).references ? '' : 'Image-to-video. '}`)
           + 'Canvas follows the first frame’s aspect ratio.'
         : '')
   return <span id="vid-note">{text}</span>

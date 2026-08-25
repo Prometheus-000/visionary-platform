@@ -41,7 +41,10 @@ import {
 } from './scene/model'
 
 export type Kind = 'image' | 'video'
-export type Mode = 'generate' | 'train'
+// 'sheet' is the character-sheet composer — its own surface, entered by a
+// door like Train, because composing a reference sheet is neither generating
+// nor training and squatting in either room made it a popover.
+export type Mode = 'generate' | 'train' | 'sheet'
 
 /** What the region layer draws. See `Store.edit` for what each one means and why
  *  editing a box's contents and redrawing the box are two states rather than one. */
@@ -495,7 +498,7 @@ export type Store = {
   /** A note on one attached file — what that picture or recording provides.
    *  Keyed by file rather than by slot, because a slot is only the channel now
    *  and two pictures of one subject share it. */
-  patchRef: (castId: string, fileId: string, patch: { note?: string }) => void
+  patchRef: (castId: string, fileId: string, patch: { note?: string; sheet?: boolean }) => void
   /** Remove one attached file. By file, not by slot: every picture shares the
    *  `image` channel now, so removing by slot would take all of them. */
   detachRef: (castId: string, fileId: string) => void
@@ -508,6 +511,13 @@ export type Store = {
    *  removing the second chip has to remove the second role with it. */
   refRoles: string[]
   setKeyframe: (slot: keyof Keyframes, b64: string | null) => void
+  /** True while `keyframe.first` is the still the kind-switch carried over on
+   *  its own — see the auto-attach effect in App. The note line reads it to
+   *  name the actor: a warning about a frame the app attached is a warning
+   *  about a decision the person never made, and has to say so. Cleared by any
+   *  hand-write of the first slot, which is what `setKeyframe` does. */
+  autoFirst: boolean
+  setAutoFirst: (on: boolean) => void
   setRefs: (refs: string[], roles?: string[]) => void
   setRefVids: (v: string[]) => void
   setRefRoles: (r: string[]) => void
@@ -775,7 +785,14 @@ export const useStore = create<Store>((set, get) => ({
   refs: [],
   refVids: [],
   refRoles: [],
-  setKeyframe: (slot, b64) => set((s) => ({ keyframe: { ...s.keyframe, [slot]: b64 } })),
+  autoFirst: false,
+  setAutoFirst: (autoFirst) => set({ autoFirst }),
+  // Any write of the first slot is a hand on the control, so the auto flag
+  // drops; the auto-attach effect re-raises it after its own write.
+  setKeyframe: (slot, b64) => set((s) => ({
+    keyframe: { ...s.keyframe, [slot]: b64 },
+    ...(slot === 'first' ? { autoFirst: false } : null),
+  })),
   setRefs: (refs, roles) => set((s) => ({ refs, refRoles: roles ?? s.refRoles })),
   setRefVids: (refVids) => set({ refVids }),
   setRefRoles: (refRoles) => set({ refRoles }),

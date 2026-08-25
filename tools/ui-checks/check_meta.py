@@ -47,11 +47,20 @@ def check(label, ok, detail=""):
 # for `wantVideo` to find and this file reports six failures for a page that is
 # working. Reaching the sheet means reaching the drawer; the check has to do what
 # a person does.
+# By the sidecar, not by the mounted media. This used to find "a card that
+# used the shot palette" by looking for a <video> — a proxy that depends on
+# IntersectionObserver having fired, which this harness's browser sometimes
+# never delivers (check_gallery already guards the same quirk). The drawer is
+# items.slice(0, 24) in listing order, so the listing itself says which card
+# is which, and the fact being tested — pills in the sidecar — is the fact
+# used to pick the card.
 OPEN_MENU = """
-(wantVideo) => {
-  const cards = [...document.querySelectorAll('#drawer-grid .gal')];
-  const card = wantVideo ? cards.find(c => c.querySelector('video'))
-                         : cards.find(c => c.querySelector('img'));
+async (withPills) => {
+  const g = await (await fetch('/api/gallery')).json();
+  const idx = g.items.slice(0, 24).findIndex(i =>
+    withPills ? (i.shot || []).length > 0
+              : !(i.shot || []).length && i.kind === 'image');
+  const card = [...document.querySelectorAll('#drawer-grid .gal')][idx];
   if (!card) return false;
   (card.querySelector('[data-act=menu]') || card.querySelector('.more')).click();
   return true;
@@ -139,6 +148,12 @@ with sync_playwright() as pw:
     # No pills, no document: the compiler returns the typed text byte-for-byte,
     # so an older card has only `prompt` and the sheet must not go blank.
     pg.reload(wait_until="networkidle")
+    # A reload shuts the drawer, and a shut drawer renders no cards now — so it
+    # is reopened the way a person would reopen it.
+    if not pg.evaluate(
+        "() => document.querySelector('#t-drawer')?.classList.contains('on')"
+    ):
+        pg.click("#t-drawer")
     pg.wait_for_timeout(1500)
     pg.wait_for_selector("#drawer-grid .gal", timeout=25_000)
     pg.evaluate(OPEN_MENU, False)

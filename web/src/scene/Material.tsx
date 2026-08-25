@@ -77,7 +77,29 @@ export function Material({ member }: { member: CastMember }) {
             : <span className="tkind" title={file!.name}>
                 {file!.kind === 'audio' ? '♪' : '▸'}
               </span>}
-          <input className="trefnote" value={ref.note ?? ''} spellCheck={false}
+          {/* **The mark is one click, and the marked row shows the derived
+              sentence instead of asking for one.** A sheet's citation is
+              templated — the compiler writes it — so offering the note field
+              on a marked row would be asking for words the run will not read.
+              Grey and uneditable is the honest state: derived, always
+              visible. Everything intent-shaped stays typed; everything the
+              format dictates is written for you. */}
+          {file!.kind === 'image' && (
+            <button type="button"
+                    className={`tsheet${ref.sheet ? ' on' : ''}`}
+                    title={ref.sheet
+                      ? 'Marked as their character sheet — the citation is written for you. Click to unmark.'
+                      : 'Mark as their character sheet — the citation gets written for you.'}
+                    onClick={() => { s.patchRef(member.id, ref.fileId, { sheet: !ref.sheet }) }}>
+              sheet
+            </button>
+          )}
+          {ref.sheet
+            ? <span className="trefnote derived"
+                    title="The compiler cites the sheet — its views and written notes define their appearance.">
+                views &amp; notes define them — written for you
+              </span>
+            : <input className="trefnote" value={ref.note ?? ''} spellCheck={false}
                  // One line, and it is teaching rather than labelling: a
                  // photograph can lend *part* of itself — the face, the coat,
                  // the light — and nothing else on the page can say so. The
@@ -90,7 +112,7 @@ export function Material({ member }: { member: CastMember }) {
                    : file!.kind === 'video'
                      ? 'the motion — how they move…'
                      : 'what to reference — face, clothing, style…'}
-                 onChange={(e) => { s.patchRef(member.id, ref.fileId, { note: e.target.value }) }} />
+                 onChange={(e) => { s.patchRef(member.id, ref.fileId, { note: e.target.value }) }} />}
           <button type="button" className="x" title={`Remove ${file!.name}`}
                   onClick={() => { s.detachRef(member.id, ref.fileId) }}>×</button>
         </div>

@@ -101,6 +101,12 @@ def open_viewer(pg):
     Opening the drawer first would work too and would be testing the drawer,
     which is not what this file is about — the handler is bound either way.
     """
+    # The drawer must be open to hold cards at all now — a shut drawer renders
+    # none, which is what stopped it fetching covers behind a closed panel.
+    if not pg.evaluate(
+        "() => document.querySelector('#t-drawer')?.classList.contains('on')"
+    ):
+        pg.click("#t-drawer")
     pg.wait_for_selector("#drawer-grid .gal .media", timeout=20_000)
     pg.evaluate("() => document.querySelector('#drawer-grid .gal .media').click()")
     pg.wait_for_selector(".lb", timeout=10_000)

@@ -579,6 +579,17 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
            const r = newRegion({ x: clamp01(Math.min(px, 1 - w)),
                                  y: clamp01(Math.min(py, 1 - h)), w, h })
            useStore.setState({ regions: [...st.regions, r], rsel: st.regions.length })
+           // Over a render the mode a land left behind is `off`, and off paints
+           // nothing — so the double-click drew a rectangle nobody could see,
+           // selected it, and sent it with the next run, empty sentence and
+           // all. Drawing is a request for geometry, so the gesture asks for
+           // the mode the way ⌘ does rather than leaving its own box invisible.
+           if (over === 'render') useStore.getState().setEdit('geometry')
+           // The first box of a session is "start something", not a framing
+           // run: the card opening is half the instruction and the caret in
+           // its sentence is the other half. Later boxes stay silent — see the
+           // pointerup note on `drew` for why a framing run must not be taxed.
+           if (!st.regions.length) useStore.getState().setCardOpen(true)
          }}
          /* Hover, resolved by the same rule as the click. Skipped on touch, where a
             move only happens with a finger already down and a box left lit from the
@@ -652,6 +663,18 @@ export function RegionLayer({ over = 'frame' }: { over?: 'frame' | 'render' }) {
            const el = (e.target as HTMLElement).closest<HTMLElement>('.rbox')
            if (el && Number(el.dataset.i) !== rsel) select(Number(el.dataset.i))
          }}>
+      {/* The words CLAUDE.md promised the empty canvas — once, where the
+          attention already is, and only while there is nothing else to say:
+          no boxes, no render under the layer, no file being dragged (the drag
+          captions own that moment). One line, because the two gestures land on
+          the same rectangle and naming both is a tutorial; double-click is the
+          one that needs no modifier key to spell. Gone the moment a first box
+          exists, which is the no-tutorial rule's price of admission. */}
+      {over === 'frame' && !regions.length && !fileOver && (
+        <div className="rl-invite" aria-hidden="true">
+          Double-click to place a character
+        </div>
+      )}
       {regions.map((r, i) => {
         const tag = regionTag(index, r)
         const face = attached(r, 'identity')

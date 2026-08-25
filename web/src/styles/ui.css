@@ -42,12 +42,22 @@
  * deletion becomes an archaeology question — is this `.14` the same `.14`, or
  * did somebody mean something by it? Named, it is one line. Unnamed, Phase 6 is
  * a rewrite rather than a removal. */
-/* `--dim` is 4.54:1 on `--bg` and cannot go darker: it carries reading text at 11-14px
-   (.muted, .sub, .foot .when, menu hints, control labels), and at #5a5a5a it was 3.04:1
-   on black, 2.82:1 on --wash-2 and 2.74:1 on --lift — under the 4.5:1 floor on every
-   ground it is used on, including the two it is used on most. */
-:root, :host{--bg:#000;--fg:#f5f5f5;--mut:#8a8a8a;--dim:#767676;
+/* `--dim` carries reading text at 11-14px (.muted, .sub, .foot .when, menu hints,
+   control labels) and cannot go darker: at #5a5a5a it was under the 4.5:1 floor on
+   every ground it is used on. #84888f is the cool-tinted step that still clears it
+   everywhere — measured 5.86 on --bg, 5.4 on --wash-2, and 4.78 on --lift, which
+   is the binding ground now that --lift is Linear's #1c1c1d menu surface. The old
+   #767676 passed only on bare --bg (4.59) and was already below the floor on the
+   washes; the retint is also the repair. */
+:root, :host{--bg:#010102;--fg:#f7f8f8;--mut:#8a8f98;--dim:#84888f;
       --drawer:320px;--head:56px;
+
+      /* The page's stack, named because it is now read in two places: `body`
+         sets it, and `.brand` has to put Jost in front of the same fallbacks —
+         a logotype that falls back to a different face than the chrome around
+         it is a wordmark that changes shape while the font loads. */
+      --stack:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+
 
       /* Surface ramp, six steps. */
       --wash-1:rgba(255,255,255,.03);   /* card ground     */
@@ -58,20 +68,24 @@
       --line-2:rgba(255,255,255,.24);   /* raised hairline */
 
       /* Elevation. One triple, because a panel over the canvas is one object
-         however many files draw it. */
-      --lift:#111;
-      --lift-line:rgba(255,255,255,.14);
+         however many files draw it. The values are Linear's own, read off the
+         live product (--loading-error-secondary-bg #1c1c1d, border #ffffff22):
+         floating panels keep a visible edge even in a system whose in-flow
+         cards are borderless, because a menu floats over arbitrary content
+         and the fill alone cannot promise separation there. */
+      --lift:#1c1c1d;
+      --lift-line:rgba(255,255,255,.13);
       --lift-cast:0 18px 48px rgba(0,0,0,.6);
 
       /* Geometry. Containers and controls were both landing in the 9–16 band,
          so a popover, a card, an input and a tile were told apart by one pixel
          of curvature. Four steps, and the control height the console already
          proves. */
-      --r-inner:9px;     /* inside a control: seg item, menu row */
-      --r-control:11px;  /* button, input, opt, tile            */
-      --r-panel:14px;    /* floating panel, media card          */
-      --r-card:16px;     /* content card — the latent rule this
-                            file already had: content 16, media 14 */
+      --r-inner:6px;     /* inside a control: seg item, menu row */
+      --r-control:8px;   /* button, input, opt, tile            */
+      --r-panel:12px;    /* floating panel, media card          */
+      --r-card:16px;     /* content card — content stays a step
+                            above media, which stays above chrome */
       --r-sheet:20px;    /* modal                               */
       /* Two steps the ramp was missing, which is why they were being spelled out
          instead. Fully-round was written three ways — `999px` six times, `99px` four,
@@ -85,7 +99,7 @@
          literal where they are: on a 6px meter they are the difference between rounded
          and a capsule, which is a decision rather than drift. */
       --r-pill:999px;    /* pill: chip, quick action, purge      */
-      --r-mark:5px;      /* a mark on top of something else      */
+      --r-mark:4px;      /* a mark on top of something else      */
       --control-h:32px;
       /* A glyph you press, at two sizes. It was nine — five boxes, six radii and
          four glyph sizes for one job — with two of them eight pixels apart on the
@@ -121,7 +135,7 @@
    sets a size and trusts `line-height:1` — most of them. */
 button,input,select,textarea{font-family:inherit;font-size:inherit}
 
-body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--stack);
      -webkit-font-smoothing:antialiased;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 svg{width:100%;height:100%;display:block}
 
@@ -132,10 +146,101 @@ svg{width:100%;height:100%;display:block}
    does not exist. So Generate is simply the page — it has no nav item because
    it is not a place you go — and Train is a door on the right: one slot,
    labelled with where it leads rather than with where you are. */
-.top{flex:0 0 var(--head);display:flex;align-items:center;gap:8px;padding:0 8px;
+.top{position:relative;flex:0 0 var(--head);display:flex;align-items:center;gap:8px;padding:0 8px;
      border-bottom:1px solid var(--wash-3)}
-.brand{border:0;background:none;color:var(--fg);font-weight:600;font-size:15px;line-height:1;letter-spacing:-.01em;
-  padding:8px 2px;cursor:pointer}
+.brand{position:relative;border:0;background:none;cursor:pointer;padding:8px 2px;
+  font-family:'Jost',var(--stack);font-weight:600;font-size:25px;line-height:1;
+  letter-spacing:4.5px;text-transform:uppercase;color:#f6f1e8;
+  text-shadow:0 0 18px rgba(255,150,170,.30)}
+
+/* The logotype, and the one place on this page that is not the system stack.
+ *
+ * Jost 600, uppercase, tracked open, over two rotated radial leaks and a grain
+ * pass — from the design canvas "Visionary platform logo". Three numbers carry
+ * it and none of them is arbitrary: 25px/4.5px is the header cut, 66px/12px the
+ * hero cut, 15px/2.6px the small one. Tracking scales with the size because a
+ * fixed track that reads open at 66px closes the counters at 15px.
+ *
+ * `#f6f1e8` and not `--fg`. The warm white is what separates the mark from the
+ * chrome standing next to it: at --fg it reads as one more control in the row,
+ * set slightly larger. A logotype in the interface's own tone is interface.
+ *
+ * Vendored rather than linked. `modal deploy app.py` is the entire install, and
+ * a wordmark that renders only when fonts.googleapis.com answers is a wordmark
+ * with an outage — one that shows up as the header silently changing width.
+ * 10KB, the latin subset, SIL OFL. `swap` and not `block`: the fallback for one
+ * frame is cheaper than an invisible mark for up to three seconds, and this is
+ * a same-origin file in the same bundle as the stylesheet asking for it. */
+@font-face{font-family:'Jost';font-style:normal;font-weight:600;font-display:swap;
+  src:url(./jost-600.woff2) format('woff2');
+  /* Google's own `latin` range, kept verbatim. Without it a glyph outside the
+     subset renders from a font that does not have it rather than falling to
+     the stack, which is a tofu box instead of a letter. */
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,
+    U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,
+    U+FEFF,U+FFFD}
+
+/* The leak: two soft lights behind the mark, one warm and one cool, rotated
+   against each other so the pair never resolves into a symmetrical glow.
+   
+   A sibling of the button rather than a pseudo-element on it, because the clip
+   has to be the *bar*, not the mark. Both ellipses are taller than the 56px
+   header on purpose — what you see is the middle of a much larger light, and a
+   leak that fits inside its box stops being a leak and becomes a drawn shape.
+   `.top` itself cannot take `overflow:hidden`; it is the anchor for the header
+   row and clipping there would cut anything that ever hangs off it. So the clip
+   gets a box of its own, 260px wide, which is past the point where the further
+   ellipse has faded out.
+
+   56px, the height of the bar, with the light *masked* out before it gets
+   there rather than cut off at it. The first pass ended the box at `bottom:0`
+   and drew a straight edge across the glow at its brightest — the ellipses are
+   centred at 55% of 56px, so the cut landed 25px above centre with half the
+   light still in it, and the header's own hairline underlined the result. The
+   mask fades from 62% of the bar, which is just under the letters' baseline, so
+   the wordmark keeps its light and only the spill below it dissolves.
+
+   Letting it spill instead — a 100px box, no mask, both gradients running out
+   on their own by y≈84 — also removes the line and is arguably the truer leak.
+   It was measured and dropped: at narrow widths the canvas starts around x=30,
+   so 45px of pink wash lands on the corner the picture renders in. Decoration
+   over the subject of the page is a worse trade than a contained one.
+
+   The mask goes on `.lights` and not on `.brand-leak`, and that is not a style
+   choice. Masking creates a stacking context, which isolates the grain's blend
+   group underneath it: with no backdrop left to blend against, `overlay` stops
+   resolving to the ground and the noise draws flat, as a faint 260x56 rectangle
+   with two hard edges of its own. Same trap as putting `z-index` on `.top` to
+   lift the layer — both trade the line under the glow for a box around it. The
+   grain has to stay outside whatever gets isolated. It needs no mask of its
+   own: it is only ever visible where there is light beneath it, and the mask is
+   what takes the light away. */
+.brand-leak{position:absolute;left:0;top:0;height:56px;width:260px;
+  overflow:hidden;pointer-events:none}
+.brand-leak .lights{position:absolute;inset:0;
+  -webkit-mask-image:linear-gradient(to bottom,#000 62%,transparent 100%);
+          mask-image:linear-gradient(to bottom,#000 62%,transparent 100%);
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
+.brand-leak .a,.brand-leak .b{position:absolute;display:block}
+.brand-leak .a{left:52px;top:-49px;width:120px;height:160px;transform:rotate(18deg);
+  background:radial-gradient(ellipse,rgba(255,120,150,.28),transparent 65%)}
+.brand-leak .b{left:132px;top:-31px;width:80px;height:140px;transform:rotate(-12deg);
+  background:radial-gradient(ellipse,rgba(140,160,255,.20),transparent 65%)}
+.brand-leak .grain{position:absolute;inset:0;opacity:.08;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")}
+
+/* The small cut, at the width where the row stops fitting. `Door` already
+   documents the measurement: at 375px the header is a fixed 56px bar with no
+   second line to break onto, and the logotype at its header size is 170px of
+   the 375 before a single door has been placed. So the phone gets the small
+   cut — and the small cut drops the leak with it, which is the design's own
+   rule rather than a saving: under about 18px the light bleeds into the
+   counters and the word turns to mush. Nothing left to glow around, so the
+   text-shadow goes too. */
+@media (max-width:640px){
+  .brand{font-size:15px;letter-spacing:2.6px;text-shadow:none}
+  .brand-leak{display:none}
+}
 .grow{flex:1;min-width:0}
 
 /* The door, and the reason it is worth a permanent slot: a training run lasts
@@ -146,6 +251,13 @@ svg{width:100%;height:100%;display:block}
   background:none;color:var(--fg);border-radius:var(--r-control);padding:0 10px;
   font-weight:500;font-size:14px;line-height:1;cursor:pointer;transition:background .12s,color .12s}
 .door:hover{background:var(--line);color:var(--fg)}
+/* The glyph rides a tone below the word — Linear's icon-button treatment: the
+   label is the message and the icon is its ornament, and at equal weight the
+   pair reads as two competing marks. Not while live: the ring and the bars are
+   readouts, and a readout does not dim. Pure icon buttons keep full tone — a
+   dimmed glyph that IS the button is a switched-off header. */
+.door:not(.live) svg{color:var(--mut);transition:color .12s}
+.door:hover:not(.live) svg{color:var(--fg)}
 /* See `Door` in App.tsx: the word goes on a phone and the ring carries the meaning. */
 @media (max-width:640px){.door .door-word{display:none}}
 .door svg{width:15px;height:15px;flex:none}
@@ -177,7 +289,7 @@ svg{width:100%;height:100%;display:block}
 .switch{display:inline-flex;background:var(--wash-2);border-radius:var(--r-control);padding:3px;gap:2px}
 .switch button{border:0;background:none;color:var(--mut);padding:6px 15px;border-radius:var(--r-inner);
   font-weight:500;font-size:13px;line-height:1.35;cursor:pointer;transition:color .12s,background .12s}
-.switch button:hover{color:#ddd}
+.switch button:hover{color:#d0d6e0}
 .switch button.on{background:#fff;color:#000}
 .ico{width:var(--ib);height:var(--ib);flex:none;border:0;border-radius:var(--r-control);background:none;color:var(--mut);
   display:grid;place-items:center;
@@ -261,7 +373,7 @@ svg{width:100%;height:100%;display:block}
    a background with the text flush to its corner, which is the same fault a
    step earlier. One number, applied where the padding belongs. */
 .opt{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 9px;font-size:14px;
-  background:var(--wash-2);border:1px solid var(--line);border-radius:var(--r-control)}
+  background:var(--wash-2);border:1px solid transparent;border-radius:var(--r-control)}
 .opt:focus-within{border-color:var(--line-2)}
 
 /* Unbounded ---------------------------------------------------------------
@@ -324,7 +436,7 @@ svg{width:100%;height:100%;display:block}
    that looks like it increments something, next to controls that do. One
    chevron, drawn once, so every select on the page says the same thing. */
 .opt select{appearance:none;-webkit-appearance:none;padding-right:16px;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238a8a8a' stroke-width='1.4' stroke-linecap='round'><path d='M3 4.5 6 7.5 9 4.5'/></svg>");
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8f98' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9.5l6 6 6-6'/></svg>");
   background-repeat:no-repeat;background-position:right center;background-size:12px}
 /* Phone. Ten controls wrapping into four ragged rows is what the strip does
    here, and three of the ten are the ones nobody touches twice: the GPU is set
@@ -452,7 +564,7 @@ svg{width:100%;height:100%;display:block}
    they are two things the same sentence can become, so the choice belongs
    inside the field you are already typing in, at the smallest size that still
    reads. Everything below the field is options for that choice. */
-.field{position:relative;border:1px solid var(--line);background:var(--wash-2);
+.field{position:relative;border:1px solid transparent;background:var(--wash-2);
   border-radius:var(--r-panel);padding:2px 2px 0}
 .field:focus-within{border-color:var(--line-2)}
 /* One row, and it grows into what you type. It was two rows fixed, with the
@@ -647,11 +759,17 @@ svg{width:100%;height:100%;display:block}
 /* The `@` is inside the edge because it is part of the value, not a label on it:
    this string *is* the handle a shot mentions them by. */
 .tname-row{display:flex;align-items:center;gap:0;background:var(--wash-2);
-  border:1px solid var(--line);border-radius:var(--r-inner);padding-left:9px}
+  border:1px solid transparent;border-radius:var(--r-inner);padding-left:9px}
 .tname-row:focus-within{border-color:var(--line-2)}
 .tname-row .at{color:var(--dim);font-size:12.5px}
 .tcard .tname{border:0;background:none;padding-left:2px;font-weight:600}
 .tcard .tname:focus{border:0}
+/* The Arsenal's write surface: one quiet row at the card's foot. */
+.tkeep{width:100%;margin-top:11px;border:1px dashed var(--line);background:none;
+  border-radius:var(--r-inner);padding:6px 0;font-size:11.5px;color:var(--dim);
+  cursor:pointer}
+.tkeep:hover:not(:disabled){color:var(--fg);border-color:var(--line-2)}
+.tkeep:disabled{cursor:default;color:var(--mut)}
 .tcard>.x{position:absolute;top:9px;right:9px;border:0;background:none;
   color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:0 4px;
   border-radius:var(--r-mark)}
@@ -670,13 +788,23 @@ svg{width:100%;height:100%;display:block}
 .tref{display:flex;align-items:center;gap:7px;min-width:0}
 .tref img,.tref .tkind{width:34px;height:34px;border-radius:var(--r-inner);flex:none;
   object-fit:cover;display:grid;place-items:center;background:var(--wash-2);
-  border:1px solid var(--line);font-size:13px;color:var(--dim)}
+  border:1px solid transparent;font-size:13px;color:var(--dim)}
 .trefnote{flex:1;min-width:0;font-size:11.5px;padding:4px 7px;border-radius:var(--r-inner);
-  border:1px solid var(--line);background:var(--wash-2);color:var(--fg)}
+  border:1px solid transparent;background:var(--wash-2);color:var(--fg)}
 .trefnote::placeholder{color:#3a3a40}
 .trefnote:focus{border-color:var(--line-2);outline:none}
 .tref .x{flex:none;border:0;background:none;color:var(--dim);cursor:pointer;
   padding:0 3px;font-size:13px}
+/* The one-click mark. Lit, the row's note field becomes a grey readout —
+   derived, always visible — because the citation is the compiler's sentence
+   and a field would be asking for words the run will not read. */
+.tsheet{flex:none;border:1px solid transparent;background:var(--wash-2);border-radius:999px;
+  padding:2px 8px;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--dim);cursor:pointer}
+.tsheet:hover{color:var(--fg);background:var(--wash-3)}
+.tsheet.on{color:var(--fg);background:var(--sel)}
+.trefnote.derived{display:flex;align-items:center;border-style:dashed;
+  color:var(--dim);font-style:italic;cursor:default}
 .tref .x:hover{color:var(--fg)}
 /* A file this subject cannot take does not highlight — the rejection is the
    absence of an invitation, and it arrives before the drop. */
@@ -702,7 +830,7 @@ svg{width:100%;height:100%;display:block}
 .trail.has-doors #shot-rail{margin:0}
 .tdoors{display:flex;align-items:center;gap:5px;flex:none}
 .tdoor{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px;
-  border:1px solid var(--line);background:var(--wash-2);border-radius:var(--r-pill);
+  border:1px solid transparent;background:var(--wash-2);border-radius:var(--r-pill);
   color:var(--mut);font-size:12px;cursor:pointer;white-space:nowrap}
 .tdoor:hover:not(:disabled){background:var(--wash-3);color:var(--fg);
   border-color:var(--line-2)}
@@ -728,15 +856,22 @@ svg{width:100%;height:100%;display:block}
 /* Over the console, never over the canvas. `.console` is the positioned
    ancestor, so `inset:0` here is exactly the bar's own box — the render above
    it stays visible while you read what it is being given. */
+/* **Quiet prose, not devtools — and the correction is the owner's.** "One
+   click away" was a note about *when* this appears, and it got misconstrued as
+   "make it look like a developer tool": monospace, an uppercase COMPILED tag,
+   the whole inspection costume. The design thesis is that nothing here feels
+   utilitarian, so what the model reads is set in the app's own type at a
+   reading rhythm — a page you glance at, not a source you inspect. The access
+   pattern was right and survives untouched: no button, the chord, the context
+   menu, over the console. Only the costume changed. */
 .tsource{position:absolute;inset:0;z-index:8;
   display:flex;flex-direction:column;
-  background:#070707;border-radius:var(--r-card);overflow:hidden;
+  background:var(--bg);border-radius:var(--r-card);overflow:hidden;
   outline:1px solid var(--line-2);outline-offset:-1px}
-.tsource-h{display:flex;align-items:center;gap:9px;padding:7px 10px;
-  border-bottom:1px solid var(--line);font-size:11px;color:var(--dim);
-  letter-spacing:.06em;text-transform:uppercase}
-.tsource-h .tag{border:0;background:var(--wash-2);border-radius:var(--r-mark);
-  padding:2px 7px;color:var(--mut);font-size:10px;letter-spacing:.04em}
+.tsource-h{display:flex;align-items:center;gap:9px;padding:8px 16px;
+  font-size:12px;color:var(--dim)}
+.tsource-h .tag{border:0;background:none;border-radius:var(--r-mark);
+  padding:2px 0;color:var(--dim);font-size:12px}
 /* Amber, because it is the one state where what runs is not what the scene says
    — the same ink the console budget's own overrun mark uses. A button, not a
    label: reattaching is one gesture and it is the way back. */
@@ -746,11 +881,14 @@ svg{width:100%;height:100%;display:block}
 .tsource-h .x{margin-left:auto;border:0;background:none;color:var(--dim);
   cursor:pointer;font-size:16px;line-height:1;padding:0 4px;border-radius:var(--r-mark)}
 .tsource-h .x:hover{background:var(--wash-3);color:var(--fg)}
-/* A textarea, not a `<pre>`: devtools is directly editable and the page responds
-   live, and here the edit is what runs. */
-#doc-source{flex:none;width:100%;border:0;border-radius:0;background:none;
-  padding:12px 14px;resize:none;overflow:auto;color:#9a9a9a;
-  font:12px/21px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+/* A textarea because the edit is what runs — but set as prose. The document is
+   sentences the model reads, and a code font was the costume, not the content.
+   A reading measure rather than full width, because a 1400px line of prose is
+   unreadable in any font. */
+#doc-source{flex:none;width:100%;max-width:72ch;margin:0 auto;border:0;
+  border-radius:0;background:none;padding:6px 16px 18px;resize:none;
+  overflow:auto;color:var(--mut);
+  font:13.5px/1.75 inherit;font-family:inherit;white-space:pre-wrap}
 #doc-source:focus{border:0;box-shadow:none;color:var(--fg)}
 
 /* The row under the prompt was half empty — a 150px chip on a 1456px line —
@@ -820,15 +958,15 @@ svg{width:100%;height:100%;display:block}
  *
  * Screen and sheet share a size deliberately — a sheet here is a whole surface,
  * not a dialog — and only the confirm step steps down. */
-h1,h2,h3{font-weight:600;letter-spacing:-.01em}
+h1,h2,h3{font-weight:600;letter-spacing:-.02em}
 h1{font-size:19px;margin-bottom:3px}   /* sheet: Settings, Metadata */
 h2{font-size:19px}                     /* screen: Training, Sets, a dataset */
 h3{font-size:16px}                     /* dialog: a confirm step */
 .sub{color:var(--dim);font-size:13px;margin-bottom:22px}
-.card{border:1px solid var(--line);background:var(--wash-1);border-radius:var(--r-card);padding:16px;margin-bottom:12px}
+.card{border:1px solid transparent;background:var(--wash-1);border-radius:var(--r-card);padding:16px;margin-bottom:12px}
 .row{display:flex;align-items:center;gap:14px}
 label{display:block;font-size:12px;color:var(--mut);margin-bottom:6px}
-input,textarea,select{width:100%;background:var(--wash-2);border:1px solid var(--line);
+input,textarea,select{width:100%;background:var(--wash-2);border:1px solid transparent;
   border-radius:var(--r-control);padding:10px 12px;color:var(--fg);font:inherit;outline:none}
 /* A field and the button beside it are one control at one height. `font:inherit`
    brings `line-height:1.5` — 21px — and 10px of padding either side made every
@@ -839,6 +977,14 @@ input,textarea,select{width:100%;background:var(--wash-2);border:1px solid var(-
 
    `textarea` is deliberately exempt — growing is its whole job. */
 input,select{height:var(--control-h);padding:0 12px}
+/* The chevron is base-wide, not the console's alone. `.opt select` got the
+   appearance reset when macOS arrows were caught rendering as a stepper on a
+   phone; every select outside an `.opt` — Train's form, the GPU pickers —
+   kept the native arrows, so the page ran two dropdown treatments and which
+   one you got depended on which container you were in. One glyph, one rule. */
+select{appearance:none;-webkit-appearance:none;padding-right:30px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8f98' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9.5l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 9px center;background-size:12px}
 input:focus,textarea:focus,select:focus{border-color:var(--line-2)}
 input:disabled,select:disabled{opacity:.45}
 textarea{resize:vertical}
@@ -855,7 +1001,7 @@ button.b,button.s,button.t{display:inline-flex;align-items:center;justify-conten
 button.b,button.s{min-height:var(--control-h)}
 button.b{background:#fff;color:#000;border:0;border-radius:var(--r-control);padding:0 14px;font-weight:600;font-size:14px;line-height:1;cursor:pointer}
 button.b:disabled{background:rgba(255,255,255,.2);color:rgba(0,0,0,.4);cursor:not-allowed}
-button.s{background:var(--wash-3);color:var(--fg);border:1px solid var(--line);
+button.s{background:var(--wash-3);color:var(--fg);border:1px solid transparent;
   border-radius:var(--r-control);padding:0 12px;font-weight:500;font-size:14px;line-height:1;cursor:pointer}
 button.s:hover{background:var(--sel)}
 button.s:disabled{opacity:.4;cursor:not-allowed}
@@ -889,7 +1035,7 @@ button.t>.lead{font-size:13px;line-height:1;color:inherit;flex:none;white-space:
    half of them actions, had made unreadable. The chosen one is filled rather
    than outlined: an outline is what every neighbour already has. */
 .seg{display:inline-flex;align-items:center;gap:2px;flex:none;padding:2px;
-  background:var(--wash-2);border:1px solid var(--line);border-radius:var(--r-control)}
+  background:var(--wash-2);border:1px solid transparent;border-radius:var(--r-control)}
 .seg button.s{border:0;background:none;min-height:26px;padding:0 10px;border-radius:var(--r-inner);
   color:var(--mut);font-size:13px;font-weight:500}
 .seg button.s:hover{background:var(--wash-3);color:var(--fg)}
@@ -897,14 +1043,17 @@ button.t>.lead{font-size:13px;line-height:1;color:inherit;flex:none;white-space:
 .seg button.s:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:-2px}
 #ds-density button.s{min-width:26px;padding:0 6px}
 .pill{display:inline-flex;align-items:center;gap:6px;background:var(--wash-2);border:0;
-  border-radius:var(--r-pill);padding:8px;color:#ddd;font-size:13px;cursor:pointer}
+  border-radius:var(--r-pill);padding:8px;color:#d0d6e0;font-size:13px;cursor:pointer}
 .pill.on{background:#fff;color:#000}
-/* Red and spelled out, because this one is a whole gallery at once. The per-card
-   × is the same kind of action at a scale a mis-click can survive; this is the
-   scale where the confirm dialog is the only thing between you and the volume. */
-.pill.danger{background:var(--crit-solid);color:#fff}
-.pill.danger:hover{background:var(--crit)}
-.pill.danger[disabled]{opacity:.35;cursor:default;background:var(--crit-solid)}
+/* Red and spelled out, because this one is a whole gallery at once. Red *ink*
+   at rest rather than the solid fill: standing, the fill made mass deletion
+   the most prominent element of a screen you open to browse, and prominence
+   is not what keys destruction here — blast radius does, and the confirm
+   carries that. The fill returns under the pointer, where it is an answer to
+   a hand rather than a headline. */
+.pill.danger{background:var(--wash-2);color:var(--crit)}
+.pill.danger:hover{background:var(--crit-solid);color:#fff}
+.pill.danger[disabled]{opacity:.35;cursor:default;background:var(--wash-2);color:var(--crit)}
 .bar{height:3px;background:var(--line);border-radius:var(--r-pill);overflow:hidden;margin-top:10px}
 .bar>i{display:block;height:100%;background:#fff;border-radius:var(--r-pill);transition:width .4s}
 .muted{color:var(--dim);font-size:12px}
@@ -1127,7 +1276,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .pal section+section{margin-top:15px;padding-top:13px;border-top:1px solid var(--wash-3)}
 .pal .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:5px}
 .pal .tl{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 3px 7px;
-  border:1px solid transparent;border-radius:var(--r-control);background:none;color:#ddd;cursor:pointer;
+  border:1px solid transparent;border-radius:var(--r-control);background:none;color:#d0d6e0;cursor:pointer;
   font-size:12px;line-height:1.25;text-align:center}
 .pal .tl:hover{background:var(--wash-3);border-color:var(--sel)}
 .pal .tl.on{background:var(--sel);border-color:var(--line-2);color:#fff}
@@ -1344,8 +1493,8 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #shot-rail>*{flex:none}
 #shot-rail:empty{display:none;margin:0}
 .spill{display:inline-flex;align-items:center;gap:7px;background:var(--wash-3);
-  border:1px solid var(--line);border-radius:var(--r-pill);padding:3px 5px 3px 7px;
-  color:#ddd;font-size:13px;max-width:100%}
+  border:1px solid transparent;border-radius:var(--r-pill);padding:3px 5px 3px 7px;
+  color:#d0d6e0;font-size:13px;max-width:100%}
 .spill>.gl{width:26px;height:18px;flex:none;opacity:.85}
 /* Frozen in the rail. The tile is the animated version because motion is what
    teaches a move you have not picked yet; a pill is the record of a decision
@@ -1359,7 +1508,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* An empty valued pill is a decision started and not finished, and it says so
    by staying visibly empty rather than by erroring. */
 .spill.val b{color:var(--dim)}
-.spill.val b.set{color:#ddd;font-style:italic}
+.spill.val b.set{color:#d0d6e0;font-style:italic}
 .spill.val:not(.open){cursor:text}
 .spill.open{background:var(--line);border-color:var(--line-2)}
 /* width:auto and flex:none on both, because the base rule three hundred lines
@@ -1388,50 +1537,97 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #shot-peek>button::before{content:"";width:0;height:0;border:4px solid transparent;
   border-left-color:currentColor;border-right:0;transition:transform .12s}
 #shot-peek.open>button::before{transform:rotate(90deg) translateX(1px)}
+/* The label's own size, and the app's own face. The mono was the devtools
+   costume — the document is sentences the model reads, and the fold shows it
+   as quiet prose at exactly the weight of the control that opened it. */
 #shot-peek pre{margin:7px 0 0;padding:10px 12px;border-radius:var(--r-control);background:var(--wash-2);
-  border:1px solid var(--line);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;
-  color:#c8c8c8;white-space:pre-wrap;word-break:break-word;max-height:184px;overflow:auto}
+  border:1px solid transparent;font:12px/1.7 inherit;font-family:inherit;
+  color:var(--mut);white-space:pre-wrap;word-break:break-word;max-height:184px;overflow:auto}
 
 /* The LoRA box. Deliberately the peek's own shapes — the caret, the wash, the
    inset border — because it is the same gesture on the same kind of thing, and
    two drawings for one idea is how a console stops reading as one surface. */
 #lora-box{margin:7px 2px 0}
-#lora-box>button{border:0;background:none;color:var(--dim);font-size:12px;
+/* --mut, one step up from the peek's --dim: this line is the only answer a
+   pick from `+ LoRA` gets, and at --dim it read as a footnote rather than a
+   confirmation. */
+#lora-box>button{border:0;background:none;color:var(--mut);font-size:12px;
   cursor:pointer;padding:2px 0;display:inline-flex;align-items:center;gap:5px}
 #lora-box>button:hover{color:var(--fg)}
 #lora-box>button::before{content:"";width:0;height:0;border:4px solid transparent;
   border-left-color:currentColor;border-right:0;transition:transform .12s}
 #lora-box.open>button::before{transform:rotate(90deg) translateX(1px)}
 #lora-box .chips{margin:7px 0 0;padding:8px 9px;border-radius:var(--r-control);
-  background:var(--wash-2);border:1px solid var(--line);
+  background:var(--wash-2);border:1px solid transparent;
   display:flex;flex-wrap:wrap;gap:7px}
 /* Name, then the value in a circle at the end — the whole shape of the thing.
    `max-content` on the name rather than a width: a filename is as long as it is,
    and truncating the one word that says which LoRA this is would undo the reason
    the box collapses in the first place. */
 .chip{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 4px 0 10px;
-  border-radius:14px;background:var(--wash-3);border:1px solid var(--line);
+  border-radius:14px;background:var(--wash-3);border:1px solid transparent;
   font-size:12px;color:var(--fg);max-width:100%}
 .chip .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chip .val{width:46px}
 .chip .val input{height:20px;width:46px;text-align:center;font-size:11px;
-  border-radius:10px;background:var(--wash-1);border:1px solid var(--line);padding:0}
+  border-radius:10px;background:var(--wash-1);border:1px solid transparent;padding:0}
 .chip .x{border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
   line-height:1;padding:0 5px}
 .chip .x:hover{color:var(--fg)}
 
 /* Sheets: settings, metadata, lightbox ---------------------------------- */
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:60;display:grid;place-items:center;padding:32px}
-.sheet{width:100%;max-width:720px;max-height:100%;overflow:auto;background:#0b0b0b;
-  border:1px solid var(--line);border-radius:var(--r-sheet);padding:22px 24px 26px}
-.sheet-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px}
+/* The mockup's ground: darker than the cards on it. --lift stays the floating
+   menus' surface — a modal is content, a menu is chrome, and the cards inside
+   this one were 3% white over a ground already lighter than they were. */
+.sheet{width:100%;max-width:720px;max-height:100%;overflow:auto;background:#0e0e0f;
+  border:1px solid transparent;border-radius:var(--r-sheet);padding:0 24px 26px}
+.sheet .card{background:#18181a;border-color:rgba(255,255,255,.05)}
+/* Pills, per the mockup — the sheet's actions are Save, Download, Add,
+   Cancel, and a pill is what separates "do a thing" from the boxed values
+   around it. Scoped: the console's `.s` stays the console's. */
+.sheet button.s{border-radius:var(--r-pill);min-height:30px;padding:0 14px}
+/* The title and the close ride the top of the scroller instead of leaving with
+   it — a long settings page otherwise scrolls its own way out. Scoped to the
+   modal's direct child because the sheet composer reuses the class name. The
+   negative margins re-span the sheet's side padding so nothing scrolls past
+   visible behind the title's own background. */
+.sheet>.sheet-head{display:flex;align-items:flex-start;gap:14px;
+  position:sticky;top:0;z-index:2;background:#0e0e0f;
+  margin:0 -24px 18px;padding:22px 24px 14px;
+  box-shadow:0 8px 20px -6px rgba(0,0,0,.85),0 1px 0 rgba(255,255,255,.06)}
+/* A mark-sized action in a row: a circle, matching the mockup. `.ico` is the
+   chrome icon button (transparent, square-ish); this is the one that sits in
+   content rows and has to read as pressable at rest. */
+.icx{width:30px;height:30px;flex:none;display:grid;place-items:center;border:0;
+  border-radius:var(--r-pill);background:var(--wash-3);color:var(--fg);
+  cursor:pointer;padding:0}
+.icx:hover{background:var(--sel)}
+.icx:disabled{opacity:.4;cursor:default}
+.icx:disabled:hover{background:var(--wash-3)}
+.icx svg{width:15px;height:15px}
+
 /* Model families. A rule above each heading rather than a box around each
    group: the cards already have edges, and nesting borders inside borders is
    two frames for one idea. */
 .fam{margin-bottom:22px}
 .fam+.fam{border-top:1px solid var(--line);padding-top:18px}
-.fam-head{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px}
+.fam-head{display:flex;align-items:center;gap:10px;margin:0 2px 10px}
 .fam-head .muted{margin-left:auto;font-size:12px}
+/* The name is the fold's handle; the caret is what says a press does
+   something. `align-items:center` above because a button beside baseline-
+   aligned text sinks. */
+.fam-toggle{display:inline-flex;align-items:center;gap:8px;padding:4px 6px 4px 2px}
+.fam-toggle b{font-weight:600;font-size:14px;color:var(--fg)}
+.fam-toggle .caret{width:0;height:0;border:4px solid transparent;
+  border-left:5px solid var(--dim);margin-left:2px;transition:transform .12s}
+.fam-toggle .caret.open{transform:rotate(90deg) translateX(1px)}
+/* One card per family, hairline rows inside — the LoRA list's own shape. */
+.mrow{display:flex;align-items:center;gap:14px;padding:11px 2px;
+  border-top:1px solid var(--line)}
+.mrow:first-child{border-top:0}
+.mrow b{font-weight:600}
+.fam>.card{padding:6px 16px}
 /* The queue reports where you started it, under the head it belongs to, rather
    than in one shared strip at the top of Settings — with a button per family
    there is no longer a single place that "the download" means. */
@@ -1454,9 +1650,9 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    others do not need. Spanning both columns because a hint indented under a
    74px label is a hint shaped like a value. */
 .form .frow>i{grid-column:1/-1;font-style:normal;font-size:11px;color:var(--mut);line-height:1.4}
-.form .sz-reset{width:100%;margin-top:2px;padding:7px 0;border:1px solid var(--line);
-  border-radius:var(--r-inner);background:none;color:var(--dim);cursor:pointer;font-weight:500;font-size:11px;line-height:1}
-.form .sz-reset:hover{color:var(--fg);border-color:var(--line-2)}
+.form .sz-reset{width:100%;margin-top:2px;padding:7px 0;border:1px solid transparent;
+  border-radius:var(--r-inner);background:var(--wash-2);color:var(--dim);cursor:pointer;font-weight:500;font-size:11px;line-height:1}
+.form .sz-reset:hover{color:var(--fg);background:var(--wash-3)}
 /* A dot, not a colour change: the button's text is the resolved numbers, and
    recolouring those would say "warning" about a value you deliberately chose. */
 #g-sampling,#v-sampling{width:auto;padding:0 10px;font-size:14px;color:var(--fg);
@@ -1481,9 +1677,9 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    two-thirds of the row, and a fourth image tier would have widened that gap
    rather than caused it. */
 .sizer .scales{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;margin-top:9px}
-.sizer .sc{padding:7px 0;border:1px solid var(--line);border-radius:var(--r-inner);background:none;
+.sizer .sc{padding:7px 0;border:1px solid transparent;border-radius:var(--r-inner);background:var(--wash-2);
   color:var(--dim);cursor:pointer;font-weight:500;font-size:12px;line-height:1}
-.sizer .sc:hover{color:var(--fg);border-color:var(--line-2)}
+.sizer .sc:hover{color:var(--fg);background:var(--wash-3)}
 .sizer .sc.on{background:var(--sel);color:var(--fg);border-color:var(--line-2)}
 .sizer .sz-custom{display:flex;align-items:center;gap:6px;margin-top:9px}
 .sizer .sz-custom label{display:flex;align-items:center;gap:5px;margin:0;flex:1;
@@ -1508,9 +1704,10 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* Always visible, unlike the dataset card's ×, which only appears on hover
    because it sits on top of a picture it would otherwise cover. There is nothing
    under this one, and the whole reason to open this card is to find it. */
-.lora-x{border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;line-height:1;
-  width:var(--ib-sm);height:var(--ib-sm);display:grid;place-items:center;padding:0;
-  border-radius:var(--r-inner);flex:none}
+.lora-x{border:0;background:var(--wash-3);color:var(--mut);cursor:pointer;font-size:13px;line-height:1;
+  width:30px;height:30px;display:grid;place-items:center;padding:0;
+  border-radius:var(--r-pill);flex:none}
+.lora-x svg{width:13px;height:13px}
 .lora-x:hover{background:var(--crit-wash);color:var(--crit)}
 /* A ✕ that is shut has to look shut. These go disabled while a delete is in flight, and
    without this they keep lighting up red under the pointer — which reads as "press me"
@@ -1518,7 +1715,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    there to prevent. `:disabled` before `:hover` in the cascade would lose, so the hover
    is overridden explicitly rather than by ordering. */
 .lora-x:disabled{opacity:.4;cursor:default}
-.lora-x:disabled:hover{background:none;color:var(--dim)}
+.lora-x:disabled:hover{background:var(--wash-3);color:var(--mut)}
 .kv{display:grid;grid-template-columns:132px 1fr;gap:5px 14px;font-size:13px}
 .kv dt{color:var(--mut)}
 .kv dd{color:#e8e8e8;word-break:break-word}
@@ -1603,11 +1800,12 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    terminal would tell you: the bar, tqdm's numbers, and the dials that are the
    only difference between two cards training the same set. */
 #sess-board{display:flex;flex-direction:column;min-height:0}
-/* Continue carries a word. The two marks beside it act on the picture in front
-   of you; this one goes somewhere, and a destination cannot be announced by a
-   glyph — the same rule that took `#g-shot` off a bare icon. */
-#canvas-chain.wide{width:auto;padding:0 12px;font-size:12px;letter-spacing:.01em;
-  gap:6px;white-space:nowrap}
+/* Continue is a plus mark, by the owner's call. It carried a word for a while
+   — "a destination cannot be announced by a glyph" — and the word never
+   actually rendered: `#canvas-chain.wide{width:auto}` tied `#canvas-acts
+   .ico{width:30px}` on specificity and lost on order, so "Continue" shipped
+   clipped to "Con" at every viewport. A rule that loses silently to a
+   neighbour is the fault the touch-target note above already documents. */
 #canvas-chain:disabled{opacity:.5;cursor:default}
 
 .board-head{position:sticky;top:-22px;z-index:6;margin:-22px -28px 12px;
@@ -1623,7 +1821,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 #sess-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));
   gap:14px;align-items:start}
 .sess{position:relative;aspect-ratio:3/4;display:flex;flex-direction:column;overflow:hidden;
-  border:1px solid var(--line);background:var(--wash-1);border-radius:var(--r-card);
+  border:1px solid transparent;background:var(--wash-1);border-radius:var(--r-card);
   padding:13px 14px 11px;transition:border-color .14s,background .14s}
 /* Only what is going gets a lit edge. Four finished cards all glowing is four
    cards saying nothing, which is the state a board spends most of its life in. */
@@ -1639,6 +1837,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .sess-hit{position:absolute;inset:0;z-index:0;border:0;background:none;padding:0;
   cursor:pointer;border-radius:inherit;-webkit-appearance:none;appearance:none}
 .sess-hit:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:-3px}
+.sess-head .sess-when{font-size:12px}
 .sess>*:not(.sess-hit){position:relative;z-index:1;pointer-events:none}
 .sess .link,.sess-x,.sess-acts button{pointer-events:auto}
 .sess-head{display:flex;align-items:center;gap:8px;min-height:20px}
@@ -1741,7 +1940,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 /* flex-column, not the default: a <button> centres its content vertically, so
    once one card in the row is taller than another the covers float in the
    middle of their cards with black above them. */
-.ds-card{border:1px solid var(--line);background:var(--wash-1);border-radius:var(--r-panel);overflow:hidden;
+.ds-card{border:1px solid transparent;background:var(--wash-1);border-radius:var(--r-panel);overflow:hidden;
   cursor:pointer;text-align:left;padding:0;color:inherit;font:inherit;
   display:flex;flex-direction:column;align-items:stretch}
 .ds-card:hover{border-color:var(--line-2)}
@@ -1794,7 +1993,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    same colour as the page read as a cropped photo rather than a contained one. */
 .tile .ph{position:relative;background:var(--wash-2);aspect-ratio:1}
 .tile .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;cursor:zoom-in}
-.tile .dim{position:absolute;left:6px;bottom:6px;font-size:11px;color:#ddd;background:rgba(0,0,0,.62);
+.tile .dim{position:absolute;left:6px;bottom:6px;font-size:11px;color:#d0d6e0;background:rgba(0,0,0,.62);
   padding:2px 6px;border-radius:var(--r-mark);pointer-events:none}
 .tile .rm{position:absolute;top:6px;right:6px;width:24px;height:24px;border:0;border-radius:50%;
   background:rgba(0,0,0,.62);color:#eee;cursor:pointer;font-size:13px;line-height:1;opacity:0;transition:opacity .12s}
@@ -1855,7 +2054,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    picture, on the one surface that exists to show pictures. */
 .dupes-head .actions{display:flex;align-items:center;gap:7px;flex:none;margin-left:auto}
 .dupes-tally.cuts{color:#fca5a5}
-.dupes-tableWrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-card);background:var(--wash-1)}
+.dupes-tableWrap{overflow-x:auto;border:1px solid transparent;border-radius:var(--r-card);background:var(--wash-1)}
 /* No `min-width:max-content`. It was here to make the wrapper scroll, and it
    sized every column to its widest cell instead — which is the caption, set
    nowrap, so one long sentence blew a 150px column out to 430px and the square
@@ -1869,7 +2068,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
   display:flex;align-items:center}
 .dupes-table>.gut:first-child{border-top:0;background:transparent}
 .dupes-table>.cell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#bdbdbd}
-.dupes-table>.cell.best{color:#f5f5f5;font-weight:600}
+.dupes-table>.cell.best{color:var(--fg);font-weight:600}
 .dupes-table .off{font-style:normal;color:var(--dim);font-size:11px;margin-left:4px}
 .cand{position:relative;min-width:0;padding:8px 8px 6px;border-left:1px solid var(--wash-3)}
 .cand.cut{background:rgba(239,68,68,.045)}
@@ -1882,7 +2081,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .cand .mark,.cand .num{position:absolute;background:rgba(0,0,0,.68);border-radius:var(--r-mark);padding:2px 5px;
   font-size:11px;line-height:1}
 .cand .mark{left:5px;bottom:5px}.cand.keep .mark{color:#86efac}.cand.cut .mark{color:#fca5a5}
-.cand .num{right:5px;top:5px;color:#ddd}
+.cand .num{right:5px;top:5px;color:#d0d6e0}
 .cand .peek{position:absolute;right:13px;top:13px;width:25px;height:25px;padding:5px;border:0;border-radius:var(--r-mark);
   background:rgba(0,0,0,.68);color:#eee;cursor:pointer;opacity:0;transition:opacity .12s}
 .cand:hover .peek,.cand .peek:focus-visible{opacity:1}
@@ -2057,7 +2256,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    both numbers were going to be measured regardless. */
 .frame{position:relative;align-self:center;flex:none;
   width:var(--frame-w,0);height:var(--frame-h,0);
-  border-radius:var(--r-card);border:1px solid var(--line);background:var(--wash-1);
+  border-radius:var(--r-card);border:1px solid transparent;background:var(--wash-1);
   overflow:hidden;touch-action:none}
 /* Absolute, not a flow child: a child sized height:100% would establish the
    container's height itself and aspect-ratio would never apply — the same trap
@@ -2231,7 +2430,7 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    would otherwise run under it. */
 .rins{position:absolute;z-index:8;width:296px;max-width:calc(100% - 52px);
   display:flex;flex-direction:column;gap:5px;padding:8px;
-  border-radius:var(--r-panel);border:1px solid var(--line-2);background:#101010;
+  border-radius:var(--r-panel);border:1px solid var(--lift-line);background:var(--lift);
   box-shadow:0 16px 44px rgba(0,0,0,.62);
   touch-action:auto;cursor:default}
 /* Out of the way of the gesture, without being taken down and rebuilt around it.
@@ -2333,7 +2532,7 @@ body.dragging .frame.hot::after,body.dragging .shot.hot::after,
 body.dragging .rbox.drop-hit::after,body.dragging #ds-sheet.hot::after{
   content:attr(data-drop);position:absolute;left:50%;top:50%;
   transform:translate(-50%,-50%);padding:5px 11px;border-radius:var(--r-pill);
-  background:rgba(0,0,0,.74);backdrop-filter:blur(8px);color:#f5f5f5;
+  background:rgba(0,0,0,.74);backdrop-filter:blur(8px);color:var(--fg);
   font-weight:500;font-size:12px;line-height:1;white-space:nowrap;max-width:calc(100% - 12px);
   overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:6}
 /* The contact sheet is the one target taller than the window — it is the thing
@@ -2348,6 +2547,12 @@ body.dragging #ds-sheet.hot::after{position:fixed;top:auto;bottom:104px;
    "nothing in this one yet" and illegible as "this is the one you are about to
    drop on". */
 body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
+/* The empty frame's one sentence — see RegionLayer. Dim and dead to the
+   pointer, because it is a caption on a surface whose gestures it must not
+   eat; gone the moment a box exists. */
+#region-layer .rl-invite{position:absolute;inset:0;display:grid;place-items:center;
+  color:var(--dim);font-size:13px;pointer-events:none;
+  -webkit-user-select:none;user-select:none}
 
 .wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
@@ -2368,6 +2573,14 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
   .views{position:static;min-height:0}
   .view{position:static;flex-direction:column;min-height:calc(100dvh - var(--head))}
   .canvas{overflow:visible}
+  /* A render must not scroll Generate away. The canvas is the flexible row
+     here, so a square render grew it past the viewport and the console — and
+     the reserved note row, the one channel a LoRA warning has — landed below
+     the fold: measured, the warning sat at y=942 in a 945px viewport. Capping
+     the media keeps picture + receipt + console inside one screen at both
+     tablet and phone heights; the page can still scroll, it just does not
+     have to be scrolled to be believed. */
+  .film .shot img,#vid-out video{max-height:min(62dvh,calc(100dvh - 340px))}
   .console{max-height:none;padding:13px 16px 15px}
   /* The gallery grid crops to squares here, which is the one place this app
      deliberately trades information for density — and the trade is right
@@ -2503,3 +2716,65 @@ body.dragging .rbox.drop-hit{opacity:1;border-color:#fff}
    input ate the row. 260px holds the placeholder's example sentence. */
 #g-plate-sec .plate-obj{width:280px;flex:none}
 #g-plate-sec .plate-obj img{width:26px;height:26px}
+
+
+/* ── the sheet composer ─────────────────────────────────────────────────────
+   Its own surface, entered by the Sheet door. The canvas IS the export —
+   `drawSheet` at full resolution, downscaled by CSS only — and the wells under
+   it are the slots, because an empty slot is an invitation and invitations do
+   not export. */
+/* `height:100%`, because `.views` is a block container: `flex:1` does nothing
+   there, so the stage was content-sized — which let the canvas set the page's
+   height and eat the screen. With the stage pinned to the viewport, the view
+   row's `flex:1` is what hands the canvas its room. */
+.sheet-stage{height:100%;min-height:0;display:flex;flex-direction:column;gap:12px;
+  padding:16px 28px 18px;overflow:auto}
+/* Scoped to the composer's stage: the modal sheets share the class name, and
+   the unscoped version of these rules reached into them — `.grow{flex:none}`
+   glued the close button to the title instead of sending it to the far edge. */
+.sheet-stage .sheet-head{display:flex;align-items:center;gap:10px;flex:none}
+.sheet-stage .sheet-head input{border:1px solid transparent;background:var(--wash-2);
+  border-radius:var(--r-inner);padding:7px 10px;font-size:12.5px;color:var(--fg)}
+.sheet-stage .sheet-head input::placeholder{color:#3a3a40}
+.sheet-stage .sheet-head input:focus{border-color:var(--line-2);outline:none}
+.sh-name{width:190px;font-weight:600}
+.sh-role{width:230px}
+.sh-note{flex:1;min-width:120px}
+.sheet-stage .sheet-head .grow{flex:none}
+/* Cast leads and Download is quiet: one action goes somewhere and one saves a
+   file, and the one that goes somewhere is the reason the surface exists. */
+.sheet-stage .sheet-head .b.quiet{background:var(--wash-2);border:1px solid transparent;color:var(--mut)}
+.sheet-stage .sheet-head .b.quiet:hover:not(:disabled){color:var(--fg);background:var(--wash-3)}
+/* The canvas is out of flow, and that is the whole fix for a sheet that ate
+   the screen: in flow, `max-height:100%` resolves against a track whose height
+   the canvas itself was setting — a cycle browsers break by ignoring the cap —
+   so the 1920-wide canvas laid out at full width, 819px tall at 1512x982, and
+   pushed the wells and the strip below the fold. Absolute, the view's height
+   comes from flex alone and the caps finally have a number to cap against;
+   `margin:auto` centres a replaced element with an intrinsic ratio both ways. */
+.sheet-view{flex:1;min-height:160px;position:relative}
+#sheet-canvas{position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;
+  aspect-ratio:16/9;border-radius:6px;box-shadow:0 0 0 1px var(--line)}
+/* Six wells, one per template slot. A well is a drop target and a picker; set,
+   it shows what it holds and a click clears it. */
+.sheet-wells{display:flex;gap:8px;flex:none;justify-content:center}
+.swell{position:relative;width:108px;height:78px;border:1px dashed var(--line);
+  border-radius:var(--r-inner);background:none;color:var(--dim);cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;overflow:hidden;padding:0}
+.swell:hover{border-color:var(--line-2);color:var(--fg)}
+.swell.hot{border-style:solid;border-color:var(--line-2);background:var(--wash-3)}
+.swell.set{border-style:solid;border-color:var(--line)}
+.swell img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  opacity:.85}
+.swell b{position:relative;font-size:9px;font-weight:600;letter-spacing:.08em;
+  z-index:1;padding:1px 5px;border-radius:3px}
+.swell.set b{background:rgba(0,0,0,.55);color:#eee}
+.swell i{font-style:normal;font-size:14px;position:relative;z-index:1}
+.swell.set i{display:none}
+/* Your own generations, one drag from a slot. */
+.sheet-strip{display:flex;gap:6px;flex:none;overflow-x:auto;padding:2px;
+  justify-content:safe center}
+.sheet-strip img{height:56px;border-radius:4px;cursor:grab;flex:none;
+  border:1px solid var(--line)}
+.sheet-strip img:hover{border-color:var(--line-2)}

@@ -79,6 +79,15 @@ export type LoraEntry = {
   root: string
   bytes: number
   catalogue: string
+  /** Which family's weights these are — 'krea2', 'h3', or '' when nothing on
+   *  the volume says (a hand-dropped file claims no architecture, so both
+   *  pickers keep offering it). From the catalogue spec or the training
+   *  sidecar; optional because an older server omits it. */
+  arch?: string
+  /** Machinery, not an instrument: the compose path's identity-edit weight is
+   *  loaded by name and must not be offered by any picker. Settings still
+   *  lists it — hidden from the pickers is not hidden. */
+  internal?: boolean
   files: LoraFile[]
 }
 

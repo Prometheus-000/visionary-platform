@@ -1,3 +1,4 @@
+import { fmtBytes } from '../format'
 import { Menu } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
 import { useStore } from '../store'
@@ -28,11 +29,21 @@ export function LoraButton({ id }: { id: string }) {
   const loras = useStore((s) => s.loras)
   const toggleLora = useStore((s) => s.toggleLora)
   const pop = usePopover()
-  const index = loraIndex(state)
+  // This strip is the Krea 2 console, so the H3 side's weights — the speed
+  // LoRAs are the ones that actually land on a volume — are not offered:
+  // loaded here they match no keys, warn nowhere, and read as a LoRA that was
+  // simply subtle. Unclaimed files ('') stay, because a hand-dropped file
+  // says nothing about what it is for.
+  const index = loraIndex(state).filter((l) => l.arch !== 'h3')
 
   // Ticked means "already on the canvas", and the tick is what makes the second
   // click legible as a removal rather than a click that did nothing.
   const on = new Set(loras.map((l) => l.path))
+  // Two rows whose labels fold to the same string — `Portrait` beside
+  // `portrait` — are told apart by the one fact that always differs: the
+  // file's own weight. Only then; a size on every row would be noise.
+  const folded = index.map((l) => l.token.toLowerCase())
+  const collides = (t: string) => folded.filter((x) => x === t.toLowerCase()).length > 1
 
   return (
     <>
@@ -49,7 +60,8 @@ export function LoraButton({ id }: { id: string }) {
                 // it appears for a LoRA you did not train yourself — so it is
                 // here as something to read and type where you want it, which is
                 // the whole of what "nothing writes trigger words" leaves.
-                hint: l.trigger || undefined,
+                hint: l.trigger
+                  || (collides(l.token) ? fmtBytes(l.bytes) : undefined),
                 on: on.has(l.path),
                 run: () => toggleLora(chipFrom(l)),
               }))} />

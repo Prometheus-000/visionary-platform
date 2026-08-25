@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import type { Session } from '../api/types'
 import type { DatasetRow } from '../datasets/useDatasets'
+import { ago } from '../gallery/types'
 import { Sheet } from '../ui/Sheet'
 import { useBusy } from '../ui/useBusy'
 import { isActive } from './useSessions'
@@ -117,6 +118,12 @@ export function SessionCard({
 
       <div className="sess-head">
         <span className={`chip ${s.status}`}>{LABEL[s.status] ?? s.status}</span>
+        {/* Two DONE cards are otherwise indistinguishable in time, and "which
+            was the recent k3nan" is the question a board of finished runs gets
+            asked most. `updated` over `created` because a re-run moves it. */}
+        {!active && (
+          <span className="muted sess-when">{ago(s.updated ?? s.created)}</span>
+        )}
         <span className="grow" />
         {!active && (
           // The same corner and the same gesture as a set card's delete. It is

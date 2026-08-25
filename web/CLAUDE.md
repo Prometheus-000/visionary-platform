@@ -1040,6 +1040,26 @@ rather than one, and it is the rule to check first if any of it is ever moved.
   Nothing in the page had ever let anyone reach it. Two drops on one target now
   do.
 
+- **Templated is ours; intent is theirs — and a reference's *type* is what
+  swaps a sentence between the two.** The division the whole video side runs
+  on, stated once: instruction text the format dictates — the alignment
+  sentences, the retention grammar, the voice-timbre line, a character sheet's
+  citation, `subject_definitions`' shape — is the compiler's to write, and the
+  person never sees or types it. Everything carrying intent — what a subject
+  *is*, what a picture *provides*, the prose, the dialogue — is theirs and
+  travels verbatim. When a control would ask the person to type instruction
+  text, the control is wrong; when the compiler would rewrite intent, the
+  compiler is wrong.
+
+  A character sheet is the worked example. Marking a picture as a sheet is a
+  *typed fact*, one click on its row — and zero clicks when Cast made the
+  sheet, because provenance is certain. Marked, the compiler writes the
+  guide-shaped citation (the sheet's views and on-image labels doing the
+  defining, MiniMax's own construction for a labeled reference card) and the
+  row's note field becomes a grey readout saying so — derived, always visible,
+  never a field asking for words the run will not read. The description stays
+  the person's and leads the definition untouched.
+
 - **One rail, three kinds of chip** — cast, shot pills, LoRAs. They were three
   mechanisms in two places and they are one tool: each is something attached to
   the thing you are making, and each opens its own card when touched.
@@ -1060,27 +1080,33 @@ rather than one, and it is the rule to check first if any of it is ever moved.
   correct it, so the menu placed itself at 0,0; and picking left the menu open on
   the name just chosen, which is a picker that will not take yes for an answer.
 
-### The compiled document is view source
+### The compiled document is one gesture away, and it is not a developer tool
 
 **Reading the prompt is not a step in composing.** It was frame 6 of the ladder
-and that was the error: the scene is the source and the document is what it
-compiles to, so the precedent is not a disclosure, it is devtools — and four
-things follow rather than being chosen.
+and that was the error: the document is secondary — hidden most of the time,
+one gesture away.
 
-- **No button says "inspect".** Devtools is a chord and a context menu and the
-  page never advertises it, so the composer carries nothing for this. ⌘⌥U, which
-  is the browser's own chord for exactly this, or right-click the console — one
-  of the two has to be findable without being told. It stands aside for a text
-  field's spelling menu or an image's Save Image rather than deciding it outranks
-  the platform.
+**And "secondary" is a claim about attention, never about aesthetics.** The
+devtools metaphor below got taken literally for a while — monospace, an
+uppercase COMPILED tag, a view-source costume — and the owner's correction is
+the record: *"my only point was that it should be treated as something that
+doesn't need to be seen most of the time but is one click away. I did not
+actually want it to look like code. My whole design thesis is it should not
+feel utilitarian."* The document is prose the model reads, so it is set as
+quiet prose in the app's own type, at a reading measure. What survives of the
+metaphor is the **access pattern** only:
+
+- **No button says "inspect".** A chord and a context menu, never advertised.
+  ⌘⌥U, or right-click the console — one of the two has to be findable without
+  being told. It stands aside for a text field's spelling menu or an image's
+  Save Image rather than deciding it outranks the platform.
 - **It is not in the console budget, because it is not in the console.** It takes
   the canvas the way devtools takes the window, and nobody is judging a render
   while reading a prompt. The surface that kept breaking the budget stops
   competing for it.
-- **A textarea, not a `<pre>`,** and the edit is what runs. Where the precedent
-  stops applying: a devtools edit evaporates on reload because the source file is
-  the truth you port back to, and here that would be a render you cannot
-  reproduce. So editing **detaches** — one bit for the whole document, visible in
+- **A textarea, not a `<pre>`,** and the edit is what runs. Unlike an
+  inspector's edit, this one cannot be allowed to evaporate — that would be a
+  render you cannot reproduce. So editing **detaches** — one bit for the whole document, visible in
   the header, one gesture back. Not per-field pinning: six independent states
   nobody asked for, and an attempt to make a derived surface partly
   authoritative. Either the scene is driving it or you have taken it over, and

@@ -249,6 +249,15 @@ export const warm = (kind: 'image' | 'video' = 'image') =>
 
 /* ---- outputs and the gallery ----------------------------------------- */
 
+/** The Arsenal's characters. The listing is names and notes for the picker;
+ *  the files come one at a time off their own route when somebody picks. */
+export const characters = () =>
+  api<Record<string, unknown>>('/api/characters')
+export const saveCharacter = (handle: string, body: unknown) =>
+  post<Record<string, unknown>>(`/api/characters/${seg(handle)}`, body)
+export const characterFileUrl = (handle: string, file: string) =>
+  `/api/character-file/${seg(handle)}/${seg(file)}`
+
 export const gallery = (before = 0, limit = 200) =>
   api<Record<string, unknown>>(`/api/gallery?before=${before}&limit=${limit}`)
 export const fileUrl = (jobId: string, name: string) =>

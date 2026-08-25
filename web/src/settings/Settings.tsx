@@ -8,7 +8,7 @@ import {
 import type { AppState, GpuChoice, LoraEntry, ModelEntry } from '../api/types'
 import { useStore } from '../store'
 import { fmtBytes } from '../format'
-import { IconClose } from '../icons'
+import { IconClose, IconDownload } from '../icons'
 import { ErrorNote } from '../ui/ErrorNote'
 import { useBusy } from '../ui/useBusy'
 import { useDownload } from './useDownload'
@@ -37,6 +37,13 @@ export function Settings({
   // that failed on a path guard answers with the route's own report behind it, and
   // widening the state is all it costs to keep that reachable.
   const [loraError, setLoraError] = useState<string | ApiError | null>(null)
+  /* Which families are unfolded, keyed by name; unset means "open unless
+     complete". A complete family is a list of green ticks — true, and not
+     worth twenty rows of the one screen that has to be scrolled to be used.
+     The head still says `complete`, so nothing is hidden that a glance was
+     answering; the rows are one click away, and the fold is session state
+     rather than stored, because `It never remembers unless told`. */
+  const [openFams, setOpenFams] = useState<Record<string, boolean>>({})
   const dl = useDownload()
   // Save and every row's ✕ on one keyed flag. `dl.busy` is the uplink, which is a
   // different thing and already had its own; this is the two mutations on this sheet
@@ -98,7 +105,7 @@ export function Settings({
     <div id="settings" className="scrim">
       <div className="sheet">
         <div className="sheet-head">
-          <h1 className="grow">Settings</h1>
+          <h1 className="grow">Models</h1>
           <button className="ico" id="settings-x" type="button" onClick={onClose}>
             <IconClose />
           </button>
@@ -107,7 +114,7 @@ export function Settings({
         <div className="card">
           <label>GPU</label>
           <div className="row" style={{ gap: 10 }}>
-            <GpuSelect id="g-gpu" label="Images" side="image" spec={state?.gpus.image} />
+            <GpuSelect id="g-gpu" label="Image" side="image" spec={state?.gpus.image} />
             <GpuSelect id="v-gpu" label="Video" side="video" spec={state?.gpus.video} />
           </div>
           <p className="muted" style={{ margin: '9px 2px 0' }}>
@@ -222,7 +229,7 @@ export function Settings({
                 <button className="lora-x" type="button" disabled={!!busy}
                         title={busy === `lora:${l.root}` ? 'Deleting…' : 'Delete'}
                         onClick={() => void removeLora(l)}>
-                  {busy === `lora:${l.root}` ? '…' : '✕'}
+                  {busy === `lora:${l.root}` ? '…' : <IconClose />}
                 </button>
               </div>
             )) : (
@@ -245,21 +252,32 @@ export function Settings({
             const left = f.items.filter((m) => !m.present)
             const size = left.reduce((a, m) => a + m.approx_gb, 0)
             const id = `fam:${f.name}`
+            const open = openFams[f.name] ?? left.length > 0
             return (
               <div className="fam" key={f.name}>
                 <div className="fam-head">
-                  <b>{f.name}</b>
+                  {/* The name is the toggle; the caret is what says so. A
+                      separate disclosure control beside the name would be two
+                      marks for one act. `.fam-dl` keeps its own button because
+                      a toggle and a 17 GB download must not share a target. */}
+                  <button className="t fam-toggle" type="button" aria-expanded={open}
+                          onClick={() => setOpenFams((o) => ({ ...o, [f.name]: !open }))}>
+                    <span className={`caret${open ? ' open' : ''}`} aria-hidden="true" />
+                    <b>{f.name}</b>
+                  </button>
                   <span className="muted">
                     {left.length ? `${left.length} missing · ${size.toFixed(1)} GB` : 'complete'}
                   </span>
                   {/* One short shows no button at all, because that is what its
                       own Download already is. */}
-                  {/* The primary action of this screen, and now the only `.b` on it.
-                      A family is the unit you decide in — you want the stack or
-                      you do not — so this is the press that matters, and the per-file
-                      buttons below are the escape hatch. */}
+                  {/* A family is the unit you decide in — you want the stack or
+                      you do not — so this is the press that matters, and the
+                      per-file buttons below are the escape hatch. A quiet pill
+                      now rather than the screen's one `.b`: the mockup's call,
+                      and the white fill was drawing a purchase decision louder
+                      than the canvas draws Generate. */}
                   {left.length > 1 && (
-                    <button className="b" type="button" disabled={dl.busy}
+                    <button className="s fam-dl" type="button" disabled={dl.busy}
                             onClick={() => void dl.begin(id, id, `${f.name} downloaded.`,
                               () => downloadFamily(f.name, token), onReload)}>
                       Download all {left.length}
@@ -268,50 +286,70 @@ export function Settings({
                 </div>
                 <Line p={dl.progressOf(id)} bar onCancel={() => void dl.cancel(id, id)} />
 
-                {f.items.map((m) => {
-                  const p = dl.progressOf(m.key)
-                  return (
-                    <div className="card row" key={m.key}>
-                      <div className="grow">
-                        <b>{m.label}</b> <span className="muted">{m.note}</span>
-                        {m.gated && <span className="warn" style={{ fontSize: 12 }}> · gated</span>}
-                        <div className="muted" style={{ marginTop: 3 }}><code>{m.repo_id}</code></div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        {m.present ? (
-                          <span className="ok">✓ {m.size_gb} GB</span>
-                        ) : (
-                          <>
-                            <button className="s" type="button" disabled={dl.busy}
-                                    onClick={() => void dl.begin(m.key, `dl_${m.key}`, 'Done',
-                                      () => startDownload(m.key), onReload)}>
-                              Download {m.approx_gb} GB
-                            </button>
-                            {p.running && (
-                              <button className="s" type="button"
-                                      onClick={() => void dl.cancel(m.key, `dl_${m.key}`)}>
-                                Cancel
-                              </button>
-                            )}
-                          </>
-                        )}
-                        {p.tone === 'err' ? (
-                          // Left-aligned and capped by hand: this column is
-                          // `text-align:right` and sized by its own content, so an
-                          // err-box dropped into it would right-align a traceback and
-                          // stretch the card until the label beside it wrapped a word
-                          // per line.
-                          <ErrorNote err={{ error: p.message, detail: p.detail }}
-                                     style={{ textAlign: 'left', maxWidth: 280, margin: '8px 0 0' }} />
-                        ) : (
-                          <div className={`muted dl-state${p.tone === 'ok' ? ' ok' : ''}`}>
-                            {p.message}
+                {/* One card per family, rows inside — the LoRA list's own
+                    shape, and the caption menu's. Twenty sibling cards made
+                    the catalogue a wall of frames where the reading unit is
+                    the family; a hairline per row is the same information at
+                    a third of the chrome. */}
+                {open && (
+                  <div className="card">
+                    {f.items.map((m) => {
+                      const p = dl.progressOf(m.key)
+                      return (
+                        <div className="mrow" key={m.key}>
+                          <div className="grow" style={{ minWidth: 0 }}>
+                            <b>{m.label}</b> <span className="muted">{m.note}</span>
+                            {m.gated && <span className="warn" style={{ fontSize: 12 }}> · gated</span>}
+                            <div className="muted" style={{ marginTop: 3 }}><code>{m.repo_id}</code></div>
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
+                          <div style={{ textAlign: 'right' }}>
+                            {m.present ? (
+                              <span className="ok">✓ {m.size_gb} GB</span>
+                            ) : (
+                              <span className="row" style={{ gap: 12, justifyContent: 'flex-end' }}>
+                                <span className="muted" style={{ whiteSpace: 'nowrap' }}>
+                                  {m.approx_gb} GB
+                                </span>
+                                {/* The size is the label, so the button can be a
+                                    mark — a control whose value is beside it, in
+                                    the row you are already reading. Cancel takes
+                                    the slot while the pull runs: two controls in
+                                    one place would be an invitation to press the
+                                    dead one. */}
+                                {p.running ? (
+                                  <button className="s" type="button"
+                                          onClick={() => void dl.cancel(m.key, `dl_${m.key}`)}>
+                                    Cancel
+                                  </button>
+                                ) : (
+                                  <button className="icx" type="button" disabled={dl.busy}
+                                          title={`Download ${m.approx_gb} GB`}
+                                          onClick={() => void dl.begin(m.key, `dl_${m.key}`, 'Done',
+                                            () => startDownload(m.key), onReload)}>
+                                    <IconDownload />
+                                  </button>
+                                )}
+                              </span>
+                            )}
+                            {p.tone === 'err' ? (
+                              // Left-aligned and capped by hand: this column is
+                              // `text-align:right` and sized by its own content, so an
+                              // err-box dropped into it would right-align a traceback and
+                              // stretch the card until the label beside it wrapped a word
+                              // per line.
+                              <ErrorNote err={{ error: p.message, detail: p.detail }}
+                                         style={{ textAlign: 'left', maxWidth: 280, margin: '8px 0 0' }} />
+                            ) : (
+                              <div className={`muted dl-state${p.tone === 'ok' ? ' ok' : ''}`}>
+                                {p.message}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -384,7 +422,7 @@ function CaptionModels({ state, onReload }: {
             <button className="lora-x" type="button" disabled={!!busy}
                     title={busy === `rm:${m.key}` ? 'Removing…' : 'Remove from the menu'}
                     onClick={() => void remove(m.key, m.label)}>
-              {busy === `rm:${m.key}` ? '…' : '✕'}
+              {busy === `rm:${m.key}` ? '…' : <IconClose />}
             </button>
           )}
         </div>

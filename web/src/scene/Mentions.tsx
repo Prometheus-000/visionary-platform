@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { useStore } from '../store'
 import { handleOf } from './model'
+import { hydrate, listCharacters, type SavedCharacter } from './arsenal'
 
 /**
  * The picker you get by typing `@`, and the only way most people will ever make
@@ -75,6 +76,10 @@ export function MentionMenu({ anchorRef, mention, onPick, onClose }: {
   const box = useRef<HTMLDivElement>(null)
   const [at, setAt] = useState<{ left: number; top: number } | null>(null)
   const [sel, setSel] = useState(0)
+  // The Arsenal, fetched when the menu opens. Names and notes only, at popover
+  // speed; a saved character's files come one at a time when somebody picks.
+  const [saved, setSaved] = useState<SavedCharacter[]>([])
+  useEffect(() => { void listCharacters().then(setSaved) }, [])
 
   const q = handleOf(mention.query)
   const hits = s.scene.cast
@@ -101,7 +106,24 @@ export function MentionMenu({ anchorRef, mention, onPick, onClose }: {
       s.setRailOpen(member.id)
     },
   }]
-  const items = [...hits, ...makes]
+  // The Arsenal's rows — the recall half of "saved deliberately, recalled by
+  // typing". A saved character already in this scene's cast is not offered
+  // twice; picking one creates the member now (the caret needs its handle) and
+  // hydrates the files behind it, onto a card already open to watch them land.
+  const recalls = saved
+    .filter((c) => c.handle && !taken.has(c.handle)
+                   && (!q || c.handle.startsWith(q)))
+    .map((c) => ({
+      label: `@${c.handle}`,
+      note: c.note ? `saved — ${c.note}` : 'saved',
+      run: () => {
+        const member = s.addCast('subject', c.handle)
+        onPick(member.name)
+        s.setRailOpen(member.id)
+        void hydrate(member.id, c)
+      },
+    }))
+  const items = [...hits, ...recalls, ...makes]
 
   useLayoutEffect(() => {
     const el = box.current

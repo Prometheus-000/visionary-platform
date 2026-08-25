@@ -40,7 +40,11 @@ export function Doors({ onPalette }: {
 }) {
   const s = useStore()
   const lora = usePopover()
-  const index = loraIndex(s.state)
+  // The H3 side of the same split `LoraButton` makes: a Krea 2 weight loaded
+  // into an H3 run matches no keys and warns nowhere. What this leaves is the
+  // speed LoRAs — this menu is ComfyUI's `turbo_mode` toggle, as a pick — and
+  // anything unclaimed ('').
+  const index = loraIndex(s.state).filter((l) => l.arch !== 'krea2')
   const on = new Set(s.loras.map((l) => l.path))
 
   const add = () => {

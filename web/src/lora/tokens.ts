@@ -78,6 +78,13 @@ export type LoraFile = {
   trigger: string
   /** The strength the server says this LoRA works at, when it says one. */
   strength: number | null
+  /** 'krea2', 'h3', or '' when nothing on the volume says. Each picker skips
+   *  the other side's architecture — a wrong-family LoRA loads nothing and
+   *  warns nowhere — and offers the unclaimed ones to both. */
+  arch: string
+  /** The entry's weight on disk — the one fact that separates two files whose
+   *  names differ only by case. */
+  bytes: number
 }
 
 /**
@@ -94,7 +101,11 @@ let cacheVal: LoraFile[] = []
 export function loraIndex(state: AppState | null): LoraFile[] {
   const rows = state?.loras ?? []
   if (rows === cacheKey) return cacheVal
-  const flat = rows.flatMap((l) =>
+  // `internal` never reaches the index at all: the compose path loads the
+  // identity-edit weight by name, and a picker offering it is one mis-click
+  // from running machinery as an instrument. Settings still lists it off
+  // `state.loras` directly, so it stays deletable.
+  const flat = rows.filter((l) => !l.internal).flatMap((l) =>
     l.files.map((f) => {
       const path = String(f.path ?? '')
       const rel = (path.split('/loras/').pop() ?? path).replace(/\.safetensors$/i, '')
@@ -104,13 +115,20 @@ export function loraIndex(state: AppState | null): LoraFile[] {
         file: path.split('/').pop() ?? path,
         trigger: l.trigger_word ?? '',
         strength: l.strength ?? null,
+        arch: l.arch ?? '',
+        bytes: l.bytes,
       }
     }),
   )
   cacheKey = rows
+  // Case-insensitive, matching the resolver: `Portrait` and `portrait` are two
+  // real files, and two menu rows whose labels differ only in a capital are a
+  // picker you cannot use — the collision test has to see them collide so the
+  // rows can be told apart some other way (see `LoraButton`'s size hint).
+  const fold = (s: string) => s.toLowerCase()
   cacheVal = flat.map((l) => ({
     ...l,
-    token: flat.filter((x) => x.stem === l.stem).length === 1 ? l.stem : l.rel,
+    token: flat.filter((x) => fold(x.stem) === fold(l.stem)).length === 1 ? l.stem : l.rel,
   }))
   return cacheVal
 }

@@ -13,11 +13,12 @@ import { MetaSheet } from './gallery/MetaSheet'
 import { Viewer } from './gallery/Viewer'
 import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
-import { IconBack, IconGear, IconPanel, IconPhoto, IconTrain } from './icons'
+import { IconBack, IconCube, IconPanel, IconPhoto, IconStack, IconTrain } from './icons'
 import { fileToB64, toB64 } from './media/files'
 import { Settings } from './settings/Settings'
 import { warmDatasets } from './datasets/useDatasets'
 import { Train } from './train/Train'
+import { SheetBuilder } from './sheet/SheetBuilder'
 import { isActive, useSessions } from './train/useSessions'
 import { supports, useStore } from './store'
 import { useVideo } from './video/useVideo'
@@ -474,6 +475,9 @@ export function App() {
       if (now.keyframe.first || now.keyframe.last || now.refs.length || now.refVids.length) return
       if (!videoReady({ ...now, keyframe: { first: b64, last: null } }).ready) return
       now.setKeyframe('first', b64)
+      // After the write, because setKeyframe clears it: the note line names
+      // the actor when the first frame was the app's doing, not a hand's.
+      now.setAutoFirst(true)
     })()
   }, [s.kind, gen.run.jobId, gen.run.files])
 
@@ -491,6 +495,16 @@ export function App() {
   return (
     <>
       <header className="top">
+        {/* The light behind the mark. Out of the flex flow and out of the a11y
+            tree — it is the logotype's ground, not a second thing in the header
+            — and a sibling rather than something inside the button because the
+            bar is what clips it. See `.brand-leak` in ui.css. */}
+        <span className="brand-leak" aria-hidden="true">
+          {/* The two lights are wrapped because the mask that dissolves them
+              into the bar has to leave the grain outside it — see `.lights`. */}
+          <span className="lights"><span className="a" /><span className="b" /></span>
+          <span className="grain" />
+        </span>
         <button className="brand" id="go-home" type="button"
                 onClick={() => { setGalleryOpen(false); s.setMode('generate') }}>
           Visionary
@@ -502,11 +516,29 @@ export function App() {
             of the half you train them in. A door, so it takes a word; hidden in
             Train because there the header's job is the way back, and moving
             between the board and the sets stays on the stage where it happens. */}
+        {/* The sheet composer's door. Its own surface rather than a popover
+            off a cast card — composing a reference sheet is neither generating
+            nor training, and the label follows Train's rule: named for where
+            it leads. Inside, the same door is the way back. */}
+        {/* Each word rides a `.door-word` span, which the phone drops the way
+            the training door's live label already does: at 375px the row
+            overflowed and the Models button sat at x=385 — reachable on no
+            phone at all. The icons have to differ once they stand alone, which
+            is why Sets stopped sharing Sheet's photograph glyph. */}
+        {!train && (
+          <button className="door" id="door-sheet" type="button"
+                  title="Compose a character reference sheet"
+                  onClick={() => { s.setMode(s.mode === 'sheet' ? 'generate' : 'sheet') }}>
+            <IconPhoto />
+            <span className="door-word">{s.mode === 'sheet' ? 'Done' : 'Sheet'}</span>
+          </button>
+        )}
         {!train && (
           <button className="door" id="door-sets" type="button"
+                  title="Datasets — the folders training reads"
                   onClick={() => { setTrainScreen('sets'); s.setMode('train') }}>
-            <IconPhoto />
-            Sets
+            <IconStack />
+            <span className="door-word">Sets</span>
           </button>
         )}
         {/* Each door names its own landing: Training opens on the board even if
@@ -520,14 +552,20 @@ export function App() {
             <IconPanel />
           </button>
         )}
-        <button className="ico" id="t-settings" title="Settings" type="button"
+        {/* "Models", not "Settings": the sheet holds weights — checkpoints,
+            LoRAs, caption models — plus the GPU and token that serve them.
+            There is no setting in it. The id stays `t-settings` because
+            check_settings.py reaches the sheet through it. */}
+        <button className="ico" id="t-settings" title="Models" type="button"
                 onClick={() => { setSettingsOpen(true); void reloadState() }}>
-          <IconGear />
+          <IconCube />
         </button>
       </header>
 
       <div className="views">
-        {train ? (
+        {s.mode === 'sheet' ? (
+          <SheetBuilder />
+        ) : train ? (
           // A set can hold clips now, and the viewer needs to know which it is being
           // handed. The route is the tell — `/api/clip/` is the only thing that serves
           // one — which keeps the Editor's callback one argument wide rather than making
@@ -581,6 +619,7 @@ export function App() {
               total={total}
               behind={behind}
               open={galleryOpen}
+              drawerOpen={drawerOpen}
               onClose={() => setGalleryOpen(false)}
               onReload={() => {
                 setGalleryOpen(true)
@@ -637,17 +676,19 @@ function Door({ running, onOpen }: { running: Session[]; onOpen: () => void }) {
 
   if (mode === 'train') {
     return (
-      <button className="door" id="door" type="button" onClick={() => setMode('generate')}>
+      <button className="door" id="door" type="button" title="Back to the canvas"
+              onClick={() => setMode('generate')}>
         <IconBack />
-        Generate
+        <span className="door-word">Generate</span>
       </button>
     )
   }
   if (pct == null) {
     return (
-      <button className="door" id="door" type="button" onClick={enter}>
+      <button className="door" id="door" type="button" title="Training sessions"
+              onClick={enter}>
         <IconTrain />
-        Train
+        <span className="door-word">Train</span>
       </button>
     )
   }

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 
 import { useStore } from '../store'
-import { SHOT_SECONDS, shares, type Shot } from './model'
+import { sceneSeconds, SHOT_SECONDS, shares, type Shot } from './model'
 
 /**
  * Time, along the axis time actually runs on.
@@ -49,7 +49,14 @@ const tick = (t: number) => {
 export function Timeline() {
   const s = useStore()
   const shots = s.scene.shots
-  const secs = shares(shots)
+  // While the scene is not live — one shot, nothing dragged — the run's length
+  // is the duration menu's, not `SHOT_SECONDS`. Drawing the default 4s bar
+  // under a menu reading 8s put two authorities on screen disagreeing about
+  // one clip; the bar shows what will actually run, and the first drag hands
+  // authority to the track exactly as `sceneSeconds` already decides.
+  const secs = sceneSeconds(s.scene) == null
+    ? [Number(s.vid.seconds) || SHOT_SECONDS]
+    : shares(shots)
   const total = secs.reduce((n, x) => n + x, 0)
   const track = useRef<HTMLDivElement>(null)
   /** Which bar is being pulled, so the whole track can suppress selection and

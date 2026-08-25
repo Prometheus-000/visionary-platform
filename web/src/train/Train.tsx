@@ -99,7 +99,11 @@ export function Train({ sess, onLightbox, screen, setScreen }: {
                 <div className="opts board-head" style={{ marginTop: 0 }}>
                   <button className="t" id="ds-back" type="button"
                           onClick={() => setScreen('board')}>
-                    ‹ Sessions
+                    {/* "Training", because that is the board's own title. It read
+                        "Sessions", which was a third S-word in a header already
+                        holding Sheet and Sets — and for anyone who arrived through
+                        the Sets door it named a place they had never been. */}
+                    ‹ Training
                   </button>
                   <h2>Sets</h2>
                   <span className="muted">

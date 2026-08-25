@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { fileUrl } from '../api/routes'
-import { IconClose, IconExpand, IconPhoto, IconPlay } from '../icons'
+import { IconClose, IconExpand, IconPhoto, IconPlay, IconPlus } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
 import { attached, regionsLive, useStore } from '../store'
@@ -198,16 +198,20 @@ export function Canvas({
               the whole of chaining and none of it is a model capability — it is
               context the person should never have to rebuild.
 
-              A word rather than a glyph, and the icon rule is what says so: the
-              two beside it act on the picture you are looking at, and this one
-              goes somewhere. That is a destination, and a destination cannot be
-              announced by a mark. */}
+              A plus sign, by the owner's call — and the word had stopped being
+              one anyway: `.wide` lost its width to `#canvas-acts .ico` on
+              cascade order, so "Continue" shipped clipped to "Con" at every
+              viewport. The count of takes stays in the title, where the mark's
+              one sentence lives. */}
           {!image && (
-            <button className="ico wide" id="canvas-chain" type="button"
+            <button className="ico" id="canvas-chain" type="button"
                     disabled={chaining}
-                    title="Write the next beat. The cast, the look and this last frame carry over."
+                    title={chaining ? 'Linking…'
+                      : 'Write the next beat. The cast, the look and this last '
+                        + 'frame carry over.'
+                        + (s.takes.length > 1 ? ` Take ${String(s.takes.length)}.` : '')}
                     onClick={onChain}>
-              {chaining ? 'Linking…' : `Continue${s.takes.length > 1 ? ` · ${String(s.takes.length)}` : ''}`}
+              <IconPlus />
             </button>
           )}
           <button className="ico" id="canvas-clear" title="Clear the canvas — ⌫" type="button"

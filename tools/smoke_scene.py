@@ -365,6 +365,37 @@ voiced["cast"][1]["refs"].append(
     {"kind": "audio", "index": 0, "slots": ["voice"]})
 vdoc = build(voiced, n_auds=1)
 vdefs, vret = field(vdoc, "subject_definitions"), field(vdoc, "retention_analysis")
+# **A sheet is a typed reference and its citation is templated.** The division
+# the platform runs on: instruction text the format wants is the compiler's,
+# what the subject *is* stays the person's words. Marking a picture as a
+# character sheet is the one bit that swaps which sentence gets written.
+sheeted = build({"style": "Live-action, cinematic",
+                 "cast": [{"id": "m", "kind": "subject", "name": "maya",
+                           "note": "a young woman",
+                           "refs": [{"kind": "image", "index": 0,
+                                     "slots": ["image"], "sheet": True}]}],
+                 "shots": [{"line": "@maya crosses the roof", "beats": 1}]},
+                n_refs=1, seconds=6.0)
+check("a sheet's citation is the compiler's sentence, not a note",
+      "is their labeled character reference sheet; its views and written "
+      "notes define their appearance." in field(sheeted, "subject_definitions"))
+check("the person's own description still leads it",
+      "<Subject 1> is a young woman." in field(sheeted, "subject_definitions"))
+check("retention speaks in the sheet's terms, once",
+      # Singular, because the sheet is the whole list — the plural belongs to
+      # a subject that also carries noted pictures.
+      "everything its reference sheet's views and notes define is retained"
+      in field(sheeted, "retention_analysis"))
+check("and does not also claim a bare appearance the sheet already covers",
+      "its appearance and" not in field(sheeted, "retention_analysis"))
+check("a sheet of audio is refused as the category error it is",
+      "only an image can be one" in refused(lambda: build(
+          {"cast": [{"id": "m", "kind": "subject", "name": "maya",
+                     "refs": [{"kind": "audio", "index": 0,
+                               "slots": ["audio"], "sheet": True}]}],
+           "shots": [{"line": "@maya speaks", "beats": 1}]},
+          n_auds=1, seconds=6.0)))
+
 check("an audio gets its own definition line",
       "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." in vdefs)
 check("and is not listed as one of the subject's pictures",

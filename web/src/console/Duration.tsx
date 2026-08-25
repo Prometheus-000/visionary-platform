@@ -1,4 +1,5 @@
 import { warm } from '../api/routes'
+import { sceneSeconds } from '../scene/model'
 import { Menu } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
 import { useStore } from '../store'
@@ -55,13 +56,23 @@ export function Duration() {
   // still says the feature exists.
   const none = !lengths.length
 
+  // Once the track is authored — a second shot, or a bar somebody dragged —
+  // the timeline owns time (`sceneSeconds`), and this button showing its own
+  // seconds would be the second authority the model.ts note warns about. So it
+  // becomes a readout of the track's total; picking a length with one authored
+  // shot writes that shot's bar, and with several shots the lengths go away
+  // entirely — the menu keeps the one job it can still hold honestly, which is
+  // still-or-motion.
+  const authored = !still && sceneSeconds(s.scene) != null
+  const total = sceneSeconds(s.scene)
+
   return (
     <>
       <button className={`opt ib${pop.open ? ' on' : ''}`} id="g-duration" type="button"
               disabled={none}
               title="How long. Still is a photograph; anything above it is a clip."
               onClick={pop.toggle}>
-        {still ? 'Still' : `${cur}s`}
+        {still ? 'Still' : `${total ?? cur}s`}
       </button>
       {pop.open && (
         <Menu anchor={pop.anchor} onClose={pop.close}
@@ -79,18 +90,24 @@ export function Duration() {
                     void warm('image')
                   },
                 },
-                ...lengths.map((n) => ({
+                ...(authored && s.scene.shots.length > 1 ? [] : lengths.map((n) => ({
                   label: `${n}s`,
-                  on: !still && String(n) === cur,
+                  on: !still && n === (total ?? Number(cur)),
                   run: () => {
                     // Both, and in this order: the seconds are what the video side
                     // will read on its first render, so writing them after the kind
                     // would paint one frame of the previous length.
                     s.setVid({ seconds: String(n) })
+                    // An authored single bar follows the pick — the track is
+                    // the authority, so the pick has to land on the track to
+                    // mean anything.
+                    if (authored && s.scene.shots[0]) {
+                      s.patchShot(s.scene.shots[0].id, { beats: n })
+                    }
                     s.setKind('video')
                     void warm('video')
                   },
-                })),
+                }))),
               ]} />
       )}
     </>

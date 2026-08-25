@@ -257,7 +257,7 @@ STATE = {
     # confirm dialogs worth being able to read side by side — one says the delete
     # is a download and the other says it is permanent.
     "loras": [
-        {"name": "my_style", "trigger_word": "ohwx_style",
+        {"name": "my_style", "trigger_word": "ohwx_style", "arch": "krea2",
          "root": "/workspace/loras/my_style", "bytes": 613_400_000, "catalogue": "",
          "files": [
             {"path": "/workspace/loras/my_style/my_style.safetensors",
@@ -270,12 +270,12 @@ STATE = {
         # placeholders so a screenshot taken against this server names weights a
         # reader can actually download.
         {"name": "darkbrush", "trigger_word": "monochrome ink wash style",
-         "strength": 1.3,
+         "strength": 1.3, "arch": "krea2",
          "root": "/workspace/loras/darkbrush.safetensors", "bytes": 469_291_992,
          "catalogue": "Krea 2 style LoRAs", "files": [
             {"path": "/workspace/loras/darkbrush.safetensors", "name": "darkbrush.safetensors"}]},
         {"name": "sunsetblur", "trigger_word": "ethereal motion blur style",
-         "strength": 1.3,
+         "strength": 1.3, "arch": "krea2",
          "root": "/workspace/loras/sunsetblur.safetensors", "bytes": 469_291_992,
          "catalogue": "Krea 2 style LoRAs", "files": [
             {"path": "/workspace/loras/sunsetblur.safetensors", "name": "sunsetblur.safetensors"}]},
@@ -294,9 +294,11 @@ STATE = {
             {"path": "/workspace/loras/portrait.safetensors", "name": "portrait.safetensors"}]},
         # The catalogue's own loose file. It was missing from this list while
         # `edit_lora` below said it was on the volume, which the real /api/state
-        # cannot do — it lands in loras/ and is listed like anything else there,
-        # picker included.
+        # cannot do — it lands in loras/ and is listed like anything else there.
+        # `internal` keeps it out of both pickers; Settings still lists it, and
+        # this stub holding one internal row is what proves the pickers skip it.
         {"name": "krea2_identity_edit_v1_2", "trigger_word": "",
+         "arch": "krea2", "internal": True,
          "root": "/workspace/loras/krea2_identity_edit_v1_2.safetensors",
          "bytes": 1_790_000_000, "catalogue": "Krea 2 — images", "files": [
             {"path": "/workspace/loras/krea2_identity_edit_v1_2.safetensors",
@@ -315,6 +317,14 @@ STATE = {
          "catalogue": "", "files": [
             {"path": "/workspace/loras/speed-b/high.safetensors", "name": "high"},
             {"path": "/workspace/loras/speed-b/low.safetensors", "name": "low"}]},
+        # The catalogue's H3 speed folder, arch-tagged. The image picker must
+        # not offer it and the video picker must — this row is the one that
+        # proves the split, which no untagged row above can.
+        {"name": "h3-speed", "trigger_word": "", "arch": "h3",
+         "root": "/workspace/loras/h3-speed", "bytes": 2_000_000_000,
+         "catalogue": "MiniMax-H3 speed LoRAs", "files": [
+            {"path": "/workspace/loras/h3-speed/fl2v-8step.safetensors",
+             "name": "fl2v-8step"}]},
     ],
     # One family, because there is one. This held three while there were two
     # more, on the rule that a stub with only one shape cannot catch a control
@@ -579,6 +589,10 @@ REMOVED: dict = {}
 # than per-request, because a run only reads as a run if consecutive polls
 # disagree with each other.
 RUNS: dict = {}
+# The stub's arsenal. In memory, because the preview's whole job is driving the
+# save-then-recall loop without a volume — a page reload keeps the server alive,
+# so a "fresh session" still finds what the last one saved.
+CHARS: dict = {}
 
 
 def train_status(job_id: str, name: str = "probe_lora") -> dict:
@@ -843,6 +857,31 @@ class Handler(BaseHTTPRequestHandler):
                              "volume — reopen Settings to refresh the list."})
             STATE["loras"].remove(row)
             return self.reply({"ok": True})
+
+        m = re.match(r"/api/characters/([^/]+)$", path)
+        if m:
+            try:
+                data = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                data = {}
+            refs = data.get("refs") or []
+            if not refs:
+                return self.reply({"error": "A character with no files is a "
+                                            "name. Attach something first."})
+            exts = {"image": "png", "audio": "wav", "video": "mp4"}
+            rec = []
+            for i2, r in enumerate(refs):
+                kind = r.get("kind", "image")
+                entry = {"file": "%02d-%s.%s" % (i2, kind, exts.get(kind, "bin")),
+                         "kind": kind, "b64": r.get("b64", "")}
+                if r.get("note"): entry["note"] = r["note"]
+                if r.get("sheet"): entry["sheet"] = True
+                rec.append(entry)
+            CHARS[m.group(1)] = {"note": data.get("note", ""),
+                                 "retention": data.get("retention", ""),
+                                 "refs": rec}
+            return self.reply({"ok": True, "handle": m.group(1),
+                               "files": len(rec)})
 
         if path == "/api/datasets":
             try:
@@ -1186,6 +1225,31 @@ class Handler(BaseHTTPRequestHandler):
             # line has nothing to read without it.
             return self.reply({"sessions": [session_view(r) for r in SESSIONS],
                                "total": len(SESSIONS)})
+        if path == "/api/characters":
+            return self.reply({"characters": [
+                {"handle": h, "note": c.get("note", ""),
+                 "retention": c.get("retention", ""),
+                 "refs": [{k: v for k, v in r.items() if k != "b64"}
+                          for r in c.get("refs", [])],
+                 "files": [r["file"] for r in c.get("refs", [])]}
+                for h, c in sorted(CHARS.items())]})
+        m = re.match(r"/api/character-file/([^/]+)/(.+)$", path)
+        if m:
+            c = CHARS.get(m.group(1))
+            r = next((x for x in (c or {}).get("refs", [])
+                      if x["file"] == m.group(2)), None)
+            if not r:
+                return self.reply({"error": "no such file"}, code=404)
+            body = base64.b64decode(r["b64"])
+            ctype = {"image": "image/png", "audio": "audio/wav",
+                     "video": "video/mp4"}[r.get("kind", "image")]
+            self.send_response(200)
+            self.send_header("content-type", ctype)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return None
+
         if path == "/api/datasets":
             return self.reply({"datasets": DATASETS})
 

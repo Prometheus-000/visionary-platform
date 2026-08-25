@@ -125,6 +125,13 @@ DATASETS = WORKSPACE / "datasets"
 DRAFTS = WORKSPACE / "drafts"
 WORK = WORKSPACE / "work"
 OUTPUTS = WORKSPACE / "outputs"
+# The Arsenal's first shelf: characters, saved deliberately and recalled by
+# typing their name. A character is a folder of the files that make them —
+# their pictures, their voice, a note.txt you can read in a terminal — because
+# storage layout is the contract and nothing here is required to get your
+# people back out. `character.json` beside them is the receipt that keeps what
+# filenames cannot: which picture is the sheet, what each file provides.
+CHARACTERS = WORKSPACE / "characters"
 STAGING = WORKSPACE / ".cache" / "hf-staging"
 
 # Deletions used to move here instead of unlinking. The name survives only so
@@ -679,9 +686,15 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
     # It lands in loras/ rather than models/ because that is what it is — the
     # regional node takes it through the same `folder_paths` lookup as a
     # character LoRA, and putting it anywhere else would mean teaching the
-    # node's combo about a second directory. The cost is that it appears in the
-    # LoRA picker like any other file, which is honest: you can write
-    # `<lora:krea2_identity_edit_v1_2:1>` and it will do something.
+    # node's combo about a second directory.
+    #
+    # `internal` keeps it out of the pickers. "It appears in the picker like
+    # any other file, which is honest" was written when the picker was prompt
+    # syntax and typing `<lora:krea2_identity_edit_v1_2:1>` was a deliberate
+    # act; the picker is a chip menu now, where the same entry is one mis-click
+    # from loading the compose path's own machinery into an ordinary render.
+    # The scene/outfit path still loads it by name, and Settings still lists,
+    # downloads and deletes it — hidden from the pickers is not hidden.
     #
     # Only the scene and outfit transfer path loads it. Every other render
     # names it in V12's required `edit_lora` slot and never opens it — see
@@ -699,6 +712,8 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": LORAS / "krea2_identity_edit_v1_2.safetensors",
         "gated": False,
         "approx_gb": 1.8,
+        "arch": "krea2",
+        "internal": True,
     },
     # ── MiniMax-H3 video ───────────────────────────────────────────────────
     #
@@ -815,6 +830,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": LORAS / "h3-speed" / "fl2v-8step.safetensors",
         "gated": False,
         "approx_gb": 2.0,
+        "arch": "h3",
     },
     "h3_speed_fl2v_4": {
         "label": "H3 speed · 4-step 768p",
@@ -825,6 +841,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": LORAS / "h3-speed" / "fl2v-4step-768p.safetensors",
         "gated": False,
         "approx_gb": 2.0,
+        "arch": "h3",
     },
     "h3_speed_ref2v_4": {
         "label": "H3 speed · 4-step reference",
@@ -835,6 +852,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": LORAS / "h3-speed" / "ref2v-4step.safetensors",
         "gated": False,
         "approx_gb": 2.0,
+        "arch": "h3",
     },
 
 }
@@ -893,6 +911,7 @@ MODEL_CATALOGUE.update({
         "dest": LORAS / f"{name}.safetensors",
         "gated": False,
         "approx_gb": 0.47,
+        "arch": "krea2",
     }
     for name, trigger in KREA_STYLE_LORAS.items()
 })
@@ -908,21 +927,24 @@ VIDEO_MODEL_KEYS = ("h3_dit", "h3_te", "h3_vae", "h3_audio_vae")
 VIDEO_REF_MODEL_KEYS = ("h3_ref_dit", "h3_te", "h3_vae", "h3_audio_vae")
 
 
-def _catalogue_lora_roots() -> dict[str, str]:
+def _catalogue_lora_roots() -> dict[str, dict[str, Any]]:
     """
-    {listing row -> family} for every catalogue weight that lands in loras/.
+    {listing row -> its catalogue spec} for every weight that lands in loras/.
 
     Keyed on the row rather than on the dest, because those are not the same
     thing: the identity-edit weight is a loose file at the top of loras/ while a
     trained LoRA is a folder holding its epochs, and it is the folder that one
     line of the LoRA listing stands for.
 
-    What reads it is the delete confirmation. Deleting a LoRA you trained costs
-    however many hours the run took and there is nothing behind the unlink;
-    deleting one of these costs a download, and the dialog is the only place that
-    difference can be said *before* the fact rather than discovered after.
+    The whole spec rather than the family alone, because the listing now serves
+    three of its facts: `family` (the delete confirmation says a catalogue LoRA
+    can be re-downloaded, where a trained one cannot), `arch` (what keeps an H3
+    speed LoRA out of the image picker and a Krea style out of the video one —
+    a LoRA for the wrong architecture loads nothing and warns nowhere), and
+    `internal` (the identity-edit weight, which the compose path loads by name
+    and a picker should never offer).
     """
-    out: dict[str, str] = {}
+    out: dict[str, dict[str, Any]] = {}
     for spec in MODEL_CATALOGUE.values():
         dest: Path = spec["dest"]
         if LORAS not in dest.parents:
@@ -930,7 +952,7 @@ def _catalogue_lora_roots() -> dict[str, str]:
         root = dest
         while root.parent != LORAS:
             root = root.parent
-        out[str(root)] = spec["family"]
+        out[str(root)] = spec
     return out
 
 
@@ -7678,8 +7700,20 @@ def _validate_scene(raw: Any, *, n_refs: int, n_vids: int, n_auds: int = 0,
             if len(note) > SHOT_VALUE_MAX:
                 raise ValueError(f"@{handle}'s note on {media} {index + 1} is "
                                  f"{len(note)} characters; at most {SHOT_VALUE_MAX}.")
+            # A character sheet is a *typed* reference, not a note. Marking it
+            # is what lets the compiler write the citation the format wants —
+            # the sheet's views and on-image labels doing the defining — and
+            # the division of labour is the platform's one rule restated:
+            # templated instruction text is ours, intent is theirs. Only a
+            # picture can be one; a "sheet" of audio is a category error worth
+            # refusing while the request is still a form.
+            sheet = bool(ref.get("sheet"))
+            if sheet and media != "image":
+                raise ValueError(f"@{handle} marks {media} {index + 1} as a "
+                                 f"character sheet, and only an image can be "
+                                 f"one.")
             refs.append({"kind": media, "index": index, "slots": slots,
-                         "note": note,
+                         "note": note, "sheet": sheet,
                          "role": role})
         cast.append({"id": cid, "kind": kind, "handle": handle,
                      "note": _oneline(str(entry.get("note") or "")),
@@ -8847,10 +8881,23 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
             what = member["note"] or "shown"
             # Where a picture has its own note, the guide's per-asset form wins,
             # because it says which asset provides which half of the subject.
-            told = [r for r in visual if r.get("note")]
-            rest = [r for r in visual if not r.get("note")]
+            # A character sheet outranks both: it is a *typed* reference, and
+            # the citation is templated — the sheet's views and on-image labels
+            # do the defining, which is MiniMax's own construction for a
+            # labeled reference card. This sentence is the compiler's to write
+            # and never the person's, by the division the platform runs on:
+            # instruction text the format wants is ours; what the subject *is*
+            # stays their words, riding in `what` untouched.
+            sheets = [r for r in visual if r.get("sheet")]
+            told = [r for r in visual if r.get("note") and not r.get("sheet")]
+            rest = [r for r in visual
+                    if not r.get("note") and not r.get("sheet")]
             labels = _h3_list([_h3_asset(r) for r in rest])
             line = f"<Subject {n}> is {what}" + (f" in {labels}" if labels else "") + "."
+            for r in sheets:
+                line += (f" {_h3_asset(r)} is their labeled character "
+                         f"reference sheet; its views and written notes "
+                         f"define their appearance.")
             # Each noted asset gets its own sentence rather than the guide's
             # `whose X comes from` clause. That form needs a bare noun and what
             # a person types is a noun *phrase* — "the olive field coat" — which
@@ -8924,10 +8971,19 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
             # and "appearance" where they said nothing — the same fallback the
             # slot phrases used to reach when a subject had no slot filled.
             visual_refs = [r for r in member["refs"] if r["kind"] != "audio"]
-            what = [r["note"] for r in visual_refs if r.get("note")]
+            what = [r["note"] for r in visual_refs
+                    if r.get("note") and not r.get("sheet")]
+            # The sheet's retention clause is templated with its citation: what
+            # is preserved is what the sheet defines, said once in the sheet's
+            # own terms rather than re-listed by hand.
+            if any(r.get("sheet") for r in visual_refs):
+                what.append("everything its reference sheet's views and "
+                            "notes define")
             # A picture nobody annotated is still there for their appearance, so
             # noting *one* of several must not delete what the others are for.
-            if any(not r.get("note") for r in visual_refs) or not what:
+            plain = [r for r in visual_refs
+                     if not r.get("note") and not r.get("sheet")]
+            if plain or not what:
                 # Leading, not appended: "its appearance and the olive field
                 # coat are retained" reads as a sentence, and the coat leading
                 # promoted one picture's note to the subject's headline.
@@ -8944,7 +9000,8 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
                 # `_h3_list`, not semicolons: "X; its Y are retained" is a
                 # mangled sentence the moment a person's note joins the list,
                 # and the guide's own retention lines read as prose.
-                + _h3_list([w if re.match(r"^(the|a|an|his|her|their)\b", w, re.I)
+                + _h3_list([w if re.match(r"^(the|a|an|his|her|their|everything)\b",
+                                           w, re.I)
                             else f"its {w}" for w in what])
                 # "its appearance are retained" — the plural was safe while
                 # every phrase came from the slot table and read as a list.
@@ -9684,10 +9741,19 @@ def web():
                             trigger = json.loads(meta.read_text()).get("trigger_word", "")
                         except Exception:
                             pass
+                    spec = CATALOGUE_LORA_ROOTS.get(str(d))
                     loras.append({
                         "name": d.name, "trigger_word": trigger,
                         "strength": None,
                         "path": str(files[0]),
+                        # The sidecar is the tell: this platform's trainer wrote
+                        # it, and the trainer trains Krea 2 RAW — so the folder's
+                        # weights are Krea 2's. A folder with neither sidecar nor
+                        # catalogue entry arrived by hand and claims nothing, so
+                        # both pickers keep offering it.
+                        "arch": (spec or {}).get(
+                            "arch", "krea2" if meta.exists() else ""),
+                        "internal": bool((spec or {}).get("internal")),
                         # `root` is served rather than left for the page to
                         # rebuild from a file path, for the same reason the LoRA
                         # index derives `rel` by splitting on `/loras/` instead
@@ -9699,7 +9765,7 @@ def web():
                         # kind of bug this file cannot take back.
                         "root": str(d),
                         "bytes": _tree_bytes(d),
-                        "catalogue": CATALOGUE_LORA_ROOTS.get(str(d), ""),
+                        "catalogue": (spec or {}).get("family", ""),
                         "files": [{"name": f.name, "path": str(f)} for f in files],
                     })
                 elif d.suffix == ".safetensors":
@@ -9710,6 +9776,7 @@ def web():
                     # trigger is in the prompt — so serving "" for them told the
                     # picker nothing about the one fact that decides whether the
                     # weight does anything on a first try.
+                    spec = CATALOGUE_LORA_ROOTS.get(str(d))
                     loras.append({
                         "name": d.stem,
                         "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
@@ -9718,7 +9785,11 @@ def web():
                         "path": str(d),
                         "root": str(d),
                         "bytes": _tree_bytes(d),
-                        "catalogue": CATALOGUE_LORA_ROOTS.get(str(d), ""),
+                        "catalogue": (spec or {}).get("family", ""),
+                        # A loose file claims no architecture unless the
+                        # catalogue put it there — see the folder branch above.
+                        "arch": (spec or {}).get("arch", ""),
+                        "internal": bool((spec or {}).get("internal")),
                         "files": [{"name": d.name, "path": str(d)}],
                     })
         loras.sort(key=lambda l: l["name"].lower())
@@ -10112,6 +10183,114 @@ def web():
         swept = _sweep_drafts()
         volume.commit()
         return {"ok": True, "swept": swept}
+
+    # ── the Arsenal: characters ─────────────────────────────────────────────
+
+    @api.get("/api/characters")
+    def list_characters() -> dict[str, Any]:
+        """
+        The saved cast, for the mention picker. Names and notes only — the
+        picker is typed into mid-sentence, so this must answer at popover
+        speed, and the files come one at a time off their own route when
+        somebody actually picks.
+        """
+        _reload_volume()
+        CHARACTERS.mkdir(parents=True, exist_ok=True)
+        out = []
+        for d in sorted(CHARACTERS.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            meta = {}
+            try:
+                meta = json.loads((d / "character.json").read_text())
+            except (OSError, json.JSONDecodeError):
+                # A folder somebody made by hand is still a character — the
+                # layout is the contract, and the receipt is optional the same
+                # way a sidecar-less output still lists in the gallery.
+                pass
+            files = sorted(f.name for f in d.iterdir()
+                           if f.is_file() and f.name != "character.json"
+                           and not f.name.startswith(".")
+                           and f.suffix.lower() != ".txt")
+            out.append({"handle": d.name,
+                        "note": str(meta.get("note") or ""),
+                        "retention": str(meta.get("retention") or ""),
+                        "refs": meta.get("refs") or
+                        [{"file": f} for f in files],
+                        "files": files})
+        return {"characters": out}
+
+    @api.post("/api/characters/{handle}")
+    def save_character(handle: str, payload: dict) -> dict[str, Any]:
+        """
+        Save one character, whole. Saving twice replaces — the folder is the
+        record and a record does not accumulate versions of itself.
+
+        Deliberate, never automatic: "it never remembers unless told" is the
+        rule, and this route is the telling.
+        """
+        try:
+            _check_name(handle)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        refs = payload.get("refs") or []
+        if not isinstance(refs, list) or not refs:
+            return {"error": "A character with no files is a name, and a name "
+                             "is already in your head. Attach something first."}
+        _reload_volume()
+        d = CHARACTERS / handle
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir(parents=True, exist_ok=True)
+        exts = {"image": "png", "audio": "wav", "video": "mp4"}
+        recorded = []
+        for i, r in enumerate(refs):
+            kind = str(r.get("kind") or "image")
+            blob = str(r.get("b64") or "")
+            if not blob or kind not in exts:
+                continue
+            name = f"{i:02d}-{kind}.{exts[kind]}"
+            try:
+                (d / name).write_bytes(base64.b64decode(blob))
+            except (ValueError, OSError) as exc:
+                shutil.rmtree(d, ignore_errors=True)
+                return {"error": f"Could not write {name}: {exc}"}
+            entry: dict[str, Any] = {"file": name, "kind": kind}
+            if r.get("note"):
+                entry["note"] = _oneline(str(r["note"]))[:SHOT_VALUE_MAX]
+            if r.get("sheet") and kind == "image":
+                entry["sheet"] = True
+            recorded.append(entry)
+        note = _oneline(str(payload.get("note") or ""))[:SHOT_VALUE_MAX]
+        # The note is its own .txt as well as a field in the receipt, because
+        # the folder has to make sense in a terminal: cat note.txt is the
+        # character, no app required.
+        if note:
+            (d / "note.txt").write_text(note + "\n")
+        (d / "character.json").write_text(json.dumps({
+            "note": note,
+            "retention": str(payload.get("retention") or ""),
+            "refs": recorded,
+            "saved": time.time(),
+        }, indent=1))
+        volume.commit()
+        return {"ok": True, "handle": handle, "files": len(recorded)}
+
+    @api.get("/api/character-file/{handle}/{name}")
+    def character_file(handle: str, name: str) -> Any:
+        """One saved file, streamed off the volume — bytes by their own route,
+        never inlined into a listing the picker polls."""
+        try:
+            _check_name(handle)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        f = (CHARACTERS / handle / Path(name).name)
+        if not f.is_file():
+            _reload_volume()
+        if not f.is_file():
+            return JSONResponse({"error": f"No {name!r} for {handle!r}."},
+                                status_code=404)
+        return FileResponse(f)
 
     @api.get("/api/datasets")
     def list_datasets() -> dict[str, Any]:

@@ -31,14 +31,19 @@ URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8791"
 READ = """
 () => {
   const fams = [...document.querySelectorAll('#models .fam')].map(f => {
-    const cards = [...f.querySelectorAll('.card.row')];
-    const famBtn = f.querySelector('.fam-head button');
+    // Rows in one card per family now, not a card per model; a complete
+    // family is folded and holds no rows at all, which the checks below are
+    // fine with — its head still carries the note they read.
+    const rows = [...f.querySelectorAll('.mrow')];
+    // `.fam-dl`, not the head's first button — the fold toggle is a button
+    // too, and it must never be mistaken for a 17 GB download.
+    const famBtn = f.querySelector('.fam-head .fam-dl');
     return {
       name: f.querySelector('b')?.textContent?.trim(),
       note: f.querySelector('.fam-head .muted')?.textContent?.trim(),
-      models: cards.length,
-      // A card with a button is a weight that is not on the volume.
-      missing: cards.filter(c => c.querySelector('button')).length,
+      models: rows.length,
+      // A row with a button is a weight that is not on the volume.
+      missing: rows.filter(c => c.querySelector('button')).length,
       famButton: famBtn ? famBtn.textContent.trim() : null,
     };
   });

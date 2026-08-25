@@ -176,6 +176,10 @@ def run(page):
     # volume to tell it that, and believing an answer that comes back without it, is
     # how a fresh render fell out of the drawer for as long as one container lasted.
     page.reload()
+    # The drawer renders no cards while it is shut now — the collapse used to
+    # hide two dozen live covers behind a closed panel — so a reload, which
+    # shuts it, has to open it again the way a person would.
+    open_drawer(page)
     page.wait_for_selector("#drawer-grid .gal", timeout=10000)
     before = page.evaluate("() => document.querySelectorAll('#drawer-grid .gal').length")
     page.evaluate("""() => {
@@ -185,6 +189,7 @@ def run(page):
       sessionStorage.setItem('vis-mine', JSON.stringify(own))
     }""")
     page.reload()
+    open_drawer(page)
     page.wait_for_selector("#drawer-grid .gal", timeout=10000)
     page.wait_for_timeout(600)
     first = page.evaluate(
