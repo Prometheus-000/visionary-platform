@@ -72,14 +72,39 @@ APP_NAME = "visionary"
 # yields an empty volume rather than an error, so _require_models() prints the
 # resolved name and what it actually found instead of a bare "not downloaded".
 VOLUME_NAME = os.environ.get("VISIONARY_VOLUME", "visionary")
-volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+# version=2 decides what a fresh account creates; an existing volume binds by
+# name whatever its version. The v1 era ended 2026-08-25: tools/cold_start.py
+# measured v1 at 0.08 GB/s against v2's 1.61, which taxed every read on the
+# platform — galleries, clips, datasets, and 240 of a cold H3 start's 300
+# seconds. The v1 volumes survive under *-v1-retired, unreferenced.
+volume = modal.Volume.from_name(VOLUME_NAME, version=2, create_if_missing=True)
+
+# Weights live on their own v2 volume, and the number that put them there is
+# 0.08 GB/s: that is what tools/cold_start.py measured the v1 volume serving,
+# single-stream or 8-way alike, which priced a cold H3 start at 240 seconds of
+# its 300 reading the checkpoint. The same probe read this volume at 1.61.
+#
+# v2 is Beta, and Modal's own docs decline to promise no data loss — which is
+# exactly why *only* weights are here. A weight is a receipt: every file on
+# this volume re-downloads from the gear. Datasets, LoRAs and characters are
+# records, and records do not move to storage with a disclaimer. If v2 ever
+# eats this volume, the cost is re-downloading checkpoints, not somebody's
+# library.
+#
+# A sibling mount, not /workspace/models: Modal refuses nested mount paths
+# outright ("volume mount paths cannot be nested"), so the models/ folder
+# became /models. The layout under each mount is still the contract.
+MODELS_VOLUME_NAME = os.environ.get("VISIONARY_MODELS_VOLUME", "visionary-models")
+models_volume = modal.Volume.from_name(MODELS_VOLUME_NAME, version=2,
+                                       create_if_missing=True)
 
 # Downloaded model weights live on their own volume, never on the data volume.
 # Qwen3-VL-8B is ~17 GB, and with the HuggingFace cache pointed at /workspace
 # every commit after a caption run had to snapshot those 17 GB — the job wrote
 # all 80 captions in eight minutes and then sat in commit() for another fifteen.
 # Separating them keeps a caption commit proportional to the captions.
-hf_cache = modal.Volume.from_name("visionary-hf-cache", create_if_missing=True)
+hf_cache = modal.Volume.from_name("visionary-hf-cache", version=2,
+                                  create_if_missing=True)
 HF_CACHE = Path("/hf")
 
 # Live job state (progress, stop flags) and the saved HF token. Dicts rather
@@ -109,7 +134,7 @@ SESSION_INDEX = "index"
 # descriptive filenames rather than the per-architecture directories a webui
 # needs in order to populate its dropdowns.
 WORKSPACE = Path("/workspace")
-MODELS = WORKSPACE / "models"
+MODELS = Path("/models")
 LORAS = WORKSPACE / "loras"
 # A dataset is a named folder of images with .txt captions beside them — the
 # same thing musubi reads, so the sidecars stay the source of truth and nothing
@@ -132,7 +157,11 @@ OUTPUTS = WORKSPACE / "outputs"
 # people back out. `character.json` beside them is the receipt that keeps what
 # filenames cannot: which picture is the sheet, what each file provides.
 CHARACTERS = WORKSPACE / "characters"
-STAGING = WORKSPACE / ".cache" / "hf-staging"
+# On the models volume, beside what it stages for. The download path promises
+# "same filesystem, so this is an instant rename rather than a 26 GB copy" —
+# staging on the data volume would quietly turn that rename into a five-minute
+# cross-device copy read at the v1 volume's 0.08 GB/s.
+STAGING = MODELS / ".cache" / "hf-staging"
 
 # Deletions used to move here instead of unlinking. The name survives only so
 # `_drop_legacy_trash` can clear what earlier versions left on the volume; no
@@ -1719,6 +1748,13 @@ def _reload_volume_locked() -> bool:
         # or cleared, which is the whole argument for the line.
         t0 = time.time()
         volume.reload()
+        # Both volumes, one freshness step. The models volume is the one a
+        # loaded checkpoint actually holds open — safetensors maps weights off
+        # /models now — so it is the likelier of the two to take the skip path
+        # this function exists to absorb. Data first: a stale weight listing
+        # costs a gear-menu refresh, a stale LoRA listing costs "that LoRA is
+        # not there" mid-render.
+        models_volume.reload()
         took = time.time() - t0
         if took > RELOAD_SLOW_S:
             print(f"[volume] reload took {took:.1f}s", flush=True)
@@ -1906,7 +1942,7 @@ def _model_status() -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume})
+@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def download_job(key: str) -> dict[str, Any]:
     job_id = f"dl_{key}"
     # Merged, not assigned. The route seeds this record before spawning, and a
@@ -2293,7 +2329,9 @@ def _download_weight(
     # volume that needs the Modal CLI to reclaim space — and this ran once with
     # 9.6 GB of a download nobody was waiting for still sitting in it.
     shutil.rmtree(STAGING, ignore_errors=True)
-    volume.commit()
+    # The models volume, because staging and dest both live there now — the
+    # data volume saw nothing from this download.
+    models_volume.commit()
 
     res = {
         "status": "completed",
@@ -2306,7 +2344,7 @@ def _download_weight(
     return res
 
 
-@app.function(image=web_image, cpu=2.0, timeout=6 * 60 * 60, volumes={"/workspace": volume})
+@app.function(image=web_image, cpu=2.0, timeout=6 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def download_missing_job(keys: list[str], job_id: str = "dl_all") -> dict[str, Any]:
     """
     Fetch a list of missing weights in one container, sequentially.
@@ -2381,7 +2419,7 @@ def _is_drive_folder(url: str) -> bool:
     return "/folders/" in url or "folderview" in url
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume})
+@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def gdrive_job(url: str, folder: str) -> dict[str, Any]:
     """
     Pull one file or one folder off Google Drive into loras/.
@@ -2649,7 +2687,8 @@ def _caption_images(
     # A100 rather than the training GPU: Qwen3-VL-8B in bf16 is ~17 GB, so this
     # does not need the headroom a rank-32 Krea 2 run does.
     image=caption_image, gpu="A100-40GB", cpu=2.0, timeout=2 * 60 * 60,
-    volumes={"/workspace": volume, str(HF_CACHE): hf_cache},
+    volumes={"/workspace": volume, "/models": models_volume,
+             str(HF_CACHE): hf_cache},
 )
 def caption_job(
     job_id: str, dataset: str, trigger_word: str = "",
@@ -2753,7 +2792,7 @@ TRAIN_DEFAULTS = {
 
 @app.function(
     image=trainer_image, gpu=GPU, cpu=4.0, timeout=6 * 60 * 60,
-    volumes={"/workspace": volume},
+    volumes={"/workspace": volume, "/models": models_volume},
 )
 def train_job(
     job_id: str, dataset: str, lora_name: str, trigger_word: str,
@@ -3338,13 +3377,18 @@ class _Comfy:
         # meaningful — one folder per trained LoRA, checkpoints beside the final
         # weights. ComfyUI walks it recursively and names a file by its path
         # relative to here, which is exactly what the LoRA validators emit.
+        # Weights are absolute because they live on their own mount now, and
+        # ComfyUI's extra_config joins with os.path.join — an absolute value
+        # simply wins over base_path, which is the documented posix behaviour
+        # rather than a trick. loras/ stays relative: it is on the data volume
+        # the base_path names.
         (COMFY / "extra_model_paths.yaml").write_text(
             "visionary:\n"
             f"  base_path: {WORKSPACE}/\n"
-            "  diffusion_models: models/\n"
-            "  text_encoders: models/\n"
-            "  clip: models/\n"
-            "  vae: models/\n"
+            f"  diffusion_models: {MODELS}\n"
+            f"  text_encoders: {MODELS}\n"
+            f"  clip: {MODELS}\n"
+            f"  vae: {MODELS}\n"
             "  loras: loras/\n"
         )
 
@@ -6030,7 +6074,7 @@ def _krea2_graph(
 
 @app.cls(
     image=comfy_image, gpu=GPU, cpu=4.0, timeout=60 * 60,
-    volumes={"/workspace": volume},
+    volumes={"/workspace": volume, "/models": models_volume},
     # One container: the checkpoint is ~35 GB across DiT/VAE/TE, so a second
     # replica costs a full cold load rather than sharing the warm one.
     max_containers=1,
@@ -9355,7 +9399,7 @@ def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
 
 @app.cls(
     image=comfy_image, gpu=VIDEO_GPU, cpu=4.0, timeout=60 * 60,
-    volumes={"/workspace": volume},
+    volumes={"/workspace": volume, "/models": models_volume},
     max_containers=1,
     # Longer than the image side's 10 min: 42.5 GB is a slow thing to reload,
     # and video is worked in takes — you watch one clip, then adjust and go again.
@@ -9666,7 +9710,7 @@ class VideoGenerator:
 
 
 @app.function(
-    image=web_image, cpu=1.0, timeout=900, volumes={"/workspace": volume},
+    image=web_image, cpu=1.0, timeout=900, volumes={"/workspace": volume, "/models": models_volume},
     max_containers=1,
 )
 @modal.concurrent(max_inputs=20)
