@@ -380,3 +380,21 @@ resident model in place**: removing the node from the graph does not unwrap a
 model a warm container already holds, which is why the removal shipped with a
 container kill. If this comes back, it comes back measured at 768p on
 ten-second takes, with the calibrator off, and with an unwrap story.
+
+It did not come back; the other family shipped instead. TeaCache's whole-
+output reuse tests the *latent*, not the hidden states, so its bookkeeping
+does not grow with resolution — the same harness at production shape read
+220.0s stock against 97.4s cached, computed steps at stock price. It ships
+as `comfy_nodes/visionary_step_cache`, first-party, because the pack it was
+proven with keeps its state in a node execute that ComfyUI caches — spent
+state silently disables it from the second take on. Ours keys on the
+sampler's sigma and resets itself.
+
+It did not come back; the other family shipped instead. TeaCache's whole-
+output reuse tests the *latent*, not the hidden states, so its bookkeeping
+does not grow with resolution — the same harness at production shape read
+220.0s stock against 97.4s cached, computed steps at stock price. It ships
+as `comfy_nodes/visionary_step_cache`, first-party, because the pack it was
+proven with keeps its state in a node execute that ComfyUI caches — spent
+state silently disables it from the second take on. Ours keys on the
+sampler's sigma and resets itself.

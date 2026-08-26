@@ -352,7 +352,17 @@ K2ST_SHA = "b30d495ab7e5626a2effc72a071430297643b718"  # 2026-07-21
 # 1.40x, removed when production takes showed its wrapper inflating every
 # *computed* step ~50% at 768p, a net loss no threshold wins back. The full
 # account, with the dashboard numbers, is in docs/decisions.md; the harness
-# that measured both directions is tools/ab_cache.py.
+# that measured both directions is tools/ab_cache.py. What replaced it is
+# `VisionaryStepCache` in comfy_nodes/ — the TeaCache mechanism, whose skip
+# test rides the latent rather than the hidden states and so has no cost
+# that grows with resolution: 220.0s to 97.4s on the same harness take.
+
+# Below this many sampler steps the cache node is not built at all: the
+# start guard already keeps the first two steps real, the final guard the
+# last two, and a distilled 4-8 step run has nothing left between them
+# worth skipping — but steps 3-6 of an 8-step schedule are where its detail
+# resolves, which is exactly the wrong place to hand back a stale output.
+H3_CACHE_MIN_STEPS = 12
 K2ST_REPO = "https://github.com/nkxx188/ComfyUI-Krea2-StyleTransfer"
 K2ST_REF_NODE = "Krea2StyleReference"
 K2ST_TRANSFER_NODE = "Krea2StyleTransfer"
@@ -706,6 +716,10 @@ comfy_image = (
     .add_local_dir(
         f"{COMFY_NODES_DIR}/visionary_edit_arity",
         remote_path=f"{COMFY}/custom_nodes/visionary_edit_arity",
+    )
+    .add_local_dir(
+        f"{COMFY_NODES_DIR}/visionary_step_cache",
+        remote_path=f"{COMFY}/custom_nodes/visionary_step_cache",
     )
 )
 
@@ -7146,6 +7160,18 @@ def _h3_graph(
     # ships 0 in the pack's preset: it is a per-block knob, not the per-step
     # one that intent names. If the tail matters, the move is a PR upstream,
     # not a patch here.
+    # Last on the chain, after LoRAs and shift, so what it wraps is the
+    # model the sampler actually runs. Every input is spelled because the
+    # node's defaults are a second copy of these numbers, and two copies
+    # drift; the graph is the record.
+    if steps >= H3_CACHE_MIN_STEPS:
+        graph["cache"] = {
+            "class_type": "VisionaryStepCache",
+            "inputs": {"model": [src, 0], "rel_l1_thresh": 0.15,
+                       "start_step": 2, "final_steps": 2,
+                       "total_steps": steps},
+        }
+        src = "cache"
     if src != "dit":
         # Both, not just the guider. A LoRA that patches model sampling would
         # otherwise have the sampler reading it and the schedule ignoring it,
@@ -9825,7 +9851,7 @@ class VideoGenerator:
         self._comfy.require_nodes(
             "MiniMaxH3MotionContext", "MiniMaxH3MotionContextTrim",
             "MiniMaxH3MotionContextSaveLatent",
-            "MiniMaxH3MotionContextLoadLatent")
+            "MiniMaxH3MotionContextLoadLatent", "VisionaryStepCache")
         # **Nothing but ComfyUI starts here now.** This container held a second
         # model for a while — Qwen3-VL beside H3, for the prompt rewrite and
         # then for the motion panel — and it cost more than it returned. It
