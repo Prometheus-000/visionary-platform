@@ -153,9 +153,10 @@ export function Gallery({
   behind: boolean
   open: boolean
   /** Whether the drawer beside the canvas is showing. The drawer stays mounted
-   *  through the collapse so the reflow animates — but its two dozen covers
-   *  must not be fetched behind a closed panel: on the deployed container that
-   *  was ~25 requests on first paint, before the person did anything. */
+   *  through the collapse so the reflow animates — but its cards must not be
+   *  rendered behind a closed panel: a hidden card never intersects the
+   *  viewport, so its cover would never load, and a drawer that opens onto a
+   *  column of blanks reads as broken for the seconds the queue takes. */
   drawerOpen: boolean
   onClose: () => void
   /** May hand back the reload it starts, and should: `remove` and `purge` stay busy until
@@ -266,11 +267,11 @@ export function Gallery({
   /**
    * `rows` is what gets drawn; `all` is what the viewer can page through.
    *
-   * They were the same array, and the drawer draws `items.slice(0, 24)` — so opening a
+   * They were the same array, and the drawer drew a 24-item slice — so opening a
    * picture from the drawer handed the viewer 24 rows and its counter read "3 / 24" on
-   * a volume holding hundreds. A render cap had quietly become a navigation cap: the
-   * chevrons and the count are a claim about how much there is, not about how many
-   * cards happened to be rendered beside the canvas.
+   * a volume holding hundreds. The slice is gone (see the drawer grid), but the split
+   * survives it: the full grid draws a *filtered* view, and the chevrons and the count
+   * are a claim about how much there is, not about how many cards happened to match.
    */
   const card = (it: GalleryItem, all: GalleryItem[], packed: boolean) => (
     <Card key={`${it.job_id}:${it.files[0]}`} item={it}
@@ -305,7 +306,14 @@ export function Gallery({
             </button>
           </div>
           <div id="drawer-grid" className="grid">
-            {(drawerOpen || open) ? cards(items.slice(0, 24), items) : null}
+            {/* The whole listing, not a slice. `slice(0, 24)` dated from when
+                every mounted card fetched its cover on first paint, so two
+                dozen was already the tolerable burst — a cap protecting the
+                network. Covers are viewport-gated and queued now, so a card
+                below the fold costs nothing until it is scrolled near, and
+                the cap had quietly become a wall: the drawer looked like the
+                volume stopped at two dozen results. */}
+            {(drawerOpen || open) ? cards(items) : null}
           </div>
           {/* A card's Delete is reachable from the drawer with the full gallery shut, and a
               failure rendered only inside `#gal-full` would then be painted behind a panel
