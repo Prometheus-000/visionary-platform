@@ -20,6 +20,13 @@ the deployed app does not grow a node pack for an experiment. cache-dit is
 pinned to the release measured here; it imports lazily inside the node, so a
 broken dependency surfaces at the node call, and the CPU smoke exists to find
 that for cents before an H100 finds it for dollars.
+
+POSTSCRIPT — the 1.40x this file measured was real and did not survive
+production shape: at 768p on 8-10s takes the wrapper inflated computed
+steps ~50% (TaylorSeer calibrator on by default, boundary clones, residual
+bookkeeping — all scaling with tensor size while skips did not), and the
+pack was removed. docs/decisions.md § "CacheDiT lasted one day" is the full
+account. If you are re-running this harness, run it at production shape.
 """
 
 import base64

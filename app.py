@@ -348,30 +348,11 @@ H3MC_SIDECAR = "context.safetensors"
 # same arity-risk class — re-check on every COMFY_SHA bump.
 K2ST_SHA = "b30d495ab7e5626a2effc72a071430297643b718"  # 2026-07-21
 
-# Step caching for H3's full-quality path. tools/ab_cache.py is the harness
-# that admitted it: 47.9s -> 34.2s on a 20-step take at the pack's preset,
-# with the divergence a sibling take rather than an artefact — the one flaw
-# the viewing found, mutated fingers on the accordion, appeared in the
-# *uncached* arm too, so it belongs to the model, not the cache. The wrapper
-# pack rides the maintained cache-dit library and did the two things a
-# candidate for this graph had to do: it clones the in-place block inputs at
-# DBCache's residual boundaries (H3's blocks mutate x in place), and its
-# history already contains the reset-between-generations fix a rival pack
-# still needs. Single-author wrapper, so the CLIFF risk class: re-check on
-# every COMFY_SHA bump.
-CACHEDIT_REPO = "https://github.com/Jasonzzt/ComfyUI-CacheDiT"
-CACHEDIT_SHA = "1d92bbd86ec59aa6223fe2368849b7413a1acb93"  # 2026-08-04, H3 support
-# The library the wrapper drives, pinned to the release the harness measured.
-# Its install was smoke-tested against this image's hub/transformers pins
-# before it was allowed near the build — see ab_cache.py::smoke.
-CACHEDIT_PIP = "cache-dit==1.5.0"
-CACHEDIT_NODE = "CacheDiT_MiniMax_H3_Advanced_Optimizer"
-# Under this many sampler steps the cache node is not built at all. The
-# warmup already refuses the first four steps, so a distilled 4-step run
-# could never skip anything — but an 8-step run could, and steps 5 through 8
-# of a distilled schedule are exactly where its detail resolves. Judgement
-# arrived at with the step floor, not measured per count.
-H3_CACHE_MIN_STEPS = 12
+# H3 step caching (CacheDiT) was here for one day — wired at a measured
+# 1.40x, removed when production takes showed its wrapper inflating every
+# *computed* step ~50% at 768p, a net loss no threshold wins back. The full
+# account, with the dashboard numbers, is in docs/decisions.md; the harness
+# that measured both directions is tools/ab_cache.py.
 K2ST_REPO = "https://github.com/nkxx188/ComfyUI-Krea2-StyleTransfer"
 K2ST_REF_NODE = "Krea2StyleReference"
 K2ST_TRANSFER_NODE = "Krea2StyleTransfer"
@@ -703,14 +684,6 @@ comfy_image = (
         f"cd {COMFY}/custom_nodes/krea2_regional && git checkout {CLIFF_SHA}",
         f"git clone {K2ST_REPO} {COMFY}/custom_nodes/krea2_styletransfer",
         f"cd {COMFY}/custom_nodes/krea2_styletransfer && git checkout {K2ST_SHA}",
-    )
-    # cache-dit *after* ComfyUI's requirements for the reason the hub pin
-    # fiasco above teaches: whatever it resolves, it resolves against the
-    # versions ComfyUI already chose, which is the order the smoke proved.
-    .pip_install(CACHEDIT_PIP)
-    .run_commands(
-        f"git clone {CACHEDIT_REPO} {COMFY}/custom_nodes/cachedit",
-        f"cd {COMFY}/custom_nodes/cachedit && git checkout {CACHEDIT_SHA}",
     )
     .env({"PYTHONUNBUFFERED": "1"})
     # Last, because add_local_dir invalidates nothing above it — the shim is
@@ -7173,21 +7146,6 @@ def _h3_graph(
     # ships 0 in the pack's preset: it is a per-block knob, not the per-step
     # one that intent names. If the tail matters, the move is a PR upstream,
     # not a patch here.
-    # Off, pending a 768p measurement. The 1.40x was measured at 544p with
-    # threshold 0.12; production shipped 0.08 unmeasured and full-tier takes
-    # promptly regressed past stock — a threshold that never trips still
-    # pays the residual comparison and the block-boundary input clones every
-    # step, so an idle cache is not free, it is negative. tools/ab_cache.py
-    # at 768p decides what re-enables this, with numbers.
-    if False and steps >= H3_CACHE_MIN_STEPS:
-        graph["cache"] = {
-            "class_type": CACHEDIT_NODE,
-            "inputs": {"model": [src, 0], "enable": True,
-                       "fn_blocks": 8, "bn_blocks": 0,
-                       "residual_diff_threshold": 0.08,
-                       "warmup_steps": 4, "print_summary": True},
-        }
-        src = "cache"
     if src != "dit":
         # Both, not just the guider. A LoRA that patches model sampling would
         # otherwise have the sampler reading it and the schedule ignoring it,
@@ -9867,7 +9825,7 @@ class VideoGenerator:
         self._comfy.require_nodes(
             "MiniMaxH3MotionContext", "MiniMaxH3MotionContextTrim",
             "MiniMaxH3MotionContextSaveLatent",
-            "MiniMaxH3MotionContextLoadLatent", CACHEDIT_NODE)
+            "MiniMaxH3MotionContextLoadLatent")
         # **Nothing but ComfyUI starts here now.** This container held a second
         # model for a while — Qwen3-VL beside H3, for the prompt rewrite and
         # then for the motion panel — and it cost more than it returned. It

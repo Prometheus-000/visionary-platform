@@ -341,3 +341,42 @@ were labels — "Euler a", "Automatic" — and `KSampler` validates `sampler_nam
 against `comfy.samplers.KSAMPLER_NAMES`, so they were not spellings of ComfyUI
 names, they were values it rejects. `tools/smoke_graphs.py` checks the offered
 lists against the node now, which is the check that would have caught it.
+
+## Krea 2 left SageAttention, and the flag stayed for H3
+
+The `forge/` entry above says `--use-sage-attention` is on for both families.
+It still is — as argv — but since 2026-08-25 the Krea 2 graph opts back out
+with a `ModelAttentionBackend` node, and the receipt is `tools/ab_sage.py`:
+six matched renders at 1024px, 3.23s median on PyTorch attention against
+3.26s on sage. A 1024px render is ~4k tokens; attention is not where a Krea 2
+render spends its time, so the flag bought nothing there — and on sm90 sage
+dispatches to an FP8-PV kernel that runs with both of its outlier mitigations
+off, which is the mechanism behind the intermittent black blotches the switch
+was made to rule out. H3 keeps sage: a packed video/text/audio sequence is
+long enough to pay for it.
+
+## CacheDiT lasted one day
+
+DBCache step-skipping for H3 (Jasonzzt/ComfyUI-CacheDiT over the cache-dit
+library) went in at a measured 1.40x — `tools/ab_cache.py`, 47.9s to 34.2s on
+a 20-step take — and came out the next morning on production logs. Both
+numbers were real; they were measured at different shapes.
+
+The harness measured 544p and 124 frames. Production runs 768p and eight-to-
+ten-second takes, and there the wrapper's per-step bookkeeping stopped being
+noise: computed steps ran ~15s where stock runs the same take at 8-10, a ~50%
+inflation on the 15 steps that still compute, against 5 steps skipped. The
+wrapper's own dashboard told the story honestly — 25% hit rate, "estimated
+speedup 1.33x" — while the take got slower, because its estimate prices the
+skips and not the overhead. Part of that overhead is a TaylorSeer calibrator
+the wrapper enables by default and exposes no input to turn off; fixing it
+means forking the pack.
+
+Two lessons worth the price of admission. **A cache that skips a quarter of
+the steps still loses if it taxes the other three quarters** — overhead
+scales with tensor size, skips do not, so a draft-shape measurement cannot
+stand in for production shape. And **`cache_dit.enable_cache` wraps the
+resident model in place**: removing the node from the graph does not unwrap a
+model a warm container already holds, which is why the removal shipped with a
+container kill. If this comes back, it comes back measured at 768p on
+ten-second takes, with the calibrator off, and with an unwrap story.
