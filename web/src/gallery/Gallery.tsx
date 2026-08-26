@@ -61,6 +61,20 @@ export function useGallery() {
   // re-render, and the reply that exhausts the budget sets `stale` to the value it
   // already had — so React bailed out and the button never learned it had given up.
   const [tries, setTries] = useState(0)
+  /** What the volume listing has returned so far, in its own order — the pages, without
+   *  the session merge. Paging appends to this and `items` is always re-derived from it,
+   *  because appending to the merged array would page from a cursor the session items
+   *  moved. */
+  const listed = useRef<GalleryItem[]>([])
+  /** No older page left. State for the sentinel's render, mirrored in a ref for the
+   *  callback that must read it without a stale closure. */
+  const [done, setDone] = useState(false)
+  const doneRef = useRef(false)
+  const finish = (v: boolean) => {
+    doneRef.current = v
+    setDone(v)
+  }
+  const fetching = useRef(false)
 
   /**
    * One fetch, applied only if it is still the newest.
@@ -83,7 +97,45 @@ export function useGallery() {
     setError(null)
     setStale(!!body.stale)
     setTotal(body.total ?? 0)
-    setItems(merged((body.items ?? []).filter((i) => i.files?.length), own.current))
+    const page = (body.items ?? []).filter((i) => i.files?.length)
+    // A refetch is page one again: a land or a delete changed what "newest"
+    // means, and older pages stitched onto the old world would double or skip
+    // across the seam. The scroll re-earns them.
+    listed.current = page
+    finish(page.length >= (body.total ?? 0) || page.length < PAGE)
+    setItems(merged(page, own.current))
+  }, [])
+
+  /**
+   * One older page, appended. The cursor is the last listed row's sort key —
+   * the same key the server pages on, so the window is stable under runs
+   * landing above it. Deduped by job id anyway: a cursor tie or a misbehaving
+   * server must cost a skipped row, never the same card twice, and a page
+   * that adds nothing marks the listing done rather than asking again forever
+   * — the scan loop's own forward-progress rule, at this end of the wire.
+   */
+  const more = useCallback(async () => {
+    if (fetching.current || doneRef.current) return
+    const last = listed.current[listed.current.length - 1]
+    if (!last?.modified) return
+    fetching.current = true
+    const mine_ = gen.current
+    try {
+      const r = await gallery(last.modified, PAGE)
+      // A reload replaced the world while this page was in flight; stitching
+      // it onto the new page one would be the out-of-order write again.
+      if (mine_ !== gen.current || failed(r)) return
+      const body = r as { items?: GalleryItem[]; total?: number }
+      const seen = new Set(listed.current.map((i) => i.job_id))
+      const page = (body.items ?? [])
+        .filter((i) => i.files?.length && !seen.has(i.job_id))
+      listed.current = [...listed.current, ...page]
+      setTotal(body.total ?? 0)
+      if (!page.length || listed.current.length >= (body.total ?? 0)) finish(true)
+      setItems(merged(listed.current, own.current))
+    } finally {
+      fetching.current = false
+    }
   }, [])
 
   /** A fresh question deserves fresh patience, so every deliberate reload — a land, the
@@ -130,17 +182,69 @@ export function useGallery() {
   // the route's own docstring is right that a listing catching up is not an error and
   // not something to apologise for on screen.
   const behind = stale && tries >= STALE_TRIES
-  return { items, error, reload, record, drop, total, behind }
+  return { items, error, reload, record, drop, total, behind, more, done }
+}
+
+/**
+ * The line that asks for the next page by being scrolled toward.
+ *
+ * Not `useNearViewport`: that latches once, which is right for a picture that
+ * should never unload and wrong for a trigger that must fire once per page.
+ * `epoch` is in the effect's deps so each appended page re-observes — the
+ * initial observation always delivers an entry, so a page that was too short
+ * to push the sentinel out of the margin still asks for the next one instead
+ * of stalling until a scroll happens to nudge it.
+ */
+function LoadMore({ done, epoch, onNear }: {
+  done: boolean
+  epoch: number
+  onNear: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (done || !el) return
+    if (typeof IntersectionObserver === 'undefined') return onNear()
+    let t: number | undefined
+    const io = new IntersectionObserver(
+      (es) => {
+        if (!es.some((e) => e.isIntersecting)) return
+        onNear()
+        // Re-armed, because the observer reports crossings and a sentinel
+        // that stays on screen never crosses again. A page that was dropped
+        // (a reload superseded it mid-flight) leaves the line visible with
+        // nothing coming — re-observing delivers a fresh initial entry, so
+        // it asks again rather than waiting for a scroll to nudge it. The
+        // hook's own guards make the repeat free while a fetch is out.
+        io.unobserve(el)
+        t = window.setTimeout(() => {
+          if (ref.current) io.observe(ref.current)
+        }, 1200)
+      },
+      // A screen of margin: an older page is a listing round trip away, so
+      // asking early means the scroll rarely catches the edge.
+      { rootMargin: '600px' },
+    )
+    io.observe(el)
+    return () => {
+      io.disconnect()
+      window.clearTimeout(t)
+    }
+  }, [done, epoch, onNear])
+  if (done) return null
+  return <p ref={ref} className="muted" style={{ margin: '14px 0' }}>Loading older results…</p>
 }
 
 export function Gallery({
   items,
   total,
   behind,
+  done,
   open,
   drawerOpen,
   onClose,
   onReload,
+  onMore,
   onDropped,
   onMeta,
   onHandoff,
@@ -151,6 +255,8 @@ export function Gallery({
   total: number
   /** The listing stopped catching up. Said on the Refresh button and nowhere else. */
   behind: boolean
+  /** Every page is loaded; the sentinels render nothing. */
+  done: boolean
   open: boolean
   /** Whether the drawer beside the canvas is showing. The drawer stays mounted
    *  through the collapse so the reflow animates — but its cards must not be
@@ -163,6 +269,9 @@ export function Gallery({
    *  the listing has actually come back, and a caller that returns `void` ends that wait at
    *  the reply instead — which on a slow volume is the shorter half of the two. */
   onReload: () => void | Promise<void>
+  /** Fetch one older page and append it. Idempotent under repeat calls — the
+   *  hook guards in-flight and exhausted — so two sentinels can share it. */
+  onMore: () => void
   onDropped: (jobIds: string[]) => void
   onMeta: (it: GalleryItem) => void
   onHandoff: (it: GalleryItem, as: 'first' | 'reference' | 'refvideo') => void
@@ -315,6 +424,9 @@ export function Gallery({
                 volume stopped at two dozen results. */}
             {(drawerOpen || open) ? cards(items) : null}
           </div>
+          {(drawerOpen || open) && (
+            <LoadMore done={done} epoch={items.length} onNear={onMore} />
+          )}
           {/* A card's Delete is reachable from the drawer with the full gallery shut, and a
               failure rendered only inside `#gal-full` would then be painted behind a panel
               nobody is looking at — silence, which is what replacing the alert must not
@@ -383,13 +495,13 @@ export function Gallery({
             ? <Masonry id="gal-grid" items={shown} ratio={ratioOf} min={232} gap={14}
                        chrome={GAL_CHROME} render={(it) => card(it, shown, true)} />
             : <div id="gal-grid" className="grid">{cards(shown)}</div>}
-          {/* Stated rather than silent. The cap was invisible, so a volume holding more
-              than a page looked like a volume that had lost the rest. */}
-          {filter === 'all' && total > shown.length && (
-            <p className="muted" id="gal-more" style={{ marginTop: 14 }}>
-              Showing the newest {shown.length} of {total}.
-            </p>
-          )}
+          {/* Where "Showing the newest 200 of N" stood. That line existed
+              because the cap was invisible and looked like lost work; the
+              sentinel replaces the cap itself — scrolling toward the end
+              fetches the next page — so what remains to say is only that the
+              end on screen is not the end of the record, for the moment it
+              takes the page to land. */}
+          <LoadMore done={done} epoch={items.length} onNear={onMore} />
           {!shown.length && (
             <p className="muted">
               {items.length ? 'Nothing of that kind yet.' : 'Nothing generated yet.'}

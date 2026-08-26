@@ -39,7 +39,7 @@ import { useVideo } from './video/useVideo'
  */
 export function App() {
   const s = useStore()
-  const { items, reload, record, drop, total, behind } = useGallery()
+  const { items, reload, record, drop, total, behind, more, done } = useGallery()
   const [galleryOpen, setGalleryOpen] = useState(false)
   /* Closed. The canvas is the largest thing on screen, always — and the drawer is
      the one piece of chrome that takes width from it rather than height, 320px of
@@ -618,6 +618,7 @@ export function App() {
               items={items}
               total={total}
               behind={behind}
+              done={done}
               open={galleryOpen}
               drawerOpen={drawerOpen}
               onClose={() => setGalleryOpen(false)}
@@ -625,6 +626,7 @@ export function App() {
                 setGalleryOpen(true)
                 return reload()
               }}
+              onMore={more}
               onDropped={drop}
               onMeta={setMeta}
               onHandoff={(it, as) => void handoff(it.job_id, it.files[0] ?? '', as)}
