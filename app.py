@@ -7173,7 +7173,13 @@ def _h3_graph(
     # ships 0 in the pack's preset: it is a per-block knob, not the per-step
     # one that intent names. If the tail matters, the move is a PR upstream,
     # not a patch here.
-    if steps >= H3_CACHE_MIN_STEPS:
+    # Off, pending a 768p measurement. The 1.40x was measured at 544p with
+    # threshold 0.12; production shipped 0.08 unmeasured and full-tier takes
+    # promptly regressed past stock — a threshold that never trips still
+    # pays the residual comparison and the block-boundary input clones every
+    # step, so an idle cache is not free, it is negative. tools/ab_cache.py
+    # at 768p decides what re-enables this, with numbers.
+    if False and steps >= H3_CACHE_MIN_STEPS:
         graph["cache"] = {
             "class_type": CACHEDIT_NODE,
             "inputs": {"model": [src, 0], "enable": True,
