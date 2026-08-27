@@ -33,6 +33,10 @@ export function Settings({
   const [tokenNote, setTokenNote] = useState<string | null>(null)
   const [driveUrl, setDriveUrl] = useState('')
   const [driveFolder, setDriveFolder] = useState('')
+  /* Off, because the answer is right for the run you actually repeat: pasting
+     the same folder link again to pick up the epochs uploaded since. On is for
+     the one case a name cannot see — a file overwritten in place on Drive. */
+  const [driveRefetch, setDriveRefetch] = useState(false)
   // The whole ApiError, not `r.error`: the sentence is what the box shows, but a delete
   // that failed on a path guard answers with the route's own report behind it, and
   // widening the state is all it costs to keep that reachable.
@@ -183,16 +187,28 @@ export function Settings({
                     onClick={() => {
                       if (!driveUrl.trim()) return
                       void dl.begin('gdrive', 'dl_gdrive', 'Downloaded.',
-                        () => startGdrive(driveUrl.trim(), driveFolder.trim() || undefined),
+                        () => startGdrive(driveUrl.trim(), driveFolder.trim() || undefined,
+                                          driveRefetch),
                         onReload)
                     }}>
               Download
             </button>
           </div>
+          {/* Under the row rather than in it: it is a property of the pull, not a
+              third field of the link, and a folder is the only shape it changes. */}
+          <label className="row" style={{ gap: 7, margin: '9px 0 0', color: '#ddd', fontSize: 13 }}>
+            <input type="checkbox" id="gd-refetch" style={{ width: 'auto' }}
+                   checked={driveRefetch}
+                   onChange={(e) => setDriveRefetch(e.target.checked)} />
+            Re-download files already here
+          </label>
           <p className="muted" style={{ marginTop: 8 }}>
             Lands in <code>loras/</code>, ready to name in a prompt. Only{' '}
-            <code>.safetensors</code> is kept — a folder's preview images and readme are left
-            behind. The link has to be shared with anyone who has it.
+            <code>.safetensors</code> is kept — a folder's preview images and readme are
+            never fetched. A folder is listed before it is pulled, so a name already in{' '}
+            <code>loras/</code> costs nothing and pasting the same link again fetches only
+            what is new. Drive gives no size or checksum, so a file replaced under the name
+            it had needs the box. The link has to be shared with anyone who has it.
           </p>
           {/* No progress bar, unlike the cards below. Drive does not say how big
               a file is before it sends it, so a bar here could only sit at zero

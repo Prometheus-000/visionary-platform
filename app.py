@@ -61,7 +61,7 @@ import time
 import zipfile
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import modal
 
@@ -2134,7 +2134,7 @@ def _staged_bytes(root: Path) -> int:
 
 def _watch_download(
     root: Path, label: str, job_id: str, done: "threading.Event",
-    expect_gb: float | None = None, note: str = "",
+    expect_gb: float | None = None, note: str | Callable[[], str] = "",
     pct_base: float = 0.0, pct_span: float = 100.0,
 ) -> dict[str, Any]:
     """
@@ -2195,8 +2195,14 @@ def _watch_download(
         rate = max(0.0, n - prev_n) / max(1.0, now - prev_t) / 1e6
         prev_n, prev_t = n, now
         size = f"{gb:.1f} of {expect_gb:.1f} GB" if expect else f"{gb:.1f} GB"
+        # Resolved every poll, not once at the call. A queued weight download
+        # knows its position before it starts and passes a string; a Drive
+        # folder learns which file of how many it is on only while it is
+        # running, and a note fixed at call time would report the first file's
+        # position for the length of the transfer.
+        where = note() if callable(note) else note
         fields: dict[str, Any] = {
-            "phase": " · ".join(x for x in (label, note, size) if x),
+            "phase": " · ".join(x for x in (label, where, size) if x),
             "downloaded_gb": round(gb, 2),
             "mb_s": round(rate, 1),
         }
@@ -2476,8 +2482,62 @@ def _is_drive_folder(url: str) -> bool:
     return "/folders/" in url or "folderview" in url
 
 
+def _land_weights(paths: list[Path], dest_dir: Path) -> list[str]:
+    """Move whole files off the stage into loras/, flattened onto their names."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    landed = []
+    for p in paths:
+        target = dest_dir / p.name
+        if target.exists():
+            target.unlink()
+        shutil.move(str(p), target)
+        landed.append(target.name)
+    return landed
+
+
+def _drive_plan(url: str, stage: Path, present: set[str], refetch: bool) -> dict[str, Any]:
+    """
+    List a Drive folder, and decide what actually has to cross the wire.
+
+    `skip_download` answers with the folder's contents — an id, a path, and the
+    local path each file would land at — without moving a byte, which is the
+    whole reason a diff is possible here. What it does not answer with is a size
+    or a checksum, so the only thing a remote file and a local one can be
+    compared on is their name. That is why re-fetching is a switch rather than a
+    freshness test: a weight replaced in place on Drive under the name it
+    already had is indistinguishable from the one already on the volume, and a
+    test that cannot see the bytes claiming otherwise would be worse than saying
+    so.
+
+    The second saving is the preview grid and the readme — dropped from the plan
+    rather than downloaded and then filtered off the stage, which is the order
+    this ran in before and it paid for every byte of them first.
+    """
+    import gdown
+
+    listed = gdown.download_folder(url, output=str(stage), quiet=True,
+                                   use_cookies=False, skip_download=True)
+    if listed is None:
+        # A folder gdown cannot read is a None and a line on stderr nobody is
+        # reading, so the two causes are named here rather than left to be
+        # inferred from a stage that stayed empty.
+        raise RuntimeError(
+            "Drive would not list that folder — either it is not shared with "
+            "'Anyone with the link', or it holds more than 50 files, which is "
+            "as far as the folder API goes.")
+
+    weights = [(f, Path(f.local_path).name) for f in listed
+               if f.path.lower().endswith(".safetensors")]
+    return {
+        "todo": [f for f, n in weights if refetch or n not in present],
+        "already": [] if refetch else [n for _, n in weights if n in present],
+        "skipped": [Path(f.path).name for f in listed
+                    if not f.path.lower().endswith(".safetensors")],
+    }
+
+
 @app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
-def gdrive_job(url: str, folder: str) -> dict[str, Any]:
+def gdrive_job(url: str, folder: str, refetch: bool = False) -> dict[str, Any]:
     """
     Pull one file or one folder off Google Drive into loras/.
 
@@ -2486,6 +2546,12 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
     directory live, so it would be offered, chosen, and fail inside a warm GPU
     container with a torch deserialization error thirty seconds into a run.
     Staging keeps a partial download invisible until it is a whole file.
+
+    A folder is listed before anything is fetched, and a name already in the
+    destination is left alone unless `refetch` says otherwise: re-pasting the
+    link after two more epochs were uploaded costs the two epochs, not the whole
+    run again. The comparison is by name, which is all Drive will give —
+    `_drive_plan` has why, and why `refetch` is a switch because of it.
     """
     import threading
 
@@ -2501,24 +2567,64 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
         return {"status": "failed", "error": err}
 
     _reload_volume()
+    # Resolved up here, before a byte moves, because the pull is now a diff
+    # against what is in it.
+    #
+    # No folder given means the top level of loras/, where the listing already
+    # treats a bare file as its own entry named for itself. A folder given means
+    # loras/{folder}/, where the listing treats the files as versions of one
+    # LoRA — which is right for a matched pair and wrong for a bag of unrelated
+    # ones, so it stays a choice rather than a default.
+    dest_dir = (LORAS / folder) if folder else LORAS
+    # Matched the way the landing does, `.suffix.lower()` rather than a
+    # `*.safetensors` glob: a file that arrived spelled .SAFETENSORS lands under
+    # that name, and a glob that cannot see it is a diff that fetches it again
+    # every time.
+    present = ({p.name for p in dest_dir.iterdir()
+                if p.is_file() and p.suffix.lower() == ".safetensors"}
+               if dest_dir.exists() else set())
+
     stage = WORK / f"gdrive-{int(time.time())}"
     if stage.exists():
         shutil.rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True, exist_ok=True)
     started = time.time()
-    print(f"[gdrive] {url} -> loras/{folder or ''}")
+    print(f"[gdrive] {url} -> loras/{folder or ''}"
+          + (f" ({len(present)} already there)" if present else ""))
 
     result: dict[str, Any] = {}
     done = threading.Event()
+    # Written by the pull thread; read by the watcher every five seconds and by
+    # the stop path once. `got` is what lets a stop keep the files that are
+    # whole — the stage cannot be trusted wholesale there, because one of the
+    # files in it is the half of a transfer that was interrupted, which is the
+    # exact thing staging exists to keep away from the picker.
+    live: dict[str, Any] = {"note": "", "got": [], "plan": {}}
 
     def pull() -> None:
         try:
             if _is_drive_folder(url):
-                gdown.download_folder(url, output=str(stage), quiet=True,
-                                      use_cookies=False)
+                plan = _drive_plan(url, stage, present, refetch)
+                live["plan"] = plan
+                todo = plan["todo"]
+                for i, f in enumerate(todo, 1):
+                    # Between files, not inside one: the same cooperative stop
+                    # the weight queue takes, at the only point where dropping
+                    # out costs nothing already paid for.
+                    if _stop_requested(job_id):
+                        break
+                    out = Path(f.local_path)
+                    live["note"] = f"{i} of {len(todo)} · {out.name}"
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    if gdown.download(id=f.id, output=str(out), quiet=True,
+                                      use_cookies=False) is not None:
+                        live["got"].append(out)
             else:
                 # fuzzy, so a pasted browser URL works as well as a bare id —
-                # which is the form the link actually arrives in.
+                # which is the form the link actually arrives in. No diff on this
+                # path: a file link carries its name in the headers of the
+                # transfer itself, so there is nothing to compare until the bytes
+                # a diff would have saved are already moving.
                 gdown.download(url, output=str(stage) + "/", quiet=True, fuzzy=True)
         except Exception as exc:
             result["error"] = exc
@@ -2526,12 +2632,26 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
             done.set()
 
     threading.Thread(target=pull, daemon=True).start()
-    state = _watch_download(stage, "Google Drive", job_id, done)
+    state = _watch_download(stage, "Google Drive", job_id, done,
+                            note=lambda: str(live["note"]))
+    plan: dict[str, Any] = live["plan"]
 
-    if state.get("stopped"):
+    # Asked again here, because a stop that lands while the thread is between
+    # files ends the pull on its own and the watcher returns on `done` without
+    # ever having seen it.
+    if state.get("stopped") or _stop_requested(job_id):
+        landed = _land_weights(live["got"], dest_dir)
         shutil.rmtree(stage, ignore_errors=True)
-        _publish(job_id, status="stopped")
-        return {"status": "stopped"}
+        if landed:
+            volume.commit()
+        # What is whole is kept, not thrown away: a stop four files into a
+        # folder has done real work, and discarding it would mean the next run's
+        # diff has nothing to skip and pays for those four again.
+        rest = [Path(f.local_path).name for f in plan.get("todo") or []]
+        res = {"status": "stopped", "downloaded": landed,
+               "remaining": [n for n in rest if n not in set(landed)]}
+        _publish(job_id, **res)
+        return res
 
     if state["stalled"]:
         shutil.rmtree(stage, ignore_errors=True)
@@ -2555,46 +2675,47 @@ def gdrive_job(url: str, folder: str) -> dict[str, Any]:
 
     # Only weights. A Drive folder usually carries a preview grid and a readme
     # too, and copying those onto the volume would put files in loras/ that the
-    # picker has to keep stepping over.
+    # picker has to keep stepping over. A folder link now knows what it left
+    # behind from the listing, since those files were never fetched to be seen
+    # on the stage; a file link has no listing and still answers off what landed.
     found = sorted(p for p in stage.rglob("*") if p.is_file())
     weights = [p for p in found if p.suffix.lower() == ".safetensors"]
-    skipped = [p.name for p in found if p not in weights]
-    if not weights:
+    skipped = plan.get("skipped") or [p.name for p in found if p not in weights]
+    already: list[str] = plan.get("already") or []
+
+    if not weights and not already:
         shutil.rmtree(stage, ignore_errors=True)
         err = ("No .safetensors in that download"
                + (f" — found {', '.join(skipped[:6])}." if skipped else "."))
         _publish(job_id, status="failed", error=err)
         return {"status": "failed", "error": err}
 
-    # No folder given means the top level of loras/, where the listing already
-    # treats a bare file as its own entry named for itself. A folder given means
-    # loras/{folder}/, where the listing treats the files as versions of one
-    # LoRA — which is right for a matched pair and wrong for a bag of unrelated
-    # ones, so it stays a choice rather than a default.
-    dest_dir = (LORAS / folder) if folder else LORAS
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    landed = []
-    for p in weights:
-        target = dest_dir / p.name
-        if target.exists():
-            target.unlink()
-        shutil.move(str(p), target)
-        landed.append(target.name)
-
+    landed = _land_weights(weights, dest_dir)
     shutil.rmtree(stage, ignore_errors=True)
     volume.commit()
 
-    res = {
+    res: dict[str, Any] = {
         "status": "completed",
         "percent": 100,
         "files": landed,
+        "already": already,
         "skipped": skipped,
         "folder": folder,
         "size_gb": round(sum((dest_dir / n).stat().st_size for n in landed) / 1e9, 2),
         "duration_s": round(time.time() - started, 1),
     }
+    # A sentence only when there is one to write. "Downloaded." is the whole
+    # truth about a run that fetched everything it listed; it is a lie about one
+    # that fetched two of five, and the three that did not cross the wire are
+    # the only evidence the diff did anything at all.
+    if already:
+        where = f"loras/{folder}/" if folder else "loras/"
+        res["note"] = (f"{len(landed)} new · {len(already)} already in {where}"
+                       if landed else
+                       f"Nothing new — {len(already)} already in {where}")
     _publish(job_id, **res)
-    print(f"[gdrive] {len(landed)} file(s), {res['size_gb']} GB in {res['duration_s']}s")
+    print(f"[gdrive] {len(landed)} file(s), {res['size_gb']} GB in {res['duration_s']}s"
+          + (f" · {len(already)} skipped as present" if already else ""))
     return res
 
 
@@ -10536,7 +10657,7 @@ def web():
             return {"error": "Paste a Google Drive link or file id."}
         if folder and not NAME_RE.match(folder):
             return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
-        gdrive_job.spawn(url, folder)
+        gdrive_job.spawn(url, folder, bool(payload.get("refetch")))
         return {"ok": True, "job_id": GDRIVE_JOB}
 
     @api.post("/api/download-missing")

@@ -68,8 +68,13 @@ export const startDownload = (key: string) => post<DownloadStart>('/api/download
 export const downloadFamily = (family: string, hfToken?: string) =>
   post<DownloadStart>('/api/download-missing', { family, hf_token: hfToken || '' })
 
-export const startGdrive = (url: string, folder?: string) =>
-  post<DownloadStart>('/api/gdrive', { url, folder })
+/** `refetch` turns the diff off. A folder is listed before it is fetched and a
+ *  name already in `loras/` is left alone, which is what makes re-pasting a link
+ *  after two more epochs were uploaded cost the two epochs — but the listing
+ *  carries no size and no checksum, so a file replaced in place under the name it
+ *  already had can only be picked up by asking for the lot again. */
+export const startGdrive = (url: string, folder?: string, refetch?: boolean) =>
+  post<DownloadStart>('/api/gdrive', { url, folder, refetch })
 /**
  * One LoRA — the folder with its epochs in it, or the loose file. Singular
  * `path`, and the unit is the row `/api/state` lists, which is the unit the

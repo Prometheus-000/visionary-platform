@@ -56,7 +56,12 @@ export function useDownload() {
         const rate = s.mb_s ? `${String(s.mb_s)} MB/s` : ''
         if (s.status === 'completed') {
           clearInterval(t)
-          set(id, { percent: 100, message: doneText, tone: 'ok', running: false })
+          // The job's own sentence when it wrote one, because it knows something
+          // `doneText` cannot: a weight that was already on the volume, or the
+          // three files of five a Drive folder did not have to fetch. "Downloaded."
+          // over the top of that throws away the only evidence the diff did anything.
+          const note = typeof s.note === 'string' ? s.note : ''
+          set(id, { percent: 100, message: note || doneText, tone: 'ok', running: false })
           setBusy(false)
           onDone()
         } else if (s.status === 'stopped') {
