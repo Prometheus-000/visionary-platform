@@ -21,6 +21,7 @@
         "dev"
       ],
       "port": 5173,
+      "autoPort": true,
       "cwd": "web"
     },
     {
@@ -35,6 +36,15 @@
       ],
       "port": 5174,
       "cwd": "web"
+    },
+    {
+      "name": "preview-ui",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "tools/preview_ui.py"
+      ],
+      "port": 8791,
+      "autoPort": true
     },
     {
       "name": "design-notes",

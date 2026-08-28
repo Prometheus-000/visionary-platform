@@ -16,7 +16,9 @@ const API = process.env.VISIONARY_API || 'http://localhost:8791'
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    // PORT wins so two sessions can each run a dev server — the launcher
+    // assigns one when 5173 is already held by another chat's server.
+    port: Number(process.env.PORT) || 5173,
     // Every route the page talks to is under /api/, except the two that serve
     // bytes off the volume by path. Proxying the prefixes rather than listing
     // 33 routes means a new route needs no change here.
