@@ -185,11 +185,17 @@ work/, .cache/        disposable
 The layout is the contract: datasets are folders of images with text files
 beside them, so nothing here is required to get your data back out.
 
-Run a second, isolated copy against its own storage by setting the volume name:
+Run a second, isolated copy — its own URL, its own records, its own weights —
+by naming all three:
 
 ```bash
-VISIONARY_VOLUME=visionary-test modal deploy app.py
+VISIONARY_APP=visionary-test VISIONARY_VOLUME=visionary-test VISIONARY_MODELS_VOLUME=visionary-test-models modal deploy app.py
 ```
+
+`VISIONARY_APP` is the one to remember. `modal deploy` replaces an app of the
+same name, so setting only the volumes gives the test copy separate storage at
+the *live* URL — which reads as the deployment having broken rather than as
+having been replaced on purpose.
 
 ---
 

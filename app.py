@@ -66,7 +66,17 @@ from typing import Any, Callable
 
 import modal
 
-APP_NAME = "visionary"
+# The name is the deployment, and therefore the URL: `modal deploy` replaces an
+# app of the same name rather than standing a second one beside it. So this is
+# env-driven for the reason VOLUME_NAME below is, and they are meant to be set
+# together — a branch tried against the live name takes the live app down while
+# it is being tried, which is a thing you find out by looking for your URL.
+#
+#     VISIONARY_APP=visionary-test VISIONARY_VOLUME=visionary-test \
+#     VISIONARY_MODELS_VOLUME=visionary-test-models modal deploy app.py
+#
+# is a whole second copy: its own URL, its own records, its own weights.
+APP_NAME = os.environ.get("VISIONARY_APP", "visionary")
 
 # Storage this app owns. create_if_missing because a fresh account or a new
 # VISIONARY_VOLUME should just work — the cost is that a typo'd name silently
