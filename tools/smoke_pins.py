@@ -54,14 +54,58 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app.py"
 
 
-def _const(node):
-    """Literal args only. A pin built by an expression is one this cannot read,
-    and reporting it as absent would be worse than skipping it."""
-    return node.value if isinstance(node, ast.Constant) else None
+def _const(node, ns=None):
+    """
+    Literal args, and — given a namespace — expressions built from them.
+
+    A pin built by an expression is one a pure AST read cannot see, and
+    reporting it as absent would be worse than skipping it. That is enough for
+    this file, which only ever needed the literal pins.
+
+    `tools/local_install.py` needs more: `comfy_image`'s clones are f-strings
+    over `COMFY_SHA` and the repo constants, which is the *whole* of what that
+    image installs. So it passes the imported module as `ns` and the same
+    reader answers both. Evaluating app.py's own expressions against app.py's
+    own globals is not a sandbox question — the caller has already imported it.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value
+    if ns is None:
+        return None
+    try:
+        return eval(compile(ast.Expression(node), "<app.py>", "eval"), dict(ns))
+    except Exception:  # noqa: BLE001 — unreadable is a real answer, see above
+        return None
 
 
-def images():
-    """Every `*_image = modal.Image...` in app.py, with its base and pin groups."""
+def _dict(node, ns=None):
+    """A literal dict arg — `.env({...})`. Same rule as `_const`: readable or
+    nothing, never guessed."""
+    if not isinstance(node, ast.Dict):
+        return None
+    out = {}
+    for k, v in zip(node.keys, node.values):
+        key, val = _const(k, ns), _const(v, ns)
+        if key is None:
+            return None
+        out[key] = val
+    return out
+
+
+def images(ns=None):
+    """
+    Every `*_image = modal.Image...` in app.py, with its base and pin groups.
+
+    Two views of the same chain. `groups` is the pip pins alone, which is what
+    this file resolves. `steps` is every builder call in order — apt, pip, shell,
+    env, mounts — which is what `tools/local_install.py` replays into a venv.
+    One reader for both, because the image definitions are the only declaration
+    of what this app needs and a second copy of them is a copy that drifts.
+
+    An argument this cannot read literally is recorded as None rather than
+    guessed. The installer hard-fails on one; reporting it as absent would be
+    the silent half of the failure both tools exist to make loud.
+    """
     tree = ast.parse(APP.read_text())
     out = {}
     for node in tree.body:
@@ -77,23 +121,42 @@ def images():
             cur = cur.func.value
         calls.reverse()
 
-        base, groups = None, []
+        base, groups, steps = None, [], []
         for call in calls:
             name = call.func.attr
-            kw = {k.arg: _const(k.value) for k in call.keywords}
+            kw = {k.arg: _const(k.value, ns) for k in call.keywords}
             if name == "from_registry":
-                base = {"kind": "registry", "ref": _const(call.args[0]),
+                base = {"kind": "registry", "ref": _const(call.args[0], ns),
                         "python": kw.get("add_python")}
             elif name == "debian_slim":
                 base = {"kind": "slim", "python": kw.get("python_version")}
             elif name == "pip_install":
-                pkgs = [p for p in (_const(a) for a in call.args) if p]
-                if pkgs:
-                    groups.append({"pkgs": pkgs,
+                pkgs = [_const(a, ns) for a in call.args]
+                named = [p for p in pkgs if p]
+                if named:
+                    groups.append({"pkgs": named,
                                    "index_url": kw.get("index_url"),
                                    "extra_index_url": kw.get("extra_index_url")})
+                steps.append({"op": "pip", "line": call.lineno, "args": pkgs,
+                              "index_url": kw.get("index_url"),
+                              "extra_index_url": kw.get("extra_index_url")})
+            elif name == "apt_install":
+                steps.append({"op": "apt", "line": call.lineno,
+                              "args": [_const(a, ns) for a in call.args]})
+            elif name == "run_commands":
+                steps.append({"op": "run", "line": call.lineno,
+                              "args": [_const(a, ns) for a in call.args]})
+            elif name == "env":
+                steps.append({"op": "env", "line": call.lineno,
+                              "vars": _dict(call.args[0], ns) if call.args else None})
+            elif name in ("add_local_file", "add_local_dir"):
+                steps.append({"op": name[len("add_local_"):], "line": call.lineno,
+                              "src": _const(call.args[0], ns) if call.args else None,
+                              "dst": (_const(call.args[1], ns) if len(call.args) > 1
+                                      else kw.get("remote_path"))})
         if base and groups:
-            out[node.targets[0].id] = {"base": base, "groups": groups}
+            out[node.targets[0].id] = {"base": base, "groups": groups,
+                                       "steps": steps}
     return out
 
 
