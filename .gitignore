@@ -34,6 +34,8 @@ Jack-Torrance-*.png
 # build anything. docs/ carries whatever survived.
 master plan/
 chip-based-prompt-mockup/
+Design_System_Concept/
+*-handoff.zip
 session-export-*/
 
 # The duplicate scanner's tuning corpus — 731 fashion-week photographs, ~520MB,
