@@ -21,25 +21,29 @@ runs while you are not using it.
 
 ## What you can do
 
-**Generate stills and video in one workspace.** Image and video share a prompt,
-a canvas and a gallery. Duration is the switch: `Still` runs Krea 2, any length
-runs MiniMax-H3. The controls on screen follow the model, so you only ever see
-the ones it actually reads.
+**Generate stills and video in one workspace.** Image and video share a canvas
+and a gallery, and each keeps its own composer — switch away and back and
+everything is as you left it. Duration is the switch: `Still` runs Krea 2, any
+length runs MiniMax-H3. The controls on screen follow the model, so you only
+ever see the ones it actually reads.
 
 **Write prompts as pills, not paragraphs.** Camera moves, framing, lighting,
-tone and audio come from a palette of animated tiles — a tile *shows* you a
-dolly-out rather than making you guess the wording. The prompt field keeps only
-what nothing else can say: who is in the shot and what happens. A live preview
-shows the exact string the model will be handed.
+tone and audio come from a palette of seventy-seven animated tiles — a tile
+*shows* you a dolly-out rather than making you guess the wording. What you type
+keeps only what nothing else can say: who is in the shot and what happens. A
+live preview shows the exact string the model will be handed, compiled by the
+same code the run uses.
 
-**Let the model finish a fragment.** Type `empty diner, 3am`, press **Enhance**,
-and it comes back as a written prompt with the light placed and the clock still
-reading 3am. ⌘Z or the Undo beside the button restores your words exactly. The
-rewrite runs on Krea 2's own text encoder — already loaded during a session — so
-it writes in the same dialect it reads.
+**Cast a scene by typing `@`.** The video side has no prompt box, because H3
+reads a document rather than a sentence — shots, cut times, and who is speaking
+in each. Type `@` mid-sentence and a picker floats off the caret; picking makes
+a cast member and drops their name into the prose. Hand them a photograph and it
+is what they look like, a recording and it is what they sound like. A shot's
+slice of the clip is the length of what you wrote about it. Write one shot, cast
+nobody, and the run is your typed text byte for byte.
 
-**Place multiple characters with regional LoRAs.** Draw a box on the frame, drop
-a `<lora:name:1.3>` into it, and that LoRA applies only inside the box — two
+**Place multiple characters with regional LoRAs.** Draw a box on the frame and
+pick a LoRA on the card that box opens: it applies only inside the box, so two
 trained identities stay separate instead of blending. Each box can also take a
 reference photo; drop a photo on the bare canvas instead and it becomes the
 scene the picture is generated inside.
