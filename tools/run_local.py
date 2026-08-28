@@ -37,28 +37,52 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_HOME = Path(os.environ.get("VISIONARY_HOME", Path.home() / ".visionary"))
 
 
-def detect_card() -> "tuple[str, str] | tuple[None, None]":
-    """(name, sm_XY) off any torch that can see a device, or (None, None).
+def detect_card(home: Path) -> dict:
+    """{name, arch, vram_gb} off any torch that can see a device, or empty.
 
-    Tried through each environment's own interpreter as well as this one,
-    because the launcher's venv is the CPU one and need not have torch at all.
+    Asked of each environment's own interpreter as well as this one, because
+    the launcher runs in the CPU environment and need not have torch at all.
     """
     probe = ("import torch,json;"
              "d=torch.cuda.is_available();"
-             "print(json.dumps([torch.cuda.get_device_name(0),"
-             "'%d.%d'%torch.cuda.get_device_capability()] if d else [None,None]))")
-    for exe in (sys.executable, DEFAULT_HOME / ".venv-comfy" / "bin" / "python"):
+             "print(json.dumps({'name':torch.cuda.get_device_name(0),"
+             "'arch':'%d%d'%torch.cuda.get_device_capability(),"
+             "'vram_gb':round(torch.cuda.get_device_properties(0)"
+             ".total_memory/1e9,1)} if d else {}))")
+    for exe in (sys.executable, home / ".venv-comfy" / "bin" / "python"):
         try:
             out = subprocess.run([str(exe), "-c", probe], capture_output=True,
                                  text=True, timeout=60)
             if out.returncode == 0:
-                import json
-                name, cap = json.loads(out.stdout.strip().splitlines()[-1])
-                if name:
-                    return name, cap
+                import json                       # noqa: PLC0415
+                got = json.loads(out.stdout.strip().splitlines()[-1])
+                if got.get("name"):
+                    return got
         except Exception:                        # noqa: BLE001 — absence is an answer
             continue
-    return None, None
+    return {}
+
+
+def comfy_args(vram_gb: float) -> list:
+    """ComfyUI's offload flags for a card this size.
+
+    **These thresholds are unmeasured and that is stated rather than hidden.**
+    They live here rather than in app.py precisely so the rented box can move
+    them without touching the file `modal deploy` ships — a threshold argued
+    from first principles is a threshold nobody has looked at, and nobody has
+    looked at these yet.
+
+    What is not a guess is the shape: ComfyUI streams what does not fit, so a
+    card smaller than the checkpoint is a speed question and not a capability
+    one, and `--reserve-vram` exists because a desktop is also using this card.
+    """
+    if not vram_gb:
+        return []
+    if vram_gb >= 40:
+        return []                                # nothing to offload
+    if vram_gb >= 20:
+        return ["--reserve-vram", "1.0"]
+    return ["--lowvram", "--reserve-vram", "1.0"]
 
 
 def frontend_is_stale(dist: Path) -> "str | None":
@@ -101,17 +125,24 @@ def build_frontend(dist: Path) -> bool:
     return subprocess.run(["npm", "run", "build"], cwd=web).returncode == 0
 
 
-def report_card(name, cap) -> None:
+def report_card(card: dict) -> None:
     """Say which card, which kernels, and what that costs — before anything
     slow starts. The failure this exists for is silent: SageAttention compiled
     for the wrong architecture loads the weights, produces the pictures, and
     runs at roughly half speed with nothing in any log to say so."""
-    if not name:
+    if not card:
         print("[gpu] no CUDA device visible. Generation and training will not "
               "run;\n      the page and its API will.")
         return
-    sm = cap.replace(".", "")
-    print(f"[gpu] {name} (sm_{sm})")
+    sm, vram = card["arch"], card["vram_gb"]
+    print(f"[gpu] {card['name']} — {vram:g} GB, sm_{sm}")
+    flags = comfy_args(vram)
+    print(f"      ComfyUI: {' '.join(flags) if flags else 'no offload flags'}"
+          "   (thresholds unmeasured — see comfy_args)")
+    if vram < 32:
+        print("      Regional multi-character rendering is refused on this "
+              "card: its\n      block-mask and score tensors are working "
+              "memory and need ~32 GB.")
     if sm == "90":
         return
     note = {
@@ -150,9 +181,9 @@ def main() -> int:
     for d in (workspace, models):
         d.mkdir(parents=True, exist_ok=True)
 
-    name, cap = detect_card()
+    card = detect_card(home)
     print()
-    report_card(name, cap)
+    report_card(card)
 
     dist = ROOT / "web" / "dist"
     if not args.api_only and not build_frontend(dist):
@@ -162,7 +193,7 @@ def main() -> int:
     # Everything app.py reads, set before it is imported. `GPU`/`VIDEO_GPU`
     # carry the card's own name so the picker offers the card that is here —
     # the menu builds itself out of these, so no front-end change is needed.
-    card = name or "local"
+    name = card.get("name") or "local"
     os.environ.update({
         "VISIONARY_LOCAL": "1",
         "VISIONARY_WORKSPACE": str(workspace),
@@ -173,8 +204,14 @@ def main() -> int:
         "VISIONARY_TRAIN_BIN": str(home / ".venv-train" / "bin"),
         "VISIONARY_SPOOL": str(home / "spool"),
         "VISIONARY_DIST": str(dist),
-        "VISIONARY_IMAGE_GPU": card,
-        "VISIONARY_VIDEO_GPU": card,
+        "VISIONARY_IMAGE_GPU": name,
+        "VISIONARY_VIDEO_GPU": name,
+        # Reported to the page so a control can explain itself, and used by the
+        # one refusal that rests on a measured number. 0 means "not stated",
+        # which is what every Modal deployment is.
+        "VISIONARY_GPU_VRAM_GB": str(card.get("vram_gb") or 0),
+        "VISIONARY_GPU_ARCH": card.get("arch") or "unknown",
+        "VISIONARY_COMFY_ARGS": " ".join(comfy_args(card.get("vram_gb") or 0)),
     })
 
     sys.path.insert(0, str(ROOT))

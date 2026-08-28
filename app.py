@@ -53,6 +53,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -318,6 +319,31 @@ IMAGE_GPUS = ("H100", "H200", "L40S")
 VIDEO_GPUS = ("H100", "H200", "L40S")
 BOTH_GPUS = ("H200", "H100", "L40S")
 
+# How much memory the card actually has, in GB, or 0 for "not stated".
+#
+# Passed in rather than measured, because the container that answers /api/state
+# has no torch and no GPU — it is `web_image`, on CPU, deliberately. On Modal
+# nothing sets it and it stays 0, which is right: every card in the two lists
+# above is an 80 GB Hopper and there is nothing for the page to warn about.
+# `tools/run_local.py` fills it from the card it found, and that is where the
+# question starts to matter.
+#
+# **Reported, not enforced.** What a given card can and cannot render is exactly
+# the sort of threshold this codebase refuses to invent — the one refusal below
+# rests on numbers V12's own regression notes measured, and everything else
+# waits for a rented box. A gate guessed here would be the app declining work it
+# has never tried.
+GPU_VRAM_GB = float(os.environ.get("VISIONARY_GPU_VRAM_GB") or 0)
+
+# What the regional path peaks at, and it is not the weights. V12's own
+# regression notes record a 30.27 GiB block-mask build and a 17.88 GiB dense
+# score tensor at reference-frame sequence lengths — *activations*, which no
+# amount of offloading or quantisation moves off the card. Krea 2 itself will
+# stream onto a 16 GB card at a GGUF tier; a regional render on one will not,
+# and the failure without this is an out-of-memory several minutes into a warm
+# GPU rather than a form error in milliseconds.
+REGIONAL_MIN_VRAM_GB = 32.0
+
 # ComfyUI is the inference backend for both images and video, pinned by commit
 # rather than vendored.
 #
@@ -380,6 +406,17 @@ COMFY_PORT = 8188
 # a venv built from the same image definition. The conflict that forces four
 # images is therefore already solved in the code, and costs one string here.
 COMFY_PYTHON = os.environ.get("VISIONARY_COMFY_PYTHON", "python")
+# Extra argv for ComfyUI, which is where the offload flags go on a card that
+# needs them. Empty on Modal, deliberately: an H100 holding the whole 42.5 GB
+# has nothing to offload, and ComfyUI's automatic mode is what has always run
+# there. `tools/run_local.py` fills it from the card it found.
+#
+# A passthrough rather than a table here, because the thresholds are the part
+# nobody has measured yet — which card wants `--lowvram`, how much
+# `--reserve-vram` a desktop actually needs — and a threshold argued from first
+# principles is a threshold nobody has looked at. Keeping them in the launcher
+# means the rented box can move them without touching this file.
+COMFY_EXTRA_ARGS = shlex.split(os.environ.get("VISIONARY_COMFY_ARGS", ""))
 
 # Regional multi-character LoRA for Krea 2, by a commit rather than a branch —
 # the pack was pushed to twice in the week this landed, and a floating ref means
@@ -4557,6 +4594,14 @@ COMFY_OOM_MARK = "ran out of memory on your GPU"
 # thing. Ours is the count, not the verdict.
 COMFY_LORA_MISS = "NOT LOADED"
 
+# What ComfyUI prints when `--use-sage-attention` actually took hold. Its
+# *absence* is the whole point: the flag is accepted whatever happens, and
+# kernels compiled for one architecture simply do not load on another — so the
+# weights load, the pictures come out, and the run takes roughly twice as long
+# with nothing anywhere saying why. On Hopper this has never been seen missing,
+# which is exactly why it needs saying out loud somewhere that is not Hopper.
+COMFY_SAGE_MARK = "sage attention"
+
 # ComfyUI narrates the model loading that happens between accepting a graph and
 # taking its first sampling step — on H3 that is 47 seconds of VAE, text encoder
 # and a 20 GB DiT — and every word of it went to a log nobody was reading while
@@ -4782,13 +4827,16 @@ class _Comfy:
              # Process-wide, because CLIPLoader takes no dtype and the three
              # families share one ComfyUI. That is fine for the other two:
              # umT5 and a quantised Qwen3-VL-32B both prefer bf16 to fp16.
-             "--bf16-text-enc"],
+             "--bf16-text-enc",
+             # Last, so a local override wins over what is fixed above it.
+             *COMFY_EXTRA_ARGS],
             cwd=str(COMFY),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
         threading.Thread(target=self._drain, daemon=True).start()
         self._wait_ready()
         self._read_card()
+        self._confirm_sage()
 
     def _read_card(self) -> None:
         """
@@ -4812,6 +4860,31 @@ class _Comfy:
         if self.card:
             print(f"[{self.tag}] on {self.card}, {total / 2**30:.1f} GiB",
                   flush=True)
+    def _confirm_sage(self) -> None:
+        """Say so if the attention backend we asked for did not arrive.
+
+        Checked at startup rather than per render because it is a property of
+        the process, and reported with the three facts that separate the causes:
+        which card, what the kernels were built for, and what it costs. Krea 2
+        is unaffected either way — `_krea2_graph` opts back out with a
+        `ModelAttentionBackend` node, measured at 3.23s against sage's 3.26s —
+        so the cost lands on H3 alone, which is the one path with a long enough
+        sequence to have wanted it.
+        """
+        if any(COMFY_SAGE_MARK in line.lower() for line in self._log):
+            return
+        arch = os.environ.get("VISIONARY_GPU_ARCH", "unknown")
+        print(f"[{self.tag}] SageAttention was requested and ComfyUI did not "
+              f"confirm it.\n"
+              f"[{self.tag}]   card:  {self.card or '?'} "
+              f"(sm_{arch})\n"
+              f"[{self.tag}]   built: TORCH_CUDA_ARCH_LIST="
+              f"{os.environ.get('TORCH_CUDA_ARCH_LIST', '?')} — rebuild "
+              f"SageAttention for this card\n"
+              f"[{self.tag}]   cost:  H3 video falls back to PyTorch attention, "
+              f"roughly half speed.\n"
+              f"[{self.tag}]          Krea 2 is unaffected; it opts out of sage "
+              f"in the graph anyway.", flush=True)
 
     def _drain(self) -> None:
         """
@@ -13141,6 +13214,12 @@ def web():
                 "image": {"options": list(IMAGE_GPUS), "default": GPU},
                 "video": {"options": list(VIDEO_GPUS), "default": VIDEO_GPU},
                 "both": {"options": list(BOTH_GPUS), "default": BOTH_GPU},
+                # 0 where nobody said, which is every Modal deployment. A page
+                # that wants to explain why a control is unavailable needs the
+                # number, and deriving it from the card's *name* would be a
+                # lookup table of every GPU there is.
+                "vram_gb": GPU_VRAM_GB,
+                "regional_min_vram_gb": REGIONAL_MIN_VRAM_GB,
             },
             "max_refs": MAX_H3_REFS,
             "max_ref_audios": MAX_H3_REF_AUDIOS,
@@ -14715,6 +14794,22 @@ def web():
             shot = _validate_shot(payload.get("shot"))
         except ValueError as exc:
             return {"error": str(exc)}
+
+        # Only where the card has been named, so this is silent on Modal and on
+        # any local run that did not say. The numbers are V12's own, not ours:
+        # a block-mask build and a dense score tensor, both activations, both
+        # larger than a consumer card whatever the checkpoint is quantised to.
+        # In milliseconds and with the boxes still on screen, which is the
+        # `_validate_loras()` rule — the alternative is an out-of-memory some
+        # minutes into a warm GPU that reads as the app being broken.
+        if regions and 0 < GPU_VRAM_GB < REGIONAL_MIN_VRAM_GB:
+            return {"error": (
+                f"Regional rendering needs about {REGIONAL_MIN_VRAM_GB:.0f} GB "
+                f"and this card has {GPU_VRAM_GB:.0f} GB. The cost is a "
+                f"30.3 GB block-mask and a 17.9 GB score tensor — working "
+                f"memory, so a smaller checkpoint does not help. Remove the "
+                f"boxes to render the frame whole, or run this one on a "
+                f"rented card.")}
 
         # The job refuses this too; here it is a form error while both
         # attachments are on screen.
