@@ -6,6 +6,12 @@ import { App } from './App'
 // one thing React changes about the page's geometry, so it has to win.
 import './styles/ui.css'
 import './styles/root.css'
+import './styles/theme.css'
+import { applyTheme, loadTheme } from './theme/theme'
+
+// Before first paint, so a Polar user never sees a Midnight flash. Midnight
+// itself applies nothing — the stylesheet is the theme.
+applyTheme(loadTheme())
 
 const root = document.getElementById('root')
 if (!root) throw new Error('#root is missing from index.html')

@@ -1,0 +1,293 @@
+/* Appearance: the mark in the header, its panel, and the inverse pole.
+   Everything theming owns lives here rather than in ui.css, so the feature is
+   one file to read and one file to delete. */
+
+/* ---- The mark ------------------------------------------------------------
+   7px of colour after the wordmark. Untinted it is `--dim` and reads as
+   punctuation; a cast makes it that cast, so the door is also the state.
+   The button is 22px because the dot is not a target — a 7px hit area is a
+   miss you blame yourself for. */
+.tint-dot {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-left: -2px;
+}
+.tint-dot > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cast, var(--dim));
+  opacity: 0.55;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.tint-dot:hover > span,
+.tint-dot:focus-visible > span {
+  opacity: 1;
+  transform: scale(1.28);
+}
+.tint-dot:focus-visible {
+  outline: 1px solid var(--line-2);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+/* ---- The panel -----------------------------------------------------------
+   Its own class rather than `menu`, which is why it borrows `.pop`'s frame by
+   hand below: `.menu button` dresses every button in a popover as a full-width
+   left-aligned row — correct for a list of things you can do to one object, and
+   wrong for a switch, a Set and a Reset, which it stretched to the full width of
+   the panel. `form` stays, because `.form .frow` is the row this is built from. */
+.tint-panel {
+  position: fixed;
+  z-index: 80;
+  overflow: auto;
+  padding: 11px;
+  min-width: 324px;
+  max-width: min(420px, 92vw);
+  max-height: min(78vh, 540px);
+  border: 1px solid var(--lift-line);
+  background: var(--lift);
+  border-radius: var(--r-panel);
+  box-shadow: var(--lift-cast);
+  font-family: -apple-system, BlinkMacSystemFont, SF Pro Display, system-ui, sans-serif;
+}
+.tint-panel .frow {
+  margin-bottom: 9px;
+}
+.tint-panel .frow:last-child {
+  margin-bottom: 0;
+}
+/* The mood field is the one control here that is not a fixed width, and a flex
+   child's default basis collapsed it to the width of its own border. */
+.tint-panel .frow .row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tint-panel .frow .row > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tint-slide {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.tint-read {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+  width: 58px;
+  text-align: right;
+  flex: none;
+}
+.tint-panel .frow > i,
+.tint-foot i {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+.tint-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 8px;
+}
+.tint-foot i {
+  flex: 1;
+  min-width: 0;
+}
+.tint-foot button.t {
+  font-size: 12px;
+  padding: 0 6px;
+  height: 24px;
+}
+
+/* ---- Named casts ---------------------------------------------------------
+   A swatch and a word. The swatch is the cast at that preset's own amount, so
+   the row is a set of samples rather than five identical chips with labels. */
+.tint-casts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.tint-cast {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: none;
+  color: var(--mut);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.tint-cast > span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--swatch);
+  flex: none;
+}
+.tint-cast:hover {
+  color: var(--fg);
+  border-color: var(--line-2);
+}
+.tint-cast:focus-visible {
+  outline: 1px solid var(--line-2);
+  outline-offset: 2px;
+}
+.tint-cast.on {
+  color: var(--fg);
+  border-color: var(--line-2);
+  background: var(--wash-2);
+}
+
+/* ---- Sliders -------------------------------------------------------------
+   ui.css has no range input, so the whole control is drawn here. The height
+   override is against `.form .frow input{height:30px}`, which is written for
+   the text fields the sampling form is made of. */
+.tint-panel input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--wash-3);
+  cursor: pointer;
+  outline-offset: 4px;
+}
+/* The cast slider carries the wheel it selects from, in the space the engine
+   derives in — so the control shows the choice rather than naming it. */
+.tint-panel input[type='range'].warmth {
+  background: linear-gradient(90deg,
+    oklch(0.62 0.06 250), oklch(0.75 0.012 250), oklch(0.8 0.008 85),
+    oklch(0.86 0.05 85));
+}
+.tint-panel input[type='range'].hue {
+  background: linear-gradient(90deg,
+    oklch(0.72 0.15 0), oklch(0.72 0.15 60), oklch(0.72 0.15 120),
+    oklch(0.72 0.15 180), oklch(0.72 0.15 240), oklch(0.72 0.15 300),
+    oklch(0.72 0.15 360));
+}
+.tint-panel input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--fg);
+  border: 2px solid var(--bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+.tint-panel input[type='range']::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--fg);
+  border: 2px solid var(--bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+/* ---- The accent ----------------------------------------------------------
+   Gated on `data-vsn-accent`, which is only set when chroma > 0. With no accent
+   the one filled action on a screen stays white — ui.css's own answer, and the
+   monochrome default the whole model rests on.
+
+   These are the three places the app already says "this one": the filled
+   button, the chosen segment of a switch, and a selected option. Visionary's
+   own rule is that there is exactly one filled action per screen, so an accent
+   has somewhere obvious to go and nowhere to spread. */
+:root[data-vsn-accent] button.b {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+:root[data-vsn-accent] button.b:disabled {
+  background: var(--accent-soft);
+  color: var(--dim);
+}
+:root[data-vsn-accent] .switch button.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+:root[data-vsn-accent] #c-image > .opts .opt.on,
+:root[data-vsn-accent] #c-video > .opts .opt.on,
+:root[data-vsn-accent] .rins .opt.on,
+:root[data-vsn-accent] .field .bar2 > .opt.on {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+/* The mark in the header is the accent too, at full strength — it is the one
+   place the theme is allowed to state itself. */
+:root[data-vsn-accent] .tint-dot > span {
+  opacity: 0.9;
+}
+
+/* ---- Polar ---------------------------------------------------------------
+   ui.css hardcodes a handful of dark surfaces that predate theming; each rule
+   here re-grounds one of them on the inverse pole. Deliberately NOT patched:
+   every `background:#000` under the canvas, the lightbox and the media tiles —
+   the picture's ground is not chrome, and it stays black on paper too.
+   Midnight needs no rules at all: the house theme is ui.css itself. */
+:root[data-vsn-theme='polar'] .sheet,
+:root[data-vsn-theme='polar'] .sheet-head {
+  background: #f7f7f8;
+}
+:root[data-vsn-theme='polar'] .sheet .card {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.07);
+}
+:root[data-vsn-theme='polar'] .menu button {
+  color: #1a1a1c;
+}
+:root[data-vsn-theme='polar'] code,
+:root[data-vsn-theme='polar'] .err-detail pre {
+  color: #555;
+}
+:root[data-vsn-theme='polar'] .dupes-table > .gut {
+  background: #f2f2f3;
+}
+:root[data-vsn-theme='polar'] .dupes-summary span {
+  color: #555;
+}
+/* The chosen segment was white-on-black, which on paper is a control with no
+   selected state at all — and this switch is now the first thing the panel
+   shows, so it had to be right before anything else was worth looking at.
+   An accent, where there is one, wins over both. */
+:root[data-vsn-theme='polar'] .switch button.on,
+:root[data-vsn-theme='polar'] button.b {
+  background: #16161a;
+  color: #fff;
+}
+:root[data-vsn-theme='polar'][data-vsn-accent] .switch button.on,
+:root[data-vsn-theme='polar'][data-vsn-accent] button.b {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+:root[data-vsn-theme='polar'] .switch button:hover {
+  color: #16161a;
+}
+:root[data-vsn-theme='polar'] .tint-panel input[type='range']::-webkit-slider-thumb {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+}

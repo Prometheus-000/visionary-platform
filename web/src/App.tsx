@@ -19,6 +19,7 @@ import { Settings } from './settings/Settings'
 import { warmDatasets } from './datasets/useDatasets'
 import { Train } from './train/Train'
 import { SheetBuilder } from './sheet/SheetBuilder'
+import { ThemeDot } from './theme/ThemeDot'
 import { isActive, useSessions } from './train/useSessions'
 import { supports, useStore } from './store'
 import { useVideo } from './video/useVideo'
@@ -509,6 +510,10 @@ export function App() {
                 onClick={() => { setGalleryOpen(false); s.setMode('generate') }}>
           Visionary
         </button>
+        {/* Its own element, not part of the wordmark: the wordmark is how you get
+            back to Generate, and a door that sometimes means "appearance" is the
+            header lying the way a mislabelled door does. */}
+        <ThemeDot />
         <span className="grow" />
         {/* Sets is a front-door destination, not a room inside Training. It was
             two levels deep — Training, then a text button on the board — which
