@@ -1306,6 +1306,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": MODELS / "krea2-raw.safetensors",
         "gated": True,
         "approx_gb": 26.3,
+        "fits_vram_gb": 40.0,
     },
     "turbo": {
         "label": "Krea 2 Turbo",
@@ -1316,6 +1317,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": MODELS / "krea2-turbo.safetensors",
         "gated": True,
         "approx_gb": 26.3,
+        "fits_vram_gb": 40.0,
     },
     "vae": {
         "label": "Qwen Image VAE",
@@ -1393,6 +1395,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": MODELS / "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
         "gated": False,
         "approx_gb": 21.0,
+        "fits_vram_gb": 24.0,
     },
     # The second half of H3. Same VAEs, same conditioner, different transformer:
     # this one takes an ordered list of references — up to 9 images, 3 videos,
@@ -1414,6 +1417,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": MODELS / "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
         "gated": False,
         "approx_gb": 21.0,
+        "fits_vram_gb": 24.0,
     },
     "h3_te": {
         "label": "Qwen3-VL 32B",
@@ -1424,6 +1428,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": MODELS / "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
         "gated": False,
         "approx_gb": 15.7,
+        "fits_vram_gb": 24.0,
     },
     "h3_vae": {
         "label": "H3 Video VAE",
@@ -1444,6 +1449,64 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "dest": MODELS / "minimax_h3_audio_vae_fp32.safetensors",
         "gated": False,
         "approx_gb": 0.6,
+    },
+    # ── Smaller tiers of the same three weights ────────────────────────────
+    #
+    # `tier_of` names the slot a row is an alternative for, and `fits_vram_gb`
+    # is the card it is meant for. Nothing here is a mode: a tier is chosen by
+    # downloading it, the same way every other weight on this page is chosen,
+    # and `_slot_name()` picks between whatever you actually have.
+    #
+    # **Verified against the HuggingFace API, and every size below is the file's
+    # own.** These are the same pruned-convrot lineage as the int8 rows above —
+    # not GGUF — so they load through the loader already in the graph, which is
+    # why 16 GB video costs a table entry rather than a node. That much is
+    # inference from format and provenance and has not been run: the rented box
+    # confirms it or these rows come out.
+    #
+    # NVFP4 is deliberately absent as a *default* anywhere. It has no compute
+    # path before Blackwell — on Ada it is a memory saving and nothing else —
+    # so it belongs to sm_120 and is not a tier to pick by size.
+    "h3_dit_int4": {
+        "label": "MiniMax-H3 (mixed int4)",
+        "note": "Video DiT for a 16 GB card — t2v and i2v",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Abiray/Minimax-H3-nvfp4-INT4-INT8-Convrot",
+        "filename": "MiniMax_H3_FL2VA_pruned_mixed_int4_int8_convrot.safetensors",
+        "dest": MODELS / "minimax_h3_fl2va_pruned_mixed_int4_int8_convrot.safetensors",
+        "gated": False,
+        "approx_gb": 15.9,
+        "tier_of": "h3_dit",
+        "fits_vram_gb": 16.0,
+    },
+    "h3_ref_dit_int4": {
+        "label": "MiniMax-H3 Reference (mixed int4)",
+        "note": "Reference DiT for a 16 GB card",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Abiray/Minimax-H3-nvfp4-INT4-INT8-Convrot",
+        "filename": "MiniMax_H3_Ref2VA_pruned_mixed_int4_int8_convrot.safetensors",
+        "dest": MODELS / "minimax_h3_ref2va_pruned_mixed_int4_int8_convrot.safetensors",
+        "gated": False,
+        "approx_gb": 15.1,
+        "tier_of": "h3_ref_dit",
+        "fits_vram_gb": 16.0,
+    },
+    # The text encoder is the stubborn half of the 16 GB question: nvfp4 above
+    # is 15.7 GB and this is 14.95, so neither is small. What makes 16 GB work
+    # is that the encoder runs first and is evicted before the DiT loads —
+    # sequential residency, which is the specific thing the rented box has to
+    # confirm rather than the size arithmetic.
+    "h3_te_int4": {
+        "label": "Qwen3-VL 32B (int4)",
+        "note": "H3 conditioner for a 16 GB card",
+        "family": "MiniMax-H3 — video with sound",
+        "repo_id": "Abiray/MiniMax-H3-GGUF",
+        "filename": "text_encoders/qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
+        "dest": MODELS / "qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
+        "gated": False,
+        "approx_gb": 15.0,
+        "tier_of": "h3_te",
+        "fits_vram_gb": 16.0,
     },
     # ── MiniMax-H3 speed LoRAs ─────────────────────────────────────────────
     #
@@ -1621,6 +1684,71 @@ CATALOGUE_LORA_ROOTS = _catalogue_lora_roots()
 RAW_PATH = MODEL_CATALOGUE["raw"]["dest"]
 VAE_PATH = MODEL_CATALOGUE["vae"]["dest"]
 TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
+
+# Alternatives per slot, best first. Built from the catalogue rather than
+# written twice, so a tier added above appears here by existing.
+SLOT_TIERS: dict[str, list[str]] = {}
+for _k, _spec in MODEL_CATALOGUE.items():
+    if _spec.get("tier_of"):
+        SLOT_TIERS.setdefault(_spec["tier_of"], []).append(_k)
+for _base, _alts in SLOT_TIERS.items():
+    # Largest first, which for one architecture is also best first: these are
+    # quantisations of one checkpoint, so size is precision.
+    _alts.sort(key=lambda k: MODEL_CATALOGUE[k]["approx_gb"], reverse=True)
+
+
+def _slot_name(key: str) -> str:
+    """
+    Which file the graph should ask for in one slot, given what is on disk.
+
+    **A working default, chosen by what you downloaded, with an override that
+    does not argue.** The catalogue's own row is the answer unless a smaller
+    tier is present and the card cannot hold the full one — so a Modal
+    deployment, where `GPU_VRAM_GB` is 0 because nobody said, always resolves to
+    exactly what it resolved to before this existed. Nothing about the deployed
+    path changes.
+
+    The override is `config["weight_tiers"][slot]`, set under the gear, and it
+    is honoured whenever the file it names is actually present. It is not
+    checked against the card: somebody who wants Q8 on a 12 GB card is asking
+    for a slow render, not making a mistake, and a gate here would be this file
+    having an opinion about a trade only the person rendering can price. The
+    same latitude the custom captioner row takes, for the same reason.
+
+    Falls back to the base row whenever nothing else resolves, including when
+    the override names a file that has since been deleted — a stale override
+    should cost a render at the default quality, never a job that cannot start.
+    """
+    alts = SLOT_TIERS.get(key)
+    base = MODEL_CATALOGUE[key]["dest"]
+    if not alts:
+        return base.name
+
+    chosen = (config.get("weight_tiers") or {}).get(key)
+    if chosen:
+        spec = MODEL_CATALOGUE.get(chosen)
+        if spec and spec["dest"].is_file():
+            return spec["dest"].name
+
+    # Candidates, best first, and "best" is size because these are
+    # quantisations of one checkpoint. `fits_vram_gb` is a *declared* fact per
+    # row rather than arithmetic over `approx_gb`: a 15.7 GB encoder fits 16 GB
+    # on paper and has nothing left to run in, and the difference between those
+    # two readings is the whole reason the field exists.
+    here = [k for k in (key, *alts) if MODEL_CATALOGUE[k]["dest"].is_file()]
+    if not here:
+        return base.name
+    if not GPU_VRAM_GB:
+        # Nobody said what the card is, which is every Modal deployment. The
+        # catalogue's own row is the answer, exactly as it was before tiers.
+        return base.name if base.is_file() else MODEL_CATALOGUE[here[0]]["dest"].name
+    fits = [k for k in here
+            if MODEL_CATALOGUE[k].get("fits_vram_gb", 0) <= GPU_VRAM_GB]
+    # Nothing claims to fit: take the smallest that is here and let ComfyUI
+    # stream it. Refusing would be this table overruling a card it has never
+    # seen, and streaming slowly is a real answer where no render is not.
+    pick = fits[0] if fits else here[-1]
+    return MODEL_CATALOGUE[pick]["dest"].name
 
 # JoyCaption, not Qwen3-VL, and still not a booru tagger.
 #
@@ -2638,6 +2766,18 @@ def _model_status() -> list[dict[str, Any]]:
                 "present": present,
                 "size_gb": round(sizes[dest] / 1e9, 2) if present else 0,
                 "path": str(dest),
+                # A tier is an alternative for another row's slot, and says
+                # which card it is meant for. Both are absent on the ordinary
+                # rows, which is every row on a deployment with no tiers pulled.
+                "tier_of": spec.get("tier_of"),
+                "fits_vram_gb": spec.get("fits_vram_gb"),
+                # On the row that owns a slot: the alternatives, and which file
+                # the graph will actually ask for. Derived here rather than in
+                # the page, for the reason every other menu is — a second
+                # implementation of the choice is a second answer to it.
+                "tiers": SLOT_TIERS.get(key) or None,
+                "using": _slot_name(key) if SLOT_TIERS.get(key) else None,
+                "pinned": (config.get("weight_tiers") or {}).get(key),
             }
         )
     return out
@@ -8080,9 +8220,9 @@ def _krea2_graph(
     reference image and no edit LoRA: V12 falls through to V9's likeness engine,
     which masks each LoRA's activation delta to its rectangle and samples once.
     """
-    dit = MODEL_CATALOGUE["turbo" if model == "turbo" else "raw"]["dest"].name
-    te = MODEL_CATALOGUE["text_encoder"]["dest"].name
-    vae = MODEL_CATALOGUE["vae"]["dest"].name
+    dit = _slot_name("turbo" if model == "turbo" else "raw")
+    te = _slot_name("text_encoder")
+    vae = _slot_name("vae")
 
     graph: dict[str, Any] = {
         "dit": {"class_type": "UNETLoader",
@@ -9069,10 +9209,10 @@ def _h3_graph(
     (`denoised_output`) — video and audio come out of the same latent.
     """
     ref_mode = bool(references or ref_videos or ref_audios)
-    dit = MODEL_CATALOGUE["h3_ref_dit" if ref_mode else "h3_dit"]["dest"].name
-    te = MODEL_CATALOGUE["h3_te"]["dest"].name
-    vae = MODEL_CATALOGUE["h3_vae"]["dest"].name
-    avae = MODEL_CATALOGUE["h3_audio_vae"]["dest"].name
+    dit = _slot_name("h3_ref_dit" if ref_mode else "h3_dit")
+    te = _slot_name("h3_te")
+    vae = _slot_name("h3_vae")
+    avae = _slot_name("h3_audio_vae")
 
     cond: dict[str, Any] = {
         "clip": ["clip", 0], "vae": ["vae", 0], "prompt": prompt,
@@ -14442,6 +14582,43 @@ def web():
             return {"ok": True}
         return {"error": f"No captioner {key!r} — reopen Settings to refresh "
                          "the list."}
+
+    @api.post("/api/models/tier")
+    def set_weight_tier(payload: dict) -> dict[str, Any]:
+        """
+        Pin one slot to one file, or clear the pin and go back to automatic.
+
+        The automatic answer is a working default — the largest tier on disk
+        that claims to fit the card — so nobody has to make this choice to get
+        started. This is for afterwards: somebody who wants to see what the
+        bigger file looks like on a card that has to stream it, or who trusts
+        their own measurement over the table's `fits_vram_gb`. It is not checked
+        against the card, deliberately. That trade is priced by the person
+        watching the render, and a refusal here would be this file having an
+        opinion about their hardware. Same latitude the custom captioner row
+        takes, and the pin lives in the same Dict so it survives a redeploy.
+        """
+        slot = str(payload.get("slot") or "")
+        if slot not in SLOT_TIERS:
+            return {"error": f"{slot!r} has no alternatives to choose between."}
+        chosen = payload.get("key")
+        pins = dict(config.get("weight_tiers") or {})
+        if not chosen:
+            pins.pop(slot, None)
+            config["weight_tiers"] = pins
+            return {"ok": True, "slot": slot, "using": _slot_name(slot)}
+        if chosen not in (slot, *SLOT_TIERS[slot]):
+            return {"error": f"{chosen!r} is not one of this slot's files."}
+        spec = MODEL_CATALOGUE[chosen]
+        if not spec["dest"].is_file():
+            # The one refusal, and it is about a fact rather than a judgement:
+            # a pin to a file nobody has downloaded would silently fall back,
+            # which reads as the pin not working.
+            return {"error": f"{spec['label']} is not downloaded yet — "
+                             "get it under Models first."}
+        pins[slot] = chosen
+        config["weight_tiers"] = pins
+        return {"ok": True, "slot": slot, "using": _slot_name(slot)}
 
     @api.post("/api/datasets/{name}/replace")
     def replace_in_captions(name: str, payload: dict) -> dict[str, Any]:
