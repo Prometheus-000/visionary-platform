@@ -241,9 +241,16 @@ that survives a port.
 copy: `smoke_prompt.py` checking a compiler against a reimplementation would be
 checking the reimplementation, and `preview_ui.py` drawing the shot palette from
 a hand-written vocabulary would be a preview of a palette that does not exist.
-Importing app.py is what it avoids — that pulls in modal and builds image
-definitions at module scope, so it wants credentials and a network to answer a
-question about a string.
+What it avoids is needing `modal` and `torch` **installed**, because both tools
+are meant to run on a laptop that has neither.
+
+It used to say importing app.py wants credentials and a network. That was
+wrong and worth correcting, because it pointed the local runtime at the harder
+of two mechanisms: every Modal object in the file is lazy — `Volume.from_name`
+returns an unhydrated handle and the RPC does not fire until something uses it
+— so `import app` takes about 0.15s with no config file and no network at all.
+`tools/run_local.py` imports app.py directly for exactly that reason, and the
+AST trick stays where it belongs, with the two tools that cannot import `modal`.
 
 `app.py` is deliberately one file. It is long, but the alternative — a package
 whose modules are imported by Modal image builds — trades one long file for a

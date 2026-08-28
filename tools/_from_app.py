@@ -6,11 +6,17 @@ rather than a copy of it: a compiler checked against a reimplementation checks
 the reimplementation, and a UI preview built against a hand-written vocabulary
 is a preview of a palette that does not exist.
 
-Importing app.py is what this avoids, for the reason `preview_ui.py` already
-records — it pulls in modal and builds image definitions at module scope, so it
-wants credentials and a network to answer a question about a string. The AST is
-already on disk, and a module assembled from a subset of its top-level
-statements runs on a laptop with no torch, no modal and no credentials.
+Importing app.py is what this avoids, and the reason is narrower than it used
+to say. It said importing wants credentials and a network; it does not — every
+Modal object in app.py is lazy, `Volume.from_name` hands back an unhydrated
+handle, and `import app` costs about a sixth of a second with no `.modal.toml`
+and no route to the internet. `tools/run_local.py` relies on exactly that.
+
+What importing app.py does want is **`modal` installed at all**, plus `torch`
+for anything that walks past the constants — and the two consumers here are a
+stub API server and a compiler test that must run on a laptop with neither. The
+AST is already on disk, and a module assembled from a subset of its top-level
+statements needs no third-party package to answer a question about a string.
 
 The subset is named, never pattern-matched. A rename upstream should fail here
 loudly rather than quietly hand back one function fewer.

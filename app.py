@@ -156,8 +156,15 @@ SESSION_INDEX = "index"
 # Weights are addressed by exact path, never scanned, so models/ is flat with
 # descriptive filenames rather than the per-architecture directories a webui
 # needs in order to populate its dropdowns.
-WORKSPACE = Path("/workspace")
-MODELS = Path("/models")
+# Env-driven because the mount point is exactly what changes off Modal: a local
+# run re-roots both at a directory it owns, and every constant below derives
+# from these two, so the layout *under* the root is identical either way. That
+# is what makes a local datasets/ and a deployed one the same folder, an rsync
+# apart. Modal refusing nested mounts is the only reason MODELS is a sibling
+# rather than WORKSPACE/models — locally it can go back under it, which is
+# where the module docstring says it started.
+WORKSPACE = Path(os.environ.get("VISIONARY_WORKSPACE", "/workspace"))
+MODELS = Path(os.environ.get("VISIONARY_MODELS", "/models"))
 LORAS = WORKSPACE / "loras"
 # A dataset is a named folder of images with .txt captions beside them — the
 # same thing musubi reads, so the sidecars stay the source of truth and nothing
@@ -179,10 +186,17 @@ DATASETS = WORKSPACE / "datasets"
 # GPU, training) reads a *saved* set, because this folder is invisible to
 # every other machine. The owner refused a named exception: *"exceptions have
 # a way of setting precedence … unsaved datasets aren't holy."*
-DRAFTS = Path("/tmp/visionary-drafts")
+# Env-driven for a reason that only shows up off Modal: "the container's disk"
+# is /tmp in a container and is a real filesystem on a workstation, where /tmp
+# is tmpfs on most Linux distributions — so an unsaved 400-image set would be
+# spooled into RAM. Same default, same meaning, somewhere the launcher can put
+# it. The Modal path does not read the variable and is unchanged.
+DRAFTS = Path(os.environ.get("VISIONARY_DRAFTS", "/tmp/visionary-drafts"))
 # Per-run scratch for the trainer's resized copy and the Drive puller's
 # staging — each on the disk of the container doing the work, disposable.
-WORK = Path("/tmp/visionary-work")
+# Same, and more sharply: WORK holds the trainer's resized copy of a dataset,
+# which is gigabytes, and putting gigabytes on a tmpfs is putting them in RAM.
+WORK = Path(os.environ.get("VISIONARY_WORK", "/tmp/visionary-work"))
 OUTPUTS = WORKSPACE / "outputs"
 # The Arsenal's first shelf: characters, saved deliberately and recalled by
 # typing their name. A character is a folder of the files that make them —
@@ -247,8 +261,18 @@ def _set_cache(d: Path) -> Path:
     on this container's disk, under the spool's LRU. They were `.thumbs/`
     inside the set on the volume; a cache the writer rebuilds does not belong
     beside the record it is derived from."""
-    return Path("/tmp/visionary-spool") / "datasets" / d.name
-MUSUBI = Path("/opt/musubi-tuner")
+    return SPOOL / "datasets" / d.name
+
+
+# Env-driven for the reason WORKSPACE is: baked into trainer_image at this
+# path, but locally it is a clone inside the venv that owns torch 2.5.1.
+MUSUBI = Path(os.environ.get("VISIONARY_MUSUBI", "/opt/musubi-tuner"))
+# Prepended to PATH for the trainer's subprocesses, so `python` and
+# `accelerate` resolve to the environment musubi was installed into. Empty on
+# Modal, where trainer_image *is* that environment. `accelerate` is a console
+# script rather than a module, which is why this is a bin directory on PATH
+# rather than an interpreter path like COMFY_PYTHON.
+TRAIN_BIN = os.environ.get("VISIONARY_TRAIN_BIN", "")
 
 # The default card for each family. Both default to Hopper for one reason
 # each, and the reason is memory, not kernels. Images: Krea 2 used to have an
@@ -347,8 +371,15 @@ COMFY_SHA = "924743af083c151296cc16f925aeab113b6484e8"  # 2026-08-22, +111
 # tokenized audio conditioning produced. The eleven commits upstream of
 # it at bump time were partner nodes and dependency churn touching
 # nothing tools/upstream.py watches, so they stay unbought.
-COMFY = Path("/opt/comfyui")
+COMFY = Path(os.environ.get("VISIONARY_COMFY", "/opt/comfyui"))
 COMFY_PORT = 8188
+# Which python runs it. `_Comfy.start()` spawns ComfyUI as a subprocess, so the
+# interpreter is already a process boundary — and a process boundary is exactly
+# what keeps torch 2.9.1+cu130 from having to agree with musubi's 2.5.1+cu124.
+# On Modal that boundary is the image and this stays "python"; locally it names
+# a venv built from the same image definition. The conflict that forces four
+# images is therefore already solved in the code, and costs one string here.
+COMFY_PYTHON = os.environ.get("VISIONARY_COMFY_PYTHON", "python")
 
 # Regional multi-character LoRA for Krea 2, by a commit rather than a branch —
 # the pack was pushed to twice in the week this landed, and a floating ref means
@@ -451,6 +482,371 @@ K2ST_TRANSFER_NODE = "Krea2StyleTransfer"
 COMFY_NODES_DIR = str(Path(__file__).parent / "comfy_nodes")
 
 app = modal.App(APP_NAME)
+
+
+# --------------------------------------------------------------------------
+# Local mode — one card, one process, the same contract
+#
+# `modal deploy app.py` is still the entire install and nothing here runs under
+# it: `VISIONARY_LOCAL` is set by tools/run_local.py and by nothing else. Every
+# decorator, image, Volume and Dict above and below is still constructed
+# unconditionally, because all of them are lazy — `Volume.from_name` hands back
+# an unhydrated handle and the RPC does not fire until something uses it, which
+# is why `import app` costs 0.15s with no credentials and no network.
+#
+# **Rebinding names rather than routing call sites through accessors is the
+# whole trick.** The surface this file asks of a Dict is three operations, and
+# of a Volume five; a shim answering those makes every existing call site work
+# off Modal *and* every future one, with no edit. The alternative was a
+# `_commit()` helper renamed across 28 sites — 28 chances to miss one, and no
+# way to notice the miss until a stranger's render came back wrong.
+#
+# Dispatch is the deliberate exception and stays visible at its eight call
+# sites, because dispatch is the one thing that genuinely differs: Modal starts
+# a container per call, and a local run has one card that holds one model.
+#
+# `tools/smoke_local.py` asserts both halves — that the Dict and Volume surfaces
+# stay closed, and that no ninth `.spawn(` appears outside `_spawn` — on a
+# laptop, in ten seconds, because the person maintaining this will not be the
+# person running it.
+# --------------------------------------------------------------------------
+
+LOCAL = bool(os.environ.get("VISIONARY_LOCAL"))
+
+
+class _LocalDict(dict):
+    """
+    A `modal.Dict` for one process, which is what a local run has.
+
+    Backed by a file only where the contents are a *record*. `jobs` is not one:
+    locally the web server and the job are the same process, so a job cannot
+    outlive the process that published it, and a record that survived a restart
+    would be exactly the stale claim `beat` and `_download_alive` exist to
+    disbelieve. `config` and `sessions` are records, and land as plain JSON —
+    readable with `cat`, which is the storage-layout rule reaching the one piece
+    of state that was never on the volume.
+    """
+
+    def __init__(self, path: "Path | None" = None):
+        super().__init__()
+        self._path = path
+        self._lock = threading.RLock()
+        if path and path.is_file():
+            try:
+                self.update(json.loads(path.read_text()))
+            except Exception as exc:  # noqa: BLE001 — a corrupt file is not fatal
+                # Named rather than swallowed: starting empty is survivable, but
+                # silently starting empty reads as "my sessions are gone".
+                print(f"[local] {path.name} unreadable, starting empty "
+                      f"({type(exc).__name__}: {exc})", flush=True)
+
+    def _flush(self) -> None:
+        if not self._path:
+            return
+        # Staged then renamed, the `_download_weight` rule: a reader arriving
+        # mid-write must see the old file whole rather than half of the new one.
+        tmp = self._path.with_suffix(f".{threading.get_ident()}.part")
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(dict(self), indent=1, default=str))
+            tmp.replace(self._path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[local] could not write {self._path}: "
+                  f"{type(exc).__name__}: {exc}", flush=True)
+            tmp.unlink(missing_ok=True)
+
+    def __setitem__(self, key, value):
+        with self._lock:
+            super().__setitem__(key, value)
+            self._flush()
+
+    def pop(self, key, *default):
+        with self._lock:
+            out = super().pop(key, *default)
+            self._flush()
+            return out
+
+
+class _LocalCommit:
+    """
+    `volume.commit`, which locally has nothing to do.
+
+    An object rather than a method because one caller reaches for
+    `volume.commit.aio()` — `/api/upload`, the one `async def` route, where a
+    blocking commit would stall the event loop for the whole container. That
+    call has to keep working, so `.aio` has to exist.
+    """
+
+    def __call__(self) -> None:
+        return None
+
+    async def aio(self) -> None:
+        return None
+
+
+class _LocalEntry:
+    """One row of `volume.listdir`, carrying the real enum so `e.type != FILE`
+    in `_entries_by_rpc` compares against what it was written to compare."""
+
+    __slots__ = ("path", "type", "mtime", "size")
+
+    def __init__(self, path: str, mtime: float, size: int):
+        self.path = path
+        self.type = modal.volume.FileEntryType.FILE
+        self.mtime = mtime
+        self.size = size
+
+
+class _LocalVolume:
+    """
+    A `modal.Volume` for a directory that is simply there.
+
+    The read path this stands in for exists because a Modal mount can serve
+    stale bytes and a reload is refusable while safetensors holds the volume
+    open — so the gallery asks the *committed* state by RPC instead. None of
+    that is true of a local directory: the mount is the record, there is no
+    second copy to be behind, and a commit is a no-op rather than a cost.
+
+    Answering `read_file` and `listdir` off the disk — rather than routing the
+    gallery onto its `_entries_by_walk` fallback — is deliberate. The fallback
+    prints a line saying the listing may be stale, and it should keep meaning
+    that. A local run is not a degraded RPC; it is a filesystem that cannot lag.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.commit = _LocalCommit()
+
+    def reload(self) -> None:
+        return None
+
+    def _resolve(self, rel: str) -> Path:
+        return self.root / str(rel).lstrip("/")
+
+    def read_file(self, rel: str):
+        """Chunks, as a generator — so a missing file raises FileNotFoundError
+        on iteration rather than at the call, which is where `_read_committed`
+        catches it in order to try the other path spelling."""
+        with open(self._resolve(rel), "rb") as fh:
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    return
+                yield chunk
+
+    def listdir(self, path: str, recursive: bool = False):
+        """Volume-relative paths, which is the spelling `_entries_by_rpc`
+        already tolerates ("returned volume-relative in testing, even though
+        '/outputs' went in")."""
+        base = self._resolve(path)
+        if not base.is_dir():
+            return []
+        walk = base.rglob("*") if recursive else base.iterdir()
+        out = []
+        for f in walk:
+            try:
+                if not f.is_file():
+                    continue
+                st = f.stat()
+            except OSError:
+                continue
+            out.append(_LocalEntry(str(f.relative_to(self.root)),
+                                   st.st_mtime, st.st_size))
+        return out
+
+
+class _Lane:
+    """
+    One queue, and as many workers as the hardware can actually run at once.
+
+    This is not a second job system. It writes into the same `jobs` record
+    through the same `_publish`, reports through the same `/api/status`, and
+    answers the same `_request_stop` — what it adds is an ordering that Modal
+    supplied by starting another container, and a local machine cannot.
+
+    A queued job says how many are ahead of it and re-says it when that number
+    changes, because a wait costs what it shows rather than what it takes, and
+    "queued" alone is the still button the antifragile rule is about.
+    """
+
+    def __init__(self, name: str, workers: int):
+        self.name = name
+        self._pending: deque = deque()
+        # Counted separately from the queue, because a job that has been picked
+        # up is no longer *in* the queue and is still the thing everything else
+        # is waiting for. Without this the first job to queue behind a running
+        # render computed nothing ahead of it and so published nothing — a card
+        # that says "queued" and never says what for, which is the still button
+        # this whole mechanism exists to avoid.
+        self._running = 0
+        self._cv = threading.Condition()
+        for i in range(workers):
+            threading.Thread(target=self._work, name=f"lane-{name}-{i}",
+                             daemon=True).start()
+
+    def submit(self, fn, args, kwargs, job_id: "str | None") -> None:
+        with self._cv:
+            self._pending.append((fn, args, kwargs, job_id))
+            ahead = len(self._pending) - 1 + self._running
+            self._cv.notify()
+        if job_id and ahead:
+            _publish(job_id, status="queued", phase=_ahead(ahead))
+
+    def _work(self) -> None:
+        while True:
+            with self._cv:
+                while not self._pending:
+                    self._cv.wait()
+                fn, args, kwargs, job_id = self._pending.popleft()
+                self._running += 1
+                waiting, running = list(self._pending), self._running
+            for i, (_, _, _, other) in enumerate(waiting):
+                if other:
+                    _publish(other, status="queued", phase=_ahead(i + running))
+            if job_id and _stop_requested(job_id):
+                # Stopped while it waited. Publishing the terminal status the
+                # bodies publish — rather than starting the body so its own
+                # `_stop_gate` can — is worth the duplication here only because
+                # locally the alternative is loading 16-40 GB of checkpoint in
+                # order to discover that nobody wants it.
+                _publish(job_id, status="stopped", phase="stopped in the queue")
+                _clear_stop(job_id)
+                continue
+            try:
+                # `.local()`, not `get_raw_f()`: it is the only one of the two
+                # that works for a Cls method, where it binds to the Obj's own
+                # instance and runs `@modal.enter()` first. That lifecycle is
+                # what loads the checkpoint, and `_on_gpu` memoizing the Obj is
+                # what stops it running per request.
+                fn.local(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 — a worker must outlive a job
+                print(f"[lane:{self.name}] {type(exc).__name__}: {exc}",
+                      flush=True)
+                if job_id:
+                    _publish(job_id, status="failed",
+                             error=f"{type(exc).__name__}: {exc}")
+            finally:
+                with self._cv:
+                    self._running -= 1
+
+
+def _ahead(n: int) -> str:
+    return "queued — next up" if n == 1 else f"queued — {n} ahead"
+
+
+# Which lane a function runs in, by `info.function_name`. Unknown names take
+# the GPU lane on purpose: it is the serialising one, so a dispatch site added
+# later is slow-but-correct rather than an out-of-memory crash, and
+# `tools/smoke_local.py` names the ones it expects so a new one is still noticed.
+_LANE_OF = {
+    "download_job": "cpu",
+    "download_missing_job": "cpu",
+    "gdrive_job": "cpu",
+    "caption_job": "gpu",
+    "train_job": "gpu",
+    "export_scene_job": "cpu",
+    "migrate_outputs_job": "cpu",
+    # Three placements share two method bodies up the MRO, and Modal names a
+    # method by the class it was reached through — so every combination is a
+    # name here. The table is spelled out rather than derived because
+    # `tools/smoke_local.py` checks these names against the classes, and a
+    # derived table would agree with itself while both halves were wrong.
+    "ImageGenerator.generate_image": "gpu",
+    "VideoGenerator.generate_video": "gpu",
+    "BothGenerator.generate_image": "gpu",
+    "BothGenerator.generate_video": "gpu",
+    # The Playground drives the same warm ComfyUI, so it queues behind renders
+    # for the same reason they queue behind each other.
+    "ImageGenerator.playground": "gpu",
+    "VideoGenerator.playground": "gpu",
+    "BothGenerator.playground": "gpu",
+    "ImageGenerator.restart_engine": "gpu",
+    "VideoGenerator.restart_engine": "gpu",
+    "BothGenerator.restart_engine": "gpu",
+    "playground_catalogue_job": "gpu",
+    # A knock on a door that is already open — locally the process is up and the
+    # checkpoint loads on the first real request, so warming is what `_on_gpu`'s
+    # memo already does.
+    "ImageGenerator.warm": "inline",
+    "VideoGenerator.warm": "inline",
+    "BothGenerator.warm": "inline",
+}
+_LANES: "dict[str, _Lane]" = {}
+_LANES_LOCK = threading.Lock()
+
+
+def _lane(name: str) -> _Lane:
+    with _LANES_LOCK:
+        if name not in _LANES:
+            # One GPU worker because there is one card: a second concurrent
+            # render is an out-of-memory failure, not throughput. Two on the CPU
+            # lane because that is what the downloads already are — `web_image`
+            # has no GPU and `_active_download` is the thing that serialises
+            # them, for the uplink's sake rather than the card's.
+            _LANES[name] = _Lane(name, 2 if name == "cpu" else 1)
+        return _LANES[name]
+
+
+def _spawn(fn, *args, **kwargs):
+    """
+    Start a job and stop caring about it — the contract this app already has.
+
+    On Modal that is `.spawn()`: fire and forget, the handle discarded, the
+    `job_id` the only correlator. Locally it is a lane (see `_Lane`), which is
+    the same contract with the ordering made explicit, because one card cannot
+    do what a container-per-call did.
+
+    `job_id` is read out of the keyword arguments rather than passed separately:
+    every call that can actually queue — both generators, captioning, training —
+    already passes it by keyword, and the ones that do not are the CPU downloads,
+    which `_active_download` was already serialising by itself.
+    """
+    if not LOCAL:
+        return fn.spawn(*args, **kwargs)
+    try:
+        name = fn.info.function_name
+    except Exception:  # noqa: BLE001 — an unnamed function still has to run
+        name = ""
+    lane = _LANE_OF.get(name, "gpu")
+    if lane == "inline":
+        return None
+    _lane(lane).submit(fn, args, kwargs, kwargs.get("job_id"))
+    return None
+
+
+# What Modal *mounts*, as against what this file reads and writes. On Modal
+# they are the same three objects; locally they are deliberately not, because a
+# `@app.function` decorator validates its `volumes=` against real Volumes at
+# import time and would reject a shim — while the code below wants something
+# that answers commit, reload, read_file and listdir against a directory.
+#
+# Captured here, above the rebind, so the decorators keep the real handles no
+# matter what the names below them come to mean. A local run never mounts
+# anything, so what these hold then is unused rather than wrong.
+MODAL_VOLUMES = {"/workspace": volume, "/models": models_volume}
+MODAL_VOLUMES_HF = {**MODAL_VOLUMES, str(HF_CACHE): hf_cache}
+# The data volume alone, for the jobs that have no business holding the
+# weights open: exporting a scene and migrating the output tree.
+MODAL_VOLUMES_WS = {"/workspace": volume}
+
+
+if LOCAL:
+    # The rebind. Everything above this line is a definition; this is the only
+    # place the running program changes shape, and it is four names.
+    LOCAL_ROOT = WORKSPACE
+    jobs = _LocalDict()
+    config = _LocalDict(LOCAL_ROOT / ".local" / "config.json")
+    sessions = _LocalDict(LOCAL_ROOT / ".local" / "sessions.json")
+    # One object for all three mounts, because locally they are one filesystem.
+    # `hf_cache` is only ever mounted, never called, so it rides along.
+    volume = models_volume = hf_cache = _LocalVolume(WORKSPACE)
+    # One card, so the picker offers one card. `GPU` and `VIDEO_GPU` are already
+    # env-driven and the launcher fills them from the detected device, so the
+    # menu — which builds itself out of these, like every other menu on the page
+    # — needs no change on the front end, and `_on_gpu` always returns the base
+    # runner because the request can only ever equal the default.
+    IMAGE_GPUS = (GPU,)
+    VIDEO_GPUS = (VIDEO_GPU,)
 
 
 # --------------------------------------------------------------------------
@@ -1748,6 +2144,12 @@ def _run(cmd: list[str], label: str, job_id: str, log: deque[str]) -> None:
     _publish(job_id, phase=label, step=0, total_steps=0, percent=0)
 
     env = {**os.environ, "PYTHONPATH": str(MUSUBI / "src")}
+    if TRAIN_BIN:
+        # In front, not appended: an `accelerate` on the system PATH would
+        # otherwise win and launch the wrong interpreter's torch, which fails
+        # as a CUDA error about the wrong architecture rather than as a
+        # wrong-environment error.
+        env["PATH"] = f"{TRAIN_BIN}{os.pathsep}{env.get('PATH', '')}"
     proc = subprocess.Popen(
         cmd, cwd=str(MUSUBI), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -2274,7 +2676,7 @@ def _probe(path: Path) -> dict[str, Any]:
 
 
 @app.function(image=export_image, cpu=2.0, timeout=60 * 60,
-              volumes={"/workspace": volume})
+              volumes=MODAL_VOLUMES_WS)
 def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
     """
     Stitch a scene's takes into one file, in the order they were made.
@@ -2425,7 +2827,7 @@ MIGRATE_JOB = "migrate_outputs"
 
 
 @app.function(image=export_image, cpu=2.0, timeout=4 * 60 * 60,
-              volumes={"/workspace": volume})
+              volumes=MODAL_VOLUMES_WS)
 def migrate_outputs_job(job_id: str) -> dict[str, Any]:
     """
     Move every job folder under outputs/ into the flat layout, once.
@@ -2494,7 +2896,7 @@ def migrate_outputs_job(job_id: str) -> dict[str, Any]:
     return res
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes=MODAL_VOLUMES)
 def download_job(key: str) -> dict[str, Any]:
     job_id = f"dl_{key}"
     # Merged, not assigned. The route seeds this record before spawning, and a
@@ -2902,7 +3304,7 @@ def _download_weight(
     return res
 
 
-@app.function(image=web_image, cpu=2.0, timeout=6 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+@app.function(image=web_image, cpu=2.0, timeout=6 * 60 * 60, volumes=MODAL_VOLUMES)
 def download_missing_job(keys: list[str], job_id: str = "dl_all") -> dict[str, Any]:
     """
     Fetch a list of missing weights in one container, sequentially.
@@ -3031,7 +3433,7 @@ def _drive_plan(url: str, stage: Path, present: set[str], refetch: bool) -> dict
     }
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes=MODAL_VOLUMES)
 def gdrive_job(url: str, folder: str, refetch: bool = False) -> dict[str, Any]:
     """
     Pull one file or one folder off Google Drive into loras/.
@@ -3531,8 +3933,7 @@ def _caption_images(
     # A100 rather than the training GPU: Qwen3-VL-8B in bf16 is ~17 GB, so this
     # does not need the headroom a rank-32 Krea 2 run does.
     image=caption_image, gpu="A100-40GB", cpu=2.0, timeout=2 * 60 * 60,
-    volumes={"/workspace": volume, "/models": models_volume,
-             str(HF_CACHE): hf_cache},
+    volumes=MODAL_VOLUMES_HF,
 )
 def caption_job(
     job_id: str, dataset: str, trigger_word: str = "",
@@ -3640,7 +4041,7 @@ TRAIN_DEFAULTS = {
 
 @app.function(
     image=trainer_image, gpu=GPU, cpu=4.0, timeout=6 * 60 * 60,
-    volumes={"/workspace": volume, "/models": models_volume},
+    volumes=MODAL_VOLUMES,
 )
 def train_job(
     job_id: str, dataset: str, lora_name: str, trigger_word: str,
@@ -4340,7 +4741,7 @@ class _Comfy:
         (COMFY / "output").mkdir(parents=True, exist_ok=True)
 
         self._proc = subprocess.Popen(
-            ["python", "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
+            [COMFY_PYTHON, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
              "--disable-auto-launch", "--disable-metadata",
              # For H3, and only H3 — this is argv on both containers because
              # one `_Comfy` starts both, but the image graph opts back out
@@ -6347,20 +6748,40 @@ def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
     }
 
 
+_RUNNERS: "dict[tuple[str, str], Any]" = {}
+_RUNNERS_LOCK = threading.Lock()
+
+
 def _on_gpu(cls: Any, requested: Any, allowed: tuple[str, ...], default: str) -> Any:
     """
-    Resolve a UI GPU choice to a Cls to spawn from.
+    Resolve a UI GPU choice to a runner to spawn from.
 
-    Returns the base class untouched when the choice is the default, so the
-    ordinary request keeps hitting the container that is already warm; only a
-    genuine switch pays for a variant. An unknown card falls back to the default
-    rather than raising — a stale tab asking for a card that has been removed
-    from the list should still get its picture.
+    Uses the base class when the choice is the default, so the ordinary request
+    keeps hitting the container that is already warm; only a genuine switch pays
+    for a variant. An unknown card falls back to the default rather than raising
+    — a stale tab asking for a card that has been removed from the list should
+    still get its picture.
+
+    **Returns an instance, memoized per (class, card), and that is load-bearing
+    rather than tidy.** A Cls method's `.local()` binds to the Obj's own user
+    instance and runs `@modal.enter()` first, once per Obj — guarded on the
+    instance, not on the class. The call sites used to construct a fresh Obj
+    inline for every request, which remotely is free and locally means a fresh
+    `_Comfy`: starting ComfyUI and reloading 35-42.5 GB of checkpoint for every
+    single render, with the warm process the whole design rests on never being
+    reached. Remotely the memo saves a hydration per request and changes nothing
+    else — which is still a change to the deployed path, so it is on the
+    rented-box list as deploy, render, redeploy, render.
     """
     gpu = str(requested or default)
-    if gpu not in allowed or gpu == default:
-        return cls
-    return cls.with_options(gpu=gpu)
+    if gpu not in allowed:
+        gpu = default
+    key = (getattr(cls, "__name__", None) or str(cls), gpu)
+    with _RUNNERS_LOCK:
+        if key not in _RUNNERS:
+            base = cls if gpu == default else cls.with_options(gpu=gpu)
+            _RUNNERS[key] = base()
+        return _RUNNERS[key]
 
 
 def _host(family: str, payload: dict[str, Any]) -> Any:
@@ -6732,7 +7153,7 @@ def _keep_entry(name: str) -> bool:
 # transfer are then held on local disk, never on /workspace, so serving
 # pictures can no longer freeze anything. The mount stays for what it is:
 # writes, deletes, and the durable record.
-SPOOL = Path("/tmp/visionary-spool")
+SPOOL = Path(os.environ.get("VISIONARY_SPOOL", "/tmp/visionary-spool"))
 # Local disk, not local memory, and capped: a busy video session is gigabytes.
 # Trimmed LRU so the spool follows the session around rather than growing with
 # the volume — which is the entire difference between it and the mount.
@@ -6770,6 +7191,12 @@ def _spooled(rel: str) -> Path | None:
     and two writers on one `.part` interleave; two whole files renaming over
     each other just means the second wins.
     """
+    if LOCAL:
+        # The spool is a container-local cache of a *network* volume. Here that
+        # volume is a directory on the same disk, so spooling it copies every
+        # byte you already own, to serve it from a second place.
+        direct = WORKSPACE / rel
+        return direct if direct.is_file() else None
     local = SPOOL / rel
     try:
         if local.is_file():
@@ -6992,7 +7419,7 @@ def _start_migration() -> str:
     if cur.get("status") == "running":
         return MIGRATE_JOB
     _publish(MIGRATE_JOB, status="running", percent=0, phase="Queued", files=[])
-    migrate_outputs_job.spawn(MIGRATE_JOB)
+    _spawn(migrate_outputs_job, MIGRATE_JOB)
     return MIGRATE_JOB
 
 
@@ -11858,7 +12285,7 @@ class _Generator(_ImageSide, _VideoSide):
 
 @app.cls(
     image=comfy_image, gpu=GPU, cpu=4.0, timeout=60 * 60,
-    volumes={"/workspace": volume, "/models": models_volume},
+    volumes=MODAL_VOLUMES,
     max_containers=1,
     scaledown_window=10 * 60,
 )
@@ -11870,7 +12297,7 @@ class ImageGenerator(_Generator):
 
 @app.cls(
     image=comfy_image, gpu=VIDEO_GPU, cpu=4.0, timeout=60 * 60,
-    volumes={"/workspace": volume, "/models": models_volume},
+    volumes=MODAL_VOLUMES,
     max_containers=1,
     # Longer than the image side's 10 min: 42.5 GB is a slow thing to reload,
     # and video is worked in takes — you watch one clip, then adjust and go again.
@@ -11884,7 +12311,7 @@ class VideoGenerator(_Generator):
 
 @app.cls(
     image=comfy_image, gpu=BOTH_GPU, cpu=4.0, timeout=60 * 60,
-    volumes={"/workspace": volume, "/models": models_volume},
+    volumes=MODAL_VOLUMES,
     max_containers=1,
     # The video side's window, because the more expensive reload is the one
     # to keep warm.
@@ -12324,7 +12751,7 @@ def _restart_engine(comfy: _Comfy, job_id: str) -> dict[str, Any]:
 
 
 @app.function(image=comfy_image, cpu=4.0, timeout=30 * 60,
-              volumes={"/workspace": volume, "/models": models_volume})
+              volumes=MODAL_VOLUMES)
 def playground_catalogue_job(job_id: str, url: str | None = None,
                              ref: str | None = None) -> dict[str, Any]:
     """
@@ -12483,7 +12910,7 @@ def playground_catalogue_job(job_id: str, url: str | None = None,
 
 
 @app.function(
-    image=web_image, cpu=1.0, timeout=900, volumes={"/workspace": volume, "/models": models_volume},
+    image=web_image, cpu=1.0, timeout=900, volumes=MODAL_VOLUMES,
     max_containers=1,
     # Modal's maximum, and the one line that retires a family of bandages.
     # With no window set the container died about a minute after the last
@@ -12528,7 +12955,11 @@ def web():
     # Where the build landed. A constant rather than a search, because a page
     # that cannot be found should say which path was empty — the same reason
     # _require_models() prints the path it wanted.
-    DIST = Path("/build/web/dist")
+    # Built into web_image at this path, which is what keeps `modal deploy
+    # app.py` the entire install. Locally the launcher runs the same
+    # `npm ci && npm run build` and says where it put it; the 503 below lists
+    # whatever it finds instead, which is the same answer either way.
+    DIST = Path(os.environ.get("VISIONARY_DIST", "/build/web/dist"))
 
     # Hashed filenames, so the bytes at a given name never change and the
     # browser never needs to ask again. index.html is the opposite: it is the
@@ -12842,7 +13273,7 @@ def web():
         try:
             # The base class, never a with_options variant: a knock on a card
             # nobody has picked would start a container nobody will use.
-            _host(kind, {"container": payload.get("container")})().warm.spawn()
+            _spawn(_host(kind, {"container": payload.get("container")}).warm)
         except Exception as exc:
             print(f"[warm] {kind} warm-up failed: {exc}", flush=True)
         return {"ok": True}
@@ -12893,7 +13324,7 @@ def web():
             "beat": time.time(),
         }
         jobs[DL_ACTIVE] = {"job_id": job_id}
-        download_job.spawn(key)
+        _spawn(download_job, key)
         return {"ok": True, "started": True, "job_id": job_id, "mine": True}
 
     @api.post("/api/gdrive")
@@ -12914,7 +13345,7 @@ def web():
             return {"error": "Paste a Google Drive link or file id."}
         if folder and not NAME_RE.match(folder):
             return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
-        gdrive_job.spawn(url, folder, bool(payload.get("refetch")))
+        _spawn(gdrive_job, url, folder, bool(payload.get("refetch")))
         return {"ok": True, "job_id": GDRIVE_JOB}
 
     @api.post("/api/download-missing")
@@ -12967,7 +13398,7 @@ def web():
         jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
                         "stop": False, "beat": time.time()}
         jobs[DL_ACTIVE] = {"job_id": job_id}
-        download_missing_job.spawn(missing, job_id)
+        _spawn(download_missing_job, missing, job_id)
         return {"ok": True, "started": True, "job_id": job_id, "mine": True,
                 "missing": missing}
 
@@ -13173,7 +13604,7 @@ def web():
         # job here keeps.
         _publish(EXPORT_JOB, status="running", percent=0,
                  phase=f"Queued — {len(rows)} takes", files=[], error=None)
-        export_scene_job.spawn(EXPORT_JOB, rows)
+        _spawn(export_scene_job, EXPORT_JOB, rows)
         return {"ok": True, "job_id": EXPORT_JOB, "takes": len(rows)}
 
     # ── the Arsenal: characters ─────────────────────────────────────────────
@@ -13819,7 +14250,8 @@ def web():
                 return default
 
         job_id = f"cap{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        caption_job.spawn(
+        _spawn(
+            caption_job,
             job_id=job_id, dataset=name, trigger_word=trigger,
             preset=preset, model=model,
             write_mode=write_mode,
@@ -14103,7 +14535,8 @@ def web():
         jobs[job_id] = {"status": "queued", "phase": "queued", "stop": False,
                         "percent": 0, "session": sid,
                         "started": time.time(), "beat": time.time()}
-        train_job.spawn(
+        _spawn(
+            train_job,
             job_id=job_id, dataset=dataset, lora_name=lora_name,
             trigger_word=trigger, session=sid, **params,
         )
@@ -14325,7 +14758,7 @@ def web():
             return {"error": str(exc)}
 
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host("image", payload)().generate_image.spawn(job_id=job_id, params={
+        _spawn(_host("image", payload).generate_image, job_id=job_id, params={
             **({"workflow": wf[0], "workflow_graph": wf[1],
                 "workflow_extras": payload.get("workflow_extras") or {}}
                if wf else {}),
@@ -14571,7 +15004,7 @@ def web():
             return {"error": str(exc)}
 
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host("video", payload)().generate_video.spawn(job_id=job_id, params={
+        _spawn(_host("video", payload).generate_video, job_id=job_id, params={
             **({"workflow": wf[0], "workflow_graph": wf[1],
                 "workflow_extras": payload.get("workflow_extras") or {}}
                if wf else {}),
@@ -15057,7 +15490,7 @@ def web():
         host = ("video" if str(payload.get("host") or "image") == "video"
                 else "image")
         job_id = f"pg{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host(host, payload)().playground.spawn(job_id=job_id, params={
+        _spawn(_host(host, payload).playground, job_id=job_id, params={
             "queued_at": time.time(),
             "graph": graph,
             "attachments": atts,
@@ -15072,7 +15505,7 @@ def web():
         host = ("video" if str(payload.get("host") or "image") == "video"
                 else "image")
         job_id = f"pgrst{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host(host, payload)().restart_engine.spawn(job_id=job_id)
+        _spawn(_host(host, payload).restart_engine, job_id=job_id)
         return {"ok": True, "job_id": job_id}
 
     @api.get("/api/playground/nodes")
@@ -15099,7 +15532,13 @@ def web():
         catalogue itself — can be read back by whichever web container is
         alive when it lands."""
         _publish(job_id, status="running", percent=0, phase="Queued", files=[])
-        fc = playground_catalogue_job.spawn(job_id=job_id, **kw)
+        fc = _spawn(playground_catalogue_job, job_id=job_id, **kw)
+        # None locally: there is one process and one disk, so the harvest writes
+        # NODE_CATALOGUE where the reader already looks and the call id has
+        # nothing to recover. Remotely it is the handle, and recording it is how
+        # a *different* web container reads the result back.
+        if fc is None:
+            return
         try:
             config["node_catalogue_call"] = {"job_id": job_id, "call_id": fc.object_id}
         except Exception as exc:  # noqa: BLE001 — a lost id is a re-harvest later
