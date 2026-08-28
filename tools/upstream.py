@@ -66,7 +66,16 @@ REPOS = {
     # The node pack is small enough that every file in it is load-bearing, so
     # there is nothing to filter — any commit is worth reading.
     "CLIFF_SHA": (None, None),
+    "GGUF_SHA": (None, None),
 }
+
+# The one pin here that is a *fork*, and the issue that would end it. Upstream
+# cannot read Krea 2 files, which is the entire reason molbal's fork is pinned
+# instead — so the question worth asking on every run is not "has the fork
+# moved" but "can we stop using it yet". A fork whose exit condition is only
+# written in a comment is a fork nobody ever leaves.
+GGUF_UPSTREAM = "city96/ComfyUI-GGUF"
+GGUF_UPSTREAM_ISSUE = 464
 
 
 def pins() -> dict[str, str]:
@@ -75,9 +84,37 @@ def pins() -> dict[str, str]:
     for node in ast.parse(APP.read_text()).body:
         if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") in REPOS:
             out[node.targets[0].id] = ast.literal_eval(node.value)
-        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "CLIFF_REPO":
-            out["_cliff_repo"] = ast.literal_eval(node.value)
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") in (
+                "CLIFF_REPO", "GGUF_REPO"):
+            out["_" + node.targets[0].id.lower()] = ast.literal_eval(node.value)
     return out
+
+
+def gguf_exit() -> bool:
+    """Has upstream learned to read Krea 2 yet? True if the fork can go."""
+    url = (f"https://api.github.com/repos/{GGUF_UPSTREAM}"
+           f"/issues/{GGUF_UPSTREAM_ISSUE}")
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "visionary-upstream-check",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            issue = json.load(r)
+    except Exception as exc:  # noqa: BLE001 — a check that cannot run says so
+        print(f"\n=== GGUF fork: could not read {GGUF_UPSTREAM}"
+              f"#{GGUF_UPSTREAM_ISSUE} ({type(exc).__name__})")
+        return False
+    state = issue.get("state")
+    print(f"\n=== GGUF fork — the exit condition")
+    print(f"  {GGUF_UPSTREAM}#{GGUF_UPSTREAM_ISSUE} is {state}"
+          f", last touched {issue.get('updated_at', '?')[:10]}")
+    if state == "closed":
+        print("  Upstream may read Krea 2 now. Check, and if it does, drop the")
+        print("  fork: GGUF_REPO back to city96, re-pin, rebuild, smoke_graphs.")
+        return True
+    print("  Still the only pack that reads Krea 2 GGUF. Fork stays pinned.")
+    return False
 
 
 def compare(repo: str, base: str, head: str = "HEAD") -> dict:
@@ -158,6 +195,11 @@ def main() -> int:
     repo = re.sub(r"^https://github\.com/", "", p.get("_cliff_repo", "")).rstrip("/")
     if repo:
         moved |= report("Regional node pack", repo, p["CLIFF_SHA"], None)
+
+    repo = re.sub(r"^https://github\.com/", "", p.get("_gguf_repo", "")).rstrip("/")
+    if repo:
+        moved |= report("GGUF loader (fork)", repo, p["GGUF_SHA"], None)
+    moved |= gguf_exit()
 
     print("\n" + ("Worth a bump. Then: modal run tools/smoke_graphs.py"
                   if moved else

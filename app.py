@@ -515,6 +515,39 @@ K2ST_REPO = "https://github.com/nkxx188/ComfyUI-Krea2-StyleTransfer"
 K2ST_REF_NODE = "Krea2StyleReference"
 K2ST_TRANSFER_NODE = "Krea2StyleTransfer"
 
+# GGUF, which is how Krea 2 reaches a 16 GB card: Q4_K_M is 7.2 GB against
+# 26.3 for bf16. H3 needed no such thing — its small tiers are convrot
+# safetensors that the loader already in the graph reads — so this is here for
+# the image side alone.
+#
+# **This is a fork, which is the thing this repo does not do, so here is the
+# argument.** The rule forbids *owning a patch*: `forge/` died because we
+# maintained a diff against `backend/nn/krea.py`, and what replaced it was a
+# clone at a SHA with nothing patched. This is that same shape — a clone, at a
+# SHA, unmodified — and the only new fact is that the upstream is itself a fork.
+#
+# It is a strict superset, not a divergence: `git compare city96...molbal` is
+# ahead 58, behind 0. Upstream cannot read Krea 2 files at all, has not been
+# pushed since 2026-01-12, and the request for it (city96/ComfyUI-GGUF#464) has
+# been open since June. Among those 58 commits are Krea-2 tensor handling, the
+# Q8_CR quant type that `molbal/krea2-gguf` ships, and dynamic-VRAM support in
+# the loaders, which is the half that matters on a card that has to stream.
+#
+# **The exit condition is #464 landing upstream**, and it is watched rather than
+# remembered — `tools/upstream.py` reads these pins by AST already. It is a
+# small upstream (55 stars against city96's 3960), so the pin is doing more work
+# here than it does on the other three packs.
+#
+# In `comfy_image` rather than a local-only path, deliberately. Local-only means
+# `_krea2_graph` grows a branch that is dead code on Modal and
+# `tools/smoke_graphs.py` fails against an image that has no such node — the
+# "second backend that becomes dead code" failure docs/decisions.md already
+# names, arrived at from the other side. It costs an H100 one small clone and
+# one import; nobody there will ever download a .gguf.
+GGUF_REPO = "https://github.com/molbal/ComfyUI-GGUF"
+GGUF_SHA = "4fb1ec6209c8eff5b339ca98dff60265bea09758"  # 2026-08-27
+GGUF_UNET_NODE = "UnetLoaderGGUF"
+
 # Our own node next to the pack's — one shim, see comfy_nodes/visionary_boxes.
 COMFY_NODES_DIR = str(Path(__file__).parent / "comfy_nodes")
 
@@ -1258,6 +1291,8 @@ comfy_image = (
         f"cd {COMFY}/custom_nodes/krea2_regional && git checkout {CLIFF_SHA}",
         f"git clone {K2ST_REPO} {COMFY}/custom_nodes/krea2_styletransfer",
         f"cd {COMFY}/custom_nodes/krea2_styletransfer && git checkout {K2ST_SHA}",
+        f"git clone {GGUF_REPO} {COMFY}/custom_nodes/gguf",
+        f"cd {COMFY}/custom_nodes/gguf && git checkout {GGUF_SHA}",
     )
     .env({"PYTHONUNBUFFERED": "1"})
     # Last, because add_local_dir invalidates nothing above it — the shim is
@@ -1318,6 +1353,62 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "gated": True,
         "approx_gb": 26.3,
         "fits_vram_gb": 40.0,
+    },
+    # ── Krea 2 on a card that cannot hold it ───────────────────────────────
+    #
+    # Q4_K_M is 7.2 GB against bf16's 26.3, which is the difference between a
+    # 12 GB card and no card at all. K-quants rather than the classic Q4_0/Q5_1
+    # line the other published repo carries: they quantise the tensors that
+    # matter less, harder, which is the whole reason the K series exists.
+    #
+    # These need `GGUF_UNET_NODE` and therefore the pinned fork — see GGUF_SHA
+    # for why a fork was taken and what ends it. Both sizes are the files' own,
+    # off the HuggingFace API.
+    #
+    # **Not gated, where the weights they quantise are.** That is a fact about
+    # a third-party re-upload, not permission granted: Krea's licence is
+    # accepted on their repo and these do not ask. Worth knowing before pulling
+    # one instead of the file it is a copy of.
+    #
+    # The text encoder stays bf16 at 8.9 GB and is not quantised here, so 16 GB
+    # holds a Q4 DiT and a bf16 encoder only if ComfyUI evicts the encoder after
+    # conditioning. That is the one thing the arithmetic cannot settle, and it
+    # is on the rented-box list rather than written into the README.
+    "krea2_turbo_q4": {
+        "label": "Krea 2 Turbo (Q4_K_M)",
+        "note": "8-step images on a 16 GB card",
+        "family": "Krea 2 — images",
+        "repo_id": "realrebelai/KREA-2_GGUFs",
+        "filename": "TURBO/Krea-2-Turbo-Q4_K_M.gguf",
+        "dest": MODELS / "krea2-turbo-Q4_K_M.gguf",
+        "gated": False,
+        "approx_gb": 7.2,
+        "tier_of": "turbo",
+        "fits_vram_gb": 16.0,
+    },
+    "krea2_turbo_q5": {
+        "label": "Krea 2 Turbo (Q5_K_S)",
+        "note": "8-step images, closer to full precision",
+        "family": "Krea 2 — images",
+        "repo_id": "realrebelai/KREA-2_GGUFs",
+        "filename": "TURBO/Krea-2-Turbo-Q5_K_S.gguf",
+        "dest": MODELS / "krea2-turbo-Q5_K_S.gguf",
+        "gated": False,
+        "approx_gb": 8.8,
+        "tier_of": "turbo",
+        "fits_vram_gb": 24.0,
+    },
+    "krea2_raw_q4": {
+        "label": "Krea 2 RAW (Q4_K_M)",
+        "note": "Full sampler, on a 16 GB card",
+        "family": "Krea 2 — images",
+        "repo_id": "realrebelai/KREA-2_GGUFs",
+        "filename": "BASE/Krea-2-Base-Q4_K_M.gguf",
+        "dest": MODELS / "krea2-raw-Q4_K_M.gguf",
+        "gated": False,
+        "approx_gb": 7.3,
+        "tier_of": "raw",
+        "fits_vram_gb": 16.0,
     },
     "vae": {
         "label": "Qwen Image VAE",
@@ -1695,6 +1786,22 @@ for _base, _alts in SLOT_TIERS.items():
     # Largest first, which for one architecture is also best first: these are
     # quantisations of one checkpoint, so size is precision.
     _alts.sort(key=lambda k: MODEL_CATALOGUE[k]["approx_gb"], reverse=True)
+
+
+def _dit_node(name: str) -> dict[str, Any]:
+    """The loader for one diffusion model, chosen by what the file is.
+
+    `UNETLoader` cannot read a GGUF and `UnetLoaderGGUF` takes no
+    `weight_dtype`, so this is one conditional on a suffix rather than a mode:
+    the file the slot resolved to already says which it is, and nobody picks a
+    loader. Both graph builders use it, so an H3 GGUF — none of which is
+    currently a catalogue row, since its small tiers are convrot safetensors —
+    would need nothing here.
+    """
+    if name.endswith(".gguf"):
+        return {"class_type": GGUF_UNET_NODE, "inputs": {"unet_name": name}}
+    return {"class_type": "UNETLoader",
+            "inputs": {"unet_name": name, "weight_dtype": "default"}}
 
 
 def _slot_name(key: str) -> str:
@@ -4908,6 +5015,13 @@ class _Comfy:
             "visionary:\n"
             f"  base_path: {WORKSPACE}/\n"
             f"  diffusion_models: {MODELS}\n"
+            # `unet` is the same folder under an older key, and ComfyUI-GGUF
+            # reads that one — it registers `unet_gguf` against it rather than
+            # against `diffusion_models`. Naming both costs a line and is the
+            # difference between a quantised tier being offered and the loader
+            # reporting an empty list, which reads as the file not having
+            # downloaded.
+            f"  unet: {MODELS}\n"
             f"  text_encoders: {MODELS}\n"
             f"  clip: {MODELS}\n"
             f"  vae: {MODELS}\n"
@@ -8225,8 +8339,7 @@ def _krea2_graph(
     vae = _slot_name("vae")
 
     graph: dict[str, Any] = {
-        "dit": {"class_type": "UNETLoader",
-                "inputs": {"unet_name": dit, "weight_dtype": "default"}},
+        "dit": _dit_node(dit),
         # type="krea2" is what selects Krea2Tokenizer and the Qwen3-VL hidden
         # state Krea 2 reads. The file is the bf16 text encoder — the fp8_scaled
         # one carries ~504 extra weight_scale tensors and is rejected outright.
@@ -8611,8 +8724,14 @@ def _krea2_graph(
 # unknown class_type — which reads as our graph builder naming a node wrong,
 # minutes into a warm GPU, when the traceback that explains it scrolled past
 # during startup.
+# GGUF_UNET_NODE is on this list for the reason the others are: a pack that
+# fails to import leaves ComfyUI running happily without it, and the first
+# symptom would otherwise be a graph rejected for an unknown class_type —
+# minutes into a warm GPU, and only for whoever picked a quantised tier, which
+# is the hardest kind of report to read.
 IMAGE_NODES = (KREA2_REGIONAL_NODE, "VisionaryBoxes", "VisionaryFreeRegional",
-               "VisionaryEditArity", K2ST_REF_NODE, K2ST_TRANSFER_NODE)
+               "VisionaryEditArity", K2ST_REF_NODE, K2ST_TRANSFER_NODE,
+               GGUF_UNET_NODE)
 
 
 class _ImageSide:
@@ -9224,8 +9343,7 @@ def _h3_graph(
         cond["audio_vae"] = ["avae", 0]
         cond["ref_image_size"] = ref_size
     graph: dict[str, Any] = {
-        "dit": {"class_type": "UNETLoader",
-                "inputs": {"unet_name": dit, "weight_dtype": "default"}},
+        "dit": _dit_node(dit),
         # type="minimax" selects H3's conditioner handling: the hidden state is
         # read from partway up Qwen3-VL, not from its last layer.
         "clip": {"class_type": "CLIPLoader",
