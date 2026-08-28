@@ -52,13 +52,6 @@
 :root, :host{--bg:#010102;--fg:#f7f8f8;--mut:#8a8f98;--dim:#84888f;
       --drawer:320px;--head:56px;
 
-      /* The page's stack, named because it is now read in two places: `body`
-         sets it, and `.brand` has to put Jost in front of the same fallbacks —
-         a logotype that falls back to a different face than the chrome around
-         it is a wordmark that changes shape while the font loads. */
-      --stack:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
-
-
       /* Surface ramp, six steps. */
       --wash-1:rgba(255,255,255,.03);   /* card ground     */
       --wash-2:rgba(255,255,255,.05);   /* field ground    */
@@ -135,7 +128,7 @@
    sets a size and trusts `line-height:1` — most of them. */
 button,input,select,textarea{font-family:inherit;font-size:inherit}
 
-body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--stack);
+body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
      -webkit-font-smoothing:antialiased;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 svg{width:100%;height:100%;display:block}
 
@@ -146,101 +139,10 @@ svg{width:100%;height:100%;display:block}
    does not exist. So Generate is simply the page — it has no nav item because
    it is not a place you go — and Train is a door on the right: one slot,
    labelled with where it leads rather than with where you are. */
-.top{position:relative;flex:0 0 var(--head);display:flex;align-items:center;gap:8px;padding:0 8px;
+.top{flex:0 0 var(--head);display:flex;align-items:center;gap:8px;padding:0 8px;
      border-bottom:1px solid var(--wash-3)}
-.brand{position:relative;border:0;background:none;cursor:pointer;padding:8px 2px;
-  font-family:'Jost',var(--stack);font-weight:600;font-size:25px;line-height:1;
-  letter-spacing:4.5px;text-transform:uppercase;color:#f6f1e8;
-  text-shadow:0 0 18px rgba(255,150,170,.30)}
-
-/* The logotype, and the one place on this page that is not the system stack.
- *
- * Jost 600, uppercase, tracked open, over two rotated radial leaks and a grain
- * pass — from the design canvas "Visionary platform logo". Three numbers carry
- * it and none of them is arbitrary: 25px/4.5px is the header cut, 66px/12px the
- * hero cut, 15px/2.6px the small one. Tracking scales with the size because a
- * fixed track that reads open at 66px closes the counters at 15px.
- *
- * `#f6f1e8` and not `--fg`. The warm white is what separates the mark from the
- * chrome standing next to it: at --fg it reads as one more control in the row,
- * set slightly larger. A logotype in the interface's own tone is interface.
- *
- * Vendored rather than linked. `modal deploy app.py` is the entire install, and
- * a wordmark that renders only when fonts.googleapis.com answers is a wordmark
- * with an outage — one that shows up as the header silently changing width.
- * 10KB, the latin subset, SIL OFL. `swap` and not `block`: the fallback for one
- * frame is cheaper than an invisible mark for up to three seconds, and this is
- * a same-origin file in the same bundle as the stylesheet asking for it. */
-@font-face{font-family:'Jost';font-style:normal;font-weight:600;font-display:swap;
-  src:url(./jost-600.woff2) format('woff2');
-  /* Google's own `latin` range, kept verbatim. Without it a glyph outside the
-     subset renders from a font that does not have it rather than falling to
-     the stack, which is a tofu box instead of a letter. */
-  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,
-    U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,
-    U+FEFF,U+FFFD}
-
-/* The leak: two soft lights behind the mark, one warm and one cool, rotated
-   against each other so the pair never resolves into a symmetrical glow.
-   
-   A sibling of the button rather than a pseudo-element on it, because the clip
-   has to be the *bar*, not the mark. Both ellipses are taller than the 56px
-   header on purpose — what you see is the middle of a much larger light, and a
-   leak that fits inside its box stops being a leak and becomes a drawn shape.
-   `.top` itself cannot take `overflow:hidden`; it is the anchor for the header
-   row and clipping there would cut anything that ever hangs off it. So the clip
-   gets a box of its own, 260px wide, which is past the point where the further
-   ellipse has faded out.
-
-   56px, the height of the bar, with the light *masked* out before it gets
-   there rather than cut off at it. The first pass ended the box at `bottom:0`
-   and drew a straight edge across the glow at its brightest — the ellipses are
-   centred at 55% of 56px, so the cut landed 25px above centre with half the
-   light still in it, and the header's own hairline underlined the result. The
-   mask fades from 62% of the bar, which is just under the letters' baseline, so
-   the wordmark keeps its light and only the spill below it dissolves.
-
-   Letting it spill instead — a 100px box, no mask, both gradients running out
-   on their own by y≈84 — also removes the line and is arguably the truer leak.
-   It was measured and dropped: at narrow widths the canvas starts around x=30,
-   so 45px of pink wash lands on the corner the picture renders in. Decoration
-   over the subject of the page is a worse trade than a contained one.
-
-   The mask goes on `.lights` and not on `.brand-leak`, and that is not a style
-   choice. Masking creates a stacking context, which isolates the grain's blend
-   group underneath it: with no backdrop left to blend against, `overlay` stops
-   resolving to the ground and the noise draws flat, as a faint 260x56 rectangle
-   with two hard edges of its own. Same trap as putting `z-index` on `.top` to
-   lift the layer — both trade the line under the glow for a box around it. The
-   grain has to stay outside whatever gets isolated. It needs no mask of its
-   own: it is only ever visible where there is light beneath it, and the mask is
-   what takes the light away. */
-.brand-leak{position:absolute;left:0;top:0;height:56px;width:260px;
-  overflow:hidden;pointer-events:none}
-.brand-leak .lights{position:absolute;inset:0;
-  -webkit-mask-image:linear-gradient(to bottom,#000 62%,transparent 100%);
-          mask-image:linear-gradient(to bottom,#000 62%,transparent 100%);
-  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
-.brand-leak .a,.brand-leak .b{position:absolute;display:block}
-.brand-leak .a{left:52px;top:-49px;width:120px;height:160px;transform:rotate(18deg);
-  background:radial-gradient(ellipse,rgba(255,120,150,.28),transparent 65%)}
-.brand-leak .b{left:132px;top:-31px;width:80px;height:140px;transform:rotate(-12deg);
-  background:radial-gradient(ellipse,rgba(140,160,255,.20),transparent 65%)}
-.brand-leak .grain{position:absolute;inset:0;opacity:.08;mix-blend-mode:overlay;
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")}
-
-/* The small cut, at the width where the row stops fitting. `Door` already
-   documents the measurement: at 375px the header is a fixed 56px bar with no
-   second line to break onto, and the logotype at its header size is 170px of
-   the 375 before a single door has been placed. So the phone gets the small
-   cut — and the small cut drops the leak with it, which is the design's own
-   rule rather than a saving: under about 18px the light bleeds into the
-   counters and the word turns to mush. Nothing left to glow around, so the
-   text-shadow goes too. */
-@media (max-width:640px){
-  .brand{font-size:15px;letter-spacing:2.6px;text-shadow:none}
-  .brand-leak{display:none}
-}
+.brand{border:0;background:none;color:var(--fg);font-weight:600;font-size:15px;line-height:1;letter-spacing:-.01em;
+  padding:8px 2px;cursor:pointer}
 .grow{flex:1;min-width:0}
 
 /* The door, and the reason it is worth a permanent slot: a training run lasts

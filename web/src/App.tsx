@@ -496,16 +496,6 @@ export function App() {
   return (
     <>
       <header className="top">
-        {/* The light behind the mark. Out of the flex flow and out of the a11y
-            tree — it is the logotype's ground, not a second thing in the header
-            — and a sibling rather than something inside the button because the
-            bar is what clips it. See `.brand-leak` in ui.css. */}
-        <span className="brand-leak" aria-hidden="true">
-          {/* The two lights are wrapped because the mask that dissolves them
-              into the bar has to leave the grain outside it — see `.lights`. */}
-          <span className="lights"><span className="a" /><span className="b" /></span>
-          <span className="grain" />
-        </span>
         <button className="brand" id="go-home" type="button"
                 onClick={() => { setGalleryOpen(false); s.setMode('generate') }}>
           Visionary
