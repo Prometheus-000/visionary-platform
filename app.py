@@ -10439,6 +10439,16 @@ def web():
                         "files": [{"name": d.name, "path": str(d)}],
                     })
         loras.sort(key=lambda l: l["name"].lower())
+        # The menu is what the ✕ removes. Customs are deleted outright; a
+        # built-in is baked into the image, so its ✕ hides it here instead —
+        # while `_caption_models()` stays whole, because old job records and
+        # the DEFAULT_CAPTION_MODEL fallback still resolve through it.
+        try:
+            hidden_caps = set(config.get("hidden_caption_models") or [])
+        except Exception:
+            hidden_caps = set()  # an unreachable Dict hides nothing, never empties the menu
+        cap_models = {k: m for k, m in _caption_models().items()
+                      if k not in hidden_caps}
         return {
             "models": _model_status(),
             "loras": loras,
@@ -10493,16 +10503,21 @@ def web():
                  "instruction": p["instruction"], "custom": bool(p.get("custom"))}
                 for k, p in _caption_presets().items()
             ],
-            # The repo is shown in the gear's Caption models section, and
-            # `custom` is what makes an entry deletable there — a built-in has
-            # no delete because there is nothing behind it to remove.
+            # The repo is shown in the gear's Caption models section.
             "caption_models": [
                 {"key": k, "label": m["label"], "note": m.get("note", ""),
                  "repo": m["repo"], "custom": bool(m.get("custom"))}
-                for k, m in _caption_models().items()
+                for k, m in cap_models.items()
             ],
-            "caption_defaults": {"preset": DEFAULT_CAPTION_PRESET,
-                                 "model": DEFAULT_CAPTION_MODEL},
+            # A hidden default would be a key the page's own menu does not
+            # offer — the captioner select would sit blank on it — so the
+            # default follows the menu.
+            "caption_defaults": {
+                "preset": DEFAULT_CAPTION_PRESET,
+                "model": (DEFAULT_CAPTION_MODEL
+                          if DEFAULT_CAPTION_MODEL in cap_models
+                          else next(iter(cap_models), DEFAULT_CAPTION_MODEL)),
+            },
             # The trainer's vocabulary, served for the reason every other table
             # here is: the form builds its menus out of this, so a value it can
             # send is a value the job will accept. A hardcoded list in the page
@@ -11503,11 +11518,25 @@ def web():
     def delete_caption_model(payload: dict) -> dict[str, Any]:
         key = str(payload.get("key") or "")
         stored = dict(config.get("custom_caption_models") or {})
-        if key not in stored:
-            return {"error": f"No custom captioner {key!r}."}
-        del stored[key]
-        config["custom_caption_models"] = stored
-        return {"ok": True}
+        if key in stored:
+            del stored[key]
+            config["custom_caption_models"] = stored
+            return {"ok": True}
+        # A built-in cannot be deleted — it is baked into the image — so its ✕
+        # hides it instead, and the hide lives in the config Dict so a redeploy
+        # does not resurrect it. `state()` filters the menu; `_caption_models()`
+        # stays whole so old job records and the default fallback still resolve.
+        if key in CAPTION_MODELS:
+            hidden = set(config.get("hidden_caption_models") or [])
+            hidden.add(key)
+            if not any(k not in hidden for k in _caption_models()):
+                return {"error": "That is the last captioner on the menu, and "
+                                 "every captioning run needs one. Add another "
+                                 "model before removing it."}
+            config["hidden_caption_models"] = sorted(hidden)
+            return {"ok": True}
+        return {"error": f"No captioner {key!r} — reopen Settings to refresh "
+                         "the list."}
 
     @api.post("/api/datasets/{name}/replace")
     def replace_in_captions(name: str, payload: dict) -> dict[str, Any]:

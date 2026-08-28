@@ -381,9 +381,11 @@ export function Settings({
  * Any vision-language model on HuggingFace, by repo id. The add is validated
  * server-side against the repo's own config.json — a typo, a gated repo
  * without a token, or a text-only model is a named error here, in
- * milliseconds, rather than a cold GPU start that dies mid-pull. Built-ins
- * have no ✕ because they are baked into the image; deleting one could only
- * hide it until the next deploy.
+ * milliseconds, rather than a cold GPU start that dies mid-pull. Every row has
+ * a ✕: a custom is deleted from the config Dict, and a built-in — baked into
+ * the image, so not deletable — is hidden through the same Dict, which is what
+ * lets the hide survive a redeploy. One gesture either way: the entry leaves
+ * the menu, and adding the repo again brings it back.
  */
 function CaptionModels({ state, onReload }: {
   state: AppState | null
@@ -415,7 +417,8 @@ function CaptionModels({ state, onReload }: {
 
   const remove = (key: string, name: string) => {
     if (!confirm(`Remove “${name}” from the captioner menu?\n\n`
-      + 'Only the menu entry goes — weights already in the cache stay cached.')) return
+      + 'Only the menu entry goes — weights already in the cache stay cached. '
+      + 'Add the repo again to bring it back.')) return
     return run(`rm:${key}`, async () => {
       const r = await deleteCaptionModel(key)
       if (failed(r)) return setNote({ text: r.error, err: true })
@@ -432,15 +435,16 @@ function CaptionModels({ state, onReload }: {
             <b>{m.label}</b> <span className="muted">{m.note}</span>
             {m.repo && <div className="muted" style={{ marginTop: 3 }}><code>{m.repo}</code></div>}
           </div>
-          {m.custom && (
-            // Same treatment as the LoRA rows above: the row survives the round trip and
-            // the reload, so without this the press had no answer until the list redrew.
-            <button className="lora-x" type="button" disabled={!!busy}
-                    title={busy === `rm:${m.key}` ? 'Removing…' : 'Remove from the menu'}
-                    onClick={() => void remove(m.key, m.label)}>
-              {busy === `rm:${m.key}` ? '…' : <IconClose />}
-            </button>
-          )}
+          {/* Same treatment as the LoRA rows above: the row survives the round trip and
+              the reload, so without this the press had no answer until the list redrew.
+              Built-ins carry it too — the route hides them rather than deleting, and
+              refuses the last row, because a menu with no captioner in it is a
+              captioning run with nothing to offer. */}
+          <button className="lora-x" type="button" disabled={!!busy}
+                  title={busy === `rm:${m.key}` ? 'Removing…' : 'Remove from the menu'}
+                  onClick={() => void remove(m.key, m.label)}>
+            {busy === `rm:${m.key}` ? '…' : <IconClose />}
+          </button>
         </div>
       ))}
       <div className="row" style={{ marginTop: 10 }}>

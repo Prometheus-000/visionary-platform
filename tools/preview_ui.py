@@ -397,6 +397,9 @@ _COLD = {"n": 0}
 # exercise add, appear-in-menu and delete without a server.
 CUSTOM_PRESETS: dict = {}
 CUSTOM_VLMS: dict = {}
+# Built-ins hidden by their ✕ — the production route parks these in the config
+# Dict; in memory here for the same reason the customs are.
+HIDDEN_VLMS: set = set()
 
 CAPTIONS = [
     "ohwx_style a photograph of a person seated by a window in soft daylight.",
@@ -946,10 +949,24 @@ class Handler(BaseHTTPRequestHandler):
                 key = str(json.loads(body or b"{}").get("key") or "")
             except json.JSONDecodeError:
                 key = ""
-            if key not in CUSTOM_VLMS:
-                return self.reply({"error": f"No custom captioner {key!r}."})
-            del CUSTOM_VLMS[key]
-            return self.reply({"ok": True})
+            if key in CUSTOM_VLMS:
+                del CUSTOM_VLMS[key]
+                return self.reply({"ok": True})
+            # Built-ins hide rather than delete, and the last row is refused —
+            # shaped as the route shapes it.
+            if key in app_api()["CAPTION_MODELS"]:
+                hidden = HIDDEN_VLMS | {key}
+                left = [k for k in app_api()["CAPTION_MODELS"]
+                        if k not in hidden] + list(CUSTOM_VLMS)
+                if not left:
+                    return self.reply({
+                        "error": "That is the last captioner on the menu, and "
+                                 "every captioning run needs one. Add another "
+                                 "model before removing it."})
+                HIDDEN_VLMS.add(key)
+                return self.reply({"ok": True})
+            return self.reply({"error": f"No captioner {key!r} — reopen "
+                                        "Settings to refresh the list."})
 
         # Find & replace answers with the count it was scoped to. The captions
         # themselves are generated per request here, so the honest half is the
@@ -1185,11 +1202,21 @@ class Handler(BaseHTTPRequestHandler):
                 "caption_models": (
                     [{"key": k, "label": m["label"], "note": m["note"],
                       "repo": m["repo"], "custom": False}
-                     for k, m in api["CAPTION_MODELS"].items()]
+                     for k, m in api["CAPTION_MODELS"].items()
+                     if k not in HIDDEN_VLMS]
                     + [{"key": k, **m, "custom": True}
                        for k, m in CUSTOM_VLMS.items()]),
-                "caption_defaults": {"preset": api["DEFAULT_CAPTION_PRESET"],
-                                     "model": api["DEFAULT_CAPTION_MODEL"]},
+                # The default follows the menu, as `state()` serves it — a
+                # hidden default would sit blank in the captioner select.
+                "caption_defaults": {
+                    "preset": api["DEFAULT_CAPTION_PRESET"],
+                    "model": (api["DEFAULT_CAPTION_MODEL"]
+                              if api["DEFAULT_CAPTION_MODEL"] not in HIDDEN_VLMS
+                              else next(
+                                  (k for k in api["CAPTION_MODELS"]
+                                   if k not in HIDDEN_VLMS),
+                                  next(iter(CUSTOM_VLMS),
+                                       api["DEFAULT_CAPTION_MODEL"])))},
                 # The session form's three menus, shaped exactly as `state()`
                 # serves them. Pulled rather than transcribed for the reason the
                 # shot vocabulary is: a menu offering a value the route rejects
