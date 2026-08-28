@@ -88,6 +88,42 @@ the model menu, with the console still compiling your prompt into it.
 You do not need a local GPU, Docker, a `.env` file, or any Modal Secret. The
 HuggingFace token is pasted into the UI and stored in a Modal Dict.
 
+### If you would rather run it on your own card
+
+Everything above stays true; this is a second way in, not a replacement. What it
+needs:
+
+- **NVIDIA, and a CUDA 13-capable driver** (r580 or newer). The inference wheels
+  are cu130; the trainer's cu124 and the captioner's cu128 run under the same
+  driver, which is what lets three environments share one machine.
+- **VRAM.** 16 GB runs images and video at their quantised tiers; 24 GB runs the
+  tiers the deployment uses. Regional multi-character rendering wants ~32 GB and
+  is refused below it — see the table under **First run**.
+- **System RAM**, and more than you would guess: a card smaller than the
+  checkpoint streams the rest from host memory, so **64 GB** is the figure to aim
+  at on a 16 GB card. This has never been a number this project had to publish,
+  because a Modal container's RAM came with the GPU.
+- **~30 GB of disk for the environments**, before any weights.
+- Node, to build the front end. Same build the image runs, same pinned version.
+- No Apple Silicon and no AMD. Every pin in the inference image is CUDA-versioned
+  for a measured reason, so this does not run on the machine it was written on.
+
+```bash
+python3 tools/local_install.py --dry-run   # what would be installed, and from where
+python3 tools/local_install.py             # build the environments
+python3 tools/run_local.py                 # http://127.0.0.1:8790
+```
+
+`--models-dir ~/ComfyUI/models` points it at weights you already have rather than
+downloading a second copy. Weights are addressed by exact filename, so a file you
+own under a different name is invisible — the gear says which directory it looked
+in and what is actually there, which is how you tell that from an empty folder.
+
+**This runs the same `app.py` the deploy ships.** It is not a port and there is
+no second copy to fall behind: `tools/run_local.py` sets one environment
+variable, imports that file, and serves the FastAPI object it already builds. A
+new route or a new shot in the palette arrives here because it is there.
+
 ---
 
 ## First run: get the weights
@@ -102,6 +138,35 @@ deployed URL, click the gear, and pick what you need.
 | MiniMax-H3 — video           |  64 GB | no    | video **with a soundtrack**, references   |
 | MiniMax-H3 speed LoRAs       |   3 GB | no    | fewer steps per clip                      |
 | Krea 2 style LoRAs           |   4 GB | no    | Krea's own nine styles, for the prompt    |
+
+### Smaller weights, for a card that cannot hold those
+
+Every row above is the size the deployment runs. There are smaller ones, and
+picking one is a download rather than a setting: the app resolves each slot to
+the largest file on disk that fits the card it found, so pulling a tier is the
+whole of choosing it.
+
+| Slot                | Deployment       | 24 GB card       | 16 GB card         |
+| ------------------- | ---------------: | ---------------: | -----------------: |
+| Krea 2 Turbo        | 26.3 GB bf16     | 8.8 GB Q5_K_S    | **7.2 GB Q4_K_M**  |
+| Krea 2 RAW          | 26.3 GB bf16     | —                | **7.3 GB Q4_K_M**  |
+| H3 transformer      | 21.0 GB int8     | 21.0 GB int8     | **15.9 GB int4**   |
+| H3 text encoder     | 15.7 GB nvfp4    | 15.7 GB nvfp4    | **15.0 GB int4**   |
+
+The gear can pin a slot to any file you have downloaded, and it will not argue:
+asking for the 21 GB file on a 16 GB card is asking for a slow render, not making
+a mistake. A pin survives a redeploy, and a pin to a file you later delete falls
+back to the default rather than failing the job.
+
+**NVFP4 is not on this ladder on purpose.** It has no compute path before
+Blackwell — on a 4090 it is a memory saving and nothing else — so it belongs to
+an RTX 50-series card rather than to a size.
+
+**Two things here are inference, not measurement.** The H3 tiers are the same
+pruned-convrot format as the files above them, so they should load through the
+loader already in the graph; and 16 GB for Krea 2 assumes ComfyUI evicts the
+8.9 GB text encoder before the transformer loads. Both are on the rented-box
+list. If either is wrong, those rows come out.
 
 You do not need a whole family. Video without references is the base set — the
 fl2va transformer, the text encoder and the two VAEs — and the ref2va
@@ -234,14 +299,29 @@ weight) are rejected on CPU in milliseconds, before a GPU is rented.
 
 ## Verifying a deployment
 
-Four smoke tests, all cheap, all runnable against your own account:
+Five smoke tests, all cheap, all runnable against your own account:
 
 ```bash
 modal run tools/smoke_graphs.py     # every graph validates against ComfyUI's node schema (CPU, no weights)
 modal run tools/smoke_caption.py    # every captioner repo id resolves and parses (CPU); --gpu captions a real image
 python3 tools/smoke_prompt.py       # the shot compiler matches MiniMax's published format (stdlib, no network)
 python3 tools/smoke_pins.py         # every pinned wheel still resolves, before a deploy spends 20 minutes finding out
+python3 tools/smoke_local.py        # the local runtime constructs, dispatches, queues and stops (no GPU, no account)
 ```
+
+`smoke_local.py` is the one that guards the local build, and it guards a
+specific thing: the *seam*. Features cannot drift, because there is one `app.py`
+and the launcher imports it. What can drift is a ninth `.spawn()`, or a
+`jobs.keys()` — lines that are perfectly good against Modal and mean nothing off
+it. So it asserts those surfaces closed, on a laptop, in ten seconds.
+
+**When a rented box is owed.** The Mac checks prove the seam and nothing about
+what a card does with weights. Rent one whenever a pin, an image build step or
+ComfyUI's argv changes, and run: a cold start; a Krea 2 render at bf16 and at
+GGUF; an H3 take at 544p draft; a rank-32 train with `--fp8_base
+--blocks_to_swap`; `Comfy-Kitchen … {'cuda': True}` in the log; and the four
+`Visionary*` nodes still binding on a GGUF-loaded model — `VisionaryStepCache`
+above all, because a silent miss there costs half the render speed with no error.
 
 ### What has been run end to end
 
@@ -253,6 +333,14 @@ Being honest about coverage, since "it deploys" is not "it works":
   `non_diegetic_music: N/A` actually silences the soundtrack.
 - **The scene composer** — driven and read, never measured against a render.
   `tools/prompt_ab.py` is the measurement that is not a proxy and has not run.
+- **The local runtime** — the API and the page have been served off it, on a Mac
+  with no CUDA: `/api/state` answers with the real catalogue, the real captioner
+  list and all 77 shot tiles, and the job contract queues and stops under
+  `smoke_local.py`. **No render has ever come out of it**, because the machine it
+  was written on cannot run one. Everything downstream of "the graph is posted"
+  is unverified there, and the quantised tiers are unverified entirely — see the
+  rented-box list under **Verifying a deployment**. The Modal path is unchanged
+  and is what the render evidence in this repo comes from.
 
 ---
 
@@ -294,15 +382,25 @@ several of which look like mistakes until you know what they avoid.
 means that if you modify this and let other people use it over a network, you owe
 those users the corresponding source — deploying, not just distributing, counts.
 Since this deploys as a web application by design, that is the normal case here.
-Running your own private instance triggers nothing.
+Running your own private instance triggers nothing — including a local one on
+your own card, which is a private instance like any other.
 
-The images install, rather than vendor, two upstreams:
+Handing somebody a modified copy to run is *distribution* rather than network
+use, so sections 5 and 6 apply instead of 13: the same obligation, owed at a
+different moment. Nothing about the local path changes what you may do; it
+changes which paragraph says so.
+
+The images install, rather than vendor, three upstreams:
 
 - **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)** — GPL-3.0. Cloned at
   `COMFY_SHA`, run as its own process, driven over its HTTP API. Not linked
   against or patched.
 - **[Krea2 Regional Multi-LoRA](https://github.com/CliffNodes/Krea2-Multi-Character-Lora-Node-with-bounding-box-Scene-and-Outfit-Edit)**
   — MIT. Cloned at `CLIFF_SHA` into ComfyUI's `custom_nodes/`, unmodified.
+- **[ComfyUI-GGUF](https://github.com/molbal/ComfyUI-GGUF)** — Apache-2.0, a
+  fork of [city96's](https://github.com/city96/ComfyUI-GGUF). Cloned at
+  `GGUF_SHA`, unmodified. It is the only pack that reads Krea 2 GGUF files;
+  `tools/upstream.py` watches city96#464 and says when the fork can be dropped.
 
 None of this is legal advice. Model weights carry their own separate licences —
 Krea 2's in particular is gated and has terms you accept on HuggingFace. Nothing
