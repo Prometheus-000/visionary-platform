@@ -570,18 +570,22 @@ caption_image = (
         index_url="https://download.pytorch.org/whl/cu128",
     )
     .pip_install(
-        "accelerate==1.10.1",
-        # Explicit, not the huggingface_hub[hf_transfer] extra — the extra does
-        # not reliably pull the package, and with the env var set below its
-        # absence surfaces as "Can't load the configuration of <repo>", which
-        # reads like a wrong or gated repo id rather than a missing dependency.
-        "hf_transfer==0.1.9",
-        "huggingface_hub==0.35.3",
+        "accelerate==1.14.0",
+        "huggingface_hub==1.29.0",
         "pillow==11.3.0",
-        "transformers==4.57.1",
+        # transformers 5, and the major is the point rather than the accident:
+        # this image exists so the captioner can move without re-litigating
+        # musubi's pins or ComfyUI's, and it is the only one of the three that
+        # can be on 5.x today. Exact, not `>=`, for the reason every pin here is
+        # exact — a build that changes under you is a build you cannot bisect.
+        "transformers==5.16.1",
     )
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1",
-          "TOKENIZERS_PARALLELISM": "false"})
+    # No hf_transfer any more. huggingface_hub 1.x pulls `hf-xet` as a hard
+    # dependency and Xet *is* the accelerated path now, so the package this
+    # image used to install and the env var that switched it on are both dead
+    # weight — and an env var that names a library nobody installs is the
+    # failure the old comment here was warning about, one release later.
+    .env({"PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false"})
 )
 
 
@@ -1062,47 +1066,94 @@ RAW_PATH = MODEL_CATALOGUE["raw"]["dest"]
 VAE_PATH = MODEL_CATALOGUE["vae"]["dest"]
 TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
 
-# Qwen3-VL, not a booru tagger and not JoyCaption.
+# JoyCaption, not Qwen3-VL, and still not a booru tagger.
 #
-# Krea 2 reads its prompt through Qwen3-VL-4B, a language model that parses
-# grammar — subordinate clauses, spatial prepositions, and the binding between
-# an adjective and the noun it modifies. Tag lists cannot express binding at
-# all: "red, blue, dress, jacket" leaves the model to guess which colour
-# belongs to which garment, and with two people in frame that guess is where
-# attribute bleed comes from. A sentence resolves it by construction.
+# The original argument here was symmetry: Krea 2 reads its prompt through
+# Qwen3-VL, so captioning with the same family should close the gap between how
+# the dataset describes an image and how you describe the one you want. It is a
+# good argument and it lost to the captions, which were not merely weak — they
+# were wrong about the picture. A medium close-up of two people posing for a
+# graduation photo came back as one person with her arm on a red bench. There is
+# no bench. That is confabulation, not style, and it is the failure mode that
+# makes a captioner worthless here: a caption nobody re-reads becomes a training
+# target, and the LoRA learns the bench.
 #
-# The second reason is symmetry. You prompt in prose, so the captions should be
-# prose — any gap between how the dataset describes an image and how you
-# describe the one you want is a gap the model has to guess across. Captioning
-# with the same model family the text encoder comes from closes that gap
-# further than a differently-trained captioner can.
+# **It was seeing the image.** That is the explanation the bench invites and it
+# is the wrong one, checked rather than assumed: the template emits
+# `<|vision_start|><|image_pad|><|vision_end|>` exactly once for the parts list
+# we send, and the model had plainly found the scene — one subject with an arm
+# resting on something, outdoors. It got the *binding* wrong. The arm was on her
+# friend's shoulder, and the friend became a red bench.
 #
-# Which *checkpoint* of it is a choice, because a refusal is not an error here.
-# The stock instruct model declines on photographs of real people often enough
-# to matter — "I can't identify or describe individuals in images" — and on a
-# character set that is every image. What arrives is not an exception: it is a
-# fluent, well-formed sentence that goes straight into a `.txt` sidecar and then
-# into a training run, so the failure surfaces as a LoRA that learned to say it
-# cannot describe someone. The abliterated repackage has the refusal direction
-# removed and is otherwise the same architecture and the same loader, so it
-# costs a repo id rather than a second code path. `_looks_like_refusal()` is the
-# other half: a caption that declines is never written, whichever model wrote it.
+# So this is attribute bleed, one level up: not "which garment is the red one"
+# but "what is the thing she is touching", and it is the same failure the
+# General preset's adjective-binding clause exists to fight. A model that loses
+# a binding does not signal it — it writes a confident sentence about furniture
+# that is not there, and that sentence becomes a training target. No rewording
+# of the instruction moved it, which is the tell that the instruction was never
+# the variable.
+#
+# JoyCaption is trained *for this job*, on this instruction surface, and its
+# default prompt beats our best-tuned one.
+#
+# So the instruction bodies below are JoyCaption's own, lifted from its Space
+# rather than written here. That is the whole lesson: a prompt for a model
+# fine-tuned on a fixed set of instructions is not a place to be creative. The
+# trained phrasing is the API, and our leave-out clauses are appended as extra
+# sentences in its grammar — which is exactly how the Space composes its own
+# option checkboxes.
+#
+# **What is not taken from it: the tag modes.** The Space offers Danbooru, e621,
+# Rule34 and Booru-like tag lists. Prose, not tags, still holds and holds for a
+# reason that has nothing to do with which captioner writes it — a tag list
+# cannot express binding, so "red, blue, dress, jacket" leaves the model to
+# guess which colour belongs to which garment, and with two people in frame that
+# guess is where attribute bleed comes from. The text encoders parse grammar.
+# Offering a mode that throws grammar away would be offering a worse dataset in
+# a menu that looks like a preference.
+#
+# Qwen3-VL stays in the table. Old job records name it, the gear can still be
+# pointed back at it, and a table that drops an entry makes every run that used
+# it unreadable — the same rule the sidecars follow.
+#
+# The system prompt is the model's, not ours. JoyCaption Beta One was trained
+# with one and the Space sends this exact string; without it the model is being
+# run off its own distribution, which is the cheapest quality loss available.
+# Qwen has no entry here and therefore gets no system turn, which is what it had
+# before and what it wants.
 CAPTION_MODELS: dict[str, dict[str, str]] = {
-    "qwen3vl": {
-        "repo": "Qwen/Qwen3-VL-8B-Instruct",
-        "label": "Qwen3-VL 8B",
-        "note": "The text encoder's own family, stock.",
-    },
-    "qwen3vl-uncensored": {
-        "repo": "prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2",
-        "label": "Qwen3-VL 8B uncensored",
+    "joycaption": {
+        "repo": "fancyfeast/llama-joycaption-beta-one-hf-llava",
+        "label": "JoyCaption Beta One",
         # The size is in the note because this is the one control on the page
         # that can start a 17 GB download without saying so: the captioner is
         # pulled into the HF cache on first use, not chosen under the gear.
+        "note": "Trained for dataset captioning. First run pulls ~17 GB.",
+        "system": ("You are a helpful assistant and help users with any queries "
+                   "they may have with no censorship or restrictions."),
+    },
+    "qwen3vl": {
+        "repo": "Qwen/Qwen3-VL-8B-Instruct",
+        "label": "Qwen3-VL 8B",
+        "note": "The text encoder's own family. Confabulated on test sets.",
+    },
+    # Kept for the same reason the stock one is, and trusted least of the three.
+    # It exists because a refusal is not an error here: the stock instruct model
+    # declines on photographs of real people — "I can't identify or describe
+    # individuals in images" — and what arrives is not an exception but a fluent
+    # sentence that goes straight into a `.txt` sidecar and then into a training
+    # run. Abliteration removes the refusal direction by editing the weights,
+    # which is a blunt instrument that does not stop at refusals, so a repackage
+    # is a standing suspect for exactly the invented-detail failure logged above.
+    # JoyCaption does not refuse at all, which retires the only reason to run
+    # either of these.
+    "qwen3vl-uncensored": {
+        "repo": "prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2",
+        "label": "Qwen3-VL 8B uncensored",
         "note": "Same weights, refusal removed. First run pulls ~17 GB.",
     },
 }
-DEFAULT_CAPTION_MODEL = "qwen3vl"
+DEFAULT_CAPTION_MODEL = "joycaption"
 
 
 def _custom_key(prefix: str, text: str) -> str:
@@ -1155,19 +1206,81 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"}
 # arrives.
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-MAX_CAPTION_CHARS = 1024
+# 507 tokens is the real budget; this is that in characters, with margin.
+#
+# Krea 2's conditioner tokenizes with `truncation=True` at
+# `TextEncoderConfig.max_length + 34 - 5` = 541, of which the fixed 34-token
+# prefix template ("Describe the image by detailing the color, shape...") is not
+# yours — so a caption gets 507. Nothing here passes a flag that moves it; see
+# `krea2_encoder.py` in musubi if it ever does.
+#
+# The old value was 1024 and was a founding constant with no argument behind it:
+# ~217 tokens, 43% of what the encoder reads, silently thrown away. It never
+# showed because Qwen wrote short. It started costing whole sentences the day
+# JoyCaption and a `long` default arrived, which is the way an arbitrary
+# threshold usually surfaces — not when it is set, but when something else
+# changes underneath it.
+#
+# 2048 rather than the ~2400 that 507 tokens buys at the 4.73 chars/token
+# measured on real caption prose. Two reasons for the margin, both about the
+# caption growing after this cap is applied: `append` mode concatenates onto an
+# existing sidecar, and denser text (quoted sign text, numbers, heavy
+# punctuation) runs nearer 4.2 chars/token — where 2048 is 488 tokens and still
+# inside the budget.
+MAX_CAPTION_CHARS = 2048
 THUMB_PX = 320
 
-# What every caption obeys regardless of preset. Factored out rather than
-# repeated five times because these are the sentences the *parser* below
-# depends on — a preamble the model was never told to drop is a preamble
-# `_caption_images` has to strip by prefix, and that list only ever grows.
-CAPTION_RULES = (
-    " Write continuous prose in plain declarative English: no list, no bullet "
-    "points, no markdown, no headings, no labels. Do not open with 'This image', "
-    "'The photo', 'Here is' or any other preamble. Do not editorialise — no "
-    "'stunning', 'conveying a sense of', 'evoking a mood of'. Do not speculate "
-    "about anything you cannot see. Output the caption itself and nothing else."
+# The Space's own sentences, verbatim, because they are trained surface.
+#
+# These read like ordinary instructions and are not: they are strings JoyCaption
+# was tuned against, and the exact wording is the reason they land. Rewriting one
+# to sound better here is the same mistake as rewriting a function signature to
+# sound better. Composed into the presets below the way the Space composes its
+# Extra Options checkboxes — appended to the base template as whole sentences.
+#
+# `NO_META` is load-bearing for more than taste. `_caption_images` strips stock
+# preambles by prefix afterwards, and that list only ever grows; a preamble the
+# model was never told to drop is one the parser has to learn.
+NO_META = (
+    " Your response will be used by a text-to-image model, so avoid useless "
+    "meta phrases like \u201cThis image shows\u2026\u201d, \"You are looking at...\", etc."
+)
+# The Character preset's whole thesis, in JoyCaption's words rather than ours.
+NO_IMMUTABLE = (
+    " Do NOT include information about people/characters that cannot be changed "
+    "(like ethnicity, gender, etc), but do still include changeable attributes "
+    "(like hair style)."
+)
+SHOT_TYPE = (
+    " Mention whether the image depicts an extreme close-up, close-up, medium "
+    "close-up, medium shot, cowboy shot, medium wide shot, wide shot, or extreme "
+    "wide shot."
+)
+LIGHTING = " Include information about lighting."
+WATERMARK = " If there is a watermark, you must mention it."
+NO_ARTIST = (
+    " If it is a work of art, do not include the artist\u2019s name or the title "
+    "of the work."
+)
+
+# The two base templates, also verbatim, with the Space's `{length}` slot left
+# in. Its third row — the one that takes a descriptor rather than a word count —
+# because a descriptor is what the page's Short/Medium/Long control has always
+# sent. The tag-list rows are not here; see the CAPTION_MODELS comment.
+JOY_DESCRIPTIVE = "Write a {length} detailed description for this image."
+JOY_CASUAL = (
+    "Write a {length} descriptive caption for this image in a casual tone."
+)
+JOY_STRAIGHT = (
+    "Write a {length} straightforward caption for this image. Begin with the "
+    "main subject and medium. Mention pivotal elements\u2014people, objects, "
+    "scenery\u2014using confident, definite language. Focus on concrete details "
+    "like color, shape, texture, and spatial relationships. Show how elements "
+    "interact. Omit mood and speculative wording. If text is present, quote it "
+    "exactly. Note any watermarks, signatures, or compression artifacts. Never "
+    "mention what\u2019s absent, resolution, or unobservable details. Vary your "
+    "sentence structure and keep the description concise, without starting with "
+    "\u201cThis image is\u2026\u201d or similar phrasing."
 )
 
 # The instruction is the product, not the model.
@@ -1189,85 +1302,87 @@ CAPTION_PRESETS: dict[str, dict[str, str]] = {
         "label": "General",
         "note": "Everything in frame, each adjective bound to its noun.",
         "instruction": (
-            "Describe this image in plain, factual prose. Name the subject and what "
-            "it is doing, then its appearance, clothing, pose, setting, lighting and "
-            "style. Attach every adjective to the noun it belongs to, so it is "
-            "unambiguous which garment or object each colour and material describes."
+            JOY_DESCRIPTIVE + NO_META
+            + " Attach every adjective to the noun it belongs to, so it is "
+            "unambiguous which garment or object each colour and material "
+            "describes."
         ),
     },
     "character": {
         "label": "Character",
         "note": "Describes everything except the face. Identity is the trigger's job.",
+        # NO_IMMUTABLE is the preset, and it is the Space's sentence rather than
+        # the four we used to spend on it. Ours enumerated what not to describe —
+        # face shape, eye colour, jaw, skin tone — and enumerating a thing is a
+        # way of putting it in the context window. The trained phrasing names the
+        # *category* and the model already knows what is in it.
         "instruction": (
-            "Write a training caption for this photograph of a recurring person. "
-            "Describe only what changes from shot to shot: pose and body position, "
-            "gaze direction, facial expression, shot type (close-up, medium, full "
-            "body), camera angle, clothing and accessories, hair when it is styled "
-            "differently, the setting behind them, the quality and direction of the "
-            "light, and anyone or anything else in frame. "
-            "Refer to the subject with a plain class noun — the woman, the man, the "
-            "person — and never invent a name. "
-            "Never describe permanent identity: face shape, eye colour, nose, jaw, "
-            "skin tone, age, ethnicity, build, or how attractive they are. Those are "
-            "constant across the set and naming them teaches the model they are free "
-            "to vary. "
-            "Do name anything you would want to remove later: a watermark, text "
-            "overlay, motion blur, harsh on-camera flash, a hand at the edge of "
-            "frame, a cluttered background. Anything named can be prompted away; "
-            "anything unnamed is baked into the character."
+            JOY_STRAIGHT + NO_IMMUTABLE
+            + " Refer to the subject with a plain class noun \u2014 the woman, the "
+            "man, the person \u2014 and never invent a name."
+            + SHOT_TYPE + LIGHTING + WATERMARK
+            + " Also name anything else you would want to prompt away later, such "
+            "as a text overlay, motion blur, harsh on-camera flash, or a cluttered "
+            "background. Anything named can be prompted away; anything unnamed is "
+            "baked into the character."
+            + NO_META
         ),
     },
     "style": {
         "label": "Style",
         "note": "Describes the content, never the look. The look is the trigger.",
+        # Descriptive rather than Straightforward, and that is not a preference:
+        # Straightforward opens "Begin with the main subject and medium", which
+        # is the one instruction this preset exists to countermand. Two sentences
+        # pulling opposite ways is a prompt that resolves at random.
         "instruction": (
-            "Write a training caption for an image in a recurring visual style. "
-            "Describe what the image is *of*: the subject, what it is doing, the "
-            "composition and framing, where things sit relative to each other, and "
-            "the setting. "
-            "Say nothing about how it is rendered — do not name the medium, the "
-            "brushwork, line quality, palette, grain, colour grade, era, artist, or "
-            "any word for the look itself such as cinematic, painterly, anime or "
-            "retro. Those are the style you are training, and a caption that names "
-            "them gives the model a phrase to hang the look on instead of the trigger "
-            "word. "
-            "Do name anything incidental you would want to prompt away later, such as "
-            "a watermark, signature, border or caption text."
+            JOY_DESCRIPTIVE
+            + " Describe only what the image is *of*: the subject, what it is "
+            "doing, the composition and framing, where things sit relative to each "
+            "other, and the setting. Say nothing about how it is rendered \u2014 do "
+            "not name the medium, the brushwork, line quality, palette, grain, "
+            "colour grade, era, or any word for the look itself such as cinematic, "
+            "painterly, anime or retro. Those are the style you are training, and "
+            "a caption that names them gives the model a phrase to hang the look "
+            "on instead of the trigger word."
+            + NO_ARTIST + WATERMARK + NO_META
         ),
     },
     "concept": {
         "label": "Concept",
-        "note": "For an object, garment or pose — describes the context around it.",
+        "note": "For an object, garment or pose \u2014 describes the context around it.",
         "instruction": (
-            "Write a training caption for an image of a recurring object, garment, "
-            "pose or effect. "
-            "Describe everything around it: the scene, who is holding or wearing it, "
-            "the angle it is seen from, its scale relative to the frame, what else is "
-            "present, the lighting and the background. "
-            "Refer to the concept itself with the shortest plain noun that fits, and "
-            "say nothing about what makes it distinctive — its shape, markings, "
-            "colour scheme, materials or construction. Those are constant across the "
-            "set and belong to the trigger word. "
-            "Do name anything incidental you would want to prompt away later."
+            JOY_STRAIGHT
+            + " Refer to the recurring object, garment, pose or effect itself with "
+            "the shortest plain noun that fits, and say nothing about what makes it "
+            "distinctive \u2014 its shape, markings, colour scheme, materials or "
+            "construction. Those are constant across the set and belong to the "
+            "trigger word. Describe everything around it instead: the scene, who is "
+            "holding or wearing it, the angle it is seen from, its scale in the "
+            "frame, what else is present, the lighting and the background."
+            + WATERMARK + NO_META
         ),
     },
     "casual": {
         "label": "Casual",
         "note": "Conversational prose, none of the dataset rules applied.",
-        "instruction": (
-            "Describe this image in natural, conversational prose, the way you would "
-            "describe a photo to someone who cannot see it. Cover what is happening, "
-            "how it looks and the overall mood, keeping each adjective clearly "
-            "attached to the thing it describes."
-        ),
+        # Bare on purpose. "None of the dataset rules applied" is the note, so
+        # bolting NO_META onto it would make the note a lie for the sake of a
+        # preamble the stripper already handles.
+        "instruction": JOY_CASUAL,
     },
 }
 DEFAULT_CAPTION_PRESET = "general"
 
+# The Space's own descriptors, substituted into `{length}` rather than appended
+# as a sentence of ours. The keys are unchanged — short/medium/long is what the
+# page sends and what every existing job record says — so only the value each
+# one compiles to moved. "medium-length" rather than "medium" because that is
+# the string in the Space's dropdown, and the dropdown is the trained vocabulary.
 CAPTION_LENGTHS = {
-    "short": " Keep it to one dense sentence.",
-    "medium": " Keep it to two or three sentences.",
-    "long": " Be thorough, four or more sentences.",
+    "short": "short",
+    "medium": "medium-length",
+    "long": "long",
 }
 
 # Anchored at the start, like `prepend_trigger`'s `startswith` and for the same
@@ -1322,24 +1437,35 @@ def _caption_instruction(
     One prompt out of the preset, the length and the trigger word.
 
     `instruction` overrides the preset's body when the page sends one — the
-    preset is a starting point the textarea prefills, not a lock. The trigger
-    clause, the length clause and CAPTION_RULES still compose around whatever
-    body is used: the trigger is a fact about *this run* (the token is
-    prepended in Python once the caption comes back, so the model has to be
-    told both that the subject has a name and that writing it would double
-    it), and the rules are the sentences the refusal/preamble parsing depends
-    on — an instruction free to drop them is a parser free to miss.
+    preset is a starting point the textarea prefills, not a lock. Only the
+    trigger clause still composes around it: the trigger is a fact about *this
+    run* rather than a preference (the token is prepended in Python once the
+    caption comes back, so the model has to be told both that the subject has a
+    name and that writing it would double it).
+
+    Nothing else is appended any more. The bodies are JoyCaption's trained
+    instruction surface now, and the sixty-word rulebook that used to ride along
+    behind every one of them — no lists, no markdown, no editorialising, do not
+    speculate — was our wording stacked on top of a model that had already been
+    taught those rules in different words. Two instructions that mean the same
+    thing are not twice as strong; they are one prompt arguing with itself, and
+    the presets that needed a clause of ours now carry it as a sentence in the
+    Space's own grammar.
+
+    `replace` rather than `format`, because this string is editable in the page.
+    `.format()` on user-typed text raises on a stray brace, and the cost of that
+    would be a form that rejects a caption instruction for containing "{".
     """
     presets = _caption_presets()
     spec = presets.get(preset) or presets[DEFAULT_CAPTION_PRESET]
     out = instruction.strip() or spec["instruction"]
+    out = out.replace("{length}", CAPTION_LENGTHS.get(length, CAPTION_LENGTHS["medium"]))
     if trigger_word:
         out += (
             f" Every caption in this set is prefixed with the trigger word "
             f"'{trigger_word}' automatically, so never write '{trigger_word}' yourself."
         )
-    out += CAPTION_LENGTHS.get(length, CAPTION_LENGTHS["medium"])
-    return out + CAPTION_RULES
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -1721,9 +1847,17 @@ def _reload_volume() -> bool:
     Raising there is the wrong trade. A reload is a *freshness* step: it exists
     so a LoRA trained ten minutes ago is visible to a warm container. Skipping it
     costs a stale listing until that container scales down; raising cost every
-    generation after the first. Everything the job is about to open was already
-    validated by the web container, which holds nothing open and reloads on
-    every request, so the reload here is the second look, not the only one.
+    generation after the first.
+
+    **What absorbing it does not buy is a job that works.** This used to say the
+    web container had already validated everything the job was about to open, so
+    the reload here was the second look and not the only one. That is a
+    confusion of two different questions: the web container proves the file is
+    *on the volume*, and the GPU container needs it in *its own mount* to open
+    it. A LoRA trained while this container was warm passed the first and failed
+    the second, and the page said "No such LoRA" about an epoch the user could
+    see in the picker. Freshness a container cannot get by reloading, it gets by
+    asking Modal — see `_lora_visible`.
 
     Only the open-files conflict is absorbed. Any other reload failure is still
     an error, because it says something about the volume rather than about what
@@ -1803,7 +1937,20 @@ REQUEST_SLOW_S = 2.0
 QUEUE_WAIT_SLOW_S = 5.0
 
 
-def _reload_volume_locked() -> bool:
+def _reload_one(vol: Any, label: str) -> bool:
+    """
+    Bring one volume forward. False if it was refused for open files.
+
+    Split from its sibling because the two refusals are independent facts and
+    one `try` made them a single one: the data volume was reloaded first, so
+    the moment anything on it was mapped the models reload was never attempted
+    at all. A container that had loaded one LoRA therefore stopped seeing newly
+    downloaded *weights* too, for a reason that had nothing to do with weights.
+
+    The label is in the log line because "reload skipped" said which failure
+    mode without ever saying which volume, and the two send you to different
+    places: /workspace is LoRAs and results, /models is the checkpoint.
+    """
     try:
         # **Timed, because this is the one step in a request with no bound on
         # it.** Everything else between accepting a job and queueing its graph
@@ -1812,25 +1959,39 @@ def _reload_volume_locked() -> bool:
         # the prime suspect for an eight-minute gap and could not be confirmed
         # or cleared, which is the whole argument for the line.
         t0 = time.time()
-        volume.reload()
-        # Both volumes, one freshness step. The models volume is the one a
-        # loaded checkpoint actually holds open — safetensors maps weights off
-        # /models now — so it is the likelier of the two to take the skip path
-        # this function exists to absorb. Data first: a stale weight listing
-        # costs a gear-menu refresh, a stale LoRA listing costs "that LoRA is
-        # not there" mid-render.
-        models_volume.reload()
+        vol.reload()
         took = time.time() - t0
         if took > RELOAD_SLOW_S:
-            print(f"[volume] reload took {took:.1f}s", flush=True)
+            print(f"[volume] {label} reload took {took:.1f}s", flush=True)
         return True
     except RuntimeError as exc:
         if "open files" not in str(exc):
             raise
         # Not silent: a stale view is a real cause of "that LoRA is not there",
         # and this line is the only thing that distinguishes it from a typo.
-        print(f"[volume] reload skipped, weights still mapped ({exc})", flush=True)
+        print(f"[volume] {label} reload skipped, weights still mapped ({exc})",
+              flush=True)
         return False
+
+
+def _reload_volume_locked() -> bool:
+    """
+    Both volumes, one freshness step — and the answer is about the data one.
+
+    Every caller of this asks about /workspace: a LoRA listing, a result
+    folder, a dataset. /models is reloaded on the same trip because the gear
+    downloads into it and a warm container should see that, but a refusal there
+    is not the answer to anybody's question, and returning it as one made
+    `_reload_insist` sleep half a second waiting out a mapped checkpoint it can
+    never unmap.
+
+    Data first, because that is the one whose staleness costs a render: a stale
+    weight listing costs a gear-menu refresh, a stale LoRA listing costs "that
+    LoRA is not there" in the middle of one.
+    """
+    ok = _reload_one(volume, "data")
+    _reload_one(models_volume, "models")
+    return ok
 
 
 def _reload_insist() -> bool:
@@ -1929,7 +2090,12 @@ def _listed(path: Path, root: Path) -> bool:
         rel = path.resolve().relative_to(root.resolve())
     except ValueError:
         return False
-    if str(rel) in _LISTED_OK:
+    # Keyed by root as well as by path, because two roots now share this memo —
+    # outputs/ and loras/ — and a bare relative path is not unique across them.
+    # Nothing collides today, but the cost of one that did is a delete route
+    # taking `_listed` at its word about a file under the *other* root.
+    key = f"{root}|{rel}"
+    if key in _LISTED_OK:
         return True
     here = root
     for part in rel.parts:
@@ -1939,7 +2105,7 @@ def _listed(path: Path, root: Path) -> bool:
         except OSError:
             return False
         here = here / part
-    _LISTED_OK.add(str(rel))
+    _LISTED_OK.add(key)
     return True
 
 
@@ -1954,14 +2120,20 @@ def _listed(path: Path, root: Path) -> bool:
 # Only *positive* answers are kept. A miss is the case this function exists to
 # re-ask, since the file it is looking for is one the GPU container may be
 # writing right now; caching that would reintroduce the negative-dentry fault
-# one layer up. A path that exists stops existing only through the two delete
-# routes, and both discard from here.
+# one layer up. A path that exists stops existing only through the three delete
+# routes — two for results, one for a LoRA — and all three discard from here.
 _LISTED_OK: set[str] = set()
 
 
-def _forget_listed(rel: str) -> None:
-    """Drop a deleted path, and anything under it, from the positive cache."""
-    for key in [k for k in _LISTED_OK if k == rel or k.startswith(f"{rel}/")]:
+def _forget_listed(rel: str, root: Path) -> None:
+    """Drop a deleted path, and anything under it, from the positive cache.
+
+    `root` is named rather than defaulted because the memo is keyed by it — see
+    `_listed` — and a default would be a second place that decides which tree a
+    caller meant. It would also be a module constant evaluated at def time,
+    which `tools/_from_app.py` executes a *subset* of this file without."""
+    pre = f"{root}|{rel}"
+    for key in [k for k in _LISTED_OK if k == pre or k.startswith(f"{pre}/")]:
         _LISTED_OK.discard(key)
 
 
@@ -2724,6 +2896,148 @@ def gdrive_job(url: str, folder: str, refetch: bool = False) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def _trimmed(caption: str) -> str:
+    """
+    Cut an over-long caption back to its last full sentence.
+
+    This is the boundary handler, not the budget — the budget is
+    MAX_CAPTION_CHARS and the argument for its value is up there. What this
+    exists for is the shape of the cut: a hard slice puts a half-word at the end
+    of a file the trainer reads as a sentence. Backing up to the last terminator
+    costs a few words and leaves prose.
+
+    It fires rarely now that the cap is the encoder's actual limit rather than
+    half of it, which is the right frequency for a fallback. It is kept because
+    "rarely" is not "never", and the run where it does fire is a run nobody is
+    watching.
+
+    Falls back to the hard slice when there is no terminator in range, because a
+    caption that is one 1100-character sentence is still better truncated than
+    dropped, and the alternative is a rule that silently empties a sidecar.
+    """
+    if len(caption) <= MAX_CAPTION_CHARS:
+        return caption
+    cut = caption[:MAX_CAPTION_CHARS]
+    stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    return cut[: stop + 1] if stop > MAX_CAPTION_CHARS // 2 else cut
+
+
+def _caption_processor(repo: str, cache_dir: str) -> Any:
+    """
+    Load a captioner's processor, with the pixel budget if it takes one.
+
+    `min_pixels`/`max_pixels` cap the vision tower's token budget: Qwen3-VL
+    scales patches with input resolution, so a 4000px training image would
+    otherwise spend thousands of tokens on detail that never reaches the
+    caption — slow, and no better. They are Qwen vocabulary. JoyCaption is a
+    LLaVA on siglip2, which resizes to a fixed grid and has no such knob.
+
+    Passed and then retried without, rather than branched on the repo id,
+    because the menu is open and there is no list of which families take them.
+    Checked on transformers 5.16.1 against all three built-ins: Qwen applies
+    them, LlavaProcessor swallows them, nobody raises — so the retry is
+    insurance rather than a live path, and it costs one extra config read on
+    the first captioner that ever does refuse. Left in because the alternative
+    is finding out inside a paid GPU job.
+    """
+    from transformers import AutoProcessor
+
+    try:
+        return AutoProcessor.from_pretrained(
+            repo, cache_dir=cache_dir,
+            min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
+        )
+    except (TypeError, ValueError) as exc:
+        print(f"[caption] {repo} takes no pixel budget ({type(exc).__name__})")
+        return AutoProcessor.from_pretrained(repo, cache_dir=cache_dir)
+
+
+# Two message shapes, because the captioner menu is open.
+#
+# Qwen3-VL takes the image as a content *part* and its chat template walks the
+# list. JoyCaption — a LLaVA on Llama 3.1, and the first captioner anyone added
+# under the gear — ships a processor-level chat_template.json (not the tokenizer
+# one, which is clean) whose first user turn is
+# `message['content'].replace('<|reserved_special_token_69|>', '')`: it splices
+# its own image placeholder in and wants `content` to be a plain string with the
+# image handed to the processor beside it. The parts list against that raised
+# `'list object' has no attribute 'replace'` — Jinja's wording rather than
+# Python's `'list' object`, which is the tell that the failure was inside the
+# template and not in this file.
+#
+# `AutoModelForImageTextToText` was picked so the menu could be any vision LM
+# transformers maps. This is the other half of that promise, which was missing:
+# the loader was general and the message shape was still Qwen's.
+#
+# Nothing here invents a placeholder token. A template that splices its own is
+# the entire reason the flat shape exists; one that does not gets the parts
+# list, where the processor does the expansion. There is no third case to guess
+# at, and guessing would put a literal `<image>` in somebody's caption.
+def _vlm_inputs(processor: Any, image: Any, instruction: str, shape: str,
+                system: str = "") -> Any:
+    # String content for the system turn under both shapes. Every template
+    # that takes a system message at all takes a string one — Qwen branches on
+    # `content is string` and JoyCaption only ever concatenates it — so a parts
+    # list here would buy nothing and break the half that does not branch.
+    head = [{"role": "system", "content": system}] if system else []
+    if shape == "parts":
+        convo = head + [{
+            "role": "user",
+            "content": [{"type": "image", "image": image},
+                        {"type": "text", "text": instruction}],
+        }]
+        return processor.apply_chat_template(
+            convo, tokenize=True, add_generation_prompt=True,
+            return_dict=True, return_tensors="pt",
+        )
+    text = processor.apply_chat_template(
+        head + [{"role": "user", "content": instruction}],
+        tokenize=False, add_generation_prompt=True,
+    )
+    return processor(text=[text], images=[image], return_tensors="pt")
+
+
+def _caption_shape(processor: Any, instruction: str, repo: str,
+                   system: str = "") -> str:
+    """
+    Which shape this captioner accepts, settled once and before the loop.
+
+    The shape cannot vary between images, so discovering it per image was
+    eighty identical unreadable log lines, zero captions written, and an A100
+    rented for the length of the set to produce them. A whole-run fact belongs
+    to the run — and the run should end on it rather than walk the set.
+
+    A probe render rather than reading the template as text, because the
+    template is not the only thing on this path that can refuse: the processor
+    call after it is where a placeholder that fails to expand shows up, and the
+    flat shape has both halves. 64px is arbitrary and large enough that no
+    patch-size or min_pixels arithmetic divides by zero on the way through.
+    """
+    from PIL import Image
+
+    # Parts first, and that order is load-bearing rather than alphabetical.
+    # Qwen3-VL's template *renders* the flat shape too — it just drops the
+    # image on the floor while doing it — so a probe that asked flat first
+    # would caption blanks fluently and never say why. The shape that fails
+    # loudly when it is wrong goes first.
+    tried = []
+    for shape in ("parts", "flat"):
+        try:
+            _vlm_inputs(processor, Image.new("RGB", (64, 64)), instruction,
+                        shape, system)
+            return shape
+        except Exception as exc:
+            tried.append(f"{shape} → {type(exc).__name__}: {exc}")
+    # Named, both attempts, because the two failures separate the causes: a
+    # template error is a captioner this app can be taught, and a processor
+    # with no image input at all is a text-only repo that got past the add
+    # route's config check.
+    raise RuntimeError(
+        f"{repo} accepted neither message shape, so no image would have been "
+        f"captioned. Tried {' · '.join(tried)}"
+    )
+
+
 def _caption_images(
     image_dir: Path, trigger_word: str, job_id: str,
     preset: str, length: str, write_mode: str, model_key: str,
@@ -2732,7 +3046,7 @@ def _caption_images(
 ) -> tuple[int, int]:
     import torch
     from PIL import Image
-    from transformers import AutoModelForImageTextToText, AutoProcessor
+    from transformers import AutoModelForImageTextToText
 
     every = sorted(p for p in image_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS)
     # "skip" only fills empties; every other mode has something to do with a
@@ -2753,13 +3067,16 @@ def _caption_images(
     _publish(job_id, phase="caption", step=0, total_steps=len(todo), percent=0)
 
     cache_dir = str(HF_CACHE)
-    # Cap the vision tower's token budget. Qwen3-VL scales patches with input
-    # resolution, so a 4000px training image would otherwise spend thousands of
-    # tokens on detail that never reaches the caption — slow, and no better.
-    processor = AutoProcessor.from_pretrained(
-        repo, cache_dir=cache_dir,
-        min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
-    )
+    processor = _caption_processor(repo, cache_dir)
+    instruction = _caption_instruction(preset, length, trigger_word, instruction)
+    # Ahead of the weights rather than after them, which is the whole payoff of
+    # settling this once: a captioner whose template refuses the image is not
+    # going to caption anything, and finding that out here costs a processor
+    # load instead of a 17 GB pull and a model load.
+    system = str(spec.get("system") or "")
+    shape = _caption_shape(processor, instruction, repo, system)
+    if shape != "parts":
+        print(f"[caption] {repo} takes flat message content")
     # The Auto class rather than Qwen3VLForConditionalGeneration, because the
     # menu is no longer two known repos: a captioner added under the gear can be
     # any vision LM transformers maps — Qwen-VL, LLaVA, InternVL, Idefics. The
@@ -2776,8 +3093,6 @@ def _caption_images(
     except Exception as exc:
         print(f"[caption] hf cache commit skipped: {exc}")
 
-    instruction = _caption_instruction(preset, length, trigger_word, instruction)
-
     written = refused = 0
     for i, img_path in enumerate(todo, 1):
         if _stop_requested(job_id):
@@ -2785,16 +3100,15 @@ def _caption_images(
             break
         try:
             image = _upright(Image.open(img_path)).convert("RGB")
-            # Qwen3-VL takes the image as a content part, not an inline <image>
-            # token, and apply_chat_template does the placeholder expansion.
-            convo = [{
-                "role": "user",
-                "content": [{"type": "image", "image": image}, {"type": "text", "text": instruction}],
-            }]
-            inputs = processor.apply_chat_template(
-                convo, tokenize=True, add_generation_prompt=True,
-                return_dict=True, return_tensors="pt",
-            ).to("cuda:0")
+            inputs = _vlm_inputs(processor, image, instruction, shape,
+                                 system).to("cuda:0")
+            # The processor hands back float32 pixels while the model is bf16.
+            # Qwen3-VL's vision tower casts its input on the way in and never
+            # minded; LLaVA's does not, so JoyCaption died on the first image
+            # with a dtype mismatch the moment the template stopped being the
+            # thing in front of it.
+            if "pixel_values" in inputs and inputs["pixel_values"].is_floating_point():
+                inputs["pixel_values"] = inputs["pixel_values"].to(model.dtype)
 
             with torch.no_grad():
                 # temperature 0 means greedy, and transformers refuses
@@ -2847,7 +3161,7 @@ def _caption_images(
                     final = f"{head} {existing}"
                 else:
                     final = f"{trigger_word}, {caption}" if trigger_word else caption
-                txt.write_text(final[:MAX_CAPTION_CHARS])
+                txt.write_text(_trimmed(final))
                 written += 1
         except Exception as exc:
             print(f"[caption] {img_path.name} failed: {exc}")
@@ -3560,6 +3874,21 @@ class _Comfy:
         # simply wins over base_path, which is the documented posix behaviour
         # rather than a trick. loras/ stays relative: it is on the data volume
         # the base_path names.
+        #
+        # Two loras roots, not one, and the second is the spool. A container
+        # that has loaded a LoRA has it mapped off /workspace, which refuses
+        # every later `volume.reload()`, which freezes the mount — so a LoRA
+        # trained *while this container was warm* is invisible here while the
+        # page shows it. `_lora_visible` pulls that file's committed bytes onto
+        # local disk by RPC, and this root is what makes the name it already
+        # answers to resolve to them. Same relative path under either root, so
+        # nothing downstream can tell which one served it.
+        #
+        # Created before ComfyUI starts, empty or not: `folder_paths` records
+        # the directories it walked and invalidates its filename cache when one
+        # of them changes, and a root that did not exist at startup is a root
+        # whose first file arrives unnoticed.
+        SPOOL_LORAS.mkdir(parents=True, exist_ok=True)
         (COMFY / "extra_model_paths.yaml").write_text(
             "visionary:\n"
             f"  base_path: {WORKSPACE}/\n"
@@ -3567,6 +3896,9 @@ class _Comfy:
             f"  text_encoders: {MODELS}\n"
             f"  clip: {MODELS}\n"
             f"  vae: {MODELS}\n"
+            "  loras: loras/\n"
+            "visionary_spool:\n"
+            f"  base_path: {SPOOL}/\n"
             "  loras: loras/\n"
         )
 
@@ -5762,6 +6094,57 @@ def _forget_output(job_id: str) -> None:
     shutil.rmtree(SPOOL / "outputs" / job_id, ignore_errors=True)
 
 
+# Where a LoRA the mount cannot show us is pulled to, and the second directory
+# ComfyUI searches for one. Under the spool because it is the same thing the
+# gallery does for bytes — see the block above `_entries_by_rpc` — and for the
+# same reason: an RPC read of committed state is the one read on this platform
+# that no open file descriptor can refuse.
+SPOOL_LORAS = SPOOL / "loras"
+
+
+def _lora_visible(rel: str, path: Path) -> bool:
+    """
+    Can this container actually open `rel`, and make it so if it can only
+    almost.
+
+    Two looks, because a GPU container has two different ways to be wrong about
+    a LoRA that exists.
+
+    The mount is asked first, by walking down from loras/ rather than statting
+    the file. `_sizes_on_disk` used to do this one level up, which covers the
+    *file* appearing in a folder we have already listed and not the folder
+    itself appearing — and a training run's first checkpoint creates the
+    folder. A name this container has asked about and been told no is cached
+    below us, and `volume.reload()` does not invalidate it, so the leaf scandir
+    raised FileNotFoundError about a directory that is there. `_listed` is the
+    function that already learned this for `outputs/{job}/{name}`; it is the
+    same lesson and there is no reason for two of it.
+
+    Then committed state, by RPC, which is the half that was missing entirely.
+    A container holding a LoRA has that LoRA *mapped* off /workspace —
+    safetensors maps the weights and ComfyUI keeps the patched state dict — so
+    every `volume.reload()` for the rest of its life is refused for open files,
+    and the mount freezes at whenever it last synced. The page kept catching up
+    because the web container maps nothing; the GPU container did not, and told
+    you the epoch you were watching get written did not exist. Ten minutes of
+    scaledown was the only cure.
+
+    `_spooled` pulls the committed bytes onto local disk and ComfyUI is pointed
+    at that directory too (see `_Comfy.start`), so the name resolves to a real
+    file under a searched root and loads exactly as it would have. It also
+    means the copy this container maps is on /tmp, which is one fewer descriptor
+    on /workspace — the same move, and the same payoff, as serving off the
+    spool.
+
+    The order matters and is not arbitrary: the mount is free and the RPC is a
+    transfer, so a fresh container never pays for this and a frozen one pays
+    once per checkpoint.
+    """
+    if _listed(path, LORAS):
+        return True
+    return _spooled(f"loras/{rel}") is not None
+
+
 def _lora_path(raw_path: Any) -> Path:
     """
     Resolve one LoRA path and confine it to loras/.
@@ -5776,18 +6159,22 @@ def _lora_path(raw_path: Any) -> Path:
     inside it that is not there is a LoRA deleted since the page loaded — which
     is the one a stale tab actually hits, and which "must be a file under
     loras/" sends you to debug in entirely the wrong place.
+
+    The returned path is always the /workspace one even when `_lora_visible`
+    had to fetch a copy to answer: that path is the LoRA's durable address, it
+    is what goes in the record, and `name` below is derived from it. Which
+    directory the bytes are read out of is ComfyUI's business and nobody
+    else's.
     """
     path = Path(str(raw_path or "")).resolve()
     if LORAS.resolve() not in path.parents:
         raise ValueError(f"LoRA must be under loras/: {str(raw_path)!r}")
-    # Via the parent listing, not is_file(), for the same reason the weight
-    # catalogue is — see _sizes_on_disk. A LoRA trained minutes ago into a
-    # container that had already asked for that name would otherwise be
-    # rejected as deleted.
-    if not _sizes_on_disk([path])[path]:
+    rel = path.relative_to(LORAS.resolve()).as_posix()
+    if not _lora_visible(rel, path):
         raise ValueError(
-            f"No such LoRA: {path.relative_to(LORAS.resolve()).as_posix()}. "
-            "It may have been deleted — reload to refresh the list."
+            f"No such LoRA: {rel}. Not on the volume and not in its committed "
+            "state — it may have been deleted, or a training run renamed out "
+            "from under this list. Reopen Settings to refresh it."
         )
     return path
 
@@ -10563,6 +10950,13 @@ def web():
             return {"error": f"No LoRA named {root.name!r} on the volume — "
                              "reopen Settings to refresh the list."}
 
+        # The same discard the two output deletes do, for the same reason:
+        # `_listed` keeps positives forever, so a LoRA proven present stays
+        # proven present after it is gone unless the route that removed it says
+        # so. Without this the next render validates a name ComfyUI will then
+        # refuse as "Value not in list" — the failure a form error exists to
+        # get in front of.
+        _forget_listed(root.name, LORAS)
         _drop_legacy_trash(LORAS)
         volume.commit()
         return {"ok": True}
@@ -12356,7 +12750,7 @@ def web():
         if not _listed(d, OUTPUTS):
             return {"error": "Not found."}
         shutil.rmtree(d, ignore_errors=True)
-        _forget_listed(job_id)
+        _forget_listed(job_id, OUTPUTS)
         _forget_output(job_id)
         _drop_legacy_trash(OUTPUTS)
         volume.commit()
@@ -12391,7 +12785,7 @@ def web():
             d = OUTPUTS / job_id
             if _listed(d, OUTPUTS):
                 shutil.rmtree(d, ignore_errors=True)
-                _forget_listed(job_id)
+                _forget_listed(job_id, OUTPUTS)
                 _forget_output(job_id)
                 removed += 1
             else:

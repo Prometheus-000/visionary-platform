@@ -488,24 +488,49 @@ nobody has looked at.
   moved rather than died — the job record now carries the exact composed
   instruction that ran, so a run is still replayable after the preset changes.
   What is *not* editable is what composes around the body: the trigger clause,
-  the length clause and `CAPTION_RULES`, because those are the sentences the
-  refusal and preamble parsing depend on. Write modes (skip, append, prepend,
+  because that is a fact about the run rather than a preference — the token is
+  prepended in Python once the caption is back, so the model has to be told both
+  that the subject has a name and that writing it would double it. Nothing else
+  composes around it any more. The length is substituted *into* the body at
+  `{length}`, and the rulebook that used to ride behind every preset is gone:
+  the bodies are JoyCaption's own trained instruction strings now, and stacking
+  our wording for the same rules on top of a model already taught them in
+  different words is one prompt arguing with itself. Write modes (skip, append, prepend,
   replace) and the sampling numbers travel with the job the same way, and
   find & replace across sidecars is scoped by the page's current filter — the
   filters are the targeting tool, and the count is on the button before you
   press it.
 
-  The captioner picker is the other half. A stock instruct model declines to
-  describe photographs of real people often enough to matter, and on a character
-  set that is *every* image — but a decline is not an exception. It is fluent
-  prose that passes every check downstream of it, lands in a `.txt` sidecar and
-  trains, so the symptom is a LoRA that learned to say it cannot describe
-  someone. `_looks_like_refusal()` therefore drops it before it is written,
-  which leaves the image in the Uncaptioned filter where it can be found, and
-  `CAPTION_MODELS` offers the abliterated repackage — same architecture, same
-  loader, so the fix costs a repo id rather than a second code path. The count
-  of refusals is reported by name and points at the other menu, because "run
-  finished, nineteen of twenty-four captioned" is not a diagnosis.
+  The captioner picker is the other half, and the default moved. JoyCaption Beta
+  One replaced Qwen3-VL because Qwen lost bindings on anything harder than a
+  single subject — an arm resting on a friend's shoulder came back as an arm on
+  a red bench, confidently, in prose nothing downstream can flag. The full
+  record is above `CAPTION_MODELS`. Qwen stays in the table because old job
+  records name it and a table that drops an entry makes those runs unreadable.
+
+  A decline is the other thing that is not an exception. A stock instruct model
+  declines to describe photographs of real people often enough to matter, and on
+  a character set that is *every* image; what arrives is fluent prose that passes
+  every check downstream of it, lands in a `.txt` sidecar and trains, so the
+  symptom is a LoRA that learned to say it cannot describe someone.
+  `_looks_like_refusal()` drops it before it is written, which leaves the image
+  in the Uncaptioned filter where it can be found, and `CAPTION_MODELS` keeps the
+  abliterated repackage for it — same architecture, same loader, so the fix costs
+  a repo id rather than a second code path. JoyCaption does not refuse at all,
+  which retires the reason that entry existed without retiring the entry. The
+  count of refusals is reported by name and points at the other menu, because
+  "run finished, nineteen of twenty-four captioned" is not a diagnosis.
+
+  **The message shape is per-captioner and settled once per run.** The menu is
+  any vision LM `AutoModelForImageTextToText` maps, and those do not agree on
+  how an image reaches the template: Qwen takes it as a content part, JoyCaption
+  wants `content` to be a plain string and splices its own placeholder in.
+  `_caption_shape()` probe-renders both against a 64px image before the weights
+  load and `_vlm_inputs()` builds whichever worked. Before the loop, because the
+  shape cannot vary between images — discovering it per image was one unreadable
+  line per file, zero captions, and an A100 rented for the length of the set.
+  Parts is tried first and that order is load-bearing: Qwen's template renders
+  the flat shape too, dropping the image while doing it.
 
   The regex is prefix-anchored for the same reason `prepend_trigger` uses
   `startswith`: "I cannot" inside a caption is a sentence about the picture, and

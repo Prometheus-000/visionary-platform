@@ -1,16 +1,16 @@
 """
-Smoke test for the Qwen3-VL captioner.
+Smoke test for the captioner.
 
     modal run tools/smoke_caption.py           # class + processor exist, no weights
     modal run tools/smoke_caption.py --gpu     # load the model and caption one image
-    modal run tools/smoke_caption.py --gpu --model qwen3vl-uncensored --preset character
+    modal run tools/smoke_caption.py --gpu --model qwen3vl --preset character
 
-The cheap check is the one that matters after a transformers bump:
-Qwen3VLForConditionalGeneration only exists from 4.57, and the failure mode of
-pinning too low is an ImportError deep inside a paid GPU job. It reads every
-entry in CAPTION_MODELS rather than the default one, because a second repo id
-in a table is a second thing that can be misspelt, and the spelling is not
-checked anywhere until a GPU container has already started.
+The cheap check is the one that matters after a transformers bump, and the
+bump it now guards is a major: the captioner image is on transformers 5 while
+the training and inference images are still on 4.x. It reads every entry in
+CAPTION_MODELS rather than the default one, because a second repo id in a table
+is a second thing that can be misspelt, and the spelling is not checked anywhere
+until a GPU container has already started.
 """
 
 import sys
@@ -22,6 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import (  # noqa: E402
     CAPTION_LENGTHS,
+    _caption_processor,
+    _caption_shape,
+    _vlm_inputs,
     DEFAULT_CAPTION_MODEL,
     DEFAULT_CAPTION_PRESET,
     HF_CACHE,
@@ -47,6 +50,7 @@ def check() -> dict:
     from transformers import (  # noqa: F401
         AutoModelForImageTextToText,
         AutoProcessor,
+        LlavaForConditionalGeneration,
         Qwen3VLForConditionalGeneration,
     )
 
@@ -72,6 +76,11 @@ def check() -> dict:
         "transformers": transformers.__version__,
         "models": models,
         "presets": list(_caption_presets()),
+        # The compiled prompt, not just the key. A preset is a string that gets
+        # substituted into and appended to before anything sees it, and the one
+        # bug this file cannot catch by listing keys is a prompt that reads
+        # wrong — which is the bug that cost a whole captioner.
+        "instruction": _caption_instruction(DEFAULT_CAPTION_PRESET, "long", "chgl"),
         "lengths": sorted(CAPTION_LENGTHS),
     }
 
@@ -108,11 +117,10 @@ def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
     cache_dir = str(HF_CACHE)
     repo = _caption_models()[model]["repo"]
 
+    system = str(_caption_models()[model].get("system") or "")
+
     started = time.time()
-    processor = AutoProcessor.from_pretrained(
-        repo, cache_dir=cache_dir,
-        min_pixels=256 * 28 * 28, max_pixels=1280 * 28 * 28,
-    )
+    processor = _caption_processor(repo, cache_dir)
     # The same class the live path loads through, so what this smokes is the
     # path a run takes rather than a sibling of it.
     vlm = AutoModelForImageTextToText.from_pretrained(
@@ -121,18 +129,18 @@ def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
     vlm.eval()
     load_s = round(time.time() - started, 1)
 
-    # The real builder, not a reimplementation of it — the point of running this
-    # is to see what the preset actually sends.
+    # The real builders, not reimplementations of them. This file used to
+    # hand-roll the conversation, and that is precisely how it stopped smoking
+    # the live path: it hard-coded Qwen's message shape, so the first captioner
+    # whose chat template wanted a flat string broke the app while this test
+    # stayed green. Anything that composes a prompt or an input tensor is now
+    # imported from app.py.
     instruction = _caption_instruction(preset, "medium", trigger)
     image = Image.open(img_path).convert("RGB")
-    convo = [{
-        "role": "user",
-        "content": [{"type": "image", "image": image}, {"type": "text", "text": instruction}],
-    }]
-    inputs = processor.apply_chat_template(
-        convo, tokenize=True, add_generation_prompt=True,
-        return_dict=True, return_tensors="pt",
-    ).to("cuda:0")
+    shape = _caption_shape(processor, instruction, repo, system)
+    inputs = _vlm_inputs(processor, image, instruction, shape, system).to("cuda:0")
+    if "pixel_values" in inputs and inputs["pixel_values"].is_floating_point():
+        inputs["pixel_values"] = inputs["pixel_values"].to(vlm.dtype)
 
     started = time.time()
     with torch.no_grad():
@@ -143,7 +151,7 @@ def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
     volume.commit()
     return {
         "image": img_path.name, "size": image.size,
-        "model": model, "repo": repo, "preset": preset,
+        "model": model, "repo": repo, "preset": preset, "shape": shape,
         "load_s": load_s, "caption_s": round(time.time() - started, 1),
         # Reported rather than left to be read: a decline is fluent prose, so
         # eyeballing the caption below is exactly how it gets missed.
