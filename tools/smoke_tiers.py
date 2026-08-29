@@ -3,7 +3,7 @@ Does a quantised tier actually render, on a card that is not a Hopper?
 
     modal run tools/smoke_tiers.py                 # Krea 2 GGUF on an L4
     modal run tools/smoke_tiers.py --gpu A10G      # or an Ampere one
-    modal run tools/smoke_tiers.py --keep          # leave the weights on /models
+    modal run tools/smoke_tiers.py --no-keep       # drop the 7.2 GB tier afterwards
 
 `tools/probe_tiers.py` is the half of this that costs nothing: it reads
 safetensors headers over range requests and says whether a tier is the same
@@ -69,7 +69,7 @@ NEEDED = [
     volumes={"/models": app.models_volume, "/archive": ARCHIVE,
              "/workspace": app.volume},
 )
-def render_on_tier(gpu: str = "L4", keep: bool = False) -> dict:
+def render_on_tier(gpu: str = "L4", keep: bool = True) -> dict:
     import os
     import shutil
 
@@ -200,14 +200,29 @@ def render_on_tier(gpu: str = "L4", keep: bool = False) -> dict:
         note(f"render failed: {out['error']}")
         return out
 
+    # Device-wide, because ComfyUI is a *separate process*: this probe's own
+    # torch allocated nothing, so `max_memory_allocated()` reported 0.0 and read
+    # as a measurement rather than as the wrong question being asked.
     try:
         free, total = torch.cuda.mem_get_info()
-        out["peak_gb"] = round((total - free) / 1e9, 2)
-        out["torch_peak_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2)
-        note(f"card held {out['peak_gb']} GB at the end; torch peak "
-             f"{out['torch_peak_gb']} GB")
+        out["held_gb"] = round((total - free) / 1e9, 2)
+        note(f"card held {out['held_gb']} GB with the model still resident")
     except Exception:  # noqa: BLE001
         pass
+
+    # **The picture, onto the volume.** A render that reports eight steps and
+    # leaves nothing to look at cannot answer the question a quantised tier
+    # actually raises, which is not "did it sample" but "is the output a
+    # picture" — a broken quant samples perfectly well and returns noise.
+    saved = Path("/workspace/outputs/probe_tier")
+    saved.mkdir(parents=True, exist_ok=True)
+    for name in files:
+        src = Path(app.COMFY) / "output" / name
+        if src.is_file():
+            shutil.copy2(src, saved / name)
+            out.setdefault("saved", []).append(f"outputs/probe_tier/{name}")
+    app.volume.commit()
+    note(f"kept {out.get('saved')} on the volume")
 
     if not keep:
         # The tier file is 7.2 GB on a volume whose only way to reclaim space is
@@ -215,7 +230,7 @@ def render_on_tier(gpu: str = "L4", keep: bool = False) -> dict:
         app.MODEL_CATALOGUE["krea2_turbo_q4"]["dest"].unlink(missing_ok=True)
         shutil.rmtree("/models/.probe", ignore_errors=True)
         app.models_volume.commit()
-        note("removed the probe's copy of the tier (--keep to leave it)")
+        note("removed the probe's copy of the tier")
     # The job record is a real one on a named Dict that outlives every
     # container, so a probe that leaves one behind has put a permanent
     # "running" into the board this app reads.
@@ -227,13 +242,13 @@ def render_on_tier(gpu: str = "L4", keep: bool = False) -> dict:
 
 
 @probe.local_entrypoint()
-def main(gpu: str = "L4", keep: bool = False):
+def main(gpu: str = "L4", keep: bool = True):
     print(f"\nProbing the GGUF tier on {gpu}. This spends GPU minutes.\n")
     r = render_on_tier.remote(gpu=gpu, keep=keep)
     print("\n" + "=" * 66)
     for k in ("card", "arch", "vram_gb", "resolved", "loader", "nodes_ok",
               "sage_confirmed", "kitchen_cuda", "files", "render_s",
-              "peak_gb", "torch_peak_gb"):
+              "held_gb", "saved"):
         if k in r:
             print(f"  {k:16} {r[k]}")
     if r.get("error"):
