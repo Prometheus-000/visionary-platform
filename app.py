@@ -1293,6 +1293,20 @@ comfy_image = (
         f"cd {COMFY}/custom_nodes/krea2_styletransfer && git checkout {K2ST_SHA}",
         f"git clone {GGUF_REPO} {COMFY}/custom_nodes/gguf",
         f"cd {COMFY}/custom_nodes/gguf && git checkout {GGUF_SHA}",
+        # This one *does* get its requirements installed, unlike the three
+        # packs above it. They declare only torch and safetensors, which are
+        # already here; this one needs the `gguf` reader itself, and without it
+        # the pack raises ModuleNotFoundError at import and ComfyUI carries on
+        # without the node — which surfaced exactly where it should, as
+        # `require_nodes` refusing to start rather than as a graph rejected
+        # minutes into a warm GPU.
+        #
+        # Unpinned on purpose, the `huggingface_hub` lesson from three lines of
+        # comment up: the pack's own resolution is the only thing that can be
+        # right about the pack's own dependency. `sentencepiece` and `protobuf`
+        # are its optional tokenizer extras and come along, because a loader
+        # that reads a GGUF text encoder is a thing this catalogue may yet grow.
+        f"cd {COMFY}/custom_nodes/gguf && pip install -r requirements.txt",
     )
     .env({"PYTHONUNBUFFERED": "1"})
     # Last, because add_local_dir invalidates nothing above it — the shim is
