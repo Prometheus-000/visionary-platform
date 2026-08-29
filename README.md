@@ -171,11 +171,24 @@ described by. So 16 GB video is the transformer coming down (21.0 to 15.9) plus
 streaming, not a smaller encoder.
 
 That probe is worth running before trusting any row here — it costs nothing, no
-GPU and no download, and it is what removed the encoder row. What it cannot tell
-you is whether a file that loads also *runs*: the kernels, the card and a render
-are the GPU half, and **16 GB for Krea 2 still assumes ComfyUI evicts the 8.9 GB
-text encoder before the transformer loads.** That assumption is on the
-rented-box list. If it is wrong, those rows come out too.
+GPU and no download, and it is what removed the encoder row.
+
+**The Krea 2 tier has been run, on the architecture it is for.** `modal run
+tools/smoke_tiers.py` renders it on an L4 — `sm_89`, 23.7 GB, a 4090's
+architecture — through the forked GGUF loader with all four `Visionary*` nodes
+bound. Turbo Q4_K_M at 1024px and 8 steps: **45 s, of which 24 s is sampling at
+3.07 s/it, and the card holds 16.1 GB** with the model resident. The output is a
+photograph rather than the noise a broken quantisation returns just as happily.
+
+Read that 16.1 GB honestly: it is what a *24 GB* card holds. A 16 GB card runs
+the same tier by streaming the difference out of host memory — slower, still a
+render, and the reason the 64 GB system-RAM figure above is not decoration.
+
+Still unmeasured: the H3 tiers, though their kernels are present — the probe
+finds comfy-kitchen's `dequantize_int8_convrot_weight` and `convrot_w4a4_linear`
+enabled on `sm_89` — and no clip has been rendered from one. And whether
+SageAttention's kernels execute on a card they were not compiled for: Krea 2
+opts out of sage in the graph, so only an H3 take can answer it.
 
 You do not need a whole family. Video without references is the base set — the
 fl2va transformer, the text encoder and the two VAEs — and the ref2va

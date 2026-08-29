@@ -1386,8 +1386,18 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
     #
     # The text encoder stays bf16 at 8.9 GB and is not quantised here, so 16 GB
     # holds a Q4 DiT and a bf16 encoder only if ComfyUI evicts the encoder after
-    # conditioning. That is the one thing the arithmetic cannot settle, and it
-    # is on the rented-box list rather than written into the README.
+    # conditioning. Arithmetic could not settle that; a card did.
+    #
+    # **Measured, 2026-08-29, `modal run tools/smoke_tiers.py` on an L4** —
+    # sm_89, 23.7 GB, which is a 4090's architecture: Turbo Q4_K_M at 1024px and
+    # 8 steps rendered in 45s, of which 24s was sampling at 3.07 s/it, and the
+    # card held **16.1 GB** with the model still resident. The eviction happens.
+    # The picture is a picture — three pears, rain on the glass — rather than
+    # the noise a broken quantisation samples perfectly well and returns.
+    #
+    # So `fits_vram_gb: 16.0` is the tier's target and not a promise of
+    # residency: 16.1 GB held on a 24 GB card means a 16 GB card runs this by
+    # streaming, which is slower and still a render. What it is not is a guess.
     "krea2_turbo_q4": {
         "label": "Krea 2 Turbo (Q4_K_M)",
         "note": "8-step images on a 16 GB card",
