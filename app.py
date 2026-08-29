@@ -1582,23 +1582,23 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "tier_of": "h3_ref_dit",
         "fits_vram_gb": 16.0,
     },
-    # The text encoder is the stubborn half of the 16 GB question: nvfp4 above
-    # is 15.7 GB and this is 14.95, so neither is small. What makes 16 GB work
-    # is that the encoder runs first and is evicted before the DiT loads —
-    # sequential residency, which is the specific thing the rented box has to
-    # confirm rather than the size arithmetic.
-    "h3_te_int4": {
-        "label": "Qwen3-VL 32B (int4)",
-        "note": "H3 conditioner for a 16 GB card",
-        "family": "MiniMax-H3 — video with sound",
-        "repo_id": "Abiray/MiniMax-H3-GGUF",
-        "filename": "text_encoders/qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
-        "dest": MODELS / "qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
-        "gated": False,
-        "approx_gb": 15.0,
-        "tier_of": "h3_te",
-        "fits_vram_gb": 16.0,
-    },
+    # **There is deliberately no smaller text encoder here, and that was
+    # measured rather than assumed.** `Abiray/MiniMax-H3-GGUF`'s
+    # `qwen3vl_32b_minimax_h3_int4_convrot.safetensors` was a row for about an
+    # hour. `tools/probe_tiers.py` read both headers over HTTP range requests
+    # and they are not the same model to a loader: nvfp4 carries 2054 tensors,
+    # the int4 file 1602, and the 452 missing ones are the whole AWQ/NVFP4
+    # scale apparatus — `weight_scale`, `weight_scale_2`, `pre_quant_scale`,
+    # and `comfy_quant`, which is ComfyUI's own marker for a quantised tensor.
+    # A strict subset with the quantisation metadata gone is a different
+    # scheme, not a smaller file, and it is the same class of failure the
+    # catalogue comment above already records for Krea 2's encoder: the fp8
+    # one is rejected outright over ~504 extra weight_scale/comfy_quant keys.
+    #
+    # It would have bought 0.74 GB. The 16 GB story rests on the transformer
+    # (21.0 to 15.9) and on ComfyUI evicting the encoder before the DiT loads,
+    # not on shaving the encoder — so there was never much here to risk a load
+    # failure for.
     # ── MiniMax-H3 speed LoRAs ─────────────────────────────────────────────
     #
     # MiniMax's own Lightning distillations, in the repo the H3 weights already

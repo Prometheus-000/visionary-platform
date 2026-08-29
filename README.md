@@ -151,7 +151,7 @@ whole of choosing it.
 | Krea 2 Turbo        | 26.3 GB bf16     | 8.8 GB Q5_K_S    | **7.2 GB Q4_K_M**  |
 | Krea 2 RAW          | 26.3 GB bf16     | —                | **7.3 GB Q4_K_M**  |
 | H3 transformer      | 21.0 GB int8     | 21.0 GB int8     | **15.9 GB int4**   |
-| H3 text encoder     | 15.7 GB nvfp4    | 15.7 GB nvfp4    | **15.0 GB int4**   |
+| H3 text encoder     | 15.7 GB nvfp4    | 15.7 GB nvfp4    | 15.7 GB nvfp4      |
 
 The gear can pin a slot to any file you have downloaded, and it will not argue:
 asking for the 21 GB file on a 16 GB card is asking for a slow render, not making
@@ -162,11 +162,20 @@ back to the default rather than failing the job.
 Blackwell — on a 4090 it is a memory saving and nothing else — so it belongs to
 an RTX 50-series card rather than to a size.
 
-**Two things here are inference, not measurement.** The H3 tiers are the same
-pruned-convrot format as the files above them, so they should load through the
-loader already in the graph; and 16 GB for Krea 2 assumes ComfyUI evicts the
-8.9 GB text encoder before the transformer loads. Both are on the rented-box
-list. If either is wrong, those rows come out.
+**The H3 text encoder has no smaller tier, and that was checked rather than
+assumed.** A community int4 file exists and is 0.74 GB smaller; `python3
+tools/probe_tiers.py` reads both headers over HTTP range requests and they are
+not the same model to a loader — nvfp4 carries 2054 tensors, the int4 file 1602,
+and the 452 missing ones are the entire scale apparatus the quantisation is
+described by. So 16 GB video is the transformer coming down (21.0 to 15.9) plus
+streaming, not a smaller encoder.
+
+That probe is worth running before trusting any row here — it costs nothing, no
+GPU and no download, and it is what removed the encoder row. What it cannot tell
+you is whether a file that loads also *runs*: the kernels, the card and a render
+are the GPU half, and **16 GB for Krea 2 still assumes ComfyUI evicts the 8.9 GB
+text encoder before the transformer loads.** That assumption is on the
+rented-box list. If it is wrong, those rows come out too.
 
 You do not need a whole family. Video without references is the base set — the
 fl2va transformer, the text encoder and the two VAEs — and the ref2va
