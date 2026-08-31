@@ -586,6 +586,28 @@ export type Store = {
 
 const FIRST = emptyScene()
 
+/**
+ * **Every `set` callback is annotated `: Partial<Store>`, and that is a guard
+ * rather than a decoration.**
+ *
+ * Zustand's `set` accepts a partial, so a callback returning an object with a
+ * key that is not a store field is *accepted and ignored* — a wrong write that
+ * produces a perfectly valid object. `repointRefs` shipped that way for an
+ * afternoon: `sources` returned at the root instead of inside `scene`, so the
+ * rewrite went nowhere and a keyframe would have left the payload with nothing
+ * on screen saying so. The rest of the file happened not to have one.
+ *
+ * TypeScript will catch it, but only if it is asked. Excess-property checking
+ * fires on an object literal assigned to a known type and does *not* fire
+ * through the union an early `return {}` creates, which is the shape most of
+ * these have. The explicit return type restores it on every branch: a typo'd
+ * `poool` now reads "Did you mean to write 'pool'?" instead of silently doing
+ * nothing.
+ *
+ * So do not strip these as noise. It is the class `check_loras` turned out to be
+ * guarding on the prompt buffers, caught by the compiler instead of by an
+ * afternoon — raised by visionary-platform-b0, whose reading it is.
+ */
 export const useStore = create<Store>((set, get) => ({
   state: null,
   stateError: null,
@@ -597,7 +619,7 @@ export const useStore = create<Store>((set, get) => ({
   setMode: (mode) => set({ mode }),
   stash: { image: null, video: null },
   // The swap, and the only statement in the file where both sets exist at once.
-  setKind: (kind) => set((s) => {
+  setKind: (kind) => set((s): Partial<Store> => {
     if (kind === s.kind) return {}
     const mine = s.stash[kind]
     return {
@@ -621,13 +643,13 @@ export const useStore = create<Store>((set, get) => ({
   setPrompt: (prompt) => set({ prompt }),
   setNegative: (negative) => set({ negative }),
   setNegOn: (negOn) => set({ negOn }),
-  toggleLora: (chip) => set((s) => ({
+  toggleLora: (chip) => set((s): Partial<Store> => ({
     loras: s.loras.some((l) => l.path === chip.path)
       ? s.loras.filter((l) => l.path !== chip.path)
       : [...s.loras, chip],
   })),
-  dropLora: (path) => set((s) => ({ loras: s.loras.filter((l) => l.path !== path) })),
-  patchLora: (path, patch) => set((s) => ({
+  dropLora: (path) => set((s): Partial<Store> => ({ loras: s.loras.filter((l) => l.path !== path) })),
+  patchLora: (path, patch) => set((s): Partial<Store> => ({
     loras: s.loras.map((l) => (l.path === path ? { ...l, ...patch } : l)),
   })),
 
@@ -640,7 +662,7 @@ export const useStore = create<Store>((set, get) => ({
   setPeekOpen: (peekOpen) => set({ peekOpen }),
   setLoraOpen: (loraOpen) => set({ loraOpen }),
   setPill: (key, patch) =>
-    set((s) => ({ shot: s.shot.map((p) => (p.key === key ? { ...p, ...patch } : p)) })),
+    set((s): Partial<Store> => ({ shot: s.shot.map((p) => (p.key === key ? { ...p, ...patch } : p)) })),
 
   toggleShot: (key) => {
     const s = get()
@@ -675,10 +697,10 @@ export const useStore = create<Store>((set, get) => ({
 
   img: IMAGE,
   vid: VIDEO,
-  setImg: (patch) => set((s) => ({ img: { ...s.img, ...patch } })),
-  setVid: (patch) => set((s) => ({ vid: { ...s.vid, ...patch } })),
+  setImg: (patch) => set((s): Partial<Store> => ({ img: { ...s.img, ...patch } })),
+  setVid: (patch) => set((s): Partial<Store> => ({ vid: { ...s.vid, ...patch } })),
   gpu: { image: '', video: '' },
-  setGpu: (patch) => set((s) => ({ gpu: { ...s.gpu, ...patch } })),
+  setGpu: (patch) => set((s): Partial<Store> => ({ gpu: { ...s.gpu, ...patch } })),
 
   regions: [],
   rsel: -1,
@@ -691,11 +713,11 @@ export const useStore = create<Store>((set, get) => ({
   fileOver: false,
   setRegions: (regions) => set({ regions }),
   patchRegion: (i, patch) =>
-    set((s) => ({ regions: s.regions.map((r, n) => (n === i ? { ...r, ...patch } : r)) })),
-  select: (i) => set((s) => ({ rsel: i >= 0 && i < s.regions.length ? i : -1 })),
+    set((s): Partial<Store> => ({ regions: s.regions.map((r, n) => (n === i ? { ...r, ...patch } : r)) })),
+  select: (i) => set((s): Partial<Store> => ({ rsel: i >= 0 && i < s.regions.length ? i : -1 })),
   setRegionWeight: (regionWeight) => set({ regionWeight }),
   setStyleStrength: (styleStrength) => set({ styleStrength }),
-  attach: (where, role, image, from) => set((s) => (
+  attach: (where, role, image, from) => set((s): Partial<Store> => (
     where === 'frame'
       ? { frame: { attachments: setAttached(s.frame.attachments, role, image, from) } }
       : {
@@ -704,7 +726,7 @@ export const useStore = create<Store>((set, get) => ({
             : r)),
         }
   )),
-  notePlate: (role, note) => set((s) => (
+  notePlate: (role, note) => set((s): Partial<Store> => (
     { frame: { attachments: setNote(s.frame.attachments, role, note) } }
   )),
   setEdit: (edit) => set({ edit }),
@@ -724,25 +746,25 @@ export const useStore = create<Store>((set, get) => ({
   takes: [],
   continueFrom: null,
   setContinueFrom: (continueFrom) => set({ continueFrom }),
-  addTake: (t) => set((s) => ({ takes: [...s.takes, t] })),
+  addTake: (t) => set((s): Partial<Store> => ({ takes: [...s.takes, t] })),
   clearTakes: () => set({ takes: [], continueFrom: null }),
   setDocOpen: (docOpen) => set({ docOpen }),
   setDoc: (doc) => set({ doc }),
-  setScene: (patch) => set((s) => ({ scene: { ...s.scene, ...patch } })),
-  setProse: (text) => set((s) => {
+  setScene: (patch) => set((s): Partial<Store> => ({ scene: { ...s.scene, ...patch } })),
+  setProse: (text) => set((s): Partial<Store> => {
     const lines = text.split('\n')
     const shots = (lines.length ? lines : ['']).map((line) => newShot(line))
     return { scene: { ...s.scene, shots }, shotSel: shots[0]?.id ?? '' }
   }),
   selectShot: (shotSel) => set({ shotSel }),
   setRailOpen: (railOpen) => set({ railOpen }),
-  patchShot: (id, patch) => set((s) => ({
+  patchShot: (id, patch) => set((s): Partial<Store> => ({
     scene: { ...s.scene,
              shots: s.scene.shots.map((x) => (x.id === id ? { ...x, ...patch } : x)) },
   })),
   addShot: (after) => {
     const row = newShot()
-    set((s) => {
+    set((s): Partial<Store> => {
       const at = s.scene.shots.findIndex((x) => x.id === after)
       const shots = [...s.scene.shots]
       shots.splice(at < 0 ? shots.length : at + 1, 0, row)
@@ -762,7 +784,7 @@ export const useStore = create<Store>((set, get) => ({
     // keeps the two ways of starting a shot one behaviour.
     const row = newShot(cur ? cur.line.slice(caret).trimStart() : '')
     const head = cur ? cur.line.slice(0, caret).trimEnd() : ''
-    set((s) => {
+    set((s): Partial<Store> => {
       const at = s.scene.shots.findIndex((x) => x.id === id)
       const shots = s.scene.shots.map((x) => (x.id === id ? { ...x, line: head } : x))
       shots.splice(at < 0 ? shots.length : at + 1, 0, row)
@@ -774,7 +796,7 @@ export const useStore = create<Store>((set, get) => ({
   // scene with nowhere to type — and `_validate_scene` reads no shots as "no
   // scene", so the composer would silently become the old prompt box with the
   // sentence deleted.
-  dropShot: (id) => set((s) => {
+  dropShot: (id) => set((s): Partial<Store> => {
     if (s.scene.shots.length < 2) return {}
     const i = s.scene.shots.findIndex((x) => x.id === id)
     const shots = s.scene.shots.filter((x) => x.id !== id)
@@ -794,13 +816,13 @@ export const useStore = create<Store>((set, get) => ({
     let handle = base
     for (let n = 2; handle && taken.has(handle); n++) handle = `${base}_${String(n)}`
     const member = { ...newMember(kind), name: handle }
-    set((s) => ({ scene: { ...s.scene, cast: [...s.scene.cast, member] } }))
+    set((s): Partial<Store> => ({ scene: { ...s.scene, cast: [...s.scene.cast, member] } }))
     return member
   },
   // A rename rewrites the handle across every row, as a visible find-and-replace
   // — the alternative is storing `@{id}` and showing a string nobody can safely
   // edit. See `rename` for the consequence that buys.
-  patchCast: (id, patch) => set((s) => {
+  patchCast: (id, patch) => set((s): Partial<Store> => {
     const was = s.scene.cast.find((c) => c.id === id)
     const from = was ? handleOf(was.name) : ''
     const to = patch.name === undefined ? from : handleOf(patch.name)
@@ -817,12 +839,27 @@ export const useStore = create<Store>((set, get) => ({
   // bucket is not a licence to edit their sentences — `_validate_scene` says so
   // out loud instead, naming the handle nobody defines any more, which is a
   // sentence under the timeline rather than words vanishing from a line.
-  dropCast: (id) => set((s) => ({
+  dropCast: (id) => set((s): Partial<Store> => ({
     scene: { ...s.scene, cast: s.scene.cast.filter((c) => c.id !== id) },
     railOpen: s.railOpen === id ? null : s.railOpen,
   })),
-  addFile: (f) => set((s) => (s.pool[f.id] ? {} : { pool: { ...s.pool, [f.id]: f } })),
-  repointRefs: (from, to) => set((s) => {
+  addFile: (f) => set((s): Partial<Store> => (s.pool[f.id] ? {} : { pool: { ...s.pool, [f.id]: f } })),
+  // **New bytes get a new id; they are never written under the old one.** The
+  // reason is not visible from here, which is why it is repeated here: `pool` is
+  // keyed by a hash of what travels, and `<Picture N>` is that key's position in
+  // `references[]` — derived rather than kept in step by hand, which is the whole
+  // of what `pool.ts` buys. Mutating a file in place would leave an id that no
+  // longer describes its contents, so a photograph and its own re-export would
+  // stop deduping and every label after the first would name somebody else's
+  // face. It reads like an implementation quirk until somebody simplifies it.
+  //
+  // `: Partial<Store>` is load-bearing. Without it this shipped with `sources`
+  // returned at the store root instead of inside `scene` — a wrong write that
+  // produces a perfectly valid object, so the rewrite went nowhere and a
+  // keyframe would have quietly left the payload. TypeScript let it past because
+  // excess-property checking does not fire through the union an early `return {}`
+  // creates; an explicit return type makes it fire on every branch.
+  repointRefs: (from, to) => set((s): Partial<Store> => {
     if (from === to) return {}
     const cast = s.scene.cast.map((c) => {
       if (!c.refs.some((r) => r.fileId === from)) return c
@@ -846,7 +883,7 @@ export const useStore = create<Store>((set, get) => ({
     ) as Scene['sources']
     return { scene: { ...s.scene, cast, sources } }
   }),
-  dropFile: (id) => set((s) => {
+  dropFile: (id) => set((s): Partial<Store> => {
     const f = s.pool[id]
     if (!f) return {}
     // The one place a file leaves the pool, so the one place its object URL can
@@ -855,7 +892,7 @@ export const useStore = create<Store>((set, get) => ({
     const { [id]: _gone, ...rest } = s.pool
     return { pool: rest }
   }),
-  attachSlot: (castId, fileId, slot) => set((s) => ({
+  attachSlot: (castId, fileId, slot) => set((s): Partial<Store> => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => {
       if (c.id !== castId) return c
       // Already here — a second drop of the same file is not a second entry.
@@ -876,17 +913,17 @@ export const useStore = create<Store>((set, get) => ({
       return { ...c, refs: [...rest, { fileId, slots: [slot] }] }
     }) },
   })),
-  detachRef: (castId, fileId) => set((s) => ({
+  detachRef: (castId, fileId) => set((s): Partial<Store> => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id !== castId ? c : {
       ...c, refs: c.refs.filter((r) => r.fileId !== fileId),
     })) },
   })),
-  patchRef: (castId, fileId, patch) => set((s) => ({
+  patchRef: (castId, fileId, patch) => set((s): Partial<Store> => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id !== castId ? c : {
       ...c, refs: c.refs.map((r) => (r.fileId === fileId ? { ...r, ...patch } : r)),
     })) },
   })),
-  detachSlot: (castId, slot) => set((s) => ({
+  detachSlot: (castId, slot) => set((s): Partial<Store> => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id === castId ? {
       ...c,
       refs: c.refs
@@ -903,11 +940,11 @@ export const useStore = create<Store>((set, get) => ({
   setAutoFirst: (autoFirst) => set({ autoFirst }),
   // Any write of the first slot is a hand on the control, so the auto flag
   // drops; the auto-attach effect re-raises it after its own write.
-  setKeyframe: (slot, b64) => set((s) => ({
+  setKeyframe: (slot, b64) => set((s): Partial<Store> => ({
     keyframe: { ...s.keyframe, [slot]: b64 },
     ...(slot === 'first' ? { autoFirst: false } : null),
   })),
-  setRefs: (refs, roles) => set((s) => ({ refs, refRoles: roles ?? s.refRoles })),
+  setRefs: (refs, roles) => set((s): Partial<Store> => ({ refs, refRoles: roles ?? s.refRoles })),
   setRefVids: (refVids) => set({ refVids }),
   setRefRoles: (refRoles) => set({ refRoles }),
 }))
