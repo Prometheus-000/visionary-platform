@@ -71,6 +71,28 @@ Two smaller things fell out of it:
   asserting on the mechanism would fail one implementation for a structural
   reason, which is the fault named below.
 
+**Crossing consoles is one gesture with two callers, and `#g-duration` is not
+it any more.** `check_drop.py` owns `cross()`; `check_loras.py` holds a verbatim
+copy. Both drive `#g-sampling`/`#v-sampling` and select `image:turbo` or
+`video:h3`, because a still stopped meaning Krea 2 — H3 makes one at zero
+seconds, so both consoles answer that length and `Still` deliberately changes no
+engine. See `Duration.tsx` and `EngineRow` in `SamplingButton.tsx`.
+
+It is written here rather than left to a docstring credit for one reason: the
+next person to change how the sides are crossed has to change **both**, and the
+grep that would have found them — `#g-duration` — now returns nothing useful.
+Copied rather than shared, deliberately, so neither file grows a private
+spelling of the gesture; the cost of that is this paragraph.
+
+**`check_loras.py` is where the per-kind buffer test lives, and its name does not
+say so.** Lines 97-107 are the only assertion anywhere that the two composers do
+not bleed into each other: the image prompt and its chips have to survive a round
+trip to video and back, with the video buffer dirtied in between so the return
+proves a *restore* rather than a survival. The file's own comment calls that a
+re-point and never a delete, and it has been re-pointed twice on that basis. A
+file named `check_loras` is the last place anyone looks for a prompt-buffer test,
+which is exactly why it is worth a line in the index.
+
 Two things `check_viewer.py` taught:
 
 **Do not hold a reference across a rebuild.** The first version captured `.lb`
