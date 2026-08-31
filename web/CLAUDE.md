@@ -1215,6 +1215,41 @@ already rendered would be results in the payload.
 - **None of it has been measured against a render.** It has been driven and read.
   `tools/prompt_ab.py` is the measurement that is not a proxy and it has not run.
 
+## The Playground
+
+The node room, at `web/src/playground/`, behind the `door-playground` header
+door on the Sheet precedent. The veto list below governs the product canvas;
+this room is the lab behind a door — and even the lab does not wear a devtools
+costume: cards in the app's own tokens, prose errors, quiet gestures.
+
+Rules the room lives by, each already argued elsewhere and applied here:
+
+- **The graph in the store is the wire format itself** — the API graph
+  `/prompt` takes. No in-editor translation layer, because the PNG round-trip
+  (`prompt` tEXt chunk, ComfyUI's own key) is only honest if what is on
+  screen *is* what runs. `png.ts` reads it back off a dropped file.
+- **Layout is computed** (`layout.ts`, hand-rolled layered layout — weighed
+  against elkjs and chosen for being sixty deterministic lines instead of the
+  largest dependency in the bundle). Positions never persist; a drag is
+  session-local; Tidy recomputes.
+- **The room opens on the app's own graph** (`/api/playground/seed`), so
+  nothing is ever blank. Seeded once; after that the graph is yours and
+  `keep.ts` carries it (in `BIN` — attachments are base64).
+- **An input is edited on the card that shows it.** No inspector, no
+  properties panel. The catalogue (`/object_info`, cached on the volume)
+  decides which rows are sockets and which are widgets — derived per spec in
+  `catalogue.ts`, never tabulated, so tomorrow's pack renders correctly today.
+- **The chunk is split.** `@xyflow/react` is the one dependency-heavy room in
+  the product, so `App.tsx` lazy-loads it — the page pays when the door
+  opens, never on load.
+- **The console toggle** (`WorkflowRows` in `SamplingButton.tsx`) renders
+  only when saved workflows exist — a control announcing an absent capability
+  is banned — and its adaptive rows come from the save-time diff
+  (`diffExposes`): new nodes' widget inputs, because those are exactly what
+  the console cannot name in advance.
+- **A failing run lights the node** (`error_node` on the job record) instead
+  of making you read an id out of prose.
+
 ## What this page may not grow
 
 The end state these serve is in `docs/roadmap.md`, together with the half of the

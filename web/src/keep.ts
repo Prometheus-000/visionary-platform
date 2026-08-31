@@ -94,6 +94,10 @@ const MAIN = [
 const BIN = [
   'pool', 'keyframe', 'autoFirst', 'refs', 'refRoles', 'refVids',
   'regions', 'rsel', 'frame',
+  // The playground rides here, not MAIN, because its attachments are base64.
+  // The graph inside it is what you made — hours of rewiring — and losing it
+  // to a reload would be the exact failure this file exists to prevent.
+  'pg',
 ] as const satisfies readonly (keyof Store)[]
 
 type Record_ = { session: string; touched: number; shape: string; data: Partial<Store> }

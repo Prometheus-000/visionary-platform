@@ -248,10 +248,68 @@ export type JobStatus = {
    *  because the canvas picks its element off this and a wrong guess mounts a
    *  `<video>` over a PNG, which shows nothing and says nothing. */
   still?: boolean
+  /** A Playground run that failed names the node that broke, beside the
+   *  message rather than inside it, so the editor can light it up. */
+  error_node?: string
+  error_node_type?: string
+  /** What a finished job says beyond its files — the restart and pack jobs
+   *  use it ("restart the engine to load it"). */
+  note?: string
   [k: string]: unknown
 }
 
 export type CompileResult = { prompt: string }
+
+/* ---- playground ------------------------------------------------------- */
+
+/** One input a saved workflow exposes to the console — the adaptive controls
+ *  the model menu grows while that workflow is toggled on. */
+export type WorkflowExpose = {
+  node: string
+  input: string
+  type: 'number' | 'text' | 'choice' | 'toggle'
+  label: string
+  default?: unknown
+  options?: string[]
+}
+
+export type WorkflowRow = {
+  name: string
+  created?: number | null
+  seed_of?: string | null
+  exposes: WorkflowExpose[]
+  mtime?: number
+}
+
+export type WorkflowMeta = {
+  created?: number | null
+  seed_of?: string | null
+  exposes?: WorkflowExpose[]
+}
+
+export type PackRow = {
+  name: string
+  url?: string | null
+  sha?: string
+  installed?: number | null
+}
+
+/** One entry of /object_info, in the parts the editor reads. The server is the
+ *  authority on the full shape; everything else rides `[k: string]`. */
+export type NodeSpec = {
+  input?: {
+    required?: Record<string, unknown[]>
+    optional?: Record<string, unknown[]>
+  }
+  output?: string[]
+  output_name?: string[]
+  display_name?: string
+  category?: string
+  description?: string
+  output_node?: boolean
+  [k: string]: unknown
+}
+export type NodeCatalogue = Record<string, NodeSpec>
 
 /**
  * What `/api/datasets/{name}/insight` answers: the prose answer to "what is this dataset

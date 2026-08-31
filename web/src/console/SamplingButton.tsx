@@ -1,4 +1,8 @@
-import { warm } from '../api/routes'
+import { useEffect, useState } from 'react'
+
+import { failed } from '../api/client'
+import { listWorkflows, warm } from '../api/routes'
+import type { WorkflowExpose, WorkflowRow as Workflow } from '../api/types'
 import { Popover, usePopover } from '../ui/Popover'
 import { NumInput } from '../ui/NumInput'
 import { useStore, videoModel } from '../store'
@@ -123,6 +127,99 @@ function EngineRow({ current, onCross }: { current: string; onCross: () => void 
   )
 }
 
+/**
+ * The Playground toggle — Default, or a saved workflow run in the console's
+ * place, with the compiled prompt fed to the nodes it inherited.
+ *
+ * Rendered only when workflows exist: a control announcing an absent
+ * capability is banned, so every install without a saved workflow never sees
+ * this row and the menu is byte-identical to before the feature. The adaptive
+ * rows under it are the workflow's own exposed inputs — controls the console
+ * cannot name in advance, grown from the save-time diff (see `diffExposes`).
+ */
+function WorkflowRows({ kind }: { kind: 'image' | 'video' }) {
+  const s = useStore()
+  const [rows, setRows] = useState<Workflow[] | null>(null)
+  useEffect(() => {
+    let dead = false
+    void listWorkflows().then((r) => {
+      if (!dead && !failed(r)) setRows(r.workflows)
+    })
+    return () => { dead = true }
+  }, [])
+  const comp = kind === 'image' ? s.img : s.vid
+  const set = kind === 'image' ? s.setImg : s.setVid
+  // No saved workflows and nothing toggled: the row does not exist. A stale
+  // selection with the list gone still renders, because a toggle you cannot
+  // reach is a run you cannot explain.
+  if (!rows?.length && !comp.workflow) return null
+  const current = rows?.find((w) => w.name === comp.workflow)
+  const setExtra = (ex: WorkflowExpose, value: string | number | boolean) => {
+    set({
+      workflowExtras: {
+        ...comp.workflowExtras,
+        [ex.node]: { ...(comp.workflowExtras[ex.node] ?? {}),
+                     [ex.input]: value },
+      },
+    })
+  }
+  return (
+    <>
+      <Row label="Workflow"
+           hint={comp.workflow
+             ? 'Your saved graph runs instead of the built-in one; the '
+               + 'console feeds the nodes it inherited.'
+             : undefined}>
+        <select value={comp.workflow} onChange={(e) => {
+          const name = e.target.value
+          const wf = rows?.find((w) => w.name === name)
+          const extras: Record<string,
+            Record<string, string | number | boolean>> = {}
+          for (const ex of wf?.exposes ?? []) {
+            const d = ex.default
+            ;(extras[ex.node] ??= {})[ex.input] =
+              typeof d === 'number' || typeof d === 'boolean' ? d : String(d ?? '')
+          }
+          set({ workflow: name, workflowExtras: extras })
+        }}>
+          <option value="">Default</option>
+          {(rows ?? []).map((w) => (
+            <option key={w.name} value={w.name}>{w.name}</option>
+          ))}
+          {comp.workflow && !current && (
+            <option value={comp.workflow}>{comp.workflow} — missing</option>
+          )}
+        </select>
+      </Row>
+      {(current?.exposes ?? []).map((ex) => {
+        const val = comp.workflowExtras[ex.node]?.[ex.input]
+        return (
+          <Row key={`${ex.node}.${ex.input}`} label={ex.label}>
+            {ex.type === 'choice' ? (
+              <select value={String(val ?? '')}
+                      onChange={(e) => setExtra(ex, e.target.value)}>
+                {(ex.options ?? []).map((o) => <option key={o}>{o}</option>)}
+              </select>
+            ) : ex.type === 'toggle' ? (
+              <input type="checkbox" checked={!!val}
+                     onChange={(e) => setExtra(ex, e.target.checked)} />
+            ) : ex.type === 'number' ? (
+              <input type="number" value={val === undefined ? '' : String(val)}
+                     onChange={(e) => {
+                       const n = parseFloat(e.target.value)
+                       setExtra(ex, Number.isFinite(n) ? n : 0)
+                     }} />
+            ) : (
+              <input type="text" value={String(val ?? '')}
+                     onChange={(e) => setExtra(ex, e.target.value)} />
+            )}
+          </Row>
+        )
+      })}
+    </>
+  )
+}
+
 export function ImageSampling() {
   const s = useStore()
   const pop = usePopover()
@@ -148,6 +245,7 @@ export function ImageSampling() {
       {pop.open && (
         <Popover anchor={pop.anchor} className="menu form" onClose={pop.close}>
           <EngineRow current={s.img.model} onCross={pop.close} />
+          <WorkflowRows kind="image" />
           <Row label="Sampler">
             <select value={s.img.sampler || s.state?.image_defaults.sampler || ''}
                     onChange={(e) => s.setImg({ sampler: e.target.value })}>
@@ -215,6 +313,7 @@ export function VideoSampling() {
       {pop.open && (
         <Popover anchor={pop.anchor} className="menu form" onClose={pop.close}>
           <EngineRow current={s.vid.model} onCross={pop.close} />
+          <WorkflowRows kind="video" />
           <Row label="Sampler">
             <select value={r.sampler} onChange={(e) => s.setVid({ sampler: e.target.value })}>
               {(m?.samplers ?? []).map((x) => <option key={x}>{x}</option>)}

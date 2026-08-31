@@ -128,6 +128,11 @@ export function videoBody(s: Store): Record<string, unknown> {
     ...(sc && { ref_audios: sc.ref_audios }),
     ref_size: s.vid.refSize,
     gpu: s.gpu.video,
+    // The Playground toggle — same rule as the image side: only while set.
+    ...(s.vid.workflow && {
+      workflow: s.vid.workflow,
+      workflow_extras: s.vid.workflowExtras,
+    }),
   }
 }
 

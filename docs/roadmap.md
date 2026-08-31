@@ -117,6 +117,25 @@ this phase should chase the first tier and leave the third alone until the model
 exists. Attempting it, failing, and concluding the whole direction is fantasy is
 the specific mistake this paragraph exists to prevent.
 
+### The Playground, and where the veto line actually runs
+
+There is a node room behind a header door now, and it needs a paragraph here
+precisely because the closing line of this file names "a node graph with
+better typography" as the failure to guard against. The line the vetoes draw
+runs around the **product canvas** — the surface where somebody makes
+pictures — and the Playground sits outside it on purpose: a lab, entered
+deliberately, where the graph our builders write is the thing on screen. It
+is not a second backend (same engine, same containers, same job contract, a
+new caller), and nothing in it ever promotes into the console — no workflow
+picker grows on the composer, no node leaks onto the canvas. The two sanctioned
+crossings are quiet: outputs land in the shared gallery with their graph
+embedded in the file, and the model menu can run a saved workflow in the
+built-in graph's place — with the console still compiling the prompt, so the
+"prompt is a compilation target" veto holds even while the graph is yours.
+The month-four failure is still the month-four failure: the day a Playground
+concept looks like it wants a *panel* on the product canvas, it goes through
+this file's test like anything else.
+
 ### Where this is going, and what that vetoes
 
 Phase 6 is the first move toward an end state worth stating in full, because

@@ -169,6 +169,23 @@ OUTPUTS = WORKSPACE / "outputs"
 # people back out. `character.json` beside them is the receipt that keeps what
 # filenames cannot: which picture is the sheet, what each file provides.
 CHARACTERS = WORKSPACE / "characters"
+# The Playground's shelf. A saved workflow is the pure API-format graph —
+# byte-for-byte what ComfyUI's /prompt accepts, so a stock install could run
+# the file and nothing here is required to get an experiment back out. Our
+# fields (created, what seeded it, exposed inputs) live beside each graph in a
+# `{name}.meta.json` sidecar — the datasets split, so a reader that ignores us
+# still gets a workflow.
+WORKFLOWS = WORKSPACE / "workflows"
+# Node packs the Playground installs from git, one clone per folder, each
+# carrying a `.visionary-pin` (source URL + resolved SHA). On the volume rather
+# than in the image because installing one is a gesture, not a deploy — the
+# generators pick the folder up through extra_model_paths.yaml at ComfyUI
+# start, and a fresh pack loads on the next engine restart.
+PLAYGROUND_NODES = WORKSPACE / "playground_nodes"
+# /object_info, harvested by a CPU container and served to the editor. A file
+# on the volume rather than a Dict entry because it is megabytes and a Dict is
+# for things that are polled.
+NODE_CATALOGUE = WORKSPACE / ".node_catalogue.json"
 # On the models volume, beside what it stages for. The download path promises
 # "same filesystem, so this is an instant rename rather than a 26 GB copy" —
 # staging on the data volume would quietly turn that rename into a five-minute
@@ -4039,6 +4056,58 @@ H3_SHIFT_VIDEO = 12.0
 H3_SHIFT_AUDIO = 3.0
 
 
+def _install_pack_requirements(tag: str) -> None:
+    """
+    Pay for the Playground's packs before ComfyUI imports them.
+
+    A pack's Python dependencies have to be in this container's environment by
+    the time ComfyUI walks custom_nodes, or the import fails and the pack
+    silently is not there — require_nodes only guards our own. Installed at
+    process start rather than baked into the image because installing a pack
+    is a gesture in the Playground, not a deploy; the bill is a pip run on
+    every cold start once packs exist, so each one prints what is being paid
+    for (a wait costs what it shows).
+
+    The torch trio is filtered out of every requirements file before pip sees
+    it. A pack that pins torch would replace the cu130 wheel with a
+    default-CUDA one and take SageAttention's ABI with it — the exact failure
+    the comfy_image build notes warn about — and a pack that lists it unpinned
+    is satisfied already. Skips are printed, not silent: a pack that truly
+    needs a different torch needs a conversation, not a broken container.
+    """
+    packs = sorted(d for d in PLAYGROUND_NODES.iterdir()
+                   if d.is_dir() and not d.name.startswith(".")) \
+        if PLAYGROUND_NODES.is_dir() else []
+    for pack in packs:
+        req = pack / "requirements.txt"
+        if not req.is_file():
+            continue
+        wanted, skipped = [], []
+        for line in req.read_text().splitlines():
+            bare = line.split("#", 1)[0].strip()
+            if re.match(r"^(torch|torchvision|torchaudio)\b", bare):
+                skipped.append(bare)
+            elif bare:
+                wanted.append(bare)
+        if skipped:
+            print(f"[{tag}] {pack.name}: leaving {', '.join(skipped)} to the "
+                  "image's own pins", flush=True)
+        if not wanted:
+            continue
+        print(f"[{tag}] installing {pack.name}'s requirements "
+              f"({len(wanted)})", flush=True)
+        done = subprocess.run(
+            ["pip", "install", "--no-input", *wanted],
+            capture_output=True, text=True)
+        if done.returncode != 0:
+            # The pack stays on the shelf and ComfyUI starts without it; the
+            # error names the pack and carries pip's last words, because "a
+            # node is missing" minutes later would not.
+            tail = (done.stderr or done.stdout or "").strip().splitlines()[-8:]
+            print(f"[{tag}] {pack.name}: pip failed — the pack will not "
+                  "load this start\n" + "\n".join(tail), flush=True)
+
+
 class _Comfy:
     """
     A warm ComfyUI, and the four things anyone needs from it.
@@ -4070,6 +4139,10 @@ class _Comfy:
         self._told = False
         self._log: deque[str] = deque(maxlen=200)
         self._proc: subprocess.Popen | None = None
+        # The unpacked execution_error of the last failed graph, so a caller
+        # that wants the failing *node* (the Playground editor lights it up)
+        # does not have to parse it back out of the message string.
+        self.last_error: dict[str, Any] | None = None
 
     def start(self) -> None:
         import threading
@@ -4103,6 +4176,12 @@ class _Comfy:
         # of them changes, and a root that did not exist at startup is a root
         # whose first file arrives unnoticed.
         SPOOL_LORAS.mkdir(parents=True, exist_ok=True)
+        # custom_nodes is the Playground's shelf riding the same mechanism as
+        # the weights: the volume layout is the contract and ComfyUI adapts to
+        # it. Created before ComfyUI starts for the same reason the loras
+        # roots are — a directory that did not exist at startup is one whose
+        # first pack arrives unnoticed until the next restart.
+        PLAYGROUND_NODES.mkdir(parents=True, exist_ok=True)
         (COMFY / "extra_model_paths.yaml").write_text(
             "visionary:\n"
             f"  base_path: {WORKSPACE}/\n"
@@ -4111,10 +4190,12 @@ class _Comfy:
             f"  clip: {MODELS}\n"
             f"  vae: {MODELS}\n"
             "  loras: loras/\n"
+            f"  custom_nodes: {PLAYGROUND_NODES}\n"
             "visionary_spool:\n"
             f"  base_path: {SPOOL}/\n"
             "  loras: loras/\n"
         )
+        _install_pack_requirements(self.tag)
 
         # A fresh clone ships input/ and output/, but a changed --base-directory
         # or a pruned image would not, and the failure would surface as a
@@ -4368,6 +4449,31 @@ class _Comfy:
         self._log.clear()
         self.start()
 
+    def restart(self) -> None:
+        """
+        Kill the warm engine on purpose and start a fresh one.
+
+        `_revive()` replaces a ComfyUI that died; this is the lever for one
+        that is alive and wrong — a pack that wrapped the resident model in
+        place (the CacheDiT removal needed a container kill for exactly this),
+        or a pack installed since this process walked custom_nodes. The bill
+        is honest and stated where it is paid: the resident checkpoint dies
+        with the process and reloads when the next graph asks for it.
+
+        Runs as a queued method on the generator, so it waits its turn behind
+        a job in flight rather than shooting one.
+        """
+        if self._proc is not None and self._proc.poll() is None:
+            print(f"[{self.tag}] restarting ComfyUI on request", flush=True)
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=10)
+        self._log.clear()
+        self.start()
+
     def _note_headroom(self) -> None:
         """
         Print what is left on the card, before the graph is queued.
@@ -4466,6 +4572,7 @@ class _Comfy:
         self._revive()
         self.job_id = job_id
         self._unmatched, self._told = 0, False
+        self.last_error = None
         try:
             self._note_headroom()
             prompt_id = self.post("/prompt", {"prompt": graph})["prompt_id"]
@@ -4592,17 +4699,25 @@ class _Comfy:
                 raise self._died()
             time.sleep(1.5)
 
-    @staticmethod
-    def _why_failed(status: dict[str, Any]) -> str:
+    def _why_failed(self, status: dict[str, Any]) -> str:
         """
         Turn ComfyUI's execution_error message into one line worth reading.
 
         The raw record nests the useful part — node type and exception — under
         a list of (event, payload) pairs, and a bare "status_str: error" sends
         you to the container logs for something the record already knows.
+
+        The payload is also kept whole on `last_error`, because the message
+        collapses node id and node type into one name and the Playground needs
+        the id back to light up the node that broke.
         """
         for event, payload in status.get("messages") or []:
             if event == "execution_error":
+                self.last_error = {
+                    "node_id": payload.get("node_id"),
+                    "node_type": payload.get("node_type"),
+                    "message": payload.get("exception_message") or "failed",
+                }
                 node = payload.get("node_type") or payload.get("node_id")
                 return f"{node}: {payload.get('exception_message') or 'failed'}"
         return "ComfyUI reported an error with no detail."
@@ -7236,6 +7351,17 @@ class ImageGenerator:
         return {"ok": True}
 
     @modal.method()
+    def playground(self, job_id: str,
+                   params: dict[str, Any]) -> dict[str, Any]:
+        """A user-authored graph on this warm engine — see _playground_run."""
+        return _playground_run(self._comfy, job_id, params)
+
+    @modal.method()
+    def restart_engine(self, job_id: str) -> dict[str, Any]:
+        """Replace the warm ComfyUI on request — see _Comfy.restart."""
+        return _restart_engine(self._comfy, job_id)
+
+    @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
         started = time.time()
         # Same three lines as the video side, and for the same reason: the
@@ -7395,6 +7521,14 @@ class ImageGenerator:
                 **plates,
             )
 
+            if params.get("workflow_graph"):
+                # The Playground toggle: the console's own graph feeds the
+                # saved workflow by inherited node key — see _apply_workflow.
+                # Applied here rather than in the route so the graph it feeds
+                # is the one with staged filenames in it, not placeholders.
+                graph = _apply_workflow(graph, params["workflow_graph"],
+                                        params.get("workflow_extras"))
+
             info = {"width": width, "height": height, "seed": seed, "steps": steps}
             _stop_gate(job_id, "staging")
             # `loading`, not `generate` — ComfyUI has the graph and has not
@@ -7490,6 +7624,10 @@ class ImageGenerator:
             prompt=str(params.get("prompt") or ""),
             negative_prompt=str(params.get("negative_prompt") or ""),
             created=time.time(), **_shot_meta(params), **report,
+            # Which saved workflow the toggle ran, when one did — the sidecar
+            # is the only place that can still answer that a week later.
+            **({"workflow_name": params["workflow"]}
+               if params.get("workflow") else {}),
         )
         volume.commit()
 
@@ -10665,6 +10803,17 @@ class VideoGenerator:
         return {"ok": True}
 
     @modal.method()
+    def playground(self, job_id: str,
+                   params: dict[str, Any]) -> dict[str, Any]:
+        """A user-authored graph on this warm engine — see _playground_run."""
+        return _playground_run(self._comfy, job_id, params)
+
+    @modal.method()
+    def restart_engine(self, job_id: str) -> dict[str, Any]:
+        """Replace the warm ComfyUI on request — see _Comfy.restart."""
+        return _restart_engine(self._comfy, job_id)
+
+    @modal.method()
     def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
         """
         Run one clip.
@@ -10725,6 +10874,13 @@ class VideoGenerator:
             t_plan = time.time()
             plan = self._plan_h3(params, stage, job_id=job_id)
             graph, info = plan["graph"], plan["info"]
+            if params.get("workflow_graph"):
+                # The Playground toggle — same fact as the image side: the
+                # compiled graph feeds the saved workflow by inherited node
+                # key, after staging so filenames are real. See
+                # _apply_workflow.
+                graph = _apply_workflow(graph, params["workflow_graph"],
+                                        params.get("workflow_extras"))
             print(f"[video] ready to queue after {time.time() - started:.1f}s "
                   f"({time.time() - t_plan:.1f}s staging {n_att} attachments, "
                   f"{mb:.1f} MB)", flush=True)
@@ -10775,6 +10931,8 @@ class VideoGenerator:
                 out_dir, kind="image", job_id=job_id, model=model,
                 prompt=params["prompt"], created=time.time(),
                 **_shot_meta(params), **info, **plan["meta"],
+                **({"workflow_name": params["workflow"]}
+                   if params.get("workflow") else {}),
             )
             volume.commit()
             res = {"status": "completed", "job_id": job_id, "files": names,
@@ -10808,6 +10966,8 @@ class VideoGenerator:
             out_dir, kind="video", job_id=job_id, model=model,
             prompt=params["prompt"], created=time.time(),
             **_shot_meta(params), **info, **plan["meta"],
+            **({"workflow_name": params["workflow"]}
+               if params.get("workflow") else {}),
         )
         volume.commit()
 
@@ -10963,6 +11123,471 @@ class VideoGenerator:
             info["fps"] = H3_FPS
         return {"graph": graph, "info": info, "meta": meta}
 
+
+
+# --------------------------------------------------------------------------
+# Playground — user-authored graphs on the same engine
+#
+# The room where the graph our builders write is the thing on screen: seeded
+# from the app's own live graph, rewired by hand, run on whichever warm
+# generator was asked for. Not a second backend — the same _Comfy, the same
+# containers, the same job/status/stop contract; the one difference is that
+# the graph arrives built instead of being built here. Saved workflows are
+# pure API-format JSON under workflows/ (the storage layout is the contract),
+# node packs installed from git live under playground_nodes/ pinned by SHA,
+# and every output embeds its own graph the way ComfyUI does, so the PNG *is*
+# the workflow.
+# --------------------------------------------------------------------------
+
+# A workflow name becomes a filename on the volume, so the rule is the
+# filename's — and the error says so, because "invalid name" explains nothing.
+_WORKFLOW_NAME_RE = re.compile(r"[\w][\w .-]{0,63}")
+
+
+def _workflow_name(raw: Any) -> str:
+    name = str(raw or "").strip()
+    if not _WORKFLOW_NAME_RE.fullmatch(name) or name.startswith("."):
+        raise ValueError(
+            f"Not a workflow name: {name!r}. Letters, digits, spaces, dots, "
+            "dashes and underscores, up to 64 characters — it becomes "
+            "workflows/{name}.json on the volume.")
+    return name
+
+
+def _load_workflow_for_run(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """
+    The toggle's read: resolve a render request's `workflow`, on CPU.
+
+    None when nothing was toggled, which is every request until the day a
+    workflow exists. Failures are ValueErrors because they are form errors —
+    a workflow deleted since the menu loaded is the stale-tab case, and the
+    answer belongs on the form, not in a dead job.
+    """
+    name = str(payload.get("workflow") or "").strip()
+    if not name:
+        return None
+    name = _workflow_name(name)
+    path = WORKFLOWS / f"{name}.json"
+    if not path.is_file():
+        _reload_volume()
+    if not path.is_file():
+        raise ValueError(f"No workflow named {name!r} — it may have been "
+                         "deleted since the menu loaded.")
+    try:
+        graph = json.loads(path.read_text())
+    except ValueError as exc:
+        raise ValueError(f"{name}.json is not valid JSON: {exc}")
+    return name, _validate_playground_graph(graph)
+
+
+def _validate_playground_graph(graph: Any,
+                               known: set[str] | None = None) -> dict[str, Any]:
+    """
+    Structural zeros only — the shapes /prompt would reject, caught on CPU.
+
+    Judgement stays out of here: whether the wiring makes *sense* is ComfyUI's
+    call on the GPU, where the error comes back naming the node. What belongs
+    here is what would otherwise cost a cold start to discover: not a dict, a
+    node without a class_type (the UI-format export, which is the mistake
+    everyone makes once), a link pointing at a node that is not in the graph,
+    a class_type this install has never heard of. The catalogue check only
+    runs when a catalogue exists — a fresh install has none, and refusing
+    every run until one is harvested would be the validator outranking the
+    engine.
+    """
+    if not isinstance(graph, dict) or not graph:
+        raise ValueError("A workflow is a non-empty object of nodes — the "
+                         "API-format graph ComfyUI's /prompt takes.")
+    unknown = []
+    for key, node in graph.items():
+        if (not isinstance(node, dict)
+                or not isinstance(node.get("class_type"), str)):
+            raise ValueError(
+                f"Node {key!r} has no class_type — this looks like a "
+                "UI-format export. The Playground reads API-format graphs "
+                "(in ComfyUI: Export (API)).")
+        inputs = node.get("inputs")
+        if inputs is None:
+            continue
+        if not isinstance(inputs, dict):
+            raise ValueError(f"Node {key!r}: inputs must be an object.")
+        for iname, val in inputs.items():
+            if isinstance(val, list):
+                if (len(val) != 2 or not isinstance(val[0], (str, int))
+                        or isinstance(val[0], bool)
+                        or not isinstance(val[1], int)):
+                    raise ValueError(
+                        f"Node {key!r} input {iname!r}: a link is "
+                        "[node_id, slot], and this is neither a link nor a "
+                        "value.")
+                if str(val[0]) not in graph:
+                    raise ValueError(
+                        f"Node {key!r} input {iname!r} links to {val[0]!r}, "
+                        "which is not in the graph.")
+        if known is not None and node["class_type"] not in known:
+            unknown.append(f"{key}: {node['class_type']}")
+    if unknown:
+        raise ValueError(
+            "Unknown node type" + ("s" if len(unknown) > 1 else "")
+            + " — not in this install's catalogue: "
+            + "; ".join(sorted(unknown)[:6])
+            + ". Install the pack that provides "
+            + ("them" if len(unknown) > 1 else "it")
+            + ", or refresh the catalogue if it was just installed.")
+    return graph
+
+
+def _apply_workflow(default_graph: dict[str, Any],
+                    workflow_graph: dict[str, Any],
+                    extras: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    Substitute the console's compiled values into a saved workflow.
+
+    By inherited node key: a workflow begins life as this app's own graph, so
+    a node that kept both its key and its class_type still belongs to the
+    console — the compiled prompt reaches its encoder, the seed and steps
+    reach its sampler, the canvas reaches its latent, exactly as if the
+    builder had written it. A node the user replaced or renamed inherits
+    nothing, which is the honest reading: rewiring is a statement that the
+    console no longer owns that input. Wiring is never substituted — links
+    are the workflow's own on both sides.
+
+    `extras` are the adaptive inputs — {node_key: {input: value}} — checked
+    to exist before they are written, so a typo is a form error rather than a
+    control that silently controls nothing.
+    """
+    out = json.loads(json.dumps(workflow_graph))
+    matched = 0
+    for key, node in default_graph.items():
+        target = out.get(key)
+        if (not isinstance(target, dict)
+                or target.get("class_type") != node.get("class_type")):
+            continue
+        for iname, val in (node.get("inputs") or {}).items():
+            if isinstance(val, list):
+                continue
+            tin = target.setdefault("inputs", {})
+            if iname in tin and not isinstance(tin[iname], list):
+                tin[iname] = val
+                matched += 1
+    if not matched:
+        raise ValueError(
+            "This workflow inherited nothing the console can feed: no node "
+            "kept both the key and the class_type of the app's own graph "
+            f"(looked for {', '.join(sorted(default_graph))}; the workflow "
+            f"has {', '.join(sorted(out))}). Re-seed it from the app's "
+            "graph, or run it from the Playground, which sends it verbatim.")
+    for nkey, vals in (extras or {}).items():
+        node = out.get(str(nkey))
+        if not isinstance(node, dict):
+            raise ValueError(f"Exposed input names node {nkey!r}, which is "
+                             "not in the workflow.")
+        for iname, val in (vals or {}).items():
+            inputs = node.setdefault("inputs", {})
+            if iname not in inputs:
+                raise ValueError(
+                    f"Exposed input {nkey}.{iname} is not an input of "
+                    f"{node.get('class_type')} in this workflow.")
+            if isinstance(inputs[iname], list):
+                raise ValueError(
+                    f"Exposed input {nkey}.{iname} is wired, not a value — "
+                    "unwire it in the Playground to control it here.")
+            inputs[iname] = val
+    return out
+
+
+def _playground_run(comfy: _Comfy, job_id: str,
+                    params: dict[str, Any]) -> dict[str, Any]:
+    """
+    Run one user-authored graph on whichever warm engine holds this call.
+
+    A sibling of the two `generate`s rather than a branch inside them — same
+    record, same staging directory, same stop gates, same volume layout and
+    sidecar. Runs on the *shared* generators on purpose: a single user has no
+    second workstream, so a quarantine container would cost a cold start to
+    protect real work from the person doing the real work. What answers the
+    risk instead is `restart()`, one gesture away in the room.
+    """
+    from PIL import Image, PngImagePlugin
+
+    started = time.time()
+    print(f"[playground] {job_id} accepted", flush=True)
+    _note_queue_wait("playground", job_id, params)
+    _clear_stop(job_id)
+    _publish(job_id, status="running", phase="reloading the volume")
+    _reload_volume()
+
+    graph = params["graph"]
+    try:
+        _stop_gate(job_id, "the volume reload")
+        atts = dict(params.get("attachments") or {})
+        if atts:
+            mb = sum(len(b) for b in atts.values()) * 3 / 4 / 2**20
+            _publish(job_id, phase=f"staging {len(atts)} attachment"
+                                   f"{'' if len(atts) == 1 else 's'}"
+                                   f" · {mb:.0f} MB")
+        for name, blob in atts.items():
+            # Written under the name the graph already spells rather than a
+            # minted one: the graph is the user's record, and rewriting its
+            # LoadImage inputs would hand back a graph that differs from the
+            # one that ran. Path-stripped so a name cannot climb out of
+            # input/.
+            safe = Path(name).name
+            (COMFY / "input" / safe).write_bytes(base64.b64decode(blob))
+            if safe.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                # Same range, same reason as the reference paths: every input
+                # a run is priced by needs one, and a file does not come with
+                # its own. See H3_REF_MAX_SIDE.
+                _fit_reference(COMFY / "input" / safe, H3_REF_MAX_SIDE,
+                               "playground")
+        _stop_gate(job_id, "staging")
+
+        # `loading`, not `generate` — ComfyUI has the graph and has sampled
+        # nothing. `_drain` moves the phase on when a step arrives.
+        _publish(job_id, phase="loading", step=0, percent=0)
+        out_names = comfy.run(job_id, graph, what="output")
+
+        out_dir = OUTPUTS / job_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%H%M%S")
+        graph_json = json.dumps(graph)
+        clip_exts = (".mp4", ".mov", ".m4v", ".webm", ".mkv")
+        names: list[str] = []
+        for i, src in enumerate(out_names):
+            srcp = COMFY / "output" / src
+            ext = srcp.suffix.lower() or ".bin"
+            name = f"{stamp}_{i:02d}{ext}"
+            if ext == ".png":
+                # Re-encoded rather than copied, same trade as the image
+                # path: ComfyUI ran with --disable-metadata, and a PNG whose
+                # graph lives only in a job record that expires is what every
+                # existing tool reads a file to avoid. `prompt` is ComfyUI's
+                # own key, so a stock install loads this straight back onto
+                # its canvas — the PNG *is* the workflow.
+                with Image.open(srcp) as im:
+                    png = PngImagePlugin.PngInfo()
+                    png.add_text("prompt", graph_json)
+                    im.save(out_dir / name, pnginfo=png)
+            elif ext in clip_exts:
+                # The same embed for a clip, via the container's ffmpeg: the
+                # graph rides the comment tag, streams copied untouched.
+                # Best-effort — failing a finished render over its metadata
+                # is the wrong trade, so a clip ffmpeg cannot rewrite is
+                # copied plain and the log says which.
+                done = subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(srcp), "-c", "copy",
+                     "-movflags", "use_metadata_tags",
+                     "-metadata", f"comment={graph_json}",
+                     str(out_dir / name)],
+                    capture_output=True, text=True)
+                if done.returncode != 0:
+                    tail = (done.stderr or "").strip().splitlines()[-1:]
+                    print(f"[playground] {job_id} could not embed the graph "
+                          f"in {name}: {' '.join(tail)}", flush=True)
+                    shutil.copyfile(srcp, out_dir / name)
+            else:
+                shutil.copyfile(srcp, out_dir / name)
+            names.append(name)
+
+        # `kind` by what came out, because everything downstream sorts on
+        # what a thing *is* rather than on which surface made it. The graph
+        # goes in the sidecar too: the PNG's copy is for ComfyUI, this one is
+        # for readers of the record.
+        kind = ("video" if any(n.lower().endswith(clip_exts) for n in names)
+                else "image")
+        _write_output_meta(
+            out_dir, kind=kind, job_id=job_id, model="playground",
+            prompt="", created=time.time(), workflow=graph,
+            workflow_name=str(params.get("workflow_name") or "") or None,
+        )
+        volume.commit()
+
+        res = {"status": "completed", "job_id": job_id, "files": names,
+               "output_dir": str(out_dir), "model": "playground",
+               "duration_s": round(time.time() - started, 1)}
+        _publish(job_id, **res)
+        return res
+    except StopRequested:
+        res = {"status": "stopped", "job_id": job_id, "files": [],
+               "duration_s": round(time.time() - started, 1)}
+        _publish(job_id, **res)
+        return res
+    except Exception as exc:
+        # The failing node travels beside the message, not inside it — the
+        # editor lights the node up, and a record that only carried the
+        # collapsed string would need parsing back apart.
+        err = comfy.last_error or {}
+        _publish(job_id, status="failed",
+                 error=(str(exc) if isinstance(exc, RuntimeError)
+                        else f"{type(exc).__name__}: {exc}"),
+                 **({"error_node": str(err["node_id"]),
+                     "error_node_type": err.get("node_type")}
+                    if err.get("node_id") is not None else {}))
+        raise
+
+
+def _restart_engine(comfy: _Comfy, job_id: str) -> dict[str, Any]:
+    """
+    Replace the warm ComfyUI, as a job — queued, watched, and priced.
+
+    A method call rather than a route side-effect so it rides
+    `@modal.concurrent(max_inputs=1)`: a restart waits its turn behind a
+    render instead of shooting one. A job record rather than a bare {ok}
+    because the page has to be able to say what the button did — the next
+    graph pays a checkpoint reload, and a lever whose cost is invisible is a
+    lever nobody trusts.
+    """
+    started = time.time()
+    print(f"[playground] {job_id} restart requested", flush=True)
+    _clear_stop(job_id)
+    _publish(job_id, status="running", phase="restarting the engine")
+    try:
+        comfy.restart()
+    except Exception as exc:
+        _publish(job_id, status="failed",
+                 error=f"{type(exc).__name__}: {exc}")
+        raise
+    res = {"status": "completed", "job_id": job_id, "files": [],
+           "duration_s": round(time.time() - started, 1),
+           "note": "Engine restarted. The next run reloads its checkpoint."}
+    _publish(job_id, **res)
+    return res
+
+
+@app.function(image=comfy_image, cpu=4.0, timeout=30 * 60,
+              volumes={"/workspace": volume, "/models": models_volume})
+def playground_catalogue_job(job_id: str, url: str | None = None,
+                             ref: str | None = None) -> dict[str, Any]:
+    """
+    Install a pack from git (optionally) and re-harvest the node catalogue.
+
+    On CPU, because reading a schema is exactly the work the
+    never-rent-a-GPU rule is about: ComfyUI answers /object_info under
+    --cpu, the same trick tools/smoke_graphs.py uses to validate graphs. On
+    comfy_image, because describing the packs means importing them, and the
+    import wants ComfyUI's own dependencies.
+
+    The clone is staged and then renamed — the same shape the weights use —
+    so a half-cloned pack is never on the shelf, and `.git` is dropped once
+    the pin records the URL and the resolved SHA: the pin is the
+    declaration, and a re-install years later is this exact tree.
+    """
+    import threading
+    import urllib.request
+
+    started = time.time()
+    print(f"[playground] {job_id} accepted", flush=True)
+    _clear_stop(job_id)
+    _publish(job_id, status="running", phase="reloading the volume")
+    _reload_volume()
+    pack_name = sha = None
+    try:
+        _stop_gate(job_id, "the volume reload")
+        if url:
+            pack_name = re.sub(r"\.git$", "", url.rstrip("/").rsplit("/", 1)[-1])
+            pack_name = re.sub(r"[^\w.-]", "-", pack_name).lstrip(".") or "pack"
+            dest = PLAYGROUND_NODES / pack_name
+            if dest.exists():
+                raise ValueError(
+                    f"{pack_name} is already installed ({dest}). Delete it "
+                    "in the Playground first to reinstall.")
+            _publish(job_id, phase=f"cloning {pack_name}")
+            PLAYGROUND_NODES.mkdir(parents=True, exist_ok=True)
+            tmp = PLAYGROUND_NODES / f".{pack_name}.cloning"
+            shutil.rmtree(tmp, ignore_errors=True)
+            done = subprocess.run(["git", "clone", url, str(tmp)],
+                                  capture_output=True, text=True, timeout=600)
+            if done.returncode != 0:
+                raise RuntimeError(f"git clone failed for {url}:\n"
+                                   + (done.stderr or "").strip()[-2000:])
+            if ref:
+                done = subprocess.run(
+                    ["git", "-C", str(tmp), "checkout", ref],
+                    capture_output=True, text=True)
+                if done.returncode != 0:
+                    raise RuntimeError(
+                        f"git checkout {ref!r} failed:\n"
+                        + (done.stderr or "").strip()[-2000:])
+            sha = subprocess.run(["git", "-C", str(tmp), "rev-parse", "HEAD"],
+                                 capture_output=True, text=True).stdout.strip()
+            (tmp / ".visionary-pin").write_text(json.dumps(
+                {"url": url, "ref": ref, "sha": sha,
+                 "installed": time.time()}, indent=2))
+            shutil.rmtree(tmp / ".git", ignore_errors=True)
+            tmp.rename(dest)
+            _stop_gate(job_id, "the clone")
+
+        _publish(job_id, phase="installing pack requirements")
+        _install_pack_requirements("playground")
+
+        _publish(job_id, phase="starting ComfyUI on CPU")
+        (COMFY / "extra_model_paths.yaml").write_text(
+            "visionary:\n"
+            f"  base_path: {WORKSPACE}/\n"
+            f"  custom_nodes: {PLAYGROUND_NODES}\n")
+        port = 8199
+        proc = subprocess.Popen(
+            ["python", "main.py", "--listen", "127.0.0.1",
+             "--port", str(port), "--cpu",
+             "--disable-auto-launch", "--disable-metadata"],
+            cwd=str(COMFY), stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, bufsize=1)
+        tail: deque[str] = deque(maxlen=60)
+
+        def drain() -> None:
+            for line in proc.stdout or []:
+                tail.append(line.rstrip())
+
+        threading.Thread(target=drain, daemon=True).start()
+        try:
+            deadline = time.time() + 300
+            raw = None
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    raise RuntimeError(
+                        "ComfyUI exited during the harvest — a pack that "
+                        "fails to import at startup is the usual cause, and "
+                        "its traceback is below.\n" + "\n".join(tail))
+                try:
+                    raw = urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/object_info",
+                        timeout=10).read()
+                    break
+                except OSError:
+                    time.sleep(1.0)
+            if raw is None:
+                raise RuntimeError(
+                    "ComfyUI did not answer /object_info within 300s.\n"
+                    + "\n".join(tail))
+        finally:
+            proc.terminate()
+
+        info = json.loads(raw)
+        NODE_CATALOGUE.write_text(json.dumps(info))
+        volume.commit()
+        res = {"status": "completed", "job_id": job_id, "files": [],
+               "nodes": len(info),
+               "duration_s": round(time.time() - started, 1)}
+        if url:
+            res["pack"] = pack_name
+            res["sha"] = (sha or "")[:12]
+            # The warm generators walked custom_nodes before this pack
+            # existed, so the note says what to press rather than leaving
+            # "installed but not offered" to be discovered mid-graph.
+            res["note"] = ("Installed. Restart the engine to load it into "
+                           "a warm generator.")
+        _publish(job_id, **res)
+        return res
+    except StopRequested:
+        res = {"status": "stopped", "job_id": job_id, "files": [],
+               "duration_s": round(time.time() - started, 1)}
+        _publish(job_id, **res)
+        return res
+    except Exception as exc:
+        _publish(job_id, status="failed",
+                 error=(str(exc) if isinstance(exc, (RuntimeError, ValueError))
+                        else f"{type(exc).__name__}: {exc}"))
+        raise
 
 
 # --------------------------------------------------------------------------
@@ -12709,9 +13334,19 @@ def web():
                                  "only a description cannot anchor the "
                                  "compose."}
 
+        # The Playground toggle, resolved here on CPU so a stale menu is a
+        # form error rather than a cold H100.
+        try:
+            wf = _load_workflow_for_run(payload)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(ImageGenerator, payload.get("gpu"), IMAGE_GPUS, GPU)
         runner().generate.spawn(job_id=job_id, params={
+            **({"workflow": wf[0], "workflow_graph": wf[1],
+                "workflow_extras": payload.get("workflow_extras") or {}}
+               if wf else {}),
             # See the video side: the container subtracts this on arrival, and
             # the difference is a delivery that waited.
             "queued_at": time.time(),
@@ -12942,9 +13577,18 @@ def web():
                                  f"H3's prompt field holds {MAX_H3_PROMPT}."}
             compiled = override
 
+        # The Playground toggle — same CPU-side read as the image route.
+        try:
+            wf = _load_workflow_for_run(payload)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
         runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
         runner().generate.spawn(job_id=job_id, params={
+            **({"workflow": wf[0], "workflow_graph": wf[1],
+                "workflow_extras": payload.get("workflow_extras") or {}}
+               if wf else {}),
             # When it was handed to Modal. The container subtracts this on
             # arrival, which is the only way to see a delivery that waited —
             # see `_note_queue_wait`.
@@ -13251,6 +13895,321 @@ def web():
     # gallery, the drawer and now the canvas all use. Two routes for one job,
     # where the second one is strictly slower, is the shape a future change
     # picks the wrong half of.
+
+    # ── Playground ─────────────────────────────────────────────────────────
+
+    @api.post("/api/playground/seed")
+    def playground_seed(payload: dict) -> dict[str, Any]:
+        """
+        The app's own live graph, built from the console's state and returned
+        without running — what the Playground opens on, so nothing is ever
+        blank and every experiment starts from something that works.
+
+        Attachment *bytes* do not cross into a seed: references and keyframes
+        stage on the GPU container at run time, and a placeholder file here on
+        CPU would fail `_fit_reference` on a picture that does not exist. What
+        was attached is named back in `dropped` so the room can say so instead
+        of the seed silently being smaller than the console.
+        """
+        kind = ("video" if str(payload.get("kind") or "image") == "video"
+                else "image")
+        prompt = str(payload.get("prompt") or "")
+
+        def num(k, d, cast):
+            try:
+                v = payload.get(k)
+                return cast(v) if v not in (None, "") else d
+            except (TypeError, ValueError):
+                return d
+
+        _reload_volume()
+        try:
+            shot = _validate_shot(payload.get("shot"))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        seed_v = num("seed", None, int)
+        if seed_v is None:
+            seed_v = int.from_bytes(os.urandom(4), "big")
+        dropped = [k for k in ("references", "ref_videos", "ref_audios",
+                               "first_frame", "last_frame", "scene", "outfit",
+                               "style_refs", "regions", "objects")
+                   if payload.get(k)]
+
+        try:
+            if kind == "image":
+                model = ("turbo" if str(payload.get("model") or "turbo")
+                         != "raw" else "raw")
+                graph = _krea2_graph(
+                    model=model,
+                    prompt=_compile_image_prompt(prompt, shot),
+                    negative_prompt=str(payload.get("negative_prompt") or ""),
+                    width=num("width", 1024, int),
+                    height=num("height", 1024, int),
+                    batch_size=max(1, min(4, num("num_images", 1, int))),
+                    seed=seed_v,
+                    steps=num("steps", KREA2_DEFAULTS[model]["steps"], int),
+                    cfg=num("cfg_scale", KREA2_DEFAULTS[model]["cfg"], float),
+                    shift=num("shift", 1.15, float),
+                    sampler=str(payload.get("sampler")
+                                or IMAGE_DEFAULTS["sampler"]),
+                    scheduler=str(payload.get("scheduler")
+                                  or IMAGE_DEFAULTS["scheduler"]),
+                    loras=_validate_loras(payload.get("loras")),
+                    regions=[],
+                )
+            else:
+                d = VIDEO_MODELS["h3"]["defaults"]
+                aspect = str(payload.get("aspect") or "16:9")
+                tier = str(payload.get("tier") or d["tier"])
+                seconds = num("seconds", float(d["seconds"]), float)
+                still = seconds == 0
+                if still:
+                    # Same fact as /api/video: the document describes a shot
+                    # and a still is a frame out of it, so it compiles at the
+                    # model's own default length.
+                    seconds = float(d["seconds"])
+                width, height = _h3_canvas(aspect, tier)
+                graph = _h3_graph(
+                    prompt=_compile_h3_prompt(
+                        typed=prompt, pills=shot, seconds=seconds, roles=[],
+                        scene=None, task=_h3_task(None, None, [], [], [])),
+                    width=width, height=height,
+                    frames=(H3_STILL_FRAMES if still
+                            else _h3_frames(seconds)),
+                    seed=seed_v,
+                    steps=max(1, min(60, num("steps", d["steps"], int))),
+                    sampler=str(payload.get("sampler") or d["sampler"]),
+                    scheduler=str(payload.get("scheduler") or d["scheduler"]),
+                    loras=_validate_video_loras(payload.get("loras")),
+                    shift_video=num("shift_video", None, float),
+                    shift_audio=num("shift_audio", None, float),
+                    still=still,
+                )
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+        return {"ok": True, "kind": kind, "graph": graph,
+                **({"dropped": dropped} if dropped else {})}
+
+    @api.post("/api/playground/run")
+    def playground_run(payload: dict) -> dict[str, Any]:
+        """
+        Queue one user-authored graph — the Playground's Generate.
+
+        Validation here is structural zeros against the cached catalogue;
+        whether the wiring makes sense is ComfyUI's call on the GPU, where a
+        failure comes back naming the node. Status and Stop are the routes
+        every other job already answers to.
+        """
+        t_route = time.time()
+        known = None
+        raw = _volume_bytes(".node_catalogue.json")
+        if raw:
+            try:
+                known = set(json.loads(raw))
+            except ValueError:
+                known = None
+        try:
+            graph = _validate_playground_graph(payload.get("graph"), known)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        atts = payload.get("attachments") or {}
+        if (not isinstance(atts, dict)
+                or any(not isinstance(v, str) for v in atts.values())):
+            return {"error": "attachments is {filename: base64}."}
+        if len(atts) > 16:
+            return {"error": f"{len(atts)} attachments — the cap is 16 a "
+                             "run, because each one rides the request body."}
+        host = ("video" if str(payload.get("host") or "image") == "video"
+                else "image")
+        job_id = f"pg{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+        if host == "video":
+            runner = _on_gpu(VideoGenerator, payload.get("gpu"),
+                             VIDEO_GPUS, VIDEO_GPU)
+        else:
+            runner = _on_gpu(ImageGenerator, payload.get("gpu"),
+                             IMAGE_GPUS, GPU)
+        runner().playground.spawn(job_id=job_id, params={
+            "queued_at": time.time(),
+            "graph": graph,
+            "attachments": atts,
+            "workflow_name": str(payload.get("workflow_name") or ""),
+        })
+        _log_spawn("playground", job_id, payload, t_route)
+        return {"ok": True, "job_id": job_id}
+
+    @api.post("/api/playground/restart")
+    def playground_restart(payload: dict) -> dict[str, Any]:
+        """The engine-restart lever — a job, so the page can watch it land."""
+        host = ("video" if str(payload.get("host") or "image") == "video"
+                else "image")
+        job_id = f"pgrst{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+        if host == "video":
+            runner = _on_gpu(VideoGenerator, payload.get("gpu"),
+                             VIDEO_GPUS, VIDEO_GPU)
+        else:
+            runner = _on_gpu(ImageGenerator, payload.get("gpu"),
+                             IMAGE_GPUS, GPU)
+        runner().restart_engine.spawn(job_id=job_id)
+        return {"ok": True, "job_id": job_id}
+
+    @api.get("/api/playground/nodes")
+    def playground_nodes():
+        """
+        The node catalogue — /object_info as one cached file.
+
+        Committed state by RPC, never the mount: the writer is a CPU
+        container. Raw bytes out, because the catalogue is megabytes and a
+        decode-and-re-encode here would buy nothing.
+        """
+        from fastapi.responses import Response
+        raw = _volume_bytes(".node_catalogue.json")
+        if raw is None:
+            return Response(json.dumps({"missing": True}),
+                            media_type="application/json")
+        return Response(raw, media_type="application/json")
+
+    @api.post("/api/playground/refresh")
+    def playground_refresh() -> dict[str, Any]:
+        """Re-harvest the catalogue — a visible job, since it boots ComfyUI."""
+        job_id = f"pgcat{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+        playground_catalogue_job.spawn(job_id=job_id)
+        return {"ok": True, "job_id": job_id}
+
+    @api.get("/api/playground/packs")
+    def playground_packs() -> dict[str, Any]:
+        _reload_volume()
+        rows = []
+        if PLAYGROUND_NODES.is_dir():
+            for d in sorted(PLAYGROUND_NODES.iterdir()):
+                if not d.is_dir() or d.name.startswith("."):
+                    continue
+                pin = {}
+                pf = d / ".visionary-pin"
+                if pf.is_file():
+                    try:
+                        pin = json.loads(pf.read_text())
+                    except ValueError:
+                        pin = {}
+                rows.append({"name": d.name, "url": pin.get("url"),
+                             "sha": (pin.get("sha") or "")[:12],
+                             "installed": pin.get("installed")})
+        return {"packs": rows}
+
+    @api.post("/api/playground/packs")
+    def playground_pack_install(payload: dict) -> dict[str, Any]:
+        url = str(payload.get("url") or "").strip()
+        # An https git URL and nothing else — a pack install is a clone, and
+        # the clone is the one thing on this surface that reaches out.
+        if not re.fullmatch(r"https://[\w.-]+/[\w./~-]+", url):
+            return {"error": "A pack installs from an https git URL — e.g. "
+                             "https://github.com/owner/repo."}
+        job_id = f"pack{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+        playground_catalogue_job.spawn(
+            job_id=job_id, url=url,
+            ref=str(payload.get("ref") or "").strip() or None)
+        return {"ok": True, "job_id": job_id}
+
+    @api.post("/api/playground/packs/delete")
+    def playground_pack_delete(payload: dict) -> dict[str, Any]:
+        name = str(payload.get("name") or "")
+        if not re.fullmatch(r"[\w.-]+", name) or name.startswith("."):
+            return {"error": f"Not a pack name: {name!r}"}
+        dest = PLAYGROUND_NODES / name
+        if not dest.is_dir():
+            _reload_volume()
+        if not dest.is_dir():
+            return {"error": f"No pack named {name!r} under "
+                             f"{PLAYGROUND_NODES}."}
+        shutil.rmtree(dest)
+        volume.commit()
+        # Same fact as install, stated on the delete: a warm engine keeps
+        # what it already imported until its next restart.
+        return {"ok": True,
+                "note": "Removed from the shelf. A warm engine keeps what "
+                        "it already imported until its next restart."}
+
+    @api.get("/api/workflows")
+    def list_workflows() -> dict[str, Any]:
+        _reload_volume()
+        rows = []
+        if WORKFLOWS.is_dir():
+            for f in sorted(WORKFLOWS.glob("*.json")):
+                if f.name.endswith(".meta.json"):
+                    continue
+                meta = {}
+                mp = f.with_name(f.stem + ".meta.json")
+                if mp.is_file():
+                    try:
+                        meta = json.loads(mp.read_text())
+                    except ValueError:
+                        meta = {}
+                rows.append({"name": f.stem,
+                             "created": meta.get("created"),
+                             "seed_of": meta.get("seed_of"),
+                             "exposes": meta.get("exposes") or [],
+                             "mtime": f.stat().st_mtime})
+        return {"workflows": rows}
+
+    @api.get("/api/workflows/{name}")
+    def get_workflow(name: str) -> dict[str, Any]:
+        try:
+            name = _workflow_name(name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        path = WORKFLOWS / f"{name}.json"
+        if not path.is_file():
+            _reload_volume()
+        if not path.is_file():
+            return {"error": f"No workflow named {name!r} under "
+                             f"{WORKFLOWS}."}
+        try:
+            graph = json.loads(path.read_text())
+        except ValueError as exc:
+            return {"error": f"{name}.json is not valid JSON: {exc}"}
+        meta = {}
+        mp = WORKFLOWS / f"{name}.meta.json"
+        if mp.is_file():
+            try:
+                meta = json.loads(mp.read_text())
+            except ValueError:
+                meta = {}
+        return {"name": name, "graph": graph, "meta": meta}
+
+    @api.post("/api/workflows/{name}")
+    def save_workflow(name: str, payload: dict) -> dict[str, Any]:
+        try:
+            name = _workflow_name(name)
+            graph = _validate_playground_graph(payload.get("graph"))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        WORKFLOWS.mkdir(parents=True, exist_ok=True)
+        # The graph file stays pure API format — a stock ComfyUI could run
+        # it — and our fields live beside it, the datasets split.
+        (WORKFLOWS / f"{name}.json").write_text(json.dumps(graph, indent=2))
+        meta = payload.get("meta") or {}
+        (WORKFLOWS / f"{name}.meta.json").write_text(json.dumps(
+            {"created": meta.get("created") or time.time(),
+             "seed_of": meta.get("seed_of"),
+             "exposes": meta.get("exposes") or []}, indent=2))
+        volume.commit()
+        return {"ok": True, "name": name}
+
+    @api.post("/api/workflows/{name}/delete")
+    def delete_workflow(name: str) -> dict[str, Any]:
+        try:
+            name = _workflow_name(name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        path = WORKFLOWS / f"{name}.json"
+        if not path.is_file():
+            _reload_volume()
+        if not path.is_file():
+            return {"error": f"No workflow named {name!r}."}
+        path.unlink()
+        (WORKFLOWS / f"{name}.meta.json").unlink(missing_ok=True)
+        volume.commit()
+        return {"ok": True}
 
     @api.get("/api/status/{job_id}")
     def status(job_id: str) -> dict[str, Any]:

@@ -609,6 +609,110 @@ CHARS: dict = {}
 # The export's own counter, so a stitch is watchable rather than instant.
 EXPORT = {"polls": 0, "takes": 0}
 
+# The Playground's shelf, in memory like CHARS and for the same reason: the
+# room's whole loop is seed → rewire → save → load → run, and it has to be
+# drivable without a volume.
+WORKFLOWS_STUB: dict = {}
+PACKS_STUB: list = []
+
+# The stub's sketch of the plain Krea 2 graph — the *shape* the room opens on,
+# not the builder's output (that lives in app.py and answers on a deployment).
+# Kept to the node types the stub catalogue below describes, so every card the
+# seed draws has a spec behind it.
+PLAYGROUND_SEED = {
+    "dit": {"class_type": "UNETLoader",
+            "inputs": {"unet_name": "krea2_turbo.safetensors",
+                       "weight_dtype": "default"}},
+    "clip": {"class_type": "CLIPLoader",
+             "inputs": {"clip_name": "qwen3vl_4b.safetensors",
+                        "type": "krea2", "device": "default"}},
+    "vae": {"class_type": "VAELoader",
+            "inputs": {"vae_name": "krea2_vae.safetensors"}},
+    "pos": {"class_type": "CLIPTextEncode",
+            "inputs": {"text": "", "clip": ["clip", 0]}},
+    "neg": {"class_type": "CLIPTextEncode",
+            "inputs": {"text": "", "clip": ["clip", 0]}},
+    "latent": {"class_type": "EmptySD3LatentImage",
+               "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+    "sample": {"class_type": "KSampler",
+               "inputs": {"model": ["dit", 0], "positive": ["pos", 0],
+                          "negative": ["neg", 0], "latent_image": ["latent", 0],
+                          "seed": 4242, "steps": 8, "cfg": 1.0,
+                          "sampler_name": "er_sde",
+                          "scheduler": "sgm_uniform", "denoise": 1.0}},
+    "decode": {"class_type": "VAEDecode",
+               "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}},
+    "save": {"class_type": "SaveImage",
+             "inputs": {"images": ["decode", 0],
+                        "filename_prefix": "visionary"}},
+}
+
+# Enough of /object_info for every node the seed uses, plus LoadImage for the
+# file-widget path. Shapes copied from ComfyUI's own answers — [type, config]
+# pairs, enums as arrays, image_upload marking the picture widget.
+NODE_CATALOGUE_STUB = {
+    "UNETLoader": {
+        "input": {"required": {
+            "unet_name": [["krea2_turbo.safetensors", "krea2_raw.safetensors"], {}],
+            "weight_dtype": [["default", "fp8_e4m3fn"], {}]}},
+        "output": ["MODEL"], "output_name": ["MODEL"],
+        "display_name": "Load Diffusion Model", "category": "advanced/loaders"},
+    "CLIPLoader": {
+        "input": {"required": {
+            "clip_name": [["qwen3vl_4b.safetensors"], {}],
+            "type": [["krea2", "stable_diffusion"], {}]},
+            "optional": {"device": [["default", "cpu"], {}]}},
+        "output": ["CLIP"], "output_name": ["CLIP"],
+        "display_name": "Load CLIP", "category": "advanced/loaders"},
+    "VAELoader": {
+        "input": {"required": {"vae_name": [["krea2_vae.safetensors"], {}]}},
+        "output": ["VAE"], "output_name": ["VAE"],
+        "display_name": "Load VAE", "category": "loaders"},
+    "CLIPTextEncode": {
+        "input": {"required": {
+            "text": ["STRING", {"multiline": True, "default": ""}],
+            "clip": ["CLIP", {}]}},
+        "output": ["CONDITIONING"], "output_name": ["CONDITIONING"],
+        "display_name": "CLIP Text Encode (Prompt)", "category": "conditioning"},
+    "EmptySD3LatentImage": {
+        "input": {"required": {
+            "width": ["INT", {"default": 1024, "min": 16, "max": 16384}],
+            "height": ["INT", {"default": 1024, "min": 16, "max": 16384}],
+            "batch_size": ["INT", {"default": 1, "min": 1, "max": 4096}]}},
+        "output": ["LATENT"], "output_name": ["LATENT"],
+        "display_name": "Empty Latent Image (SD3)", "category": "latent/sd3"},
+    "KSampler": {
+        "input": {"required": {
+            "model": ["MODEL", {}],
+            "seed": ["INT", {"default": 0, "min": 0}],
+            "steps": ["INT", {"default": 20, "min": 1, "max": 10000}],
+            "cfg": ["FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}],
+            "sampler_name": [["er_sde", "euler", "euler_ancestral",
+                              "res_multistep"], {}],
+            "scheduler": [["sgm_uniform", "simple", "normal"], {}],
+            "positive": ["CONDITIONING", {}],
+            "negative": ["CONDITIONING", {}],
+            "latent_image": ["LATENT", {}],
+            "denoise": ["FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0}]}},
+        "output": ["LATENT"], "output_name": ["LATENT"],
+        "display_name": "KSampler", "category": "sampling"},
+    "VAEDecode": {
+        "input": {"required": {"samples": ["LATENT", {}], "vae": ["VAE", {}]}},
+        "output": ["IMAGE"], "output_name": ["IMAGE"],
+        "display_name": "VAE Decode", "category": "latent"},
+    "SaveImage": {
+        "input": {"required": {
+            "images": ["IMAGE", {}],
+            "filename_prefix": ["STRING", {"default": "ComfyUI"}]}},
+        "output": [], "output_name": [], "output_node": True,
+        "display_name": "Save Image", "category": "image"},
+    "LoadImage": {
+        "input": {"required": {
+            "image": [["example.png"], {"image_upload": True}]}},
+        "output": ["IMAGE", "MASK"], "output_name": ["IMAGE", "MASK"],
+        "display_name": "Load Image", "category": "image"},
+}
+
 
 def train_status(job_id: str, name: str = "probe_lora") -> dict:
     """
@@ -1245,6 +1349,82 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"ok": True, "started": True, "job_id": job,
                                "mine": True, "missing": ["a", "b", "c"]})
 
+        # ── Playground ─────────────────────────────────────────────────────
+        if path == "/api/playground/seed":
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            graph = json.loads(json.dumps(PLAYGROUND_SEED))
+            graph["pos"]["inputs"]["text"] = str(req.get("prompt") or "")
+            dropped = [k for k in ("references", "first_frame", "last_frame",
+                                   "regions", "style_refs")
+                       if req.get(k)]
+            return self.reply({"ok": True, "kind": "image", "graph": graph,
+                               **({"dropped": dropped} if dropped else {})})
+
+        if path == "/api/playground/run":
+            try:
+                graph = json.loads(body or b"{}").get("graph") or {}
+            except json.JSONDecodeError:
+                graph = {}
+            job = "pg%03d" % sum(1 for k in RUNS if k.startswith("pg"))
+            # A node keyed "boom" fails the run naming itself, so the room's
+            # error path — the lit-up card, the prose — is drivable here.
+            RUNS[job] = {"polls": 0, "stopped": False,
+                         "boom": "boom" in graph}
+            return self.reply({"ok": True, "job_id": job})
+
+        if path == "/api/playground/restart":
+            job = "pgrst%03d" % sum(1 for k in RUNS if k.startswith("pgrst"))
+            RUNS[job] = {"polls": 0, "stopped": False}
+            return self.reply({"ok": True, "job_id": job})
+
+        if path == "/api/playground/refresh":
+            job = "pgcat%03d" % sum(1 for k in RUNS if k.startswith("pgcat"))
+            RUNS[job] = {"polls": 0, "stopped": False}
+            return self.reply({"ok": True, "job_id": job})
+
+        if path == "/api/playground/packs":
+            try:
+                url = str(json.loads(body or b"{}").get("url") or "")
+            except json.JSONDecodeError:
+                url = ""
+            name = re.sub(r"\.git$", "", url.rstrip("/").rsplit("/", 1)[-1]) \
+                or "pack"
+            PACKS_STUB.append({"name": name, "url": url, "sha": "abcdef123456",
+                               "installed": 1_756_000_000})
+            job = "pack%03d" % sum(1 for k in RUNS if k.startswith("pack"))
+            RUNS[job] = {"polls": 0, "stopped": False, "pack": name}
+            return self.reply({"ok": True, "job_id": job})
+
+        if path == "/api/playground/packs/delete":
+            try:
+                name = str(json.loads(body or b"{}").get("name") or "")
+            except json.JSONDecodeError:
+                name = ""
+            PACKS_STUB[:] = [p for p in PACKS_STUB if p["name"] != name]
+            return self.reply({"ok": True, "note":
+                "Removed from the shelf. A warm engine keeps what it already "
+                "imported until its next restart."})
+
+        m = re.match(r"/api/workflows/([^/]+)/delete$", path)
+        if m:
+            WORKFLOWS_STUB.pop(m.group(1), None)
+            return self.reply({"ok": True})
+
+        m = re.match(r"/api/workflows/([^/]+)$", path)
+        if m:
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            WORKFLOWS_STUB[m.group(1)] = {
+                "graph": req.get("graph") or {},
+                "meta": req.get("meta") or {},
+            }
+            return self.reply({"ok": True, "name": m.group(1)})
+
         m = re.match(r"/api/stop/(.+)$", path)
         if m:
             job = RUNS.get(m.group(1))
@@ -1621,6 +1801,85 @@ class Handler(BaseHTTPRequestHandler):
                 })
             return self.reply({"status": "completed", "percent": 100,
                                "downloaded": names, "failed": []})
+
+        # ── Playground ─────────────────────────────────────────────────────
+        if path == "/api/playground/nodes":
+            return self.reply(NODE_CATALOGUE_STUB)
+
+        if path == "/api/playground/packs":
+            return self.reply({"packs": PACKS_STUB})
+
+        if path == "/api/workflows":
+            return self.reply({"workflows": [
+                {"name": name,
+                 "created": rec["meta"].get("created"),
+                 "seed_of": rec["meta"].get("seed_of"),
+                 "exposes": rec["meta"].get("exposes") or [],
+                 "mtime": 1_756_000_000}
+                for name, rec in sorted(WORKFLOWS_STUB.items())
+            ]})
+
+        m = re.match(r"/api/workflows/([^/]+)$", path)
+        if m:
+            rec = WORKFLOWS_STUB.get(m.group(1))
+            if not rec:
+                return self.reply({"error":
+                    f"No workflow named {m.group(1)!r} under "
+                    "/workspace/workflows."})
+            return self.reply({"name": m.group(1), "graph": rec["graph"],
+                               "meta": rec["meta"]})
+
+        # A Playground run, with a failure mode: see /api/playground/run.
+        m = re.match(r"/api/status/(pg\d+)$", path)
+        if m:
+            job = RUNS.setdefault(m.group(1), {"polls": 0, "stopped": False})
+            job["polls"] += 1
+            if job["stopped"]:
+                return self.reply({"status": "stopped"})
+            total = 8
+            if job["polls"] < total:
+                return self.reply({
+                    "status": "running", "phase": "generate",
+                    "step": job["polls"], "total_steps": total,
+                    "percent": int(job["polls"] * 100 / total)})
+            if job.get("boom"):
+                return self.reply({
+                    "status": "failed",
+                    "error": "KSampler: mat1 and mat2 shapes cannot be "
+                             "multiplied (77x768 and 2560x3072)",
+                    "error_node": "boom", "error_node_type": "KSampler"})
+            return self.reply({
+                "status": "completed", "percent": 100,
+                "files": ["120000_00.png", "120000_01.png"],
+                "job_id": m.group(1), "model": "playground",
+                "output_dir": "/workspace/outputs/" + m.group(1),
+                "duration_s": 6.2})
+
+        m = re.match(r"/api/status/(pgrst\d+)$", path)
+        if m:
+            job = RUNS.setdefault(m.group(1), {"polls": 0, "stopped": False})
+            job["polls"] += 1
+            if job["polls"] < 3:
+                return self.reply({"status": "running",
+                                   "phase": "restarting the engine"})
+            return self.reply({"status": "completed", "files": [],
+                               "note": "Engine restarted. The next run "
+                                       "reloads its checkpoint."})
+
+        m = re.match(r"/api/status/(pgcat\d+|pack\d+)$", path)
+        if m:
+            job = RUNS.setdefault(m.group(1), {"polls": 0, "stopped": False})
+            job["polls"] += 1
+            if job["polls"] < 2:
+                return self.reply({"status": "running",
+                                   "phase": "starting ComfyUI on CPU"})
+            done = {"status": "completed", "files": [],
+                    "nodes": len(NODE_CATALOGUE_STUB)}
+            if job.get("pack"):
+                done.update(pack=job["pack"], sha="abcdef123456",
+                            note="Installed. Restart the engine to load it "
+                                 "into a warm generator.")
+            return self.reply(done)
 
         if path.startswith("/api/status/"):
             return self.reply({

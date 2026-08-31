@@ -13,7 +13,8 @@
  */
 import { api, post, type Res } from './client'
 import type {
-  AppState, CompileResult, DupeReport, Insight, JobStatus, Session, ShotPill } from './types'
+  AppState, CompileResult, DupeReport, Insight, JobStatus, NodeCatalogue,
+  PackRow, Session, ShotPill, WorkflowMeta, WorkflowRow } from './types'
 
 const seg = encodeURIComponent
 
@@ -296,6 +297,44 @@ export const deleteOutput = (jobId: string, body?: unknown) =>
   post<Record<string, unknown>>(`/api/outputs/${seg(jobId)}/delete`, body)
 export const purgeOutputs = (body?: unknown) =>
   post<Record<string, unknown>>('/api/outputs/purge', body)
+
+/* ---- playground ------------------------------------------------------- */
+
+/** The app's own live graph, built from console state and returned without
+ *  running — what the room opens on. `dropped` names attachments whose bytes
+ *  do not cross into a seed. */
+export const playgroundSeed = (body: unknown) =>
+  post<{ ok?: boolean; kind: string; graph: Record<string, unknown>;
+         dropped?: string[] }>('/api/playground/seed', body)
+/** Queue one user-authored graph. Status and Stop are the same routes every
+ *  other job answers to. */
+export const playgroundRun = (body: unknown) =>
+  post<{ job_id: string }>('/api/playground/run', body)
+/** The engine-restart lever — a job, so the page can watch it land. */
+export const playgroundRestart = (host: string) =>
+  post<{ job_id: string }>('/api/playground/restart', { host })
+/** The cached /object_info. `{missing: true}` until first harvested. */
+export const playgroundNodes = () =>
+  api<NodeCatalogue & { missing?: boolean }>('/api/playground/nodes')
+export const playgroundRefresh = () =>
+  post<{ job_id: string }>('/api/playground/refresh')
+export const playgroundPacks = () =>
+  api<{ packs: PackRow[] }>('/api/playground/packs')
+export const installPack = (url: string, ref?: string) =>
+  post<{ job_id: string }>('/api/playground/packs', { url, ref })
+export const deletePack = (name: string) =>
+  post<{ ok?: boolean; note?: string }>('/api/playground/packs/delete', { name })
+
+export const listWorkflows = () =>
+  api<{ workflows: WorkflowRow[] }>('/api/workflows')
+export const getWorkflow = (name: string) =>
+  api<{ name: string; graph: Record<string, unknown>; meta: WorkflowMeta }>(
+    `/api/workflows/${seg(name)}`)
+export const saveWorkflow = (name: string, graph: unknown, meta: WorkflowMeta) =>
+  post<{ ok?: boolean; name?: string }>(`/api/workflows/${seg(name)}`,
+                                        { graph, meta })
+export const deleteWorkflow = (name: string) =>
+  post<{ ok?: boolean }>(`/api/workflows/${seg(name)}/delete`)
 
 /* ---- upload ---------------------------------------------------------- */
 

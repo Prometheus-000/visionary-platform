@@ -145,6 +145,12 @@ export function imageBody(s: Store): Record<string, unknown> {
     cfg_scale: s.img.cfg,
     shift: s.img.shift,
     gpu: s.gpu.image,
+    // The Playground toggle. Only while set — a request that names no
+    // workflow must be byte-identical to one from before the feature.
+    ...(s.img.workflow && {
+      workflow: s.img.workflow,
+      workflow_extras: s.img.workflowExtras,
+    }),
   }
 }
 

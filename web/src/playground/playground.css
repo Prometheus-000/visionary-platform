@@ -1,0 +1,125 @@
+/*
+ * The Playground's own sheet, on the app's vocabulary.
+ *
+ * Its own file on the blocking.css precedent — a room's chrome beside the
+ * room — and every value below is a token from ui.css, because a lab that
+ * invents its own alphas is the transcription drift that vocabulary block
+ * exists to end. Nothing here is monospace and nothing wears a devtools
+ * costume: the design thesis is that even the hood-open surface should not
+ * feel utilitarian.
+ */
+
+.view.playground{display:flex;flex-direction:column;min-height:0;flex:1}
+
+/* The bar: one quiet row of unbounded controls, the console's own rule —
+   the value is the control, and the box is spent only on hover or an open
+   popover. */
+.pgbar{display:flex;align-items:center;gap:6px;padding:8px 14px;
+  border-bottom:1px solid var(--line);flex:0 0 auto}
+.pgbar .opt{background:none;border-color:transparent;color:var(--mut)}
+.pgbar .opt:hover,.pgbar .opt.on{background:var(--wash-3);color:var(--fg)}
+.pgbar .opt.danger{color:var(--crit)}
+.pgbar .grow{flex:1}
+.pgbar .go{height:var(--control-h);padding:0 16px;border-radius:var(--r-control);
+  border:1px solid transparent;background:var(--fg);color:var(--bg);
+  font-weight:600;cursor:pointer}
+.pgbar .go:disabled{opacity:.4;cursor:default}
+
+.pgname-box{display:inline-flex;align-items:center;gap:4px}
+.pgwf{height:var(--control-h);width:150px;background:var(--wash-2);
+  border:1px solid var(--line);border-radius:var(--r-control);
+  color:var(--fg);padding:0 10px}
+.pgwf::placeholder{color:var(--dim)}
+.pgdot{width:6px;height:6px;border-radius:var(--r-pill);
+  background:var(--warn);flex:0 0 auto}
+
+/* The stage. xyflow's chrome re-grounded onto the tokens: its default theme
+   is someone else's palette, and two greys arguing is the one thing a canvas
+   must not do. */
+.pgstage{position:relative;flex:1;min-height:0}
+.pgstage .react-flow{background:var(--bg)}
+.pgstage .react-flow__attribution{background:none;color:var(--dim)}
+.pgstage .react-flow__edge-path{stroke:var(--line-2);stroke-width:1.5}
+.pgstage .react-flow__edge.selected .react-flow__edge-path{stroke:var(--fg)}
+.pgstage .react-flow__connection-path{stroke:var(--fg)}
+.pgempty{display:grid;place-items:center;height:100%;color:var(--dim)}
+
+/* A node is a card — content card ground, panel radius, label-cased title.
+   Selection is the app's own raised hairline, and the failing node wears the
+   crit wash: the error names it, the card shows it. */
+.pgcard{width:232px;background:var(--lift);border:1px solid var(--lift-line);
+  border-radius:var(--r-panel);box-shadow:var(--lift-cast);overflow:hidden}
+.react-flow__node.selected .pgcard{border-color:var(--line-2)}
+.react-flow__node.pgerr .pgcard{border-color:var(--crit-line);
+  background:linear-gradient(var(--crit-fill),var(--crit-fill)),var(--lift)}
+.pghead{display:flex;flex-direction:column;gap:1px;padding:8px 12px 6px;
+  border-bottom:1px solid var(--line)}
+.pgtitle{font-size:12px;font-weight:600;color:var(--fg);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pgclass{font-size:10px;color:var(--dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.pgrow{position:relative;display:flex;align-items:center;gap:6px;
+  padding:3px 12px;min-height:24px}
+.pgrow.out{justify-content:flex-end}
+.pgrow.want .pgname{color:var(--warn)}
+.pgname{font-size:11px;color:var(--mut);flex:0 0 auto;max-width:45%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pgval{flex:1;min-width:0;height:22px;font-size:11px;color:var(--fg);
+  background:var(--wash-1);border:1px solid transparent;
+  border-radius:var(--r-inner);padding:0 6px}
+.pgval:hover,.pgval:focus{background:var(--wash-2);border-color:var(--line)}
+select.pgval{appearance:none}
+input[type=checkbox].pgval{flex:0 0 auto;width:14px;height:14px;accent-color:var(--fg)}
+.pgfile{display:inline-flex;align-items:center;cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mut)}
+.pgfile:hover{color:var(--fg)}
+
+/* Ports sit on the card's edge, small until aimed at — spatial feedback
+   about scope, which is the one job hover keeps. */
+.pgport{width:8px;height:8px;background:var(--bg);
+  border:1.5px solid var(--line-2)}
+.pgport:hover,.react-flow__handle.connectingto{border-color:var(--fg)}
+
+/* Notes and progress float over the stage's lower edge — the wait says what
+   it is doing, where the eye already is. */
+.pgnote{position:absolute;left:14px;right:14px;bottom:14px;display:flex;
+  align-items:center;gap:10px;background:var(--lift);
+  border:1px solid var(--lift-line);border-radius:var(--r-panel);
+  box-shadow:var(--lift-cast);padding:10px 14px;z-index:5}
+.pgnote.quiet{color:var(--mut);font-size:12px}
+.pgnote>span{flex:1}
+.pgprog{position:absolute;left:14px;right:14px;bottom:14px;display:flex;
+  align-items:center;gap:10px;background:var(--lift);
+  border:1px solid var(--lift-line);border-radius:var(--r-panel);
+  box-shadow:var(--lift-cast);padding:10px 14px;z-index:5}
+.pgphase{font-size:12px;color:var(--fg);flex:0 0 auto}
+.pgpct{font-size:12px;color:var(--mut)}
+.pgtrack{flex:1;height:3px;border-radius:var(--r-pill);background:var(--wash-3)}
+.pgfill{height:100%;border-radius:var(--r-pill);background:var(--fg);
+  transition:width .3s ease}
+
+/* What came out — a strip under the stage; the gallery holds the record. */
+.pgresults{display:flex;gap:8px;padding:10px 14px;overflow-x:auto;
+  border-top:1px solid var(--line);flex:0 0 auto}
+.pgresults img,.pgresults video{height:120px;border-radius:var(--r-control);
+  border:1px solid var(--line)}
+
+/* The add-node and packs popovers. */
+.pgadd input[type=text],.pgpacks input[type=text]{width:240px;
+  height:var(--control-h);background:var(--wash-2);
+  border:1px solid var(--line);border-radius:var(--r-control);
+  color:var(--fg);padding:0 10px;margin-bottom:6px}
+.pgadd-list{display:flex;flex-direction:column;max-height:300px;
+  overflow-y:auto}
+.pgadd-list button{display:flex;justify-content:space-between;gap:10px;
+  background:none;border:0;color:var(--fg);text-align:left;
+  padding:6px 8px;border-radius:var(--r-inner);cursor:pointer;font-size:12px}
+.pgadd-list button:hover{background:var(--wash-3)}
+.pgadd-list .hint,.pgpack .hint{color:var(--dim);font-size:10px}
+.pgadd-none{color:var(--dim);font-size:12px;padding:6px 8px}
+.pgpack{display:flex;align-items:center;gap:8px;padding:4px 0}
+.pgpack-name{flex:1;font-size:12px;color:var(--fg);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.pgpack-add{display:flex;align-items:center;gap:6px;margin-top:4px}
+.pgpacks hr{border:0;border-top:1px solid var(--line);margin:8px 0}

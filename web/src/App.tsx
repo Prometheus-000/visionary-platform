@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 
 import { failed } from './api/client'
 import { fileUrl, getState, warm } from './api/routes'
@@ -13,7 +13,13 @@ import { MetaSheet } from './gallery/MetaSheet'
 import { Viewer } from './gallery/Viewer'
 import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
-import { IconBack, IconCube, IconPanel, IconPhoto, IconStack, IconTrain } from './icons'
+import { IconBack, IconCube, IconNodes, IconPanel, IconPhoto, IconStack, IconTrain } from './icons'
+
+// Split, not imported: the graph surface is the one dependency-heavy room in
+// the product, and the page must pay for it when the door is opened, never on
+// load. The chunk is cached after the first visit.
+const Playground = lazy(() =>
+  import('./playground/Playground').then((m) => ({ default: m.Playground })))
 import { fileToB64, toB64 } from './media/files'
 import { live } from './scene/model'
 import { Settings } from './settings/Settings'
@@ -555,6 +561,21 @@ export function App() {
             <span className="door-word">Sets</span>
           </button>
         )}
+        {/* The node room. A door on the Sheet precedent — experimenting on
+            the engine is neither generating nor training — and the same
+            Done rule, so two things never look equally selected. */}
+        {!train && (
+          <button className="door" id="door-playground" type="button"
+                  title="The Playground — the backend's own graph, rewired by hand"
+                  onClick={() => {
+                    s.setMode(s.mode === 'playground' ? 'generate' : 'playground')
+                  }}>
+            <IconNodes />
+            <span className="door-word">
+              {s.mode === 'playground' ? 'Done' : 'Playground'}
+            </span>
+          </button>
+        )}
         {/* Each door names its own landing: Training opens on the board even if
             Sets was the last screen open in there — a door that lands you
             somewhere other than what it says is the header lying. */}
@@ -577,7 +598,11 @@ export function App() {
       </header>
 
       <div className="views">
-        {s.mode === 'sheet' ? (
+        {s.mode === 'playground' ? (
+          <Suspense fallback={null}>
+            <Playground />
+          </Suspense>
+        ) : s.mode === 'sheet' ? (
           <SheetBuilder />
         ) : train ? (
           // A set can hold clips now, and the viewer needs to know which it is being

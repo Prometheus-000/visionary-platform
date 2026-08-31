@@ -19,6 +19,12 @@ export function IconPhoto() {
   )
 }
 
+export function IconNodes() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="7" r="2.6"/><circle cx="6" cy="17" r="2.6"/><circle cx="18" cy="12" r="2.6"/><path d="M8.5 7.8l7 3.2M8.5 16.2l7-3.2"/></svg>
+  )
+}
+
 export function IconPlay() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 5.6a1.8 1.8 0 0 0-2.8 1.5v9.8A1.8 1.8 0 0 0 9 18.4l7.9-4.9a1.8 1.8 0 0 0 0-3z"/></svg>

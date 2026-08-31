@@ -45,7 +45,11 @@ export type Kind = 'image' | 'video'
 // 'sheet' is the character-sheet composer — its own surface, entered by a
 // door like Train, because composing a reference sheet is neither generating
 // nor training and squatting in either room made it a popover.
-export type Mode = 'generate' | 'train' | 'sheet'
+// 'playground' is the node room — the backend's own graph on screen, rewired
+// by hand. A door on the same argument as Sheet: experimenting on the engine
+// is neither generating nor training, and the veto list governs the product
+// canvas, not the lab.
+export type Mode = 'generate' | 'train' | 'sheet' | 'playground'
 
 /** What the region layer draws. See `Store.edit` for what each one means and why
  *  editing a box's contents and redrawing the box are two states rather than one. */
@@ -206,6 +210,14 @@ export type ImageComposer = {
   shift: string
   seed: string
   n: number
+  /** The Playground toggle: '' runs the built-in graph, a name runs that saved
+   *  workflow with the console's compiled values substituted in. See
+   *  _apply_workflow in app.py for what "substituted" means. */
+  workflow: string
+  /** Values for the workflow's exposed inputs — {nodeKey: {input: value}}.
+   *  Only sent while `workflow` is set; kept per-composer so toggling back to
+   *  Default does not forget what you dialled in. */
+  workflowExtras: Record<string, Record<string, string | number | boolean>>
 }
 
 export type VideoComposer = {
@@ -222,6 +234,9 @@ export type VideoComposer = {
    *  changes what a take costs rather than what it contains — reference tokens
    *  ride every sampling step, so this is a per-step price. */
   refSize: 'match' | 'max'
+  /** Same pair as the image side — see ImageComposer.workflow. */
+  workflow: string
+  workflowExtras: Record<string, Record<string, string | number | boolean>>
 }
 
 export type { LoraChip }
@@ -254,6 +269,7 @@ const IMAGE: ImageComposer = {
   height: 896,
   sampler: '', scheduler: '', steps: '', cfg: '', shift: '', seed: '',
   n: 1,
+  workflow: '', workflowExtras: {},
 }
 
 const VIDEO: VideoComposer = {
@@ -262,6 +278,38 @@ const VIDEO: VideoComposer = {
   tier: '', seconds: '', sampler: '', scheduler: '',
   steps: '', seed: '',
   refSize: 'match',
+  workflow: '', workflowExtras: {},
+}
+
+/** One ComfyUI node as the wire spells it. `_meta.title` is ComfyUI's own
+ *  optional label field, carried so a renamed node round-trips. */
+export type PgNode = {
+  class_type: string
+  inputs?: Record<string, unknown>
+  _meta?: { title?: string }
+}
+export type PgGraph = Record<string, PgNode>
+
+export type Playground = {
+  /** null until first seeded — the room seeds itself from the console. */
+  graph: PgGraph | null
+  /** What the graph was seeded from, kept for the save-time diff that finds
+   *  the inputs a workflow exposes to the console. */
+  seed: PgGraph | null
+  /** Which engine runs it — the same choice the console makes by duration. */
+  host: Kind
+  /** Saved-as name; '' while unsaved. */
+  name: string
+  dirty: boolean
+  /** Selected node key, or null. */
+  sel: string | null
+  /** {filename: base64} for the files LoadImage-style nodes name. */
+  attachments: Record<string, string>
+}
+
+const PLAYGROUND: Playground = {
+  graph: null, seed: null, host: 'image', name: '', dirty: false,
+  sel: null, attachments: {},
 }
 
 
@@ -341,6 +389,16 @@ export type Store = {
   vid: VideoComposer
   setImg: (patch: Partial<ImageComposer>) => void
   setVid: (patch: Partial<VideoComposer>) => void
+
+  /* ---- the playground --------------------------------------------------- */
+  /** The node room's whole state. The graph is the wire format itself — the
+   *  API graph /prompt takes — because a second in-editor shape would be a
+   *  translation layer with its own bugs, and the PNG round-trip only has to
+   *  be honest if what is on screen *is* what runs. Node positions are not
+   *  here: layout is computed (the frame is computed, never authored), and a
+   *  drag is session-local. */
+  pg: Playground
+  setPg: (p: Partial<Playground>) => void
   /** Chosen once a session, and it already confirms a cold start when it
    *  changes — so it lives under the gear rather than in the strip. */
   gpu: { image: string; video: string }
@@ -713,6 +771,9 @@ export const useStore = create<Store>((set, get) => ({
   vid: VIDEO,
   setImg: (patch) => set((s): Partial<Store> => ({ img: { ...s.img, ...patch } })),
   setVid: (patch) => set((s): Partial<Store> => ({ vid: { ...s.vid, ...patch } })),
+
+  pg: PLAYGROUND,
+  setPg: (patch) => set((s): Partial<Store> => ({ pg: { ...s.pg, ...patch } })),
   gpu: { image: '', video: '' },
   setGpu: (patch) => set((s): Partial<Store> => ({ gpu: { ...s.gpu, ...patch } })),
 

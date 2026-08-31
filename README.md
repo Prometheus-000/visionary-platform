@@ -62,6 +62,14 @@ concept). A panel reads the set back to you — trigger-word coverage, caption
 length, repeated clauses — and duplicate detection flags copies before they
 train unevenly.
 
+**Open the hood in the Playground.** A node room over the same engine: it
+opens on the exact graph the app itself would run, and you rewire it, add
+nodes, install packs from git, and run the result on the same warm GPU.
+Workflows save as plain API-format JSON on your volume, every render embeds
+its own graph the way ComfyUI does — the PNG *is* the workflow, droppable back
+onto the room — and a saved workflow can stand in for the built-in graph from
+the model menu, with the console still compiling your prompt into it.
+
 ![Seventy-seven tiles, each animating the move it names](docs/shot-palette.png)
 ![A take, the pills that produced it, and the gallery beside it](docs/video.png)
 ![A box per character, each LoRA masked to its own rectangle](docs/regional.png)
