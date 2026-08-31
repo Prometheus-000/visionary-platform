@@ -6,6 +6,7 @@ import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { loraIndex, readChips, stripLoras } from '../lora/tokens'
 import { readRegions } from '../regions/geometry'
+import { refreshArsenal } from '../scene/arsenal'
 import { attached, negAllowed, readShot, regionsLive, useStore, type Store } from '../store'
 import { readSize } from '../console/size'
 
@@ -203,6 +204,10 @@ export function useGenerate(onLanded: (it: GalleryItem) => void) {
   }, [onLanded])
 
   const start = useCallback(async () => {
+    // The image side's half of the same rule — see `useVideo.start`. A box
+    // holding a recalled character re-reads it off the shelf before the body is
+    // built, so the face that renders is the one in the library now.
+    await refreshArsenal()
     const s = useStore.getState()
     const body = imageBody(s)
     if (!body.prompt && !(body.regions as unknown[]).length) return

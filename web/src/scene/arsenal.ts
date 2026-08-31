@@ -58,6 +58,88 @@ export async function save(member: CastMember): Promise<string | null> {
 }
 
 /**
+ * Re-read every recalled file off the Arsenal, and re-point what changed.
+ *
+ * **This is the second half of "things are applied, never imported".** The
+ * roadmap's veto states both halves as one rule — *edits in a scene are
+ * scene-local, edits in the library propagate, and those are two different acts
+ * in two different places* — and only the first half was built. `hydrate` copied
+ * the bytes and stopped, so re-shooting `@maya`'s reference left every scene
+ * that already had her holding the old picture, permanently and silently.
+ *
+ * It was invisible while a scene died with its tab: the library and the copy had
+ * one session to disagree in and no way to show it. `keep.ts` is what changed
+ * that — a hydrated cast now outlives the library state it was copied from —
+ * which is why this landed with persistence rather than before it.
+ *
+ * **The pool is content-keyed, so a changed file is a new entry and not a
+ * mutated one.** `PoolFile.id` is a hash of what travels, and that is what makes
+ * `<Picture N>` derivable rather than kept in step by hand — writing new bytes
+ * under an old id would break the one invariant `pool.ts` exists to hold. So a
+ * change is a migration: intake the new bytes, rewrite every `CastRef` that
+ * pointed at the old id, and drop the old entry. Identical bytes hash to the
+ * same id and cost nothing but the fetch.
+ *
+ * **Quiet and partial, like `hydrate`.** A file the shelf no longer has is left
+ * exactly as it is rather than blanked — losing a character's face because a
+ * folder was tidied is worse than holding a picture one revision behind, and the
+ * run that follows is one you can still explain.
+ *
+ * Returns the handles whose bytes actually moved, so a caller can say so.
+ */
+export async function refreshArsenal(): Promise<string[]> {
+  const moved = new Set<string>()
+
+  // ── the video side: the pool, re-pointed by id ────────────────────────────
+  const pool = useStore.getState().pool
+  for (const old of Object.values(pool)) {
+    if (!old.from) continue
+    try {
+      const res = await fetch(characterFileUrl(old.from.handle, old.from.file))
+      if (!res.ok) continue
+      const blob = await res.blob()
+      const got = await intake(new File([blob], old.from.file, { type: blob.type }),
+                               old.from)
+      if (!got || got.id === old.id) {
+        // Unchanged. The object URL just minted is a handle on bytes nothing
+        // will point at, so it is released rather than left to the tab.
+        if (got) URL.revokeObjectURL(got.url)
+        continue
+      }
+      const st = useStore.getState()
+      st.addFile(got)
+      st.repointRefs(old.id, got.id)
+      st.dropFile(old.id)
+      moved.add(old.from.handle)
+    } catch {
+      // See the docstring: one revision behind beats a blank.
+    }
+  }
+
+  // ── the image side: bytes in place, because a box has no id to re-point ───
+  const regions = useStore.getState().regions
+  for (let i = 0; i < regions.length; i++) {
+    const a = regions[i]?.attachments.find((x) => x.role === 'identity')
+    if (!a?.from) continue
+    try {
+      const res = await fetch(characterFileUrl(a.from.handle, a.from.file))
+      if (!res.ok) continue
+      const b64 = await toB64(await res.blob())
+      if (!b64 || b64 === a.image) continue
+      // Re-found by id across the await: a box can be added, removed or
+      // reordered while two round trips are in flight, and an index would then
+      // name somebody else's rectangle.
+      const now = useStore.getState().regions.findIndex((r) => r.id === regions[i]!.id)
+      if (now < 0) continue
+      useStore.getState().attach(now, 'identity', b64, a.from)
+      moved.add(a.from.handle)
+    } catch { /* as above */ }
+  }
+
+  return [...moved]
+}
+
+/**
  * The same shelf, reached from the image side.
  *
  * **A character placed on the canvas and a character cast in the composer are
@@ -134,7 +216,10 @@ export async function hydrateRegion(
     if (!res.ok) return
     const b64 = await toB64(await res.blob())
     const now = at()
-    if (b64 && now >= 0) useStore.getState().attach(now, 'identity', b64)
+    if (b64 && now >= 0) {
+      useStore.getState().attach(now, 'identity', b64,
+                                 { handle: saved.handle, file: pic.file })
+    }
   } catch {
     // A photograph that would not fetch leaves the box with its sentence and
     // its weight, which is visible on the card and needs no sentence about it.
@@ -160,7 +245,8 @@ export async function hydrate(memberId: string, saved: SavedCharacter): Promise<
       const res = await fetch(characterFileUrl(saved.handle, ref.file))
       if (!res.ok) continue
       const blob = await res.blob()
-      const got = await intake(new File([blob], ref.file, { type: blob.type }))
+      const got = await intake(new File([blob], ref.file, { type: blob.type }),
+                               { handle: saved.handle, file: ref.file })
       if (!got) continue
       const now = useStore.getState()
       now.addFile(got)

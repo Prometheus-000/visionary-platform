@@ -1,3 +1,4 @@
+import { refreshArsenal } from './scene/arsenal'
 import { SESSION } from './datasets/session'
 import { newMember, newShot, seedShotIds } from './scene/model'
 import { newRegion, seedRegionIds, useStore, type Store } from './store'
@@ -275,6 +276,13 @@ export async function restore(): Promise<void> {
     ])
     seedRegionIds((patch.regions ?? []).map((x) => x.id))
     useStore.setState(patch)
+    // **A restored cast re-reads the shelf.** This is the reason `PoolFile.from`
+    // exists: persistence is what lets a recalled character outlive the library
+    // it was copied from, so the moment that becomes possible is the moment the
+    // second half of *edits in the library propagate* has to run. Not awaited —
+    // it is a fetch per recalled file and the composer must not wait on the
+    // shelf to paint; what it finds arrives a beat later, in place.
+    void refreshArsenal()
   } catch {
     // Storage is a courtesy. There is no error worth showing on a cold load for
     // a feature whose failure mode is the behaviour that shipped for a year.

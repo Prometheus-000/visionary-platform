@@ -48,7 +48,10 @@ async function idOf(b64: string): Promise<string> {
  * unlucky one. Video and audio are sent whole: there is nothing here that can
  * re-encode either.
  */
-export async function intake(f: File): Promise<PoolFile | null> {
+export async function intake(
+  f: File,
+  from?: { handle: string; file: string },
+): Promise<PoolFile | null> {
   const kind = mediaOf(f.type)
   if (!kind) return null
   const b64 = await (kind === 'image' ? shrinkB64(f) : toB64(f))
@@ -65,5 +68,7 @@ export async function intake(f: File): Promise<PoolFile | null> {
     // a thumbnail for every reference as a data URI is the whole payload rendered
     // twice, once for the model and once for a 64px square.
     url: URL.createObjectURL(f),
+    // Only a recall passes this. See `PoolFile.from` and `refreshArsenal`.
+    ...(from ? { from } : {}),
   }
 }

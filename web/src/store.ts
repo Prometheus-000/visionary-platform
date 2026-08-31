@@ -142,7 +142,15 @@ export type Role =
  *  "a motorcycle she leans against" — and an object with no sentence does
  *  close to nothing, which is why the backend refuses one. It is the cast
  *  row's `ref.note` wearing the image side's record. */
-export type Attachment = { role: Role; image: string; note?: string }
+export type Attachment = {
+  role: Role
+  image: string
+  note?: string
+  /** The Arsenal file this came off — see `PoolFile.from`, which carries the
+   *  same fact for the video side's pool. The image side has no id to re-point,
+   *  so a refresh replaces `image` where it stands. */
+  from?: { handle: string; file: string }
+}
 
 /** Everything a picture can be given to. The frame is one of these, which is what stops
  *  "a photo on a box" and "a photo on the canvas" from being two systems. */
@@ -160,9 +168,14 @@ export const setAttached = (
   list: Attachment[],
   role: Role,
   image: string | null,
+  from?: { handle: string; file: string },
 ): Attachment[] => {
   const rest = list.filter((a) => a.role !== role)
-  return image ? [...rest, { role, image }] : rest
+  // `from` is only ever set by a recall. A hand-dropped photograph replacing a
+  // recalled one passes nothing and the provenance goes with the picture it
+  // described — which is right: what is on the box now came off the Finder, and
+  // a later library edit has no claim on it.
+  return image ? [...rest, { role, image, ...(from ? { from } : {}) }] : rest
 }
 
 /** The object plates' sentence. Only an attachment that exists takes one —
@@ -418,7 +431,8 @@ export type Store = {
   /** One picture onto one place. `where` is a region's index or the frame, and that
    *  argument is the entire difference between "this character" and "this scene" —
    *  same gesture, same record, different target. */
-  attach: (where: number | 'frame', role: Role, image: string | null) => void
+  attach: (where: number | 'frame', role: Role, image: string | null,
+           from?: { handle: string; file: string }) => void
   /** The sentence on an object plate — frame-scope only, because only the
    *  frame's attachments carry notes. */
   notePlate: (role: Role, note: string) => void
@@ -520,6 +534,23 @@ export type Store = {
   patchCast: (id: string, patch: Partial<CastMember>) => void
   dropCast: (id: string) => void
   addFile: (f: PoolFile) => void
+  /**
+   * Move every reference from one pool id to another, and forget the old file.
+   *
+   * The pool is keyed by content, so a library file whose bytes changed is a
+   * *new* entry rather than a mutated one — writing new bytes under an old id
+   * would break the hash `<Picture N>` is derived from. Re-pointing is therefore
+   * the whole of an update, and it has to be one action: a rewrite followed by a
+   * separate delete leaves a window where a ref names a file the pool no longer
+   * has, and `assets()` would number around the gap. See `refreshArsenal`.
+   *
+   * The old entry's object URL is revoked here because this is the only place a
+   * file has ever left the pool. Nothing else removes one — `detachRef` drops
+   * the pointer and leaves the bytes, which is right while another member may
+   * still point at them.
+   */
+  repointRefs: (from: string, to: string) => void
+  dropFile: (id: string) => void
   /** One file onto one slot of one cast member. A second slot on the same file
    *  adds a role rather than a second entry — that is what makes "this photo is
    *  both the wardrobe and the body" one upload. */
@@ -664,12 +695,12 @@ export const useStore = create<Store>((set, get) => ({
   select: (i) => set((s) => ({ rsel: i >= 0 && i < s.regions.length ? i : -1 })),
   setRegionWeight: (regionWeight) => set({ regionWeight }),
   setStyleStrength: (styleStrength) => set({ styleStrength }),
-  attach: (where, role, image) => set((s) => (
+  attach: (where, role, image, from) => set((s) => (
     where === 'frame'
-      ? { frame: { attachments: setAttached(s.frame.attachments, role, image) } }
+      ? { frame: { attachments: setAttached(s.frame.attachments, role, image, from) } }
       : {
           regions: s.regions.map((r, n) => (n === where
-            ? { ...r, attachments: setAttached(r.attachments, role, image) }
+            ? { ...r, attachments: setAttached(r.attachments, role, image, from) }
             : r)),
         }
   )),
@@ -791,6 +822,39 @@ export const useStore = create<Store>((set, get) => ({
     railOpen: s.railOpen === id ? null : s.railOpen,
   })),
   addFile: (f) => set((s) => (s.pool[f.id] ? {} : { pool: { ...s.pool, [f.id]: f } })),
+  repointRefs: (from, to) => set((s) => {
+    if (from === to) return {}
+    const cast = s.scene.cast.map((c) => {
+      if (!c.refs.some((r) => r.fileId === from)) return c
+      // A member already holding the new id keeps one entry rather than two:
+      // the same rule `attachSlot` follows, and the reason the pool is keyed by
+      // content at all — two rows pointing at one picture is two `<Picture N>`
+      // labels for one upload.
+      return { ...c, refs: c.refs.some((r) => r.fileId === to)
+        ? c.refs.filter((r) => r.fileId !== from)
+        : c.refs.map((r) => (r.fileId === from ? { ...r, fileId: to } : r)) }
+    })
+    // **`sources` too, and inside `scene` where it lives.** A clip-level source
+    // is unlikely to be a recalled file, but `dropFile` removes the old entry
+    // either way and `readScene` filters an id the pool has lost — so missing
+    // this would take a keyframe out of the payload with nothing on screen
+    // saying so, which is the one failure worse than an error.
+    const sources = Object.fromEntries(
+      Object.entries(s.scene.sources).map(([k, ids]) => [
+        k, [...new Set((ids as string[]).map((i) => (i === from ? to : i)))],
+      ]),
+    ) as Scene['sources']
+    return { scene: { ...s.scene, cast, sources } }
+  }),
+  dropFile: (id) => set((s) => {
+    const f = s.pool[id]
+    if (!f) return {}
+    // The one place a file leaves the pool, so the one place its object URL can
+    // be released without stranding a thumbnail somebody is still looking at.
+    if (f.url) URL.revokeObjectURL(f.url)
+    const { [id]: _gone, ...rest } = s.pool
+    return { pool: rest }
+  }),
   attachSlot: (castId, fileId, slot) => set((s) => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => {
       if (c.id !== castId) return c

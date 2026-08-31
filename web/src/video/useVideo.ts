@@ -6,6 +6,7 @@ import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { readVidChips, stripLoras } from '../lora/tokens'
 import { readShot, useStore, type Store } from '../store'
+import { refreshArsenal } from '../scene/arsenal'
 import { readScene, sceneSeconds, typedProse } from '../scene/model'
 import { resolveVid } from '../console/resolve'
 import { lastFrame } from './lastFrame'
@@ -179,6 +180,14 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
   }, [onLanded])
 
   const start = useCallback(async () => {
+    // **The shelf wins, and this is where that is decided.** A recalled
+    // character is applied rather than imported, so the bytes that run are the
+    // library's as of now — not as of whenever somebody typed the name. Awaited
+    // before the body is read, because `readScene` numbers `<Picture N>` off the
+    // pool and a refresh landing mid-request would number one picture and upload
+    // another. One same-origin fetch per recalled file, on a path that already
+    // costs minutes. See `refreshArsenal`.
+    await refreshArsenal()
     const s = useStore.getState()
     if (!stripLoras(typedProse(s.scene))) return
     // Keep the last clip on screen and overlay a progress state on it — see `jobId`

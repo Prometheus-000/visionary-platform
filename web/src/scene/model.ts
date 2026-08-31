@@ -31,6 +31,20 @@ export type PoolFile = {
   kind: Media
   b64: string
   url: string
+  /**
+   * The Arsenal file this came off, when it came off one.
+   *
+   * **A recalled character is applied, not imported** — the roadmap's veto in
+   * its own words, and the half that was missing. Recall copied the bytes and
+   * stopped, so re-shooting `@maya`'s reference left every scene that already
+   * had her holding the old picture forever. Harmless while a scene died with
+   * the tab; `keep.ts` made a scene outlive the library it was copied from,
+   * which is the first moment the two could disagree.
+   *
+   * Absent for a dropped file, which has no library behind it and is nobody's
+   * to update. See `refreshArsenal`.
+   */
+  from?: { handle: string; file: string }
 }
 
 // ── the cast ────────────────────────────────────────────────────────────────
