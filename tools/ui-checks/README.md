@@ -71,6 +71,19 @@ Two smaller things fell out of it:
   asserting on the mechanism would fail one implementation for a structural
   reason, which is the fault named below.
 
+**`check_arsenal.py` asserts colours, and that is the point of it.** A reference
+that failed to follow the library renders perfectly — same shape, same size, same
+card, a different face — so nothing about the failure is visible unless you know
+what the picture was supposed to become. Each step writes a flat swatch of a known
+colour into the Arsenal over HTTP, behind the page's back, and reads the colour
+back off the tile the page is showing. Four colours in sequence rather than two,
+because the interesting failure is off-by-one in time: red → blue proves *a*
+change propagated, red → blue → green → yellow proves the page is following the
+library rather than lagging it by one revision. Its last two rows are the negative
+case — a dropped photograph has no library behind it and must come through
+untouched — which is what stops a widened provenance test from passing every other
+row while dropped files start chasing an entry they never came from.
+
 **Crossing consoles is one gesture with two callers, and `#g-duration` is not
 it any more.** `check_drop.py` owns `cross()`; `check_loras.py` holds a verbatim
 copy. Both drive `#g-sampling`/`#v-sampling` and select `image:turbo` or
