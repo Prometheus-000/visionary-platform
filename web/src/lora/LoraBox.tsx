@@ -17,9 +17,10 @@ import { useStore } from '../store'
  *   - **Zero pixels at rest.** Nothing to render with no LoRAs, which is the rule
  *     `#shot-rail:empty` encodes — a row is affordable when it carries content
  *     and never when it carries one control.
- *   - **In flow**, so nothing sits on top of a render. A popover floats over the
- *     canvas; this pushes the console, and `fieldMax()` already absorbs exactly
- *     that for the peek's own panel.
+ *   - **In flow**, so nothing sits on top of a render. A popover floats over
+ *     the canvas; this pushes the console, whose own overflow cap absorbs it —
+ *     the field no longer yields to make room, since its height stopped being
+ *     budget-derived. See `fieldMax.ts`.
  *   - **It does not close on scroll**, which is this codebase's standing
  *     objection to `Popover` and disqualifying for a box you type numbers into.
  *   - It is a shape already on screen.

@@ -1,32 +1,32 @@
 """
-How tall the console gets, and whether that still fits the 30% budget.
+The field fits its content up to three lines, and the canvas stays dominant.
 
 Replaces the earlier `measure_console.py`, which had gone stale in a way worth
 recording: it drove `#kinds`, `#toggle-adv` and `#v-toggle-adv`, none of which
-survived the console redesign — Advanced became the model/sampling popovers and
-the kind switch became a chip in the prompt field. It still ran, still printed a
-table, and the numbers were of a page it was no longer opening. A harness that
-reports on controls it failed to click is worse than no harness, so this one
-asserts the selector exists before it measures anything.
+survived the console redesign. A harness that reports on controls it failed to
+click is worse than no harness, so this one asserts the selector exists before
+it measures anything.
 
-The budget is 30% of the viewport. `fieldMax()` hands the prompt whatever is
-left after everything else, so the worst case is not a long prompt on its own —
-it is a long prompt with the pill rail wrapped and regions armed,
-because those arrive long after the last keystroke. That is the state the
-ResizeObserver exists for, and the one that measured 38.1% without it.
+**The 30% budget this file used to defend is retired, on the owner's ruling:**
+"That number has caused me more trouble than it's worth. It was never meant to
+be exact. The point was that the canvas should always be dominant — the second
+it's not, the platform becomes utilitarian. The prompt box should grow and
+contract based on content." The budget arithmetic that derived the field's cap
+from the viewport — with its floor, its quantiser and its ResizeObserver, each
+defending the last — went with it; the history is in `fieldMax.ts`.
 
-**The assertion is the formula, not the 30%**, and the difference is the whole
-reason this file is worth having. A bare `frac <= 0.30` fails at 1440x900 —
-the budget leaves the field about 38px there, `FIELD_FLOOR` clamps it to 52,
-and the console lands at 31.6%. That is not a regression, it is the documented
-trade: below two lines the box stops being a place you can write, so the floor
-is allowed to win. Checking the symptom would have reported the design as a bug
-on the shortest viewport anyone uses. So what is pinned is
+Two assertions now, and they are different kinds of claim:
 
-    field  == max(FLOOR, min(CEIL, innerHeight * 0.30 - other))
+    field == min(content, chrome + 3 * line)     # the formula, exact
+    console / viewport < 0.50                    # dominance, a tripwire
 
-which is true at every viewport, says *why* the console is over when it is over,
-and is exactly what a React `fieldMax` has to reproduce.
+The first is the page's contract and fails on any drift. The second is the
+actual invariant the number was always standing in for: the canvas is the
+largest thing on screen. A console at 50% is not something to squeeze a field
+over — it is a layout that needs designing, and the ruling says so — so the
+probe surfaces it as a failure rather than absorbing it, per the standing rule
+that a broken limit is information: find which side is lying, never clamp the
+one that is easier to silence.
 """
 import re
 import sys
@@ -35,10 +35,12 @@ from playwright.sync_api import sync_playwright
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8791"
 
-# Mirrored from the page, and deliberately not imported: if these three drift
-# apart from `CONSOLE_BUDGET`/`FIELD_FLOOR`/`FIELD_CEIL` in the source, the
-# check should fail rather than quietly follow the new numbers.
-BUDGET, FIELD_FLOOR, FIELD_CEIL = 0.30, 52, 168
+# Mirrored from the page, and deliberately not imported: if these drift apart
+# from `FIELD_LINES` in `fieldMax.ts`, the check should fail rather than
+# quietly follow the new numbers. DOMINANCE is the probe's own line in the
+# sand — the ruling's "never come close to 50%", asserted at 50 so the failure
+# names the moment the canvas stops being the largest thing on screen.
+FIELD_LINES, DOMINANCE = 3, 0.50
 
 # 14" MBP, 13" MBP, 16" MBP. The 13" is the one that binds — it is the shortest
 # viewport the console has to fit inside, so it is where the budget is decided.
@@ -55,30 +57,19 @@ def need(pg, sel):
     return sel
 
 
-def whole_lines(m, cap):
+def field_cap(m):
     """
-    The cap, rounded down to a whole number of lines — `wholeLines` in
-    `console/fieldMax.ts`, mirrored here for the reason the three constants
-    above are: if the two drift apart, this should fail rather than follow.
+    `cap()` in `console/fieldMax.ts`, mirrored rather than imported.
 
-    **The rule this replaces was `field == fieldMax()` exactly, and it was the
-    right assertion for a cap that was applied raw.** It is not any more, and the
-    fault it stopped catching is the reason: every constant in that file is a
-    pixel count and a line is 21px on 8px of padding, so `FIELD_FLOOR` came out
-    at 2.095 lines. The box permanently showed a 2px sliver of the line below,
-    and once the text scrolled the browser moved it by whatever kept the caret
-    in view — 14.5px, measured — leaving the caret inside a half-rendered line
-    with the row above it sliced through the middle. The check passed
-    throughout, because a box of 2.095 lines is exactly `fieldMax()`.
-
-    So the contract is now *the largest whole number of lines that fits the cap*,
-    which is strictly stronger: it still pins the cap, and it additionally pins
-    that the height lands on a line.
+    Stated in lines, not pixels, which is what dissolved the half-rendered-row
+    bug the old quantiser existed for: `chrome + 3 × line` is on a line
+    boundary by construction, at every viewport, so there is no arbitrary
+    pixel to round and no sliver for the caret to land in.
     """
     line, chrome = m.get("line") or 0, m.get("chrome") or 0
     if line <= 0:
-        return cap
-    return chrome + max(1, int((cap - chrome) // line)) * line
+        return 72  # FALLBACK_CAP, same mirror rule
+    return chrome + FIELD_LINES * line
 
 
 def measure(pg, label, rows):
@@ -97,6 +88,10 @@ def measure(pg, label, rows):
               // scrollHeight > clientHeight means the text wants more room than
               // it was given, which is the state where the cap has to bind.
               overflowing: f ? f.scrollHeight > f.clientHeight + 1 : false,
+              // The content's own height — what the field would be with no cap.
+              // A clamped textarea still reports it, which is what lets the
+              // formula below be asserted from outside the page.
+              scrollH: f ? f.scrollHeight : 0,
               // What a line costs, and what the box spends before the first one.
               // Read off the page rather than written here: the cap is quantised
               // to whole lines and the quantum is a property of the field's own
@@ -110,16 +105,16 @@ def measure(pg, label, rows):
     if m["console"] is None or m["field"] is None:
         raise AssertionError(".console or the live field is not on the page")
 
-    other = m["console"] - m["field"]
-    want = max(FIELD_FLOOR, min(FIELD_CEIL, m["vh"] * BUDGET - other))
+    # The page's whole contract: content, up to three lines of this field's
+    # own type. `scrollHeight` of a clamped textarea is still the content's
+    # height, which is what makes the formula assertable from outside.
+    want = min(m["scrollH"], field_cap(m))
     rows.append({
         "state": label, "console": round(m["console"]), "canvas": round(m["canvas"] or 0),
-        "field": round(m["field"]), "other": round(other),
-        "want_field": round(want), "want_lines": round(whole_lines(m, want)),
+        "field": round(m["field"]),
+        "want_field": round(want), "want_lines": round(want),
         "frac": round(m["console"] / m["vh"], 4),
         "overflowing": bool(m["overflowing"]),
-        # Over budget is only legitimate when the floor is what forced it.
-        "floored": round(want) <= FIELD_FLOOR,
     })
 
 
@@ -318,23 +313,22 @@ def report(data):
         print(f"\n=== {vp} ===")
         print(f"  {'state':32} {'console':>8} {'field':>7} {'want':>6} {'% vp':>7}")
         for r in rows:
-            # `fieldMax()` is a cap, not a target: `autoGrow` sets
-            # min(scrollHeight, fieldMax()), so a one-line prompt sits at 32px
-            # and is correct there. Two things to hold, then — the cap is never
-            # exceeded, and it is actually *reached* once the text overflows,
-            # which is the only state that proves the cap is wired up at all.
-            # One pixel of slack: fractional padding at some zooms.
-            ok = r["field"] <= r["want_field"] + 1
-            if r["overflowing"]:
-                ok = abs(r["field"] - r["want_lines"]) <= 1
+            # An equality now, not a cap-plus-proof: `autoGrow` sets exactly
+            # min(content, three lines), and `want` is computed from the same
+            # two measurements, so any daylight between them is drift. One
+            # pixel of slack: fractional padding at some zooms.
+            ok = abs(r["field"] - r["want_field"]) <= 1
             note = ""
             if not ok:
-                note = "   FIELD vs fieldMax()"
+                note = "   FIELD vs three-line contract"
                 bad.append((vp, r["state"], r["field"], r["want_lines"]))
-            elif r["frac"] > BUDGET:
-                note = "   over 30% (floor, by design)" if r["floored"] else "   OVER 30%"
-                if not r["floored"]:
-                    bad.append((vp, r["state"], r["field"], r["want_field"]))
+            elif r["frac"] >= DOMINANCE:
+                # Not absorbed and not softened: a console at half the window
+                # is the canvas no longer dominant, which the ruling calls a
+                # layout problem that needs designing — so it fails, loudly,
+                # as one.
+                note = "   CANVAS NOT DOMINANT"
+                bad.append((vp, r["state"], r["field"], r["want_field"]))
             print(f"  {r['state']:32} {r['console']:>6}px {r['field']:>5}px "
                   f"{r['want_lines']:>4}px {r['frac']*100:>6.1f}%{note}")
     return bad
@@ -348,4 +342,4 @@ if __name__ == "__main__":
         for vp, state, got, want in bad:
             print(f"  {vp}  {state}  field={got}px want={want}px", file=sys.stderr)
         sys.exit(1)
-    print("\nfield height matches fieldMax() at every viewport and state")
+    print("\nfield fits its content to three lines at every viewport, and the canvas stays dominant")

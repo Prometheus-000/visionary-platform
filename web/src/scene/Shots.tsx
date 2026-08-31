@@ -23,12 +23,12 @@ import { handleOf, sceneSeconds, times, type Shot } from './model'
  * still compiles to the typed text byte-for-byte; it simply no longer pretends to
  * be a text box while doing it.
  *
- * **The rows divide the field's existing allowance rather than adding to it** —
- * one prompt at two lines and two shots at one line each are the same height, so
- * a four-shot scene costs what a long prompt costs. See `growRows`.
+ * **Each row fits its own content, up to three lines** — the budget arithmetic
+ * that used to divide one allowance between them retired with the 30% number;
+ * see `fieldMax.ts` for the ruling. A tall scene is an honest cost the console's
+ * own overflow cap absorbs, not a mutual squeeze between the rows.
  */
-export function Shots({ consoleEl, hide, onSubmit }: {
-  consoleEl: React.RefObject<HTMLDivElement | null>
+export function Shots({ hide, onSubmit }: {
   /** The negative box is showing instead. Hidden rather than unmounted, so the
    *  caret, the scroll position and the selection are where you left them when
    *  you switch back — the same reason `#prompt` was only ever `.hide`d. */
@@ -55,7 +55,7 @@ export function Shots({ consoleEl, hide, onSubmit }: {
   const cuts = times(shots, secs)
 
   useLayoutEffect(() => {
-    growRows(box.current, consoleEl.current)
+    growRows(box.current)
   })
 
   // The selected shot is the one you are writing. One field, not a field per

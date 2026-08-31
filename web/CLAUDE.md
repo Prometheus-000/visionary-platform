@@ -118,19 +118,31 @@ and two domains, and the page follows the domains.
   are the checkpoint's defaults. The checkpoint is the choice; the numbers are
   its consequences.
 
-- **The console has a budget, and the prompt is what yields to it.** 30% of the
-  viewport. Everything else in there is fixed or conditional — the strip is one
-  row, the rail appears with the first pill, and the boxes cost it nothing —
-  so the prompt field is the only part that grows without asking, and measuring
-  showed it was also the part that broke the budget alone: at a flat 168px cap
-  the worst case was 39.8% of a 1440x900 window, 136 of which was the field.
-  `fieldMax()` hands it whatever is left, down to a two-line floor, because a
-  budget that wins by making the prompt unusable has optimised the wrong thing.
-  A ResizeObserver on the console is the half that makes it true more than once:
-  arming regions and picking pills both happen long after the last keystroke,
-  and without it a long prompt sat at 30.0% and climbed to 38.1% when they
-  arrived. It converges in one pass because `fieldMax` subtracts the field's own
-  height, so `other` does not move when the field does.
+- **The canvas is dominant; the prompt fits its content to three lines, then
+  scrolls.** This section used to define a 30% console budget with the prompt
+  as the part that yields, and the owner retired the number: *"It was never
+  meant to be exact. The point was that the canvas should always be dominant —
+  the second it's not, the platform becomes utilitarian. The prompt box should
+  grow and contract based on content. There will never be a reason for it to
+  come close to 50%, and if that reason surfaces one day, that's simply a UI
+  layout problem that needs to be designed for."*
+
+  What the number cost is why it went, and it is the cautionary tale here: the
+  cap was *derived* — whatever 30% of this viewport had left after the rest of
+  the console — so it landed on an arbitrary pixel at every window size, and
+  each defence it needed (a whole-lines quantiser, a two-line floor, a
+  ResizeObserver for rails that wrap after the last keystroke) was a subsystem
+  defending the last one. One of them measured the wrong element and the field
+  broke at three lines of text. A cap stated in *lines* — `chrome + 3 × line`,
+  see `fieldMax.ts` — is exact by construction and needs none of them; the
+  measured worst case fell from 39.8% to 38.2% on the shortest viewport.
+
+  What holds the canvas dominant is the console's own overflow cap, and
+  `probe_console.py` watches dominance itself: it reports the console's share
+  and fails at 50%, loudly, as the layout problem the ruling says that would
+  be. When that probe and the page disagree, one of them is wrong — diagnose
+  which; never quiet the probe or squeeze the field to make the number stop
+  complaining, which is the sweep that broke the field the first time.
 
 - **The note line under the strip is reserved, and Generate does not move under
   your finger.** The warnings (`#console-notes`) used to mount on demand, which
@@ -139,8 +151,7 @@ and two domains, and the page follows the domains.
   stage, so a note appearing shifted every control in it by one line, at
   exactly the moments a hand is over Generate (the LoRA notes arrive
   mid-typing, the keyframe note mid-attach). One 18px row held at rest is the
-  price of a button that stays where you aimed; `fieldMax` absorbs it, so the
-  30% budget still holds at every viewport. Two spans share the row, and only
+  price of a button that stays where you aimed. Two spans share the row, and only
   a second line — both notes at once, or one wrapping — still moves anything.
 
 - **Typing with nothing focused lands in the prompt, not in the hotkeys.** A
@@ -788,8 +799,8 @@ and two domains, and the page follows the domains.
   **It sat at the head of the pill rail for a version, and the measurement is what
   moved it back.** The rail is the right *room* — the door and the words that come
   out of it in one place, needing no caption — and it was the wrong price. A row
-  that exists only to hold one button costs 34px of a console capped at 30% of the
-  viewport, at rest, forever: resting went 120px to 154px, while the rail carrying
+  that exists only to hold one button costs 34px of a console the canvas can
+  never get back, at rest, forever: resting went 120px to 154px, while the rail carrying
   sixteen pills only ever added 29px on top of that, because then the row is
   holding something. `#shot-rail:empty{display:none}` is back, and the rule it
   encodes — the rail costs nothing until there is something in it — turns out to be
@@ -994,9 +1005,10 @@ rather than one, and it is the rule to check first if any of it is ever moved.
 
 - **Rows divide the field's existing allowance rather than adding to it.**
   `growRows` is `autoGrow` over n boxes and reduces to it exactly at n=1, so a
-  four-shot scene costs what a long prompt costs and the 30% budget needs no
-  second arithmetic. Measured at 1512x982 with three shots and the source row
-  showing: 287px, 29.2%.
+  four-shot scene used to cost what a long prompt costs by dividing one
+  budget-derived allowance between the rows — retired with the 30% number;
+  each row now fits its own content to three lines, and a tall scene is an
+  honest cost the console's overflow cap absorbs rather than a mutual squeeze.
 
 - **The file is the slot, and a form field is a closed vocabulary.** A character
   had five labelled squares — Face, Wardrobe, Body, Voice, Motion — on the rule

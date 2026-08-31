@@ -99,7 +99,7 @@ export function Field({
 
           The image side keeps this box. Krea 2 has no fields to fill in, so a
           timeline there would be a control the compiler discards. */}
-      {s.kind === 'video' ? <Shots consoleEl={consoleEl} hide={s.negOn && ok}
+      {s.kind === 'video' ? <Shots hide={s.negOn && ok}
                                    onSubmit={onSubmit} /> : (
       <>
       {/* **The mirror is the text you read**, and the textarea over it is

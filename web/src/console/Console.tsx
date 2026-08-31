@@ -64,27 +64,14 @@ export function Console({
   const box = useRef<HTMLDivElement>(null)
   const pal = usePopover()
 
-  // The console has to watch itself, because the prompt is not the only thing that
-  // grows: arming Regions adds a bar and picking pills adds a rail, and both happen
-  // long after the last keystroke. Without this the field keeps whatever height it won
-  // when it was the only claimant — measured, a long prompt sat at 30.0% and climbed to
-  // 38.1% when the others arrived.
-  //
-  // It converges in one pass because `fieldMax` subtracts the field's own height, so
-  // `other` does not move when the field does.
-  useLayoutEffect(() => {
-    const con = box.current
-    if (!con) return
-    const grow = () => { growField(con) }
-    grow()
-    const ro = new ResizeObserver(grow)
-    ro.observe(con)
-    window.addEventListener('resize', grow)
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', grow)
-    }
-  }, [])
+  // The ResizeObserver that used to live here watched the console's own height,
+  // because the field's cap was *derived* from it — 30% of the viewport minus
+  // everything else — so a rail wrapping or regions arming changed the answer
+  // long after the last keystroke. The cap is a property of the field alone now
+  // (three lines of its own type; see `fieldMax.ts` for the ruling), so nothing
+  // the console does can change it and the observer watched nothing. One run on
+  // mount for the restored draft, and the input events own the rest.
+  useLayoutEffect(() => { growField(box.current) }, [])
 
   /* A model that cannot take what is already attached would fail at submit. Dropped
      here, where the section it came from is visibly gone, which is the only version of
