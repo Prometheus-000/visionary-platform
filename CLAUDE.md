@@ -113,6 +113,17 @@ The full argument, and the veto list it produces, is in `docs/roadmap.md`.
 These apply before any file is opened. Everything else is scoped — see Pointers
 below.
 
+- **Nothing is built in a silo.** How a feature sits in the whole experience
+  is front of mind *during* the build, not a pass after it. The definition of
+  done includes the neighbors: every surface that reads or writes the changed
+  concept, the other console, the checks and stubs that encode the old
+  meaning. A control that renders but no longer travels is the failure this
+  names — the composer shipped once with the keyframe tiles and both flat
+  trays looking live and silently dead beside it. And when a rule in this file
+  chafes, surface the judgment it proxies and assert that: the rules exist to
+  keep an agent out of exactly this vacuum, and deleting one reopens it. The
+  30% console budget is the worked example — retired for the judgment it stood
+  in for, "the canvas is always dominant," not deleted.
 - **Comments explain why, not what.** Every non-obvious line in this codebase
   earns its comment by naming the failure that produced it. If a comment could
   be deleted without losing a fact, delete it.
