@@ -22,11 +22,34 @@ import { useStore } from '../store'
  * > **Duration starts at zero.** A still is the default and time is added. Someone
  * > who wants one image should finish and leave without learning that motion exists.
  *
- * Which is what this is. At `Still` the run is Krea 2; pick a number and it is H3.
- * Video stops being a place you navigate to and becomes a value you set — and
- * that is what makes it findable, because a control reading "Still" invites a press
- * in a way an unlabelled photo glyph never did, while somebody who only wants a
- * picture never has to learn what the other values are for.
+ * Which is what this is. Video stops being a place you navigate to and becomes a
+ * value you set — and that is what makes it findable, because a control reading
+ * "Still" invites a press in a way an unlabelled photo glyph never did, while
+ * somebody who only wants a picture never has to learn what the other values are
+ * for.
+ *
+ * **`Still` is H3 at zero seconds, and it used to be Krea 2.** That swap is the
+ * whole of this control's meaning changing, so it is worth the paragraph. A still
+ * meant a second checkpoint, which meant the cast, `<Subject N>`, the reference
+ * grammar and the audio labels all vanished the moment somebody wanted one frame
+ * — the duration control was a *model* switch wearing a time label, which is the
+ * exact fault the chip was replaced for, surviving inside its replacement. H3
+ * makes a still by sampling a short sequence and keeping a frame of it, and its
+ * casting holds at that length, so zero is now the short end of one model's own
+ * range and nothing about the surface changes when the answer is a picture.
+ *
+ * **Krea 2's door is the model button, not this one.** Image and video are
+ * sibling disciplines with their own console and their own canvas, and crossing
+ * between them is a choice of engine — see `EngineRow`. Which leaves this
+ * control one honest job and a rule that falls out of it:
+ *
+ * > **Duration changes the engine only when the current one cannot answer.**
+ *
+ * Both consoles make a still, so going to zero never moves you — you stay
+ * wherever you are and get a picture. Adding *time* does move you, because Krea
+ * 2 has no answer for it, and being carried to the model that does is the only
+ * reading of "5s" there is. That asymmetry is not a special case; it is what
+ * stops this from being a model switch wearing a time label again.
  *
  * It is also the stronger reading of the rule the chip was written for — *"which one
  * you get is a property of what you are making, not an address you navigate to"*.
@@ -49,7 +72,11 @@ export function Duration() {
     ? s.vid.seconds
     : String(m?.defaults.seconds ?? lengths[0] ?? '')
 
-  const still = s.kind === 'image'
+  // Two ways to be showing a picture, and the button says the same word for
+  // both: `image` is the Krea 2 composer, reached only by reusing a past render
+  // now, and zero seconds is H3's own still.
+  const krea = s.kind === 'image'
+  const still = krea || (!krea && cur === '0')
   // Nothing to offer above zero, so the control states the one thing that is true and
   // does not open onto an empty list. Disabled rather than absent: the strip must not
   // reflow when a video model finishes downloading, and a door that is visibly shut
@@ -81,16 +108,21 @@ export function Duration() {
                   label: 'Still',
                   on: still,
                   run: () => {
-                    s.setKind('image')
-                    // The switch is the earliest honest signal of which
-                    // container this session is about to want, and Enhance
-                    // lives on that container. Warming here is what turns the
-                    // first press after a switch into a press rather than a
-                    // wait. Fire and forget; a repeat is a no-op on a warm one.
-                    void warm('image')
+                    // **No `setKind` and no warm: zero moves nobody.** Both
+                    // consoles answer it, so which one you are in stays the
+                    // model button's question. Written to the video side even
+                    // from Krea 2, so that crossing to H3 later lands on Still
+                    // rather than on whatever length was picked before it.
+                    s.setVid({ seconds: '0' })
                   },
                 },
-                ...(authored && s.scene.shots.length > 1 ? [] : lengths.map((n) => ({
+                // `0` is a real length on the model — it is how the backend
+                // reads a still — but it is this menu's *first* item already,
+                // so listing it again as "0s" would be the same choice twice
+                // wearing two words. Filtered here rather than left out of
+                // `lengths`, because what the model can do and what this menu
+                // spells are different statements.
+                ...(authored && s.scene.shots.length > 1 ? [] : lengths.filter((n) => n > 0).map((n) => ({
                   label: `${n}s`,
                   on: !still && n === (total ?? Number(cur)),
                   run: () => {

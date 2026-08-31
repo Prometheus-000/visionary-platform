@@ -348,21 +348,21 @@ H3MC_SIDECAR = "context.safetensors"
 # same arity-risk class — re-check on every COMFY_SHA bump.
 K2ST_SHA = "b30d495ab7e5626a2effc72a071430297643b718"  # 2026-07-21
 
-# H3 step caching (CacheDiT) was here for one day — wired at a measured
-# 1.40x, removed when production takes showed its wrapper inflating every
-# *computed* step ~50% at 768p, a net loss no threshold wins back. The full
-# account, with the dashboard numbers, is in docs/decisions.md; the harness
-# that measured both directions is tools/ab_cache.py. What replaced it is
-# `VisionaryStepCache` in comfy_nodes/ — the TeaCache mechanism, whose skip
-# test rides the latent rather than the hidden states and so has no cost
-# that grows with resolution: 220.0s to 97.4s on the same harness take.
-
-# Below this many sampler steps the cache node is not built at all: the
-# start guard already keeps the first two steps real, the final guard the
-# last two, and a distilled 4-8 step run has nothing left between them
-# worth skipping — but steps 3-6 of an 8-step schedule are where its detail
-# resolves, which is exactly the wrong place to hand back a stale output.
-H3_CACHE_MIN_STEPS = 12
+# **There is no step cache on the H3 path, and a third one does not go back in
+# on a wall-clock number.** Two families were tried and both are gone. CacheDiT
+# came out in a day on cost — its wrapper taxed every *computed* step ~50% at
+# 768p, more than the skips returned. TeaCache (`VisionaryStepCache`, ours)
+# survived that test — 220.0s to 97.4s at production shape, computed steps at
+# stock price — and came out on **fidelity**: it distorts H3 LoRAs. A skip does
+# not drop a step, it re-applies the previous prediction while the sampler
+# takes its normal stride, so the update is misplaced rather than missing —
+# which is why the failure looks like a wrong face and never like a weak LoRA.
+# The gate reads rel-L1 on the input latent and infers the output has not moved
+# either; that inference is a claim about output-per-input gain, and a LoRA is
+# a low-rank gain increase in exactly the subspace carrying identity. The
+# harness that timed both is tools/ab_cache.py; docs/decisions.md carries the
+# account. A fourth attempt needs a fidelity arm with LoRAs loaded, not a
+# stopwatch.
 K2ST_REPO = "https://github.com/nkxx188/ComfyUI-Krea2-StyleTransfer"
 K2ST_REF_NODE = "Krea2StyleReference"
 K2ST_TRANSFER_NODE = "Krea2StyleTransfer"
@@ -498,6 +498,20 @@ web_image = (
     .add_local_dir("web", "/build/web", copy=True, ignore=["node_modules", "dist"])
     .run_commands("cd /build/web && npm run build")
 )
+
+# **web_image plus ffmpeg, and it is a derived image rather than a fatter one.**
+# The export stitches finished takes into one file, which is CPU work — so it
+# gets a container, not a share of a GPU. What it must not get is a place in the
+# image the *UI* runs from: `web` is the container the page waits on before it
+# can draw anything, and ffmpeg's apt tree is ~100 MB of cold start charged to
+# every session for a button pressed at the end of a scene. Derived from
+# `web_image`, so every layer under it is the one already built and cached and
+# the only new layer is the one this needs.
+#
+# It is also why `web_image has no ffmpeg` stays true, and why the two notes
+# that say so — the clip cover in the gallery, the character-file transcode —
+# are still accurate rather than quietly stale.
+export_image = web_image.apt_install("ffmpeg")
 
 trainer_image = (
     modal.Image.from_registry(
@@ -720,10 +734,6 @@ comfy_image = (
     .add_local_dir(
         f"{COMFY_NODES_DIR}/visionary_edit_arity",
         remote_path=f"{COMFY}/custom_nodes/visionary_edit_arity",
-    )
-    .add_local_dir(
-        f"{COMFY_NODES_DIR}/visionary_step_cache",
-        remote_path=f"{COMFY}/custom_nodes/visionary_step_cache",
     )
 )
 
@@ -2169,6 +2179,210 @@ def _model_status() -> list[dict[str, Any]]:
 # Deliberately not on the GPU function: pulling 26 GB while an A100 idles is
 # money burned for nothing. This runs on plain CPU at a fraction of the cost.
 # --------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# Exporting a scene
+#
+# **A scene is several takes, and until this existed it stayed several takes.**
+# H3 renders about 14.4 seconds at a time, so anything with more than one beat
+# in it is several runs — and the platform's own claim is that what makes them
+# one scene is that the cast, the look and the last frame carry across. That is
+# true of the *making* and was false of the result: the takes sat in the gallery
+# as unrelated clips, and the owner's reading is the one that matters — without
+# this "it's just a gimmick".
+#
+# On CPU, for the reason the downloads are: never rent a GPU to do CPU work.
+# --------------------------------------------------------------------------
+
+EXPORT_JOB = "export_scene"
+
+
+def _probe(path: Path) -> dict[str, Any]:
+    """
+    One take's shape, as ffprobe reports it.
+
+    Read rather than assumed, because the fast path below turns on the answer:
+    takes from one scene *usually* agree on codec, size and rate, and "usually"
+    is not something to concatenate on. A scene whose middle take was rendered
+    after somebody changed the size is the case that produces a file where the
+    picture goes wrong halfway through and nothing said so.
+    """
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-print_format", "json",
+         "-show_streams", "-show_format", str(path)],
+        capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        raise RuntimeError(f"{path.name}: {out.stderr.strip()[:200] or 'unreadable'}")
+    meta = json.loads(out.stdout or "{}")
+    streams = meta.get("streams") or []
+    v = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if not v:
+        raise RuntimeError(f"{path.name} has no video track")
+    a = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    # The container's duration, then the video stream's. Needed only to make
+    # silence the right length for a take that has no sound — see the graph —
+    # and it is deliberately **not** part of the equality test below: two takes
+    # of different lengths concatenate perfectly well, and treating a duration
+    # as a shape mismatch would re-encode every scene.
+    try:
+        dur = float(meta.get("format", {}).get("duration")
+                    or v.get("duration") or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    return {
+        "w": int(v.get("width") or 0), "h": int(v.get("height") or 0),
+        "vcodec": str(v.get("codec_name") or ""), "rate": str(v.get("r_frame_rate") or ""),
+        "pix": str(v.get("pix_fmt") or ""),
+        "acodec": str(a.get("codec_name") or "") if a else "",
+        "arate": str(a.get("sample_rate") or "") if a else "",
+        "alayout": str(a.get("channel_layout") or "") if a else "",
+        "audio": a is not None,
+        "dur": dur,
+    }
+
+
+@app.function(image=export_image, cpu=2.0, timeout=60 * 60,
+              volumes={"/workspace": volume})
+def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
+    """
+    Stitch a scene's takes into one file, in the order they were made.
+
+    **Stream copy when the takes agree, re-encode only when they do not.** A
+    copy is seconds and lossless; a re-encode is minutes and generational loss,
+    and it is the wrong default for the case that is overwhelmingly common —
+    every take out of one scene comes from one pipeline at one size. So the
+    shapes are probed and the answer decides, and the phase says which happened
+    rather than leaving a person to wonder why one export took forty seconds and
+    the next took four.
+
+    Audio is normalised rather than dropped. H3 renders sound, and a take with a
+    silent stretch is still a take with an audio track — but a scene where one
+    clip has none would make the concat filter fail on a stream that is not
+    there, so silence is generated for it and the sound of the others survives.
+    """
+    _publish(job_id, status="running", percent=0, phase="Reading the takes")
+    _reload_volume()
+    out_dir = OUTPUTS / job_id
+    try:
+        srcs: list[Path] = []
+        for i, t in enumerate(takes):
+            jid = Path(str(t.get("job_id") or "")).name
+            name = Path(str(t.get("file") or "")).name
+            f = OUTPUTS / jid / name
+            if not f.is_file():
+                # Named, with the take number, because the fix is on the page:
+                # a take deleted from the gallery is still in the scene's chain
+                # until somebody takes it out of the chain too. Raised rather
+                # than returned so it leaves by the one path that writes the
+                # record — an early `return` here published nothing and the page
+                # polled a job that would never answer, which is the exact
+                # failure `_publish`'s own docstring records.
+                raise RuntimeError(
+                    f"Take {i + 1} is not on the volume any more ({name}). "
+                    "Remove it from the scene and export again.")
+            srcs.append(f)
+        if not srcs:
+            raise RuntimeError(
+                "Nothing to export — the scene has no finished takes.")
+
+        shapes = []
+        for i, f in enumerate(srcs):
+            _stop_gate(job_id, "probing")
+            _publish(job_id, percent=int(5 * (i + 1) / len(srcs)),
+                     phase=f"Reading take {i + 1} of {len(srcs)}")
+            shapes.append(_probe(f))
+        # Every field but the duration: a codec or a frame rate that differs is
+        # exactly as unconcatenatable as a width, and it is the one you do not
+        # see until the file is open. Length is the exception and has to be —
+        # takes are different lengths by construction, and comparing whole dicts
+        # would send every scene down the re-encode.
+        shape = lambda s: {k: v for k, v in s.items() if k != "dur"}  # noqa: E731
+        same = all(shape(s) == shape(shapes[0]) for s in shapes)
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / "scene.mp4"
+        work = Path(tempfile.mkdtemp(prefix="export-"))
+        if same:
+            _publish(job_id, percent=10,
+                     phase=f"Joining {len(srcs)} takes — no re-encode")
+            # Absolute paths with `-safe 0`, and each one single-quoted with
+            # embedded quotes escaped the way the demuxer's own parser wants.
+            listing = "\n".join(
+                "file '%s'" % str(f).replace("'", "'\\''") for f in srcs)
+            (work / "takes.txt").write_text(listing + "\n")
+            cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                   "-i", str(work / "takes.txt"), "-c", "copy",
+                   "-movflags", "+faststart", str(out)]
+        else:
+            _publish(job_id, percent=10,
+                     phase=f"Joining {len(srcs)} takes — re-encoding, they differ")
+            w, h = shapes[0]["w"] or 1280, shapes[0]["h"] or 720
+            cmd = ["ffmpeg", "-y"]
+            for f in srcs:
+                cmd += ["-i", str(f)]
+            # Scaled and padded to the first take's frame rather than stretched:
+            # a take at another aspect is a different shot, not a mistake to
+            # squash. SAR is reset because a mismatched sample aspect is the one
+            # thing `concat` refuses after everything else has been made equal.
+            parts, legs = [], ""
+            for i, sh in enumerate(shapes):
+                parts.append(
+                    f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v{i}]")
+                if sh["audio"]:
+                    # `aformat`, not `aresample`: `concat` refuses streams whose
+                    # channel layout differs as readily as ones whose rate does,
+                    # and a mono take beside a stereo one is the ordinary case
+                    # once anything but H3 has produced one of them.
+                    parts.append(
+                        f"[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo"
+                        f"[a{i}]")
+                else:
+                    # Silence exactly as long as that take's picture, so the
+                    # tracks stay in step instead of the sound running ahead of
+                    # the frames for the rest of the scene. `anullsrc` runs
+                    # forever without `d`, which is why the duration is probed.
+                    parts.append(
+                        "anullsrc=channel_layout=stereo:sample_rate=48000:"
+                        f"d={sh['dur'] or 1:.3f}[a{i}]")
+                legs += f"[v{i}][a{i}]"
+            graph = ";".join(parts) + f";{legs}concat=n={len(srcs)}:v=1:a=1[v][a]"
+            cmd += ["-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart", str(out)]
+
+        _stop_gate(job_id, "stitching")
+        run = subprocess.run(cmd, capture_output=True, text=True, timeout=55 * 60)
+        if run.returncode != 0 or not out.is_file():
+            # ffmpeg's last line is the one that says why; the rest is a banner
+            # naming every codec it was built with.
+            tail = (run.stderr or "").strip().splitlines()
+            raise RuntimeError("ffmpeg could not join the takes: "
+                               + (tail[-1] if tail else "no output"))
+        _publish(job_id, percent=95, phase="Committing")
+        volume.commit()
+        # `completed`, which is the word every other job in this file finishes
+        # on and the one `pollStatus` reads. The record is what the page sees —
+        # the return value is only this function's own answer — so both are
+        # written, the way `_download_weight` does it.
+        res = {"status": "completed", "job_id": job_id, "files": ["scene.mp4"],
+               "kind": "video", "takes": len(srcs), "percent": 100,
+               "bytes": out.stat().st_size, "reencoded": not same}
+        _publish(job_id, **res)
+        return res
+    except StopRequested:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        res = {"status": "stopped", "job_id": job_id}
+        _publish(job_id, **res)
+        return res
+    except Exception as exc:  # noqa: BLE001 - the record is the only report
+        shutil.rmtree(out_dir, ignore_errors=True)
+        res = {"status": "failed", "job_id": job_id, "error": str(exc)[:400]}
+        _publish(job_id, **res)
+        return res
+
 
 
 @app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
@@ -7323,6 +7537,26 @@ H3_FRAME_BASE = 5
 H3_MIN_FRAMES = 124
 H3_MAX_FRAMES = 345
 
+# **A still is a film still — a fragment of a take, decoded, one frame kept.**
+# So it is a frame count and not a duration, and it sits below H3_MIN_FRAMES on
+# purpose: that floor is the trained range for a clip somebody is going to
+# *watch*, and none of what it protects applies to a run whose output is a
+# picture. Duration and model stop being the same control, which is the whole
+# point — the cast, the reference grammar and the audio labels are H3's, so a
+# still made anywhere else was a second product with a second vocabulary.
+#
+# 22 is the second point on the 17n+5 grid the video VAE decodes on; 5 is the
+# first and yields five candidates, 39 the third. Short lengths hold on ref2va
+# with the cast's identity intact — measured, and the reason this is a length
+# rather than a second image model. The number itself is a starting point from
+# one set of runs, not a measurement of the optimum; the neighbours are one
+# edit away.
+#
+# There is no image VAE here and there must not be one. The frames come out of
+# the *video* VAE, which is what keeps hair, skin and fine contour — the T=1
+# decoders soften exactly what a character keyframe is carrying.
+H3_STILL_FRAMES = 22
+
 # H3's canvas is a short edge, not a resolution: the aspect ratio picks the
 # long edge. 768 is what it was trained at; 544 is the draft tier, which is
 # roughly 2.3x faster per step and is the single biggest speed lever there is —
@@ -7514,6 +7748,7 @@ def _h3_graph(
     shift_audio: float | None = None,
     save_context_as: str | None = None,
     load_context_from: str | None = None,
+    still: bool = False,
 ) -> dict[str, Any]:
     """
     Build ComfyUI's API-format graph for one H3 clip.
@@ -7577,6 +7812,29 @@ def _h3_graph(
                  "inputs": {"video": ["video", 0], "filename_prefix": "visionary",
                             "format": "auto", "codec": "auto"}},
     }
+
+    if still:
+        # Refused by name rather than reached as a KeyError two lines down.
+        # Both context inputs are about what a take opens from and what the
+        # next one continues into, and a picture is neither end of a chain.
+        if save_context_as or load_context_from:
+            raise ValueError("A still has no motion context to save or "
+                             "continue from.")
+        # A picture has no soundtrack, so the audio decode, the muxer and the
+        # video writer all come out. In a run with no references that orphans
+        # the audio VAE — nothing reads it, so ComfyUI never loads it, and a
+        # 605 MB decoder stops being paid for by every still.
+        del graph["audio"], graph["video"]
+        graph["save"] = {"class_type": "SaveImage",
+                         "inputs": {"images": ["frames", 0],
+                                    "filename_prefix": "visionary"}}
+        # Falls through rather than returning: the LoRA stack and the sigma
+        # shift are below, and a still is the run that needs them *most* —
+        # `h3_speed_ref2v_4` is what makes one cheap enough to iterate on. An
+        # early return here dropped it in a way nothing would have reported,
+        # which is the failure the LoRA comment below already warns about.
+        # Nothing between here and there touches the two nodes just deleted;
+        # both motion-context blocks are unreachable, refused above.
 
     # ── motion continuation ─────────────────────────────────────────────────
     # Every H3 take saves its sampler latent beside the clip, because the *next*
@@ -7656,30 +7914,6 @@ def _h3_graph(
             },
         }
         src = "shift"
-    # Last on the chain, after LoRAs and shift, so what it wraps is the model
-    # the sampler will actually run. Threshold 0.08 rather than the wrapper's
-    # 0.12 — the library's own default, chosen after the harness viewing put
-    # the fidelity cost on fine articulated detail; warmup 4 keeps the first
-    # fifth of a 20-step schedule fully computed, which is where structure
-    # locks in. What is deliberately *not* here is a tail guard: "compute the
-    # final steps in full" exists in cache-dit (`steps_computation_mask`) but
-    # the wrapper node exposes no input for it, and reaching around the
-    # wrapper means owning a fork. `bn_blocks` stays 0 for the same reason it
-    # ships 0 in the pack's preset: it is a per-block knob, not the per-step
-    # one that intent names. If the tail matters, the move is a PR upstream,
-    # not a patch here.
-    # Last on the chain, after LoRAs and shift, so what it wraps is the
-    # model the sampler actually runs. Every input is spelled because the
-    # node's defaults are a second copy of these numbers, and two copies
-    # drift; the graph is the record.
-    if steps >= H3_CACHE_MIN_STEPS:
-        graph["cache"] = {
-            "class_type": "VisionaryStepCache",
-            "inputs": {"model": [src, 0], "rel_l1_thresh": 0.15,
-                       "start_step": 2, "final_steps": 2,
-                       "total_steps": steps},
-        }
-        src = "cache"
     if src != "dit":
         # Both, not just the guider. A LoRA that patches model sampling would
         # otherwise have the sampler reading it and the schedule ignoring it,
@@ -7776,7 +8010,14 @@ VIDEO_MODELS: dict[str, dict[str, Any]] = {
         "note": "Sound and picture in one pass",
         "requires": {"fl2va": VIDEO_MODEL_KEYS, "ref2va": VIDEO_REF_MODEL_KEYS},
         "tiers": {"full": "768p", "draft": "544p draft"},
-        "lengths": [5, 6, 8, 10, 12, 14],
+        # **Zero is a length, and that is the point.** A still used to mean
+        # Krea 2, so asking for one frame threw away the cast, `<Subject N>`
+        # and the audio labels — the duration control was a model switch
+        # wearing a time label. Zero is now the short end of this model's own
+        # range, so composing does not change surface when the answer is a
+        # picture. A model that cannot make one simply has no 0 here, which is
+        # why there is no `supports.still` beside it saying the same thing.
+        "lengths": [0, 5, 6, 8, 10, 12, 14],
         "samplers": ["res_multistep", "euler", "dpmpp_2m"],
         "schedulers": ["simple", "normal", "beta"],
         "defaults": {"steps": 20, "sampler": "res_multistep", "scheduler": "simple",
@@ -10306,8 +10547,12 @@ def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
     the file, on CPU, before an H100 is warm.
 
     Same confinement as the image stack: `resolve()` before the check, so a
-    crafted `../../` cannot name a checkpoint. No text-encoder weight — umT5 is
-    loaded through CLIPLoader and LoraLoaderModelOnly patches the DiT only.
+    crafted `../../` cannot name a checkpoint. One weight where the image
+    stack carries two, because `LoraLoaderModelOnly` patches the DiT and H3's
+    text encoder — Qwen3-VL 32B, through CLIPLoader with type="minimax" — is
+    never in the chain. That is a missing *text-encoder* number, not a refusal
+    of LoRAs: three are in the catalogue, and ComfyUI's own H3 templates wire
+    this same model-only loader.
     """
     if not raw:
         return []
@@ -10359,7 +10604,7 @@ class VideoGenerator:
         self._comfy.require_nodes(
             "MiniMaxH3MotionContext", "MiniMaxH3MotionContextTrim",
             "MiniMaxH3MotionContextSaveLatent",
-            "MiniMaxH3MotionContextLoadLatent", "VisionaryStepCache")
+            "MiniMaxH3MotionContextLoadLatent")
         # **Nothing but ComfyUI starts here now.** This container held a second
         # model for a while — Qwen3-VL beside H3, for the prompt rewrite and
         # then for the motion panel — and it cost more than it returned. It
@@ -10410,6 +10655,7 @@ class VideoGenerator:
         _reload_volume()
 
         model = str(params.get("model") or "h3")
+        still = bool(params.get("still"))
 
         try:
             # Inside the try, not above it: a missing weight raised out here
@@ -10448,7 +10694,8 @@ class VideoGenerator:
             _publish(job_id, phase="loading", step=0,
                      total_steps=info["steps"], percent=0, **info)
 
-            out_names = self._comfy.run(job_id, graph, what="video")
+            out_names = self._comfy.run(job_id, graph,
+                                        what="image" if still else "video")
         except StopRequested:
             res = {"status": "stopped", "job_id": job_id, "files": [],
                    "duration_s": round(time.time() - started, 1)}
@@ -10460,6 +10707,38 @@ class VideoGenerator:
 
         out_dir = OUTPUTS / job_id
         out_dir.mkdir(parents=True, exist_ok=True)
+        if still:
+            # **Every decoded frame is kept, and that is the feature rather
+            # than the leftover.** Which frame is cleanest moves with the
+            # prompt, the seed and the canvas, so choosing one here would be
+            # this file guessing at the only part a person has to look at. One
+            # run returns a strip, which is also the answer to H3 being too
+            # expensive to think in: the cost amortises across the candidates.
+            #
+            # Indexed in the filename because that index is the record. A still
+            # whose sidecar says which take it came from but not which frame is
+            # a still nobody can make again.
+            stamp = time.strftime("%H%M%S")
+            names = []
+            for i, src in enumerate(out_names):
+                names.append(f"{stamp}_{i:02d}.png")
+                shutil.copyfile(COMFY / "output" / src, out_dir / names[-1])
+            # `kind="image"` because what came out is a picture, and everything
+            # downstream sorts on what a thing *is* rather than on which model
+            # made it — the gallery, Use as reference, and the first-frame
+            # picker this exists to feed.
+            _write_output_meta(
+                out_dir, kind="image", job_id=job_id, model=model,
+                prompt=params["prompt"], created=time.time(),
+                **_shot_meta(params), **info, **plan["meta"],
+            )
+            volume.commit()
+            res = {"status": "completed", "job_id": job_id, "files": names,
+                   "output_dir": str(out_dir), "model": model,
+                   "duration_s": round(time.time() - started, 1), **info}
+            _publish(job_id, **res)
+            return res
+
         name = f"{time.strftime('%H%M%S')}.mp4"
         # One clip per graph, so the first is the only one. Taking [0] rather
         # than asserting length: a save node that ever emitted a poster frame
@@ -10507,8 +10786,13 @@ class VideoGenerator:
                           if (refs_b64 or vids_b64 or auds_b64)
                           else VIDEO_MODEL_KEYS))
 
+        still = bool(params.get("still"))
         width, height = _h3_canvas(params["aspect"], params["tier"])
-        frames = _h3_frames(params["seconds"])
+        # `seconds` still reaches the *compiler* on a still, and is meant to:
+        # the document describes a shot, and a still is a frame out of it. A
+        # separate one-moment grammar would be a second way to say the thing
+        # `[Shot 1]` already says.
+        frames = H3_STILL_FRAMES if still else _h3_frames(params["seconds"])
 
         # A continued take asks for its seconds *plus* the pinned context,
         # because the pinned run sits at the head of the clip and is trimmed
@@ -10581,7 +10865,8 @@ class VideoGenerator:
             loras=loras,
             shift_video=params.get("shift_video"),
             shift_audio=params.get("shift_audio"),
-            save_context_as=job_id or None,
+            still=still,
+            save_context_as=None if still else (job_id or None),
             load_context_from=continue_from,
             **keyframes,
         )
@@ -10615,13 +10900,24 @@ class VideoGenerator:
         if continue_from:
             meta["continued_from"] = continue_from
         shown = frames - H3MC_CONTEXT_FRAMES if continue_from else frames
-        return {
-            "graph": graph,
-            "info": {"width": width, "height": height, "frames": shown,
-                     "seconds": round(shown / H3_FPS, 2), "fps": H3_FPS,
-                     "seed": seed, "steps": steps},
-            "meta": meta,
-        }
+        info = {"width": width, "height": height, "frames": shown,
+                "seed": seed, "steps": steps}
+        if still:
+            # **In `info` rather than `meta`, because the page reads this one.**
+            # `info` is what reaches the completed job record, and the canvas
+            # has to know it is holding a strip of frames rather than a clip
+            # before it decides which element to mount — a `<video>` pointed at
+            # a PNG shows nothing and reports nothing. `frames` beside it is
+            # already the count, so there is no second number to record.
+            info["still"] = True
+        else:
+            # No `seconds` or `fps` on a still. They are true of the fragment
+            # that was sampled and false of the thing delivered, and a sidecar
+            # saying a picture is 0.92 seconds long is worse than one that does
+            # not say.
+            info["seconds"] = round(shown / H3_FPS, 2)
+            info["fps"] = H3_FPS
+        return {"graph": graph, "info": info, "meta": meta}
 
 
 
@@ -11268,6 +11564,46 @@ def web():
         volume.commit()
         return {"ok": True, "swept": swept}
 
+    @api.post("/api/export-scene")
+    def export_scene(payload: dict) -> dict[str, Any]:
+        """
+        Queue a stitch of this scene's takes into one file.
+
+        Validated here rather than in the job for the reason `/api/gdrive`
+        gives: an empty chain is a form error, and finding it inside the job
+        costs a container start before anything can say so. What this cannot
+        check is whether the files are still on the volume — a reload settles
+        that, and the job names the take by number when one is gone.
+
+        One job id, not one per press: the export is a property of the scene on
+        screen, so a second press replaces the first rather than racing it, the
+        same way `GDRIVE_JOB` is one name.
+        """
+        takes = payload.get("takes")
+        if not isinstance(takes, list) or not takes:
+            return {"error": "Nothing to export — render a take first."}
+        if len(takes) > 64:
+            return {"error": f"{len(takes)} takes is past what one export "
+                             "handles. Clear the scene and chain fewer."}
+        rows = []
+        for t in takes:
+            if not isinstance(t, dict):
+                continue
+            jid, name = str(t.get("job_id") or ""), str(t.get("file") or "")
+            if jid and name:
+                rows.append({"job_id": jid, "file": name})
+        if not rows:
+            return {"error": "The takes carried no filenames — reload and try "
+                             "again."}
+        _clear_stop(EXPORT_JOB)
+        # Seeded before the spawn, so the first poll finds a record rather than
+        # a 404 it has to read as "not started yet" — the contract every other
+        # job here keeps.
+        _publish(EXPORT_JOB, status="running", percent=0,
+                 phase=f"Queued — {len(rows)} takes", files=[], error=None)
+        export_scene_job.spawn(EXPORT_JOB, rows)
+        return {"ok": True, "job_id": EXPORT_JOB, "takes": len(rows)}
+
     # ── the Arsenal: characters ─────────────────────────────────────────────
 
     @api.get("/api/characters")
@@ -11296,12 +11632,18 @@ def web():
                            if f.is_file() and f.name != "character.json"
                            and not f.name.startswith(".")
                            and f.suffix.lower() != ".txt")
-            out.append({"handle": d.name,
-                        "note": str(meta.get("note") or ""),
-                        "retention": str(meta.get("retention") or ""),
-                        "refs": meta.get("refs") or
-                        [{"file": f} for f in files],
-                        "files": files})
+            row = {"handle": d.name,
+                   "note": str(meta.get("note") or ""),
+                   "retention": str(meta.get("retention") or ""),
+                   "refs": meta.get("refs") or
+                   [{"file": f} for f in files],
+                   "files": files}
+            # Only when there is one. The key is absent rather than null for a
+            # character with no weight behind it, so the picker's rows do not
+            # all carry a field three quarters of them cannot fill.
+            if isinstance(meta.get("lora"), dict):
+                row["lora"] = meta["lora"]
+            out.append(row)
         return {"characters": out}
 
     @api.post("/api/characters/{handle}")
@@ -11318,9 +11660,18 @@ def web():
         except ValueError as exc:
             return {"error": str(exc)}
         refs = payload.get("refs") or []
-        if not isinstance(refs, list) or not refs:
-            return {"error": "A character with no files is a name, and a name "
-                             "is already in your head. Attach something first."}
+        weight = payload.get("lora")
+        held = bool(isinstance(weight, dict) and str(weight.get("path") or ""))
+        # **A LoRA counts as something to save, and this used to refuse it.**
+        # "A character with no files is a name" was written when a character was
+        # photographs, and on a platform whose other half trains weights it
+        # refused the strongest case there is: somebody who exists as a LoRA and
+        # no reference photo. Files *or* a weight — a name with neither is still
+        # a name, and that is what this sentence was always about.
+        if (not isinstance(refs, list) or not refs) and not held:
+            return {"error": "A character with no photograph and no LoRA is a "
+                             "name, and a name is already in your head. Attach "
+                             "something first."}
         _reload_volume()
         d = CHARACTERS / handle
         if d.exists():
@@ -11351,12 +11702,32 @@ def web():
         # character, no app required.
         if note:
             (d / "note.txt").write_text(note + "\n")
-        (d / "character.json").write_text(json.dumps({
+        # **A pointer, never the weight.** The LoRA is already a file on this
+        # volume under `loras/`, so what a character stores is the path to it —
+        # copying a 300 MB weight into every character that uses it would make
+        # saving a character cost what training one did, and two copies of one
+        # file is two things to delete. The consequence is stated rather than
+        # hidden: delete the LoRA and the character recalls without it, which
+        # `hydrate` shows as a chip that is simply not there.
+        #
+        # It is here at all because this platform's other half is a trainer. A
+        # character whose likeness *is* a trained weight is the case the whole
+        # product is for, and a record that dropped it would save the least
+        # valuable half of them.
+        lora = payload.get("lora")
+        record: dict[str, Any] = {
             "note": note,
             "retention": str(payload.get("retention") or ""),
             "refs": recorded,
             "saved": time.time(),
-        }, indent=1))
+        }
+        if isinstance(lora, dict) and str(lora.get("path") or ""):
+            record["lora"] = {
+                "path": str(lora["path"]),
+                "rel": str(lora.get("rel") or ""),
+                "strength": float(lora.get("strength") or 1),
+            }
+        (d / "character.json").write_text(json.dumps(record, indent=1))
         volume.commit()
         return {"ok": True, "handle": handle, "files": len(recorded)}
 
@@ -12182,6 +12553,13 @@ def web():
         if str(payload.get("kind") or "video") == "image":
             return {"prompt": _compile_image_prompt(typed, shot)}
         d = VIDEO_MODELS["h3"]["defaults"]
+        # `or` rather than a `not in (None, "")` check, and deliberately: zero
+        # seconds is a still, and `/api/video` compiles a still's document at
+        # this same default because a still is a frame *out of* a shot. So zero
+        # falling through to the default here is what keeps the preview and the
+        # run saying the same thing — and a later edit "fixing" this to pass 0
+        # through would give the composer a document the run does not use, which
+        # is worse than no preview at all.
         try:
             seconds = float(payload.get("seconds") or d["seconds"])
         except (TypeError, ValueError):
@@ -12376,6 +12754,10 @@ def web():
         # at the controls. The job checks again at render time because the
         # volume can change between the two.
         continue_from = str(payload.get("continue_from") or "").strip() or None
+        if still and continue_from:
+            return {"error": "A still is one frame, so there is no motion to "
+                             "continue — clear the Motion tile, or ask for a "
+                             "take."}
         if continue_from:
             if not re.fullmatch(r"vid[0-9a-z]+", continue_from):
                 return {"error": f"Not a video job id: {continue_from!r}"}
@@ -12452,6 +12834,20 @@ def web():
 
         d = spec["defaults"]
         seconds = num("seconds", float(d["seconds"]), float)
+        # **Read off the duration, not asked for**, the same way the task is
+        # read off what was attached. Zero seconds is the one length whose
+        # answer is a picture.
+        still = seconds == 0
+        if still and 0 not in (spec["lengths"] or []):
+            return {"error": f"{spec['label']} does not make stills."}
+        if still:
+            # The compiler still needs a shot to describe, because a still is a
+            # frame *out of* one — `[Shot 1]` and its timings are what the
+            # document is made of, and a one-moment grammar beside it would be
+            # a second way to say what that field already says. So the document
+            # is compiled at the model's own default length and the sampler
+            # renders the opening of it.
+            seconds = float(d["seconds"])
 
         # The composer's timeline. Note that `scene` means something else one
         # route up: on `/api/generate` it is a base64 *plate* — a picture of a
@@ -12527,6 +12923,11 @@ def web():
             # made. It was a per-model question while there were two families.
             "aspect": aspect,
             "tier": tier,
+            # Both travel on a still. `seconds` is what the *document* was
+            # compiled against — the shot the frame is taken out of — and
+            # dropping it here would make the sidecar disagree with the prompt
+            # it sits beside.
+            "still": still,
             "seconds": seconds,
             "steps": max(1, min(60, num("steps", d["steps"], int))),
             "seed": num("seed", None, int),

@@ -1,7 +1,8 @@
 # Visionary
 
-A single-user LoRA training and generation platform on Modal. `modal deploy app.py`
-gives you one URL that is the whole application — UI, API and GPU jobs.
+A single-user LoRA training and generation platform. `modal deploy app.py` gives
+you one URL that is the whole application — UI, API and GPU jobs. Modal is the
+vehicle it runs on today, not part of what it is.
 
 ## Philosophy
 
@@ -27,6 +28,48 @@ commit cost. One container per loaded checkpoint.
 **Future-proof.** Prefer the surface that will still be there, and that carries
 the *next* model in for free. Depend on maintained upstreams over owned forks.
 Separate images when pins conflict — and only then.
+
+### The product is the experience; everything else is a receipt
+
+**The product is what the user experiences. It is not the stack, and the stack
+does not get a share of the credit.** Modal, ComfyUI, MiniMax-H3, a GPU class,
+one-file `app.py` — each is a derived, disposable interpretation of a workflow,
+replaceable the day something serves the experience better.
+
+That is what makes a teardown cheap rather than tragic. What accumulates is an
+understanding of a workflow almost nobody has designed before, and it outlives
+every implementation: the thesis below survived the deletion of everything built
+to serve it, and `web/CLAUDE.md`'s veto list — the densest artefact in the
+project — names no GPU, no model and no framework anywhere in it. Volatility in
+this field is the only instrument that reveals what the product should be, so a
+shock costs a receipt and pays the record. **Treat radical rebuilds as the
+environment, not the emergency.**
+
+**Ask what a thing makes possible before asking what it would cost us.** That
+ordering is not politeness; it decides what you read. FastVideo was nearly
+dismissed here because its numbers were measured on Blackwell and this is a
+Hopper image — a string in a build arg, functioning as a law — and under that
+frame `apps/dreamverse/` sat in its README and went unopened. Dreamverse
+(hao-ai-lab/FastVideo, live at dreamverse.fastvideo.org) is a websocket session
+where video generates continuously and you append prompts mid-rollout. It is the
+first thing that could satisfy this project's own veto on the Generate button —
+a veto written before anything could. Researching *harder* under the wrong frame
+produced a more confident wrong answer, not a correction.
+
+Three rules fall out of that:
+
+- **Price the number before invoking a rule.** Conventions break ties; they do
+  not outrank an order-of-magnitude claim. Split a headline into its parts and
+  ask which part is actually new to us.
+- **`docs/decisions.md` is a dated record, not a veto list.** Every entry is
+  what the measurement said on one date, against the alternatives that existed
+  then. A new candidate inherits the *test*, never the verdict.
+- **The limitations worth hacking are the ones that do not look like
+  decisions.** "You need 80 GB to train a 33B model" reads as physics; the real
+  assumption is that all parameters are trainable at once, and rotating
+  trainable windows hacks the simultaneity instead. An undocumented decision
+  goes invisible, and an invisible decision hardens into a law — which is the
+  reason this file exists at all.
 
 ### The user's prose is the record; everything derived from it is a receipt
 
@@ -81,7 +124,10 @@ below.
 - **Nothing downloads on its own.** Weights are chosen explicitly, under the
   gear.
 - **Pin to what you can reproduce.** A commit SHA, not a branch or a floating
-  ref. When upstream force-pushes, your build should not change under you.
+  ref. When upstream force-pushes, your build should not change under you. A pin
+  is a declaration, not a binding — bumping one is editing a number, and what
+  binds you is the cost of the bump. A pin that moves is a seed; a pin that has
+  not moved in two years is a fossil.
 - **Storage layout is the contract, not the code.** Datasets are folders of
   images with `.txt` sidecars beside them — the same thing the trainer reads.
   Nothing here is required to get your data back out.
@@ -106,7 +152,7 @@ below.
 | --- | --- | --- |
 | `.claude/rules/backend.md` | `app.py`, the ComfyUI nodes, the tools: the philosophy in detail, storage behaviour, conventions, the shot vocabulary | on reading `app.py`, `comfy_nodes/**`, `tools/**` |
 | `web/CLAUDE.md` | the page, the console budget, the canvas, region cards, LoRA chips, the shot palette, the scene composer, and the veto list | on reading anything under `web/` |
-| `docs/decisions.md` | what was removed or refused, and the measurement that settled it — the semantic layer, the rewrite, `forge/`, Wan 2.2, 2K, the ten-minute render | never; read it when someone proposes rebuilding one |
+| `docs/decisions.md` | what was removed or refused, and the measurement that settled it — the semantic layer, the rewrite, `forge/`, Wan 2.2, 2K, the ten-minute render | never; read it for the measurement and the trap it names, not as a standing no |
 | `docs/roadmap.md` | the phases, and the veto list in full | never; read it when deciding whether a new surface belongs |
 
 Layout and the storage schema are not written down here because they are

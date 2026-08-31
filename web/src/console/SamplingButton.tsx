@@ -1,3 +1,4 @@
+import { warm } from '../api/routes'
 import { Popover, usePopover } from '../ui/Popover'
 import { NumInput } from '../ui/NumInput'
 import { useStore, videoModel } from '../store'
@@ -48,6 +49,80 @@ const SEED_HINT = 'Blank draws a new one. A seed worth keeping is on the render 
   + 'that used it, and Reuse puts it back.'
 const SHIFT_HINT = 'Bends the noise schedule — higher spends more steps on composition and motion.'
 
+/**
+ * **Switching the model is how you cross between the two consoles.**
+ *
+ * Image and video are sibling disciplines with their own console and their own
+ * canvas — a photographer is not a filmmaker with the duration turned down — so
+ * there is a door between them, and this is it. One list, both families, and
+ * picking from the other one takes the whole surface with it.
+ *
+ * It belongs here by this button's own definition: the model is the
+ * rarely-touched choice that decides what every frequently-touched one *means*,
+ * and Krea 2 against H3 is that difference at its largest — which sizes exist,
+ * whether there is a negative prompt to write, whether there is a prompt box at
+ * all. The list used to be forked by the console you were already in, which
+ * made it a picker you could only reach a family through after arriving there.
+ *
+ * Duration is *not* the door and must not become one again. Zero is a length
+ * both consoles can answer, so going still never changes the engine; adding
+ * time does, because Krea 2 cannot answer it. See `Duration`.
+ */
+type Engine = { key: string; label: string; kind: 'image' | 'video'; ready: boolean }
+
+function useEngines(): Engine[] {
+  const s = useStore()
+  // Turbo first, against the catalogue's order, for the reason `ImageSampling`
+  // already records: the catalogue is ordered by what trains and this picker is
+  // read by what generates.
+  const img: Engine[] = ['turbo', 'raw']
+    .map((k) => s.state?.models.find((m) => m.key === k))
+    .filter((m): m is NonNullable<typeof m> => !!m)
+    .map((m) => ({ key: m.key, label: m.label, kind: 'image', ready: !!m.present }))
+  const vid: Engine[] = (s.state?.video_models ?? [])
+    .map((v) => ({ key: v.key, label: v.label, kind: 'video', ready: !!v.ready }))
+  return [...img, ...vid]
+}
+
+function EngineRow({ current, onCross }: { current: string; onCross: () => void }) {
+  const s = useStore()
+  const list = useEngines()
+  // Keyed `kind:key` rather than by key alone. The two families do not collide
+  // today, and a picker whose correctness depends on that is one an added
+  // checkpoint breaks silently — it would switch the wrong console and look
+  // like the model not taking.
+  const value = `${s.kind}:${current}`
+  return (
+    <Row label="Model">
+      <select value={value} onChange={(e) => {
+        const hit = list.find((x) => `${x.kind}:${x.key}` === e.target.value)
+        if (!hit) return
+        if (hit.kind === 'image') s.setImg({ model: hit.key })
+        else s.setVid({ model: hit.key })
+        if (hit.kind !== s.kind) {
+          s.setKind(hit.kind)
+          // **Crossing closes this.** The button that owns the popover belongs
+          // to the console you just left, so leaving it up parks the other
+          // discipline's controls — a CFG field over a model that has no CFG —
+          // at whatever coordinates its anchor used to have. Same rule the
+          // cast picker learned: a picker that stays open on the choice you
+          // just made is one that will not take yes for an answer.
+          onCross()
+        }
+        // The earliest honest signal of which container this session is about
+        // to want — the same reason `Duration` warms on its own switch.
+        void warm(hit.kind)
+      }}>
+        {list.map((x) => (
+          <option key={`${x.kind}:${x.key}`} value={`${x.kind}:${x.key}`} disabled={!x.ready}>
+            {x.label}{x.ready ? '' : ' — missing'}
+          </option>
+        ))}
+      </select>
+    </Row>
+  )
+}
+
 export function ImageSampling() {
   const s = useStore()
   const pop = usePopover()
@@ -60,11 +135,8 @@ export function ImageSampling() {
   // against twenty-eight is the whole difference, so falling through to RAW because
   // it happens to be listed first is a picker that charges you three and a half
   // times the sampling to open the page.
-  const models = ['turbo', 'raw']
-    .map((k) => s.state?.models.find((m) => m.key === k))
-    .filter((m): m is NonNullable<typeof m> => !!m)
   const edited = !!(s.img.steps || s.img.cfg || s.img.shift || s.img.sampler || s.img.scheduler)
-  const label = models.find((m) => m.key === s.img.model)?.label ?? 'Sampling'
+  const label = s.state?.models.find((m) => m.key === s.img.model)?.label ?? 'Sampling'
 
   return (
     <>
@@ -75,15 +147,7 @@ export function ImageSampling() {
       </button>
       {pop.open && (
         <Popover anchor={pop.anchor} className="menu form" onClose={pop.close}>
-          <Row label="Model">
-            <select value={s.img.model} onChange={(e) => s.setImg({ model: e.target.value })}>
-              {models.map((m) => (
-                <option key={m.key} value={m.key} disabled={!m.present}>
-                  {m.label}{m.present ? '' : ' — missing'}
-                </option>
-              ))}
-            </select>
-          </Row>
+          <EngineRow current={s.img.model} onCross={pop.close} />
           <Row label="Sampler">
             <select value={s.img.sampler || s.state?.image_defaults.sampler || ''}
                     onChange={(e) => s.setImg({ sampler: e.target.value })}>
@@ -140,7 +204,6 @@ export function VideoSampling() {
   const pop = usePopover()
   const m = videoModel(s)
   const r = resolveVid(s)
-  const models = s.state?.video_models ?? []
 
   return (
     <>
@@ -151,15 +214,7 @@ export function VideoSampling() {
       </button>
       {pop.open && (
         <Popover anchor={pop.anchor} className="menu form" onClose={pop.close}>
-          <Row label="Model">
-            <select value={s.vid.model} onChange={(e) => s.setVid({ model: e.target.value })}>
-              {models.map((v) => (
-                <option key={v.key} value={v.key} disabled={!v.ready}>
-                  {v.label}{v.ready ? '' : ' — missing'}
-                </option>
-              ))}
-            </select>
-          </Row>
+          <EngineRow current={s.vid.model} onCross={pop.close} />
           <Row label="Sampler">
             <select value={r.sampler} onChange={(e) => s.setVid({ sampler: e.target.value })}>
               {(m?.samplers ?? []).map((x) => <option key={x}>{x}</option>)}

@@ -67,6 +67,22 @@ export type Region = {
   y: number
   w: number
   h: number
+  /**
+   * Who this box is, as an Arsenal handle — and empty is the normal state.
+   *
+   * A box has never needed a name to render: `prompt` says who is standing
+   * there and `_pair_boxes` matches by position, so nothing downstream reads
+   * this. It exists because **a character you place is a character you should
+   * be able to keep**, and the Arsenal is keyed by handle. Naming a box is what
+   * makes it saveable and what makes it recallable — the same rule the cast
+   * runs on, that the name you are already typing is the recall.
+   *
+   * It is deliberately not sent. A region's payload is a rectangle, a sentence,
+   * a photograph and a LoRA; a handle is how *you* address the character, and
+   * putting it on the wire would be the app asking the encoder to read a
+   * filing label.
+   */
+  name: string
   prompt: string
   /** One per box — the node's shape. A dropdown on the card rather than a token
    *  in the field: the field is for words this performer's description needs,
@@ -77,9 +93,19 @@ export type Region = {
 }
 
 let regionSeq = 0
+
+/** The same seeding `seedShotIds` does, for the same reason and the same caller.
+ *  See `keep.ts`. */
+export const seedRegionIds = (ids: string[]) => {
+  for (const id of ids) {
+    const n = Number(id.slice(1))
+    if (Number.isFinite(n) && n > regionSeq) regionSeq = n
+  }
+}
+
 export const newRegion = (r: Partial<Region> = {}): Region => ({
   id: `r${++regionSeq}`,
-  x: 0, y: 0, w: 0.5, h: 1, prompt: '', lora: null, attachments: [],
+  x: 0, y: 0, w: 0.5, h: 1, name: '', prompt: '', lora: null, attachments: [],
   ...r,
 })
 
@@ -482,6 +508,10 @@ export type Store = {
   patchShot: (id: string, patch: Partial<Shot>) => void
   /** A new row after `after`, selected. Returns its id so the caller can focus it. */
   addShot: (after?: string) => string
+  /** Cut one shot in two at the caret: the tail becomes the next row, the head
+   *  stays put. A caret at the end is `addShot` exactly, which is what lets ⏎
+   *  be one gesture instead of two. */
+  splitShot: (id: string, caret: number) => string
   dropShot: (id: string) => void
   /** A cast member, named on creation because the gesture that makes one is
    *  typing its name — see the mention menu. Returns it so the caller can insert
@@ -684,6 +714,26 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       const at = s.scene.shots.findIndex((x) => x.id === after)
       const shots = [...s.scene.shots]
+      shots.splice(at < 0 ? shots.length : at + 1, 0, row)
+      return { scene: { ...s.scene, shots }, shotSel: row.id }
+    })
+    return row.id
+  },
+  splitShot: (id, caret) => {
+    const cur = get().scene.shots.find((x) => x.id === id)
+    // Only the line moves. The pills, the dialogue and `beats` stay with the
+    // head — they were chosen about the shot you were writing, and a cut does
+    // not reassign them — and the new row takes the default length rather than a
+    // share of its parent's. Splitting the parent's seconds by where the caret
+    // sits would derive a duration from the description, which is the derivation
+    // `Timeline` records the retirement of: the director decides, so the clip
+    // grows and the bar is dragged. That is also what `+` already does, which
+    // keeps the two ways of starting a shot one behaviour.
+    const row = newShot(cur ? cur.line.slice(caret).trimStart() : '')
+    const head = cur ? cur.line.slice(0, caret).trimEnd() : ''
+    set((s) => {
+      const at = s.scene.shots.findIndex((x) => x.id === id)
+      const shots = s.scene.shots.map((x) => (x.id === id ? { ...x, line: head } : x))
       shots.splice(at < 0 ? shots.length : at + 1, 0, row)
       return { scene: { ...s.scene, shots }, shotSel: row.id }
     })

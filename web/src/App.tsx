@@ -265,14 +265,22 @@ export function App() {
       // here as its own stray key while focus was still in flight.
       field.focus()
       const st = useStore.getState()
-      // `#prompt` is the image side's box on one kind and shot 1's row on the
-      // other — same id because it is the same thing, "the box you write in".
-      // The write has to follow it, or a stray letter on the video side lands in
-      // a buffer nothing is showing.
+      // `#prompt` is the image side's box on one kind and the *selected* shot's
+      // row on the other — same id because it is the same thing, "the box you
+      // write in". The write has to follow it, or a stray letter on the video
+      // side lands in a buffer nothing is showing.
+      //
+      // **The selected row, never `shots[0]`.** It was the first shot, and the
+      // value is composed from the field this handler just focused — so with the
+      // caret anywhere but shot 1, one stray letter wrote an empty box's contents
+      // plus that letter over shot 1, replacing the sentence there. `shotSel`
+      // falls back the way `Shots` does, because it can name a row a ⌫ removed.
       const write = field.id === 'neg'
         ? st.setNegative
         : st.kind === 'video'
-          ? (v: string) => { st.patchShot(st.scene.shots[0]?.id ?? '', { line: v }) }
+          ? (v: string) => {
+              st.patchShot(st.shotSel || (st.scene.shots[0]?.id ?? ''), { line: v })
+            }
           : st.setPrompt
       // Never welded to the last word — the same courtesy `insertLora` extends.
       const sep = field.value && !/\s$/.test(field.value) ? ' ' : ''
@@ -580,6 +588,8 @@ export function App() {
                 onOpenVideo={(src) => lightbox(src, 'video')}
                 onChain={() => void vid.chain()}
                 chaining={vid.linking}
+                onExport={() => void vid.exportScene()}
+                exporting={vid.exporting}
                 onHandoff={(jobId, file, as) => void handoff(jobId, file, as)}
                 onFirstFrame={async (f) => {
                   const b64 = await toB64(f)

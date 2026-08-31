@@ -214,6 +214,22 @@ export type Scene = {
 let seq = 0
 const uid = (p: string) => `${p}${++seq}`
 
+/**
+ * Push the counter past ids that came from somewhere other than this counter.
+ *
+ * The restore path is the only caller and the reason is exact: the sequence is
+ * module-level, so it restarts at zero on a reload while the shots and cast
+ * coming back out of storage still carry `s1`, `c1`. The next row added was a
+ * second row with a live row's id — `patchShot` writes to both of them and React
+ * keys them as one element. See `keep.ts`.
+ */
+export const seedShotIds = (ids: string[]) => {
+  for (const id of ids) {
+    const n = Number(id.slice(1))
+    if (Number.isFinite(n) && n > seq) seq = n
+  }
+}
+
 export const newShot = (line = ''): Shot => ({
   id: uid('s'), line, beats: null, pills: [],
   say: { who: [], text: '', lang: 'English', voice: '',

@@ -25,14 +25,60 @@ export const FIELD_FLOOR = 52
 export const FIELD_CEIL = 168
 
 /**
+ * The allowance, given how tall the field part currently measures.
+ *
+ * Split out from `fieldMax` because the video side's field is *several*
+ * elements — see `growRows`, where handing this a container was the bug.
+ */
+function allowance(consoleEl: HTMLElement | null, fieldHeight: number): number {
+  if (!consoleEl) return FIELD_CEIL
+  const other = consoleEl.getBoundingClientRect().height - fieldHeight
+  return Math.max(FIELD_FLOOR, Math.min(FIELD_CEIL, window.innerHeight * CONSOLE_BUDGET - other))
+}
+
+/**
  * @param consoleEl the `.console` element
  * @param fieldEl   the field currently on show — the negative box when that is
  *                  the one visible, which is what `liveField()` decided
  */
 export function fieldMax(consoleEl: HTMLElement | null, fieldEl: HTMLElement | null): number {
   if (!consoleEl || !fieldEl) return FIELD_CEIL
-  const other = consoleEl.getBoundingClientRect().height - fieldEl.getBoundingClientRect().height
-  return Math.max(FIELD_FLOOR, Math.min(FIELD_CEIL, window.innerHeight * CONSOLE_BUDGET - other))
+  return allowance(consoleEl, fieldEl.getBoundingClientRect().height)
+}
+
+/**
+ * The cap, rounded **down to a whole number of lines**.
+ *
+ * **A box that is 2.095 lines tall is the "the cursor goes whacky" bug**, and it
+ * is not cosmetic. Every constant here is a pixel count — 52, 168, 30 — and a
+ * line is 21px on 4px of padding, so none of them lands on a line boundary:
+ * `FIELD_FLOOR` measured 2.095 lines, which means the box permanently shows a
+ * 2px sliver of the line below. Once the text is long enough to scroll, the
+ * browser scrolls by whatever it takes to keep the caret in view — 14.5px,
+ * measured — and the caret then sits inside a half-rendered line with the row
+ * above it sliced through the middle. You are typing into a strip of glyphs cut
+ * in half, which is what "3 lines and it goes whacky" is.
+ *
+ * It cannot be fixed by choosing rounder constants. The cap is derived — it is
+ * whatever 30% of *this* viewport has left after the rest of the console — so it
+ * lands on an arbitrary pixel at almost every window size. The height has to be
+ * quantised where it is applied, which is here.
+ *
+ * Rounded *down*, never up: up is a box one line taller than the budget allows,
+ * and the budget is the thing all of this exists to hold. One line is the floor
+ * — a box with no line in it is not a box you can write in — and it is allowed
+ * to exceed the cap for the same reason `FIELD_FLOOR` is.
+ */
+function wholeLines(el: HTMLTextAreaElement, cap: number): number {
+  const cs = getComputedStyle(el)
+  const line = parseFloat(cs.lineHeight)
+  // `box-sizing: border-box`, so the height being set includes both.
+  const chrome = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+    + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+  // `line-height: normal` parses to NaN, and a font that has not loaded can
+  // report zero. Either way the cap is better than a box of no height.
+  if (!Number.isFinite(line) || line <= 0 || !Number.isFinite(chrome)) return cap
+  return chrome + Math.max(1, Math.floor((cap - chrome) / line)) * line
 }
 
 /**
@@ -45,7 +91,8 @@ export function fieldMax(consoleEl: HTMLElement | null, fieldEl: HTMLElement | n
 export function autoGrow(fieldEl: HTMLTextAreaElement | null, consoleEl: HTMLElement | null): void {
   if (!fieldEl) return
   fieldEl.style.height = 'auto'
-  fieldEl.style.height = `${Math.min(fieldEl.scrollHeight, fieldMax(consoleEl, fieldEl))}px`
+  const cap = wholeLines(fieldEl, fieldMax(consoleEl, fieldEl))
+  fieldEl.style.height = `${Math.min(fieldEl.scrollHeight, cap)}px`
 }
 
 /**
@@ -73,8 +120,19 @@ export function growRows(box: HTMLElement | null, consoleEl: HTMLElement | null)
   // element with an explicit height reports that height, so measuring without
   // this lets a row grow and never shrink.
   for (const a of areas) a.style.height = 'auto'
-  const share = Math.max(ROW_FLOOR, fieldMax(consoleEl, box) / areas.length)
-  for (const a of areas) a.style.height = `${Math.min(a.scrollHeight, share)}px`
+  // **The rows, not the box holding them.** This measured `fieldMax(console,
+  // box)` — and `.tline` is the strip and the ruler *as well as* the row, so
+  // everything `Timeline` draws was subtracted out of `other` and then handed
+  // back to the textarea as if it were the textarea's own. The allowance came
+  // out one Timeline too generous at every viewport, and the console ran 36% of
+  // a window it is budgeted 30% of. `probe_console.py` flagged it on every video
+  // row as `FIELD vs fieldMax()`; it is the one state the formula was never
+  // right for, because it is the one field that is not a single element.
+  const rows = areas.reduce((n, a) => n + a.getBoundingClientRect().height, 0)
+  const share = Math.max(ROW_FLOOR, allowance(consoleEl, rows) / areas.length)
+  for (const a of areas) {
+    a.style.height = `${Math.min(a.scrollHeight, wholeLines(a, share))}px`
+  }
 }
 
 /**

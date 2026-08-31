@@ -75,13 +75,33 @@ with sync_playwright() as pw:
         fails.append("picking a ticked row did not remove it")
 
     # ---- the switch -------------------------------------------------------
-    # The kind switch is the Duration menu — "Still" is an image, any number of
-    # seconds is a clip. There is no image/video chip; see `Duration`.
-    def duration(label):
-        page.click("#g-duration")
-        page.wait_for_selector(".menu button")
-        page.locator(".menu button", has_text=label).first.click()
-        time.sleep(0.35)
+    def cross(want_video):
+        """
+        **Crossing consoles is a choice of model, not of duration.**
+
+        This drove the Duration menu — `duration("5s")` to reach video and
+        `duration("Still")` to come back — which was right while a still meant
+        Krea 2. It is not any more: H3 makes a still at zero seconds, so both
+        consoles answer that length and `Still` deliberately changes no engine.
+        Left as it was, the round trip below never left H3, `#lora-box` never
+        mounted, and the check died waiting thirty seconds for a selector that
+        cannot appear — the same staleness `check_drop.py` carried, and this is
+        its `cross()` verbatim so the two cannot drift into two spellings of one
+        gesture. See `Duration.tsx` and `EngineRow` in `SamplingButton.tsx`.
+
+        The button clicked is the *current* console's, which is the opposite of
+        where we are going. Values are `kind:key` because the picker spans both
+        families and a bare key could name either one.
+        """
+        if page.eval_on_selector(
+            "#c-video", "e => e.classList.contains('hide')"
+        ) != want_video:
+            return
+        page.click("#g-sampling" if want_video else "#v-sampling")
+        page.wait_for_selector(".menu.form select")
+        page.select_option(".menu.form select",
+                           "video:h3" if want_video else "image:turbo")
+        time.sleep(0.5)
 
     # **This block dies with video's prompt box, and what it is testing does
     # not.** Three lines below depend on `#prompt` existing on the video side:
@@ -95,13 +115,13 @@ with sync_playwright() as pw:
     # then, or the LoRA side loses a real guard for a reason that has nothing to
     # do with LoRAs. Deleting it would read as tidying up after a UI change and
     # would quietly drop the only check that the per-kind buffers do not bleed.
-    duration("5s")
+    cross(True)
     if page.locator("#lora-box").count():
         fails.append("an image LoRA followed the switch to video")
     if box(page) != "":
         fails.append(f"the image prompt followed the switch: {box(page)!r}")
     page.fill("#prompt", "a slow push in")
-    duration("Still")
+    cross(False)
     if box(page) != "a portrait in soft window light":
         fails.append(f"the image prompt did not come back: {box(page)!r}")
     if page.locator("#lora-box > button").inner_text().strip() != "1 LoRA":

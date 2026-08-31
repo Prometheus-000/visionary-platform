@@ -2,11 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { fileUrl } from '../api/routes'
 import { RetryImg } from '../media/thumb'
-import { IconClose, IconExpand, IconPhoto, IconPlay, IconPlus } from '../icons'
+import { IconClose, IconExpand, IconFilm, IconPhoto, IconPlay, IconPlus } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
 import { attached, regionsLive, useStore } from '../store'
-import { layoutShots } from './layoutShots'
+import { layoutClip, layoutShots } from './layoutShots'
 import type { RunState } from './useGenerate'
 import type { VideoRun } from '../video/useVideo'
 
@@ -44,6 +44,8 @@ export function Canvas({
   onClear,
   onChain,
   chaining,
+  onExport,
+  exporting,
   blank,
 }: {
   run: RunState
@@ -57,6 +59,11 @@ export function Canvas({
   /** The next generation of the same scene — see `useVideo.chain`. */
   onChain: () => void
   chaining: boolean
+  /** Stitch every take into one file and save it. Null while idle; the phase
+   *  while it runs, because a still button for the length of a re-encode is the
+   *  wait this codebase has a rule about. */
+  onExport: () => void
+  exporting: string | null
   blank: React.ReactNode
 }) {
   const s = useStore()
@@ -64,9 +71,27 @@ export function Canvas({
   const gridRef = useRef<HTMLDivElement>(null)
   const capRef = useRef<HTMLParagraphElement>(null)
   const navRef = useRef<HTMLDivElement>(null)
+  const clipRef = useRef<HTMLDivElement>(null)
+  const vidCapRef = useRef<HTMLParagraphElement>(null)
 
   const image = s.kind === 'image'
-  const n = image ? run.files.length : 0
+  // **A strip is both consoles' shape.** A Krea 2 batch and H3's still — several
+  // pictures out of one run, judged one at a time at full canvas size — are the
+  // same object, so one block draws both and only the source differs. A contact
+  // sheet would be worse here than anywhere: the frames of a still are nearly
+  // identical, and picking the clean one means seeing each big, not seeing all
+  // of them small.
+  //
+  // What does *not* generalise is what hangs off a frame. Regions are the image
+  // console's and never mount over a film frame, which is why every one of them
+  // below stays gated on `image` rather than on the strip.
+  const strip = image
+    ? { jobId: run.jobId, files: run.files, w: run.w, h: run.h }
+    : { jobId: vidRun.jobId, files: vidRun.stills, w: vidRun.w, h: vidRun.h }
+  const n = strip.files.length
+  // The clip — the video side's *other* answer, and exclusive with the strip by
+  // construction: `finish` fills one or the other, so the canvas never has to
+  // choose between them.
   const vidSrc = !image && vidRun.jobId && vidRun.file
     ? fileUrl(vidRun.jobId, vidRun.file)
     : null
@@ -77,7 +102,7 @@ export function Canvas({
   // A new render is its own strip, so it starts at its first frame. Keyed on the job
   // rather than on `n` — two runs of four would otherwise leave you on frame 3 of a
   // batch you have not seen.
-  useEffect(() => { setCur(0) }, [run.jobId])
+  useEffect(() => { setCur(0) }, [strip.jobId])
   const at = Math.min(cur, Math.max(0, n - 1))
 
   // The canvas changes height whenever the console does, so the fit is recomputed on
@@ -85,18 +110,32 @@ export function Canvas({
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const fit = () => layoutShots(gridRef.current, canvas, capRef.current, n, navRef.current)
+    // Both sides, off one observer. The clip used to be fitted by nothing at
+    // all — see `layoutClip` — and `n` is the *still* count, so a version that
+    // only ran this when `n` changed would never run it on the video side.
+    const fit = () => {
+      // The caption belongs to the strip, and which element that is follows
+      // the console: `#gen-meta` on the image side, `#vid-meta` on the video
+      // one. Passing the image ref unconditionally handed this a null the
+      // moment a still landed on the video canvas.
+      layoutShots(gridRef.current, canvas,
+                  image ? capRef.current : vidCapRef.current, n, navRef.current)
+      layoutClip(clipRef.current, canvas, vidCapRef.current)
+    }
     fit()
     const ro = new ResizeObserver(fit)
     ro.observe(canvas)
     return () => ro.disconnect()
-  }, [n])
+    // `image` is a dependency because the caption ref above follows it, and the
+    // two consoles can both sit at n=0 — switching between them there would
+    // otherwise leave the fit measuring the other side's caption element.
+  }, [n, vidSrc, image])
 
   // The boxes are an image-side thing and the canvas is the same element, so switching
   // kinds has to take the layer with it — otherwise the rectangles sit over a clip they
   // mean nothing to.
   const running = image ? run.running : vidRun.running
-  const shown = image ? n > 0 : !!vidSrc
+  const shown = n > 0 || !!vidSrc
   const ready = !!s.state && !s.stateError
 
   // Whenever a render is up, not only when boxes exist. `regionsLive` used to gate
@@ -188,7 +227,7 @@ export function Canvas({
           <button className="ico" id="canvas-full" title="Full screen — Space" type="button"
                   onClick={() => {
                     if (vidSrc) onOpenVideo(vidSrc)
-                    else if (run.jobId) onOpen(run.jobId, at)
+                    else if (strip.jobId) onOpen(strip.jobId, at)
                   }}>
             <IconExpand />
           </button>
@@ -215,6 +254,30 @@ export function Canvas({
               <IconPlus />
             </button>
           )}
+          {/* **The scene, as one file — and it only appears once there is a
+              scene.** One take is a clip and the gallery already saves it; the
+              export is for the thing that has no other way out, which is the
+              several takes `Continue` chained into something the app calls a
+              scene and the volume calls unrelated clips. Beside `+` because
+              they are the two halves of one act: the plus makes the scene
+              longer, this takes it away with you.
+
+              The phase rides the title rather than a bar. A press that starts a
+              minute of work has to say something different as often as the work
+              changes, and there is no room here for a progress line — the title
+              is what this row has. */}
+          {!image && s.takes.length > 1 && (
+            <button className="ico" id="canvas-export" type="button"
+                    disabled={!!exporting}
+                    title={exporting
+                      ? `${exporting}…`
+                      : `Save all ${String(s.takes.length)} takes as one file. `
+                        + 'Joined in the order you made them, without re-encoding '
+                        + 'when they match.'}
+                    onClick={onExport}>
+              <IconFilm />
+            </button>
+          )}
           <button className="ico" id="canvas-clear" title="Clear the canvas — ⌫" type="button"
                   onClick={onClear}>
             <IconClose />
@@ -228,12 +291,12 @@ export function Canvas({
           any of the stills can paint. Each <img> paints as its own bytes land, off the
           same route and the same cache the gallery uses — and every frame of the strip
           is mounted, so stepping to the next one is a transform rather than a fetch. */}
-      {image && (
+      {(image || n > 0) && (
         <div className="film" id="gen-out" ref={gridRef} hidden={!n}>
           <div className="film-track" style={{ transform: `translateX(-${at * 100}%)` }}>
-            {run.jobId && run.files.map((f, i) => (
+            {strip.jobId && strip.files.map((f, i) => (
               <div className="film-cell" key={f} aria-hidden={i !== at}>
-                <figure className={`shot${regionsLive(s) ? ' can-drop' : ''}`}>
+                <figure className={`shot${image && regionsLive(s) ? ' can-drop' : ''}`}>
                   {/* No click-to-zoom. It used to open the lightbox, which was right
                       when a batch was four thumbnails and the canvas was only
                       pretending to show you the picture — the strip shows it at full
@@ -251,19 +314,19 @@ export function Canvas({
                   {/* RetryImg, not <img>: a still that failed to load once is a
                       finished render showing nothing, and the element never
                       asks again on its own. */}
-                  <RetryImg src={fileUrl(run.jobId!, f)} alt="" decoding="async"
-                            width={run.w || undefined} height={run.h || undefined}
+                  <RetryImg src={fileUrl(strip.jobId!, f)} alt="" decoding="async"
+                            width={strip.w || undefined} height={strip.h || undefined}
                             fetchPriority={i === at ? 'high' : 'auto'} />
                   {/* Each still carries its own way into video. Two, because they are
                       genuinely different jobs: a first frame is the shot the clip starts
                       on, a reference is a subject the clip is about. */}
                   <span className="acts">
                     <button type="button" title="Animate — use as the first frame of a clip"
-                            onClick={() => onHandoff(run.jobId!, f, 'first')}>
+                            onClick={() => onHandoff(strip.jobId!, f, 'first')}>
                       <IconPlay />
                     </button>
                     <button type="button" title="Use as a reference image"
-                            onClick={() => onHandoff(run.jobId!, f, 'reference')}>
+                            onClick={() => onHandoff(strip.jobId!, f, 'reference')}>
                       <IconPhoto />
                     </button>
                   </span>
@@ -283,7 +346,7 @@ export function Canvas({
       {/* `‹ 2 / 4 ›`. The whole batch control, and it only exists when there is a batch
           — one result is one canvas and has nothing to step through. Quiet at rest like
           everything else that sits near the picture. */}
-      {image && n > 1 && (
+      {n > 1 && (
         <div className="film-nav" id="gen-nav" ref={navRef}>
           <button type="button" className="ico" id="gen-prev" title="Previous — ←"
                   disabled={at === 0} onClick={() => setCur(at - 1)}>‹</button>
@@ -336,7 +399,7 @@ export function Canvas({
           clip, because the element *is* the handler — `check_drop.py` found this
           missing, and what was missing was not a class on a div, it was the gesture. */}
       {!image && (
-        <div id="vid-out" className={`can-drop${vidSrc ? '' : ' hide'}`} data-drop="First frame"
+        <div id="vid-out" ref={clipRef} className={`can-drop${vidSrc ? '' : ' hide'}`} data-drop="First frame"
              onDragOver={(e) => {
                if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return
                e.preventDefault()
@@ -367,7 +430,14 @@ export function Canvas({
                   clip plays silent and looping the instant it lands, which is
                   what "the result on screen is the canvas" means for video; the
                   native controls are right there for the soundtrack. */}
-              <video controls autoPlay muted loop playsInline src={vidSrc} />
+              {/* `width`/`height` are the reservation, not a size — exactly what
+                  they are on the still above. `#vid-out video` is
+                  `width:auto;height:auto` now so it can be capped by height, and
+                  a replaced element with no intrinsic size defaults to 300x150:
+                  without these the take lands as a small grey box and snaps to
+                  its real shape when the metadata arrives. */}
+              <video controls autoPlay muted loop playsInline src={vidSrc}
+                     width={vidRun.w || undefined} height={vidRun.h || undefined} />
               <button className="zoom" title="Full screen" type="button"
                       onClick={() => onOpenVideo(vidSrc)}>
                 <IconExpand />
@@ -377,7 +447,7 @@ export function Canvas({
         </div>
       )}
       {!image && (
-        <p className="muted" id="vid-meta" style={{ margin: '12px 2px' }}
+        <p className="muted" id="vid-meta" ref={vidCapRef} style={{ margin: '12px 2px' }}
            aria-live="polite">
           {vidRun.running
             ? [s.gpu.video, vidRun.phase || 'Working…'].filter(Boolean).join(' · ')

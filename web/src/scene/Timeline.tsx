@@ -112,6 +112,35 @@ export function Timeline() {
                   and the sentence is the only thing that says what this shot is. */}
               <span className="tl-line">{shot.line.trim() || <i>…</i>}</span>
               <span className="tl-secs">{sec % 1 ? sec.toFixed(1) : sec}s</span>
+              {/* **A shot you can see is a shot you can remove, and this was the
+                  one thing the bar could not do.** ⌫ on an empty row took a shot
+                  out, and the comment beside it claimed that was "the only way
+                  back out of a timeline that does not need a control of its
+                  own". It needed one: the gesture is invisible, and it has a
+                  precondition — you have to *empty the row first*, so the shot
+                  you actually want gone, the one with a sentence in it, is the
+                  one it refuses. The owner's reading is the refutation, and it
+                  is this file's own icon rule arriving from the other side: it
+                  "tricks you into thinking you're stuck with it".
+
+                  On the bar, because the bar is the shot — the same rule the
+                  region card follows. Drawn for the selected bar and on hover
+                  only, so a five-shot track is not five ✕ marks competing with
+                  the sentences; and never for the last one, because a scene
+                  with no shots is a scene with nowhere to type and
+                  `_validate_scene` reads it as no scene at all. */}
+              {shots.length > 1 && (
+                <button type="button" className="tl-x" title="Remove this shot"
+                        onPointerDown={(e) => { e.stopPropagation() }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          s.dropShot(shot.id)
+                          // Into whatever the store selected in its place, so the
+                          // next keystroke has somewhere to land rather than
+                          // going to the stray-key handler in `App`.
+                          requestAnimationFrame(() => document.getElementById('prompt')?.focus())
+                        }}>×</button>
+              )}
               {/* The whole right edge, not a hairline: this is the one control
                   the old derivation existed to avoid, so it has to be grabbable. */}
               <span className="tl-pull" title={`${tick(start)} → ${tick(start + sec)} — drag to set how long this shot runs`}

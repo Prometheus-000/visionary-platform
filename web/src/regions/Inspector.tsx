@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { IconArrange, IconPhoto, IconTrash } from '../icons'
 import { Menu } from '../ui/Menu'
@@ -9,6 +9,9 @@ import { shrinkB64 } from '../media/files'
 import { caretProps, dropCaret } from '../lora/caret'
 import { regionNote } from '../lora/note'
 import { chipFrom, loraIndex } from '../lora/tokens'
+import { hydrateRegion, listCharacters, saveRegion,
+         type SavedCharacter } from '../scene/arsenal'
+import { handleOf } from '../scene/model'
 import { attached, regionsLive, useStore, type EditMode, type Region } from '../store'
 import { takeResumeFocus } from './focus'
 import { clamp01, distribute, readRegions } from './geometry'
@@ -58,7 +61,16 @@ export function Inspector({ mode }: { mode: EditMode }) {
           gesture that touched a box put a 296px panel over the picture for the whole
           of a framing session — and the layer refuses presses inside `.rins`, so
           whatever lay under it was not adjustable at all. */}
-      {s.cardOpen && <BoxCard r={r} i={s.rsel} drag={s.boxDrag} mode={mode} />}
+      {/* **Keyed by the box, so selecting another one is a remount.** Everything
+          in this card is per-box state that assumes exactly that — the caret
+          sink's withdrawal ("this one goes on every render of selection, not
+          just on unmount"), the resume-focus flag, the Arsenal listing and the
+          save button's `Saved ✓`. It held only by accident: pressing another box
+          puts the card away first, so `cardOpen` flickered false and unmounted
+          it. Tab cycles selection without that press, and there the same
+          instance was reused — a `Saved ✓` sitting on the next character's card,
+          and a recall list fetched for a box you left. */}
+      {s.cardOpen && <BoxCard key={r.id} r={r} i={s.rsel} drag={s.boxDrag} mode={mode} />}
       {/* The card's numbers, for the length of the gesture that takes the card away —
           and now for every drag, because a drag is what closes the card in the first
           place. Gated on geometry, which is the gate the numbers themselves carry: a
@@ -149,6 +161,8 @@ function BoxCard(
 
   return (
     <div className={`rins${drag ? ' dragging' : ''}`} id="region-inspector" style={anchorTo(r)}>
+      <CharacterRow r={r} i={i} />
+
       {/* The sentence gets the row to itself. Beside the photo tile it measured 168px
           of a 296px card, which is about four words of a field whose placeholder is
           eight — and what a box holds is mostly this. */}
@@ -282,7 +296,107 @@ function BoxCard(
           {num('h', 'H', 'How much of the canvas height this box covers, 0 to 1.')}
         </div>
       )}
+
+      <KeepRow r={r} />
     </div>
+  )
+}
+
+/**
+ * Who this box is, and the only control on this card that outlives the picture.
+ *
+ * **The name is both halves of the Arsenal, which is why one field does it.**
+ * Type a name nobody has saved and it is a name; type one you have and the row
+ * under it offers them back, files and weight and sentence. That is the cast's
+ * own rule — *the name you are already typing is the recall* — brought to the
+ * side that never had it, rather than a Library button, a browse panel or an
+ * import dialog, all of which the roadmap vetoes by name.
+ *
+ * It is above the sentence because it is the smaller, more definite fact: the
+ * prompt is what they are *doing here*, and this is who is doing it.
+ */
+function CharacterRow({ r, i }: { r: Region; i: number }) {
+  const s = useStore()
+  const [saved, setSaved] = useState<SavedCharacter[]>([])
+  const [open, setOpen] = useState(false)
+  // Fetched when a card opens, which is popover speed: names, sentences and
+  // filenames, never bytes. Same listing the mention menu takes.
+  useEffect(() => { void listCharacters().then(setSaved) }, [])
+
+  const q = handleOf(r.name)
+  // A handle this box already *is* is not a thing to recall — the row would
+  // offer to replace the character with itself. Everything else that matches
+  // the prefix, and everything when there is no prefix yet, because an empty
+  // field is the moment "who have I got" is the question.
+  const hits = saved.filter((c) => c.handle && c.handle !== q
+                                   && (!q || c.handle.startsWith(q)))
+
+  return (
+    <>
+      <div className="rins-row">
+        <div className="tname-row grow">
+          <span className="at">@</span>
+          <input id="r-name" className="tname" value={r.name} spellCheck={false}
+                 placeholder="name — and how you get them back"
+                 title="Who this box is. Naming them is what lets you keep them: save below, and typing the name in any future session offers them back with their photo, their sentence and their LoRA."
+                 onFocus={() => { setOpen(true) }}
+                 // On a timer, because the row below is a mousedown target and a
+                 // blur fires first — closing the list on the way to clicking it
+                 // is a picker that cannot be picked from, which is the fault the
+                 // mention menu records from the other direction.
+                 onBlur={() => { window.setTimeout(() => { setOpen(false) }, 120) }}
+                 onChange={(e) => { s.patchRegion(i, { name: handleOf(e.target.value) }) }} />
+        </div>
+      </div>
+
+      {open && hits.length > 0 && (
+        <div className="rcast">
+          {hits.slice(0, 6).map((c) => (
+            <button key={c.handle} type="button"
+                    // mousedown, not click: the field is focused and a click
+                    // blurs it first, so the list is already gone by the time
+                    // the press lands.
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      setOpen(false)
+                      void hydrateRegion(r.id, c, loraIndex(useStore.getState().state))
+                    }}>
+              <b>@{c.handle}</b>
+              <i>{c.note || (c.lora ? c.lora.rel : 'saved')}</i>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * The write surface, and the same one row the cast card carries.
+ *
+ * **Only once there is something to keep.** A named box with no photograph and
+ * no weight is a name, which is already in your head — the sentence the route
+ * refuses with, so the button does not offer an act the server will decline.
+ * A LoRA counts: on a platform whose other half is a trainer, somebody who
+ * exists as a weight and no reference photo is the case this is most for.
+ */
+function KeepRow({ r }: { r: Region }) {
+  const [kept, setKept] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const name = handleOf(r.name)
+  if (!name || !(attached(r, 'identity') || r.lora)) return null
+  return (
+    <button type="button" className="tkeep" id="r-keep" disabled={kept !== 'idle'}
+            title={`Save @${name} to the arsenal — type the name in any future session to get them back. Saving again replaces.`}
+            onClick={() => {
+              setKept('saving')
+              void saveRegion(r, name).then((err) => {
+                if (err) { alert(err); setKept('idle'); return }
+                setKept('saved')
+                window.setTimeout(() => { setKept('idle') }, 1600)
+              })
+            }}>
+      {kept === 'saving' ? 'Saving…' : kept === 'saved' ? 'Saved ✓' : 'Save to arsenal'}
+    </button>
   )
 }
 

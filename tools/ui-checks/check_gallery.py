@@ -192,10 +192,18 @@ def run(page):
     open_drawer(page)
     page.wait_for_selector("#drawer-grid .gal", timeout=10000)
     page.wait_for_timeout(600)
+    # **The card's own id, not its cover's URL.** This read the first
+    # `.gal img`'s `src` and looked for the job id inside it, which is a
+    # property of the *picture* rather than of the card — `Thumb` fetches the
+    # cover and replaces `src` with a `blob:` URL as soon as the bytes land, so
+    # the assertion was a race it lost whenever the fetch was quick, and a clip
+    # card has no `<img>` in it at all. `data-job` is the card naming itself;
+    # see `Card.tsx`. Equality rather than a substring, which the id in a URL
+    # could never be.
     first = page.evaluate(
-        "() => document.querySelector('#drawer-grid .gal img')?.getAttribute('src')")
+        "() => document.querySelector('#drawer-grid .gal')?.dataset.job")
     check("a result the listing omits is still in the grid",
-          bool(first and "genLOCAL" in first), str(first))
+          first == "genLOCAL", str(first))
     check("and it did not displace the listing",
           page.evaluate(
               "() => document.querySelectorAll('#drawer-grid .gal').length") >= before)

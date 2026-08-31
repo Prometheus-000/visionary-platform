@@ -565,6 +565,19 @@ svg{width:100%;height:100%;display:block}
   overflow:hidden;text-overflow:ellipsis}
 .tl-line i{color:var(--dim);font-style:normal}
 .tl-secs{font-size:9.5px;color:var(--dim);flex:none;font-variant-numeric:tabular-nums}
+/* Remove this shot. Hidden at rest and drawn for the bar you are on, so a
+   five-shot track is five sentences rather than five ✕ marks — the disclosure
+   `.tref .x` already makes, on the same argument. Inside the pull edge's 10px
+   so the two targets cannot overlap: one of them deletes the shot and the other
+   resizes it, and a press that could mean either is the one arrangement neither
+   can afford. On glass there is no hover, so it is always drawn — a control
+   revealed by a gesture that does not exist is a control that is not there. */
+.tl-x{flex:none;margin-right:8px;border:0;background:none;padding:0 2px;line-height:1;
+  font-size:13px;color:var(--dim);cursor:pointer;border-radius:var(--r-mark);
+  opacity:0;transition:opacity .12s}
+.tl-shot:hover .tl-x,.tl-shot.sel .tl-x{opacity:1}
+.tl-x:hover{color:var(--fg);background:var(--wash-3)}
+@media (hover:none){.tl-x{opacity:1}}
 /* The whole right edge. This is the control the derivation existed to avoid,
    so it is 10px and it keeps its cursor past where the pointer left it. */
 .tl-pull{position:absolute;top:0;right:0;bottom:0;width:10px;cursor:col-resize;
@@ -1070,8 +1083,24 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .shot .acts button svg{width:100%;height:100%;display:block}
 /* Lit, unlike its two neighbours, because it is the only one of the three
    that restores something rather than starting something. */
-#vid-out{position:relative}
-#vid-out video{width:100%;max-width:1180px;margin:0 auto;display:block;border-radius:var(--r-card);
+#vid-out{position:relative;display:flex;justify-content:center}
+/* **Fitted the way a still is, and `--clip-h` is the half that was missing.**
+   This was `width:100%` with no ceiling on the height, so a 720p take came out
+   665px tall in whatever the console had left — 360px on a 13" window — and the
+   canvas scrolled with the native controls below the fold. `.shot img` has had
+   the answer the whole time and the clip simply never got it: cap both axes,
+   let the intrinsic ratio pick the other one, and let `layoutClip` measure the
+   height off the canvas rather than off the viewport.
+
+   `width:auto`, not `100%`, because a percentage width with a capped height
+   makes the *element* 1180px wide with the picture letterboxed inside it —
+   a black bar either side of a clip that is not that shape. The box has to be
+   the picture, which is what the still's rule says too.
+
+   `min(100%,1180px)`: the cap on how big a clip is allowed to get on a wide
+   window survives, it is just no longer the only cap there is. */
+#vid-out video{max-width:min(100%,1180px);max-height:var(--clip-h,none);
+  width:auto;height:auto;display:block;border-radius:var(--r-card);
   border:1px solid var(--line);background:#000}
 /* A button rather than a click on the video: the video already owns its own
    click, which is play/pause, and taking that away to open a viewer would
@@ -2356,6 +2385,28 @@ button.b.danger:hover:not(:disabled){background:var(--crit)}
    masked sampling pass, or a krea2edit compose that regenerates the whole frame
    and is several times slower. */
 .rins-note{margin:2px 3px 0;font-size:12px;line-height:1.35;color:var(--mut)}
+/* The name row and the keep button are the cast card's, worn by a box — one
+   Arsenal, so one look for the two surfaces that reach it. The rules are shared
+   rather than copied because a second spelling of them is a second place for the
+   two to drift, and the whole point of this row is that they are one shelf. */
+.rins .tname-row{flex:1 1 auto;min-width:0;padding:0 0 0 9px}
+.rins .tname{border:0;background:none;padding:0 9px 0 2px;font-weight:600;
+  height:30px;width:100%;min-width:0;font-size:14px}
+.rins .tname:focus{border:0}
+.rins .tkeep{margin-top:2px}
+/* The recall list. Six rows at most and in flow rather than floating: the card
+   is already a positioned thing inside a clipped layer, and a popover off it
+   would be the third stacking context in one corner — and this one must not
+   close on scroll, which is the objection `LoraBox` records about `Popover`. */
+.rcast{display:flex;flex-direction:column;gap:1px;margin:-2px 0 1px;
+  max-height:150px;overflow-y:auto}
+.rcast button{display:flex;align-items:baseline;gap:7px;width:100%;text-align:left;
+  border:0;background:none;color:var(--mut);cursor:pointer;padding:5px 9px;
+  border-radius:var(--r-inner);font-size:12.5px;overflow:hidden}
+.rcast button:hover{background:var(--wash-3);color:var(--fg)}
+.rcast button>b{font-weight:600;flex:none}
+.rcast button>i{font-style:normal;color:var(--dim);font-size:11.5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Where the frame's own card sits. Bottom-left, and capped short of the button
    in the opposite corner so the two never overlap on a narrow frame. */
 .rins.frame-card{left:8px;bottom:8px;max-width:calc(100% - 52px)}

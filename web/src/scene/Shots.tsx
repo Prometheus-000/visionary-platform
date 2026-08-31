@@ -7,7 +7,7 @@ import { resolveVid } from '../console/resolve'
 import { supports, useStore } from '../store'
 import { MentionMenu, complete, mentionAt, type Mention } from './Mentions'
 import { Timeline } from './Timeline'
-import { handleOf, times, type Shot } from './model'
+import { handleOf, sceneSeconds, times, type Shot } from './model'
 
 /**
  * The timeline, where the video side's prompt box used to be.
@@ -42,7 +42,16 @@ export function Shots({ consoleEl, hide, onSubmit }: {
   // — see `ResolvedVid`. The clock needs a number, and the fallback is one
   // second so a model with no length yet still divides rather than dividing by
   // zero; nothing is shown at that point anyway.
-  const secs = Number(resolveVid(s).seconds) || 1
+  //
+  // **The track's total, not the menu's.** `times` normalises the shares against
+  // whatever it is handed, so asking the menu put the gutter and the document on
+  // different clocks the moment the bars outgrew it: three 4s shots read `05.33`
+  // under an 8s menu where the document said `At 00:08.000`, with the ruler two
+  // pixels away reading 12s and correct. Same rule `sceneSeconds` and `Timeline`
+  // already state — the timeline is the clip's length — and this was the one
+  // place still asking. Live, it makes `times` an identity over the bars, which
+  // is exactly the arithmetic `_compile_h3_scene` does with the same number.
+  const secs = sceneSeconds(s.scene) ?? (Number(resolveVid(s).seconds) || 1)
   const cuts = times(shots, secs)
 
   useLayoutEffect(() => {
@@ -149,12 +158,30 @@ function Row({ shot, n, at, onSubmit }: {
     }
     if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey && !e.altKey) {
       e.preventDefault()
-      // ⌘⏎ submits from anywhere; a bare ⏎ at the end of a row that already has
-      // something in it starts the next shot, which is the gesture a timeline
-      // makes available and a prompt box cannot.
+      // ⌘⏎ submits from anywhere; a bare ⏎ in a row that already has something
+      // in it starts the next shot, which is the gesture a timeline makes
+      // available and a prompt box cannot.
       if (e.metaKey || e.ctrlKey || !shot.line.trim()) { onSubmit(); return }
-      const next = s.addShot(shot.id)
-      requestAnimationFrame(() => document.getElementById(`shot-${next}`)?.focus())
+      // **Split at the caret rather than append an empty row.** H3 timestamps a
+      // shot boundary and nothing else — there is no timestamp for an action or
+      // a hold — so the cut is the only timing control the model has, and
+      // reaching the moment mid-sentence has to carry the tail across rather
+      // than strand it. A caret at the end leaves nothing to carry, which is the
+      // old behaviour exactly.
+      s.splitShot(shot.id, el.selectionStart ?? shot.line.length)
+      // **`#prompt`, like every other focus call in the app.** This reached for
+      // `shot-${id}`, which has never been an element here: the row is remounted
+      // by its key when the selection moves, so focus fell to <body> and nothing
+      // put it back — and the next keystroke went to the stray-key handler in
+      // `App`, which wrote it over shot 1. One dead selector, and the visible
+      // failure was losing the sentence you had just written.
+      requestAnimationFrame(() => {
+        const box = document.getElementById('prompt') as HTMLTextAreaElement | null
+        box?.focus()
+        // At the end of what moved, which is where you were writing. A caret
+        // left at 0 would put the next word in front of the tail.
+        box?.setSelectionRange(box.value.length, box.value.length)
+      })
     }
   }
 

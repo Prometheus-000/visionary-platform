@@ -266,6 +266,17 @@ export const saveCharacter = (handle: string, body: unknown) =>
 export const characterFileUrl = (handle: string, file: string) =>
   `/api/character-file/${seg(handle)}/${seg(file)}`
 
+/**
+ * Stitch this scene's takes into one file.
+ *
+ * The takes travel as `{job_id, file}` and never as bytes: they are already on
+ * the volume, so sending them back up would be uploading a scene to the machine
+ * that made it. Answers with the job id to poll, like every other queued job —
+ * the export is not a special case, it is CPU work with a status record.
+ */
+export const exportScene = (takes: { job_id: string; file: string }[]) =>
+  post<Record<string, unknown>>('/api/export-scene', { takes })
+
 export const gallery = (before = 0, limit = 200) =>
   api<Record<string, unknown>>(`/api/gallery?before=${before}&limit=${limit}`)
 export const fileUrl = (jobId: string, name: string) =>

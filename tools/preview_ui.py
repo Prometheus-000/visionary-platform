@@ -337,7 +337,6 @@ STATE = {
         {"key": "h3", "label": "MiniMax-H3",
          "note": "Sound and picture in one pass",
          "tiers": {"full": "768p", "draft": "544p draft"},
-         "lengths": [5, 6, 8, 10, 12, 14],
          "samplers": ["res_multistep", "euler", "dpmpp_2m"],
          "schedulers": ["simple", "normal", "beta"],
          "defaults": {"steps": 20, "sampler": "res_multistep",
@@ -382,9 +381,20 @@ STATE = {
 # ran as a hand-written table until H3 grew LoRAs and the preview kept rendering
 # the composer without the button — which is the whole argument for pulling them:
 # a stub that omits a menu is a preview of a control that does not exist.
-_VIDEO = pull(VIDEO)["VIDEO_MODELS"]
+_PULLED_VIDEO = pull(VIDEO)
+_VIDEO = _PULLED_VIDEO["VIDEO_MODELS"]
+# How many frames a still comes back as, so the stubbed strip is the arity that
+# actually ships rather than a number chosen here.
+H3_STILL_FRAMES = _PULLED_VIDEO["H3_STILL_FRAMES"]
 for _m in STATE["video_models"]:
     _m["supports"] = dict(_VIDEO[_m["key"]]["supports"])
+    # `lengths` for the same reason, found the same way. It was hand-written
+    # here, and app.py grew a `0` — the length that means a still — which the
+    # stub did not have, so the preview rendered a duration menu the deployment
+    # does not serve and `Still` fell through to 5s. A vocabulary is the
+    # deployment's, not this file's; what stays hand-written is which tasks are
+    # ready and which weights are pretend-downloaded.
+    _m["lengths"] = list(_VIDEO[_m["key"]]["lengths"])
 
 
 # Which Drive outcome the next poll reports. Mutable module state, like
@@ -596,6 +606,8 @@ RUNS: dict = {}
 # save-then-recall loop without a volume — a page reload keeps the server alive,
 # so a "fresh session" still finds what the last one saved.
 CHARS: dict = {}
+# The export's own counter, so a stitch is watchable rather than instant.
+EXPORT = {"polls": 0, "takes": 0}
 
 
 def train_status(job_id: str, name: str = "probe_lora") -> dict:
@@ -723,6 +735,67 @@ def swatch(w: int, h: int, label: str, seed: int) -> bytes:
         f'font-size="16" fill="#ffffff88">{w}×{h}</text>'
         f'</svg>'
     ).encode()
+
+
+# **A real 1280x720 clip, 2.3 KB, because a swatch has no dimensions.**
+#
+# Every `.mp4` this server was asked for came back as `swatch()` — an SVG — so
+# `<video>` reported `videoWidth: 0` and laid out at the height of its own
+# controls. That made a whole class of fault structurally invisible here: a clip
+# that does not fit the canvas cannot be seen to not fit when the clip has no
+# height. It is `web/CLAUDE.md`'s own named failure mode, arrived at from the
+# other direction — a stub that omits a *property* is a preview of a render that
+# cannot happen, and it fails silently.
+#
+# One second of flat grey at CRF 51, inlined rather than generated, so this file
+# keeps the property the swatch was protecting: no Pillow, no ffmpeg, no
+# dependency at all.
+CLIP_720P = base64.b64decode(
+    "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAOlbW9vdgAAAGxtdmhkAAAAAAAA"
+    "AAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAA"
+    "AAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAtB0cmFrAAAAXHRr"
+    "aGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAA"
+    "AAAAAAABAAAAAAAAAAAAAAAAAABAAAAABQAAAALQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAA"
+    "AAEAAAPoAAAIAAABAAAAAAJIbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAwAAAAMABVxAAA"
+    "AAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAAB821pbmYA"
+    "AAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAA"
+    "AQAAAbNzdGJsAAAAw3N0c2QAAAAAAAAAAQAAALNhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAA"
+    "AAAABQAC0ABIAAAASAAAAAAAAAABFUxhdmM2Mi4xMS4xMDAgbGlieDI2NAAAAAAAAAAAAAAA"
+    "GP//AAAAOWF2Y0MBZAAy/+EAG2dkADKscgRAUAW7ARAAAAMAEAAAAwGA8YMYRgEAB2joQ4GU"
+    "siz9+PgAAAAAEHBhc3AAAAABAAAAAQAAABRidHJ0AAAAAAAAKmgAAAAAAAAAGHN0dHMAAAAA"
+    "AAAAAQAAAAwAAAQAAAAAFHN0c3MAAAAAAAAAAQAAAAEAAABIY3R0cwAAAAAAAAAHAAAAAQAA"
+    "CAAAAAABAAAoAAAAAAEAABAAAAAAAwAAAAAAAAAEAAAEAAAAAAEAAAwAAAAAAQAABAAAAAAc"
+    "c3RzYwAAAAAAAAABAAAAAQAAAAwAAAABAAAARHN0c3oAAAAAAAAAAAAAAAwAAAO7AAAAJQAA"
+    "ACMAAAAkAAAAJAAAACQAAAAkAAAAJAAAACQAAAAkAAAAKgAAACQAAAAUc3RjbwAAAAAAAAAB"
+    "AAAD1QAAAGF1ZHRhAAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAA"
+    "AAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAAAQAAAABMYXZmNjIuMy4xMDAAAAAIZnJl"
+    "ZQAABVVtZGF0AAACsQYF//+t3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSByMzIy"
+    "MiBiMzU2MDVhIC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAy"
+    "NSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFj"
+    "PTEgcmVmPTE2IGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDM6MHgxMzMgbWU9dW1oIHN1Ym1l"
+    "PTEwIHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MjQgY2hy"
+    "b21hX21lPTEgdHJlbGxpcz0yIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf"
+    "cHNraXA9MSBjaHJvbWFfcXBfb2Zmc2V0PS0yIHRocmVhZHM9MTggbG9va2FoZWFkX3RocmVh"
+    "ZHM9MyBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1"
+    "cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz04IGJfcHlyYW1pZD0y"
+    "IGJfYWRhcHQ9MiBiX2JpYXM9MCBkaXJlY3Q9MyB3ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWln"
+    "aHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTEyIHNjZW5lY3V0PTQwIGludHJhX3JlZnJl"
+    "c2g9MCByY19sb29rYWhlYWQ9NjAgcmM9Y3JmIG1idHJlZT0xIGNyZj01MS4wIHFjb21wPTAu"
+    "NjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACA"
+    "AAABAmWIgQAHf/D5+BNUYwAYAAADAAADAAADAAAWQAAACKgAAAcgAAAMYAAAFtgAAAMAAAMA"
+    "AAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMA"
+    "AAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMA"
+    "AAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMA"
+    "AAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMC+wAAACFBmgkt"
+    "iF//AAADAAADAAADAAADAAADAAADAAADAAADAWUAAAAfQZ4QhxDPAAADAAADAAADAAADAAAD"
+    "AAADAAADAAAEzQAAACABnhgmiFf/AAADAAADAAADAAADAAADAAADAAADAAAFTAAAACABnhhG"
+    "iFf/AAADAAADAAADAAADAAADAAADAAADAAAFTQAAACABnhhmiFf/AAADAAADAAADAAADAAAD"
+    "AAADAAADAAAFTQAAACABnhitSFf/AAADAAADAAADAAADAAADAAADAAADAAAFTQAAACABnhjN"
+    "SFf/AAADAAADAAADAAADAAADAAADAAADAAAFTQAAACABnhjtSFf/AAADAAADAAADAAADAAAD"
+    "AAADAAADAAAFTAAAACABnhkNSFf/AAADAAADAAADAAADAAADAAADAAADAAAFTAAAACZBmhlp"
+    "NQIC0TKYEK8AAAMAAAMAAAMAAAMAAAMAAAMAAAMAAAMBlQAAACABniFFyFf/AAADAAADAAAD"
+    "AAADAAADAAADAAADAAAFTA=="
+)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -861,6 +934,21 @@ class Handler(BaseHTTPRequestHandler):
             STATE["loras"].remove(row)
             return self.reply({"ok": True})
 
+        if path == "/api/export-scene":
+            try:
+                data = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                data = {}
+            takes = [x for x in (data.get("takes") or [])
+                     if isinstance(x, dict) and x.get("job_id") and x.get("file")]
+            if not takes:
+                return self.reply({"error": "Nothing to export — render a take "
+                                            "first."})
+            EXPORT["polls"] = 0
+            EXPORT["takes"] = len(takes)
+            return self.reply({"ok": True, "job_id": "export_scene",
+                               "takes": len(takes)})
+
         m = re.match(r"/api/characters/([^/]+)$", path)
         if m:
             try:
@@ -868,9 +956,12 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 data = {}
             refs = data.get("refs") or []
-            if not refs:
-                return self.reply({"error": "A character with no files is a "
-                                            "name. Attach something first."})
+            weight = data.get("lora")
+            held = bool(isinstance(weight, dict) and weight.get("path"))
+            if not refs and not held:
+                return self.reply({"error": "A character with no photograph and "
+                                            "no LoRA is a name. Attach "
+                                            "something first."})
             exts = {"image": "png", "audio": "wav", "video": "mp4"}
             rec = []
             for i2, r in enumerate(refs):
@@ -880,9 +971,15 @@ class Handler(BaseHTTPRequestHandler):
                 if r.get("note"): entry["note"] = r["note"]
                 if r.get("sheet"): entry["sheet"] = True
                 rec.append(entry)
-            CHARS[m.group(1)] = {"note": data.get("note", ""),
-                                 "retention": data.get("retention", ""),
-                                 "refs": rec}
+            saved = {"note": data.get("note", ""),
+                     "retention": data.get("retention", ""),
+                     "refs": rec}
+            lora = data.get("lora")
+            if isinstance(lora, dict) and lora.get("path"):
+                saved["lora"] = {"path": str(lora["path"]),
+                                 "rel": str(lora.get("rel") or ""),
+                                 "strength": float(lora.get("strength") or 1)}
+            CHARS[m.group(1)] = saved
             return self.reply({"ok": True, "handle": m.group(1),
                                "files": len(rec)})
 
@@ -1114,7 +1211,22 @@ class Handler(BaseHTTPRequestHandler):
             # the previous clip stays up until its replacement lands, and with one
             # reused id "replaced" and "never changed" are the same two frames.
             job = "vid%03d" % sum(1 for k in RUNS if k.startswith("vid"))
-            RUNS[job] = {"polls": 0, "stopped": False}
+            # **Zero seconds is the other shape a video run lands in**, and the
+            # stub has to be able to return it for the same reason `/api/generate`
+            # echoes `num_images`: a canvas that only ever gets a clip makes the
+            # strip look correct in the one case that needs no navigation. Read
+            # off `seconds` exactly the way `/api/video` derives it, so the two
+            # cannot drift into disagreeing about what a still is.
+            # `not in (None, "")` rather than `or 5`, which is app.py's `num()`
+            # helper spelled out and exists for exactly this value: zero is the
+            # one `seconds` that means something and the one that is falsy, so
+            # `or 5` turns every still back into a five-second clip.
+            try:
+                _s = json.loads(body or b"{}").get("seconds")
+                secs = float(_s) if _s not in (None, "") else 5.0
+            except (json.JSONDecodeError, TypeError, ValueError):
+                secs = 5.0
+            RUNS[job] = {"polls": 0, "stopped": False, "still": secs == 0}
             return self.reply({"ok": True, "job_id": job})
 
         # A family's queue. Worth stubbing rather than falling through to the
@@ -1258,7 +1370,12 @@ class Handler(BaseHTTPRequestHandler):
                  "retention": c.get("retention", ""),
                  "refs": [{k: v for k, v in r.items() if k != "b64"}
                           for r in c.get("refs", [])],
-                 "files": [r["file"] for r in c.get("refs", [])]}
+                 "files": [r["file"] for r in c.get("refs", [])],
+                 # Absent rather than null when there is none — the stub has to
+                 # hold the shape app.py serves or the front end develops
+                 # against a field that does not exist. This file's one named
+                 # failure mode; see web/CLAUDE.md.
+                 **({"lora": c["lora"]} if c.get("lora") else {})}
                 for h, c in sorted(CHARS.items())]})
         m = re.match(r"/api/character-file/([^/]+)/(.+)$", path)
         if m:
@@ -1337,9 +1454,18 @@ class Handler(BaseHTTPRequestHandler):
             # rectangles — and the film strip's whole job is to move between them,
             # which is unfalsifiable when every frame looks the same.
             tag = f"{m.group(1)} · {m.group(2)}"
-            # Videos get a still too. A stub cannot mux a real clip, and a card
-            # that renders is worth more here than a card that is honest about
-            # being empty — the video path itself is only reachable on Modal.
+            # **A clip gets a clip.** This served the same SVG for `.mp4` as for
+            # a still, on the reasoning that a card which renders beats a card
+            # that is honest about being empty. True of a *card*, and it made
+            # the canvas lie: `<video>` cannot decode an SVG, so it reported
+            # `videoWidth: 0` and laid out at the height of its own controls —
+            # roughly 150px, at any window size, for any clip. Every question
+            # about how a clip sits on the canvas was therefore unanswerable
+            # here, which is how a 720p clip came to overflow the canvas on the
+            # deployed app with every check in this directory passing. See
+            # `CLIP_720P`.
+            if m.group(2).lower().endswith((".mp4", ".webm", ".mov")):
+                return self.reply(CLIP_720P, "video/mp4")
             return self.reply(swatch(w, h, tag, hash(tag)), "image/svg+xml")
 
         # A finished job, with results. This used to land `{"images": []}`,
@@ -1351,6 +1477,21 @@ class Handler(BaseHTTPRequestHandler):
         # Its own status shape: no total to divide by, so no percent — the byte
         # count and the rate are the whole progress report, which is exactly the
         # state the real job is in against Drive.
+        # The export, as a job that takes long enough to have a progress line.
+        # Answering the first poll with "completed" would make the one state a
+        # person actually watches — a scene being stitched — the one state this
+        # server cannot show, which is the fault the generate stub records.
+        if path == "/api/status/export_scene":
+            EXPORT["polls"] += 1
+            if EXPORT["polls"] < 4:
+                return self.reply({
+                    "status": "running", "percent": EXPORT["polls"] * 22,
+                    "phase": f"Joining {EXPORT['takes']} takes — no re-encode"})
+            return self.reply({
+                "status": "completed", "percent": 100, "kind": "video",
+                "files": ["scene.mp4"], "takes": EXPORT["takes"],
+                "bytes": 18_400_000, "reencoded": False})
+
         if path == "/api/status/dl_gdrive":
             GDRIVE["polls"] += 1
             if GDRIVE["mode"] == "error":
@@ -1423,6 +1564,23 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "running", "phase": "sampling", "step": step,
                     "total_steps": total - 2, "eta": "%ds" % (2 * (total - job["polls"])),
                     "percent": int(step * 100 / (total - 2)),
+                })
+            if job.get("still"):
+                # **The other shape a video run lands in.** Stubbed for the same
+                # reason `/api/generate` echoes `num_images`: a canvas that only
+                # ever gets a clip makes the strip look right in the one case
+                # that needs no navigation, and a still is 22 frames deep.
+                #
+                # No `seconds` and no `fps`, matching `_plan_h3` — they are true
+                # of the fragment sampled and false of the picture delivered, so
+                # a stub carrying them would hide that the meta line has to read
+                # differently for a still.
+                return self.reply({
+                    "status": "completed", "percent": 100, "still": True,
+                    "files": ["%02d.png" % i for i in range(H3_STILL_FRAMES)],
+                    "job_id": m.group(1), "width": 1344, "height": 768,
+                    "frames": H3_STILL_FRAMES, "seed": 4242, "steps": 4,
+                    "duration_s": 11.4,
                 })
             return self.reply({
                 "status": "completed", "percent": 100, "files": ["clip.mp4"],

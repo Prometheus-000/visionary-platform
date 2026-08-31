@@ -243,6 +243,11 @@ export type JobStatus = {
   beat?: number
   files?: string[]
   job_id?: string
+  /** A video run whose answer is a strip of frames rather than a clip — H3 at
+   *  zero seconds. Explicit rather than inferred from a missing `seconds`,
+   *  because the canvas picks its element off this and a wrong guess mounts a
+   *  `<video>` over a PNG, which shows nothing and says nothing. */
+  still?: boolean
   [k: string]: unknown
 }
 

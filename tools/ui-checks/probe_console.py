@@ -28,6 +28,7 @@ on the shortest viewport anyone uses. So what is pinned is
 which is true at every viewport, says *why* the console is over when it is over,
 and is exactly what a React `fieldMax` has to reproduce.
 """
+import re
 import sys
 
 from playwright.sync_api import sync_playwright
@@ -54,6 +55,32 @@ def need(pg, sel):
     return sel
 
 
+def whole_lines(m, cap):
+    """
+    The cap, rounded down to a whole number of lines — `wholeLines` in
+    `console/fieldMax.ts`, mirrored here for the reason the three constants
+    above are: if the two drift apart, this should fail rather than follow.
+
+    **The rule this replaces was `field == fieldMax()` exactly, and it was the
+    right assertion for a cap that was applied raw.** It is not any more, and the
+    fault it stopped catching is the reason: every constant in that file is a
+    pixel count and a line is 21px on 8px of padding, so `FIELD_FLOOR` came out
+    at 2.095 lines. The box permanently showed a 2px sliver of the line below,
+    and once the text scrolled the browser moved it by whatever kept the caret
+    in view — 14.5px, measured — leaving the caret inside a half-rendered line
+    with the row above it sliced through the middle. The check passed
+    throughout, because a box of 2.095 lines is exactly `fieldMax()`.
+
+    So the contract is now *the largest whole number of lines that fits the cap*,
+    which is strictly stronger: it still pins the cap, and it additionally pins
+    that the height lands on a line.
+    """
+    line, chrome = m.get("line") or 0, m.get("chrome") or 0
+    if line <= 0:
+        return cap
+    return chrome + max(1, int((cap - chrome) // line)) * line
+
+
 def measure(pg, label, rows):
     m = pg.evaluate("""() => {
       const c = document.querySelector('.console');
@@ -63,12 +90,21 @@ def measure(pg, label, rows):
       // a hidden element's height on the models that swap it.
       const f = document.querySelector('.field.on-neg')
                   ? document.querySelector('#neg') : document.querySelector('#prompt');
+      const cs = f ? getComputedStyle(f) : null;
       return {console: c ? c.getBoundingClientRect().height : null,
               canvas:  v ? v.getBoundingClientRect().height : null,
               field:   f ? f.getBoundingClientRect().height : null,
               // scrollHeight > clientHeight means the text wants more room than
               // it was given, which is the state where the cap has to bind.
               overflowing: f ? f.scrollHeight > f.clientHeight + 1 : false,
+              // What a line costs, and what the box spends before the first one.
+              // Read off the page rather than written here: the cap is quantised
+              // to whole lines and the quantum is a property of the field's own
+              // type, which differs between the prompt and a shot row.
+              line: cs ? parseFloat(cs.lineHeight) : 0,
+              chrome: cs ? parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+                           + parseFloat(cs.borderTopWidth)
+                           + parseFloat(cs.borderBottomWidth) : 0,
               vh: innerHeight};
     }""")
     if m["console"] is None or m["field"] is None:
@@ -79,7 +115,8 @@ def measure(pg, label, rows):
     rows.append({
         "state": label, "console": round(m["console"]), "canvas": round(m["canvas"] or 0),
         "field": round(m["field"]), "other": round(other),
-        "want_field": round(want), "frac": round(m["console"] / m["vh"], 4),
+        "want_field": round(want), "want_lines": round(whole_lines(m, want)),
+        "frac": round(m["console"] / m["vh"], 4),
         "overflowing": bool(m["overflowing"]),
         # Over budget is only legitimate when the floor is what forced it.
         "floored": round(want) <= FIELD_FLOOR,
@@ -119,11 +156,13 @@ def pills(pg, side, n):
     pg.keyboard.press("Escape")
 
 
-def run(pg, side):
-    rows = []
-    # Duration is the switch now — `Still` is a photograph and anything above it is a
-    # clip, so there is no image/video chip. Index rather than a label, because the
-    # seconds a model offers are per model: 0 is always Still and 1 its shortest clip.
+def to_side(pg, side):
+    """
+    Duration is the switch now — `Still` is a photograph and anything above it is
+    a clip, so there is no image/video chip. Index rather than a label, because
+    the seconds a model offers are per model: 0 is always Still and 1 its
+    shortest clip.
+    """
     want_video = side == "video"
     if pg.eval_on_selector(
         "#c-video", "e => e.classList.contains('hide')"
@@ -132,6 +171,11 @@ def run(pg, side):
         pg.wait_for_selector(".menu button")
         pg.locator(".menu button").nth(1 if want_video else 0).click()
     pg.wait_for_timeout(400)
+
+
+def run(pg, side):
+    rows = []
+    to_side(pg, side)
     measure(pg, f"{side} · resting", rows)
 
     if side == "image":
@@ -177,6 +221,69 @@ def run(pg, side):
     return rows
 
 
+def cuts(pg):
+    """
+    The gutter and the document have to agree about when a shot starts.
+
+    `times()` normalises the shares against whatever number it is handed, so
+    this is one expression in one file being right — and when it was wrong
+    nothing failed, the timestamps beside every row were simply not the ones
+    that would run. Three 4s shots read `05.33` under an 8s duration menu where
+    the document said `At 00:08.000`, with the ruler two pixels away reading 12s
+    and correct. A cut time is the only timing control H3 has — it timestamps a
+    shot boundary and nothing else — so a readout that quietly lies about one is
+    worth its own check rather than a heights row.
+
+    Measured against `/api/compile`'s own answer, never against arithmetic
+    repeated here: a check that recomputes the number it is checking agrees with
+    itself no matter which of the two is wrong.
+    """
+    to_side(pg, "video")
+    pg.fill(need(pg, "#prompt"), "A dancer turns under a streetlight.")
+    for line in ("The camera pushes in on her hands.", "She steps out of the light."):
+        pg.click(need(pg, ".tl-add"))
+        pg.wait_for_timeout(250)
+        pg.fill(need(pg, "#prompt"), line)
+    # Pulled to unequal lengths on purpose: equal bars are the one arrangement
+    # where a readout dividing by the wrong total can still land on the right
+    # numbers, because the error is a ratio.
+    grip = pg.locator(".tl-shot .tl-pull").first.bounding_box()
+    y = grip["y"] + grip["height"] / 2
+    pg.mouse.move(grip["x"] + grip["width"] / 2, y)
+    pg.mouse.down()
+    pg.mouse.move(grip["x"] + grip["width"] / 2 + 60, y, steps=8)
+    pg.mouse.up()
+    pg.wait_for_timeout(350)
+
+    pg.click(need(pg, "#shot-peek button"))
+    pg.wait_for_timeout(800)
+    doc = pg.text_content(need(pg, "#shot-peek pre")) or ""
+    stamps = {int(n): int(mm) * 60 + float(ss)
+              for n, mm, ss in re.findall(r"\[Shot (\d+)\] At (\d\d):(\d\d\.\d\d\d)", doc)}
+    # `[Shot 1]` carries no timestamp — that is the guide's rule and the
+    # compiler's — so an empty map means the document never compiled, not that
+    # the scene has one shot.
+    if not stamps:
+        raise AssertionError(f"no cut times in the compiled document: {doc[:300]!r}")
+
+    bars = pg.locator(".tl-shot")
+    for i in range(bars.count()):
+        bars.nth(i).click()
+        pg.wait_for_timeout(150)
+        shown = pg.text_content(need(pg, ".tnum em")) or ""
+        mins, _, rest = shown.rpartition(":")
+        at = (int(mins) * 60 if mins else 0) + float(rest)
+        want = stamps.get(i + 1, 0.0)
+        if abs(at - want) > 0.01:
+            raise AssertionError(
+                f"shot {i + 1}: the gutter reads {shown} and the document says "
+                f"{want:.3f} — the readout is on a different clock")
+    print(f"  cut times agree with the document across {bars.count()} shots")
+    pg.reload(wait_until="networkidle")
+    pg.wait_for_timeout(900)
+    need(pg, "#prompt")
+
+
 def capture():
     out = {}
     with sync_playwright() as pw:
@@ -190,6 +297,12 @@ def capture():
             need(pg, "#prompt")
             need(pg, "#canvas")
             rows = run(pg, "image") + run(pg, "video")
+            # Once, not per viewport: it is arithmetic over the bars and the
+            # answer cannot depend on how wide the window is. Runs on the
+            # binding viewport so a failure is reported where the console is
+            # tightest anyway.
+            if not out:
+                cuts(pg)
             if errors:
                 raise AssertionError(f"page errors at {vw}x{vh}: {errors[:3]}")
             out[f"{vw}x{vh}"] = rows
@@ -213,17 +326,17 @@ def report(data):
             # One pixel of slack: fractional padding at some zooms.
             ok = r["field"] <= r["want_field"] + 1
             if r["overflowing"]:
-                ok = abs(r["field"] - r["want_field"]) <= 1
+                ok = abs(r["field"] - r["want_lines"]) <= 1
             note = ""
             if not ok:
                 note = "   FIELD vs fieldMax()"
-                bad.append((vp, r["state"], r["field"], r["want_field"]))
+                bad.append((vp, r["state"], r["field"], r["want_lines"]))
             elif r["frac"] > BUDGET:
                 note = "   over 30% (floor, by design)" if r["floored"] else "   OVER 30%"
                 if not r["floored"]:
                     bad.append((vp, r["state"], r["field"], r["want_field"]))
             print(f"  {r['state']:32} {r['console']:>6}px {r['field']:>5}px "
-                  f"{r['want_field']:>4}px {r['frac']*100:>6.1f}%{note}")
+                  f"{r['want_lines']:>4}px {r['frac']*100:>6.1f}%{note}")
     return bad
 
 

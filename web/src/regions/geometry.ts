@@ -61,9 +61,13 @@ export function snapEdge(
 export const regionArmed = (_index: LoraFile[], r: Region): boolean =>
   !!(attached(r, 'identity') || r.lora)
 
-/** What the box calls itself. The LoRA name is the identity, so it wins; the prompt
- *  is the fallback because a photo-only box still has words worth showing. */
+/** What the box calls itself. A name you gave the character wins over everything,
+ *  because it is the one label somebody chose rather than derived — and it is the
+ *  handle the Arsenal knows them by, so the box reads as the person rather than as
+ *  the file. Then the LoRA name, then the prompt: a photo-only box still has words
+ *  worth showing. */
 export function regionTag(_index: LoraFile[], r: Region): { text: string; muted: boolean } {
+  if (r.name) return { text: `@${r.name}`, muted: false }
   if (r.lora) return { text: r.lora.rel, muted: false }
   const words = stripLoras(r.prompt || '').trim()
   if (words) return { text: words.length > 28 ? `${words.slice(0, 27)}…` : words, muted: false }

@@ -381,20 +381,39 @@ model a warm container already holds, which is why the removal shipped with a
 container kill. If this comes back, it comes back measured at 768p on
 ten-second takes, with the calibrator off, and with an unwrap story.
 
-It did not come back; the other family shipped instead. TeaCache's whole-
-output reuse tests the *latent*, not the hidden states, so its bookkeeping
-does not grow with resolution — the same harness at production shape read
-220.0s stock against 97.4s cached, computed steps at stock price. It ships
-as `comfy_nodes/visionary_step_cache`, first-party, because the pack it was
-proven with keeps its state in a node execute that ComfyUI caches — spent
-state silently disables it from the second take on. Ours keys on the
-sampler's sigma and resets itself.
+It did not come back; the other family shipped instead, and then it went too.
+TeaCache's whole-output reuse tests the *latent*, not the hidden states, so
+its bookkeeping does not grow with resolution — the same harness at production
+shape read 220.0s stock against 97.4s cached, computed steps at stock price.
+It shipped as `comfy_nodes/visionary_step_cache`, first-party, because the
+pack it was proven with keeps its state in a node execute that ComfyUI caches
+— spent state silently disables it from the second take on. Ours keyed on the
+sampler's sigma and reset itself.
 
-It did not come back; the other family shipped instead. TeaCache's whole-
-output reuse tests the *latent*, not the hidden states, so its bookkeeping
-does not grow with resolution — the same harness at production shape read
-220.0s stock against 97.4s cached, computed steps at stock price. It ships
-as `comfy_nodes/visionary_step_cache`, first-party, because the pack it was
-proven with keeps its state in a node execute that ComfyUI caches — spent
-state silently disables it from the second take on. Ours keys on the
-sampler's sigma and resets itself.
+It came out on fidelity: **it distorts H3 LoRAs.** The distinction that matters
+is that a skip does not *drop* a step — the wrapper returns the previous
+prediction and the sampler takes its normal stride along it, so the update is
+misplaced, not missing. Nothing is ever attenuated back toward the base model;
+what is frozen is base and LoRA together, and you get the LoRA's own earlier
+prediction imposed at a point the trajectory has since left.
+
+The gate is what fails. It reads rel-L1 on the input latent and infers the
+output has not moved either — an inference about the model's output-per-input
+gain, on raw rel-L1 with no calibration polynomial. A LoRA is precisely a
+low-rank gain increase, concentrated in the subspace that carries identity, so
+the threshold is over-permissive exactly where the cost is highest. Two things
+then keep it from reading as softness: the tail guard recomputes the last
+steps, polishing the drifted trajectory into something sharp and committed;
+and a sampler self-corrects toward the manifold, not toward the *intended*
+sample, so each real forward consolidates the error into a different plausible
+draw. Stock, that is another decent take. With a LoRA it is the wrong person,
+wandering across the frames of one clip.
+
+So the third lesson, and the one that outlives both packs: **a step cache is
+not a wall-clock question.** Both arms of `tools/ab_cache.py` measured
+seconds, twice, and seconds were the wrong instrument the second time —
+CacheDiT was caught by a stopwatch at the right shape, TeaCache was not caught
+by a stopwatch at all. Whatever comes next needs a fidelity arm with LoRAs
+loaded before it needs a timing arm, and the H3 path ships with no step cache
+until something passes it.
+

@@ -124,6 +124,11 @@ CAPTION = {
 # pulled in the same edit, or app.py raises NameError from inside the subset.
 VIDEO = {
     "VIDEO_MODELS", "VIDEO_MODEL_KEYS", "VIDEO_REF_MODEL_KEYS",
+    # How many frames a still comes back as. Pulled rather than guessed at in
+    # the stub for the reason the batch count is echoed there: the strip is only
+    # exercisable at the arity it actually ships, and this number is one edit
+    # from moving.
+    "H3_STILL_FRAMES",
 }
 
 # The trainer's three menus and its dial defaults, for the same reason again:

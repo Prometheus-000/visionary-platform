@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 
 import { everyMs, failed, type ApiError } from '../api/client'
-import { fileUrl, status, stop, video } from '../api/routes'
+import { exportScene as exportSceneRoute, fileUrl, status, stop, video } from '../api/routes'
 import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { readVidChips, stripLoras } from '../lora/tokens'
@@ -31,6 +31,11 @@ export type VideoRun = {
    *  of them. `finish` is the only thing that moves it. */
   jobId: string | null
   file: string | null
+  /** The other shape a video run lands in: every decoded frame of a still,
+   *  which the canvas steps through the way the image side steps a batch. Empty
+   *  for a clip, and `file` is null for a still — the two are exclusive, so
+   *  whichever is filled is what came back. */
+  stills: string[]
   /** The job being polled right now, which is *not* `jobId` until it completes. Two
    *  ids because the bytes on screen and the work in flight are two different clips
    *  during a run. */
@@ -41,11 +46,17 @@ export type VideoRun = {
    *  server's report to fold away under the sentence. */
   error: string | ApiError | null
   meta: string[]
+  /** The clip's pixel size, for the reservation on the `<video>` — the same job
+   *  `run.w`/`run.h` do for a still. Without it the element is 300x150 until its
+   *  metadata loads, so a take lands as a small grey box and jumps to its real
+   *  shape a frame later, under a hand already reaching for the controls. */
+  w: number
+  h: number
 }
 
 const IDLE: VideoRun = {
-  running: false, jobId: null, file: null, runId: null, percent: 0, phase: '',
-  error: null, meta: [],
+  running: false, jobId: null, file: null, stills: [], runId: null, percent: 0,
+  phase: '', error: null, meta: [], w: 0, h: 0,
 }
 
 export function videoBody(s: Store): Record<string, unknown> {
@@ -74,7 +85,15 @@ export function videoBody(s: Store): Record<string, unknown> {
     tier: r.tier,
     // The track is the clip's length once it has been authored. See
     // `sceneSeconds` — the duration menu keeps still-or-motion and nothing else.
-    seconds: sceneSeconds(s.scene) ?? r.seconds,
+    //
+    // **And still-or-motion is the half the track cannot own.** Zero is not a
+    // length on the timeline, it is the absence of one, so an authored bar
+    // cannot outrank it — writing a shot after picking `Still` used to send the
+    // bar's beats and quietly render a clip, which is the duration control
+    // being overruled by a control that never claimed that question. The menu
+    // keeps exactly the one job it says it keeps, and this is where it is
+    // honoured.
+    seconds: r.seconds === '0' ? 0 : (sceneSeconds(s.scene) ?? r.seconds),
     steps: s.vid.steps,
     seed: s.vid.seed,
     sampler: r.sampler,
@@ -111,7 +130,13 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
   const [linking, setLinking] = useState(false)
 
   const finish = useCallback((st: JobStatus, jobId: string) => {
-    const file = (st.files as string[] | undefined)?.[0] ?? null
+    // The two shapes a video run lands in, kept exclusive: a clip is one file
+    // and a still is all of them. Split here rather than at the canvas so there
+    // is one place that knows which came back.
+    const files = (st.files as string[] | undefined) ?? []
+    const still = !!st.still
+    const stills = still ? files : []
+    const file = still ? null : (files[0] ?? null)
     const meta = [
       st.width ? `${String(st.width)}×${String(st.height)}` : '',
       st.seconds ? `${String(st.seconds)}s · ${String(st.frames)} frames · ${String(st.fps)} fps` : '',
@@ -121,20 +146,35 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
     ].filter(Boolean)
     // Atomically, so there is never a frame pairing the old jobId with the new file.
     setRun((p) => ({
-      ...p, running: false, jobId, file, runId: null, percent: 100, phase: '',
-      error: null, meta,
+      ...p, running: false, jobId, file, stills, runId: null, percent: 100,
+      phase: '', error: null, meta,
+      w: Number(st.width) || 0, h: Number(st.height) || 0,
     }))
     // See useGenerate: the run reports itself rather than the page re-asking the
     // volume about work it just watched finish.
-    if (file) {
-      onLanded({ ...(st as Partial<GalleryItem>), job_id: jobId, kind: 'video',
-                 files: [file], created: Date.now() / 1000 })
-      // And it joins the scene. Every generation is a link whether or not you go
-      // on to add another — a scene with one take in it is just a scene you have
-      // not continued yet, which is what keeps `Continue` from being a mode you
-      // enter.
-      const st2 = useStore.getState()
-      st2.addTake({ jobId, file, line: typedProse(st2.scene) })
+    if (file || stills.length) {
+      // `kind` is what the run *produced*, and it is the sidecar's word too —
+      // a still is written `kind="image"` on the volume, so an optimistic card
+      // claiming 'video' would disagree with the listing the moment it
+      // refreshed, and the gallery would try to play a PNG.
+      onLanded({ ...(st as Partial<GalleryItem>), job_id: jobId,
+                 kind: still ? 'image' : 'video',
+                 files: still ? stills : [file as string],
+                 created: Date.now() / 1000 })
+      // And a *clip* joins the scene. Every generation is a link whether or not
+      // you go on to add another — a scene with one take in it is just a scene
+      // you have not continued yet, which is what keeps `Continue` from being a
+      // mode you enter.
+      //
+      // A still is not a take and must not be one. `Continue` chains from a
+      // clip's last frame and `export` stitches takes into one file; a
+      // frame-strip has no last frame to continue from and nothing to stitch,
+      // so a still landing in `takes` would put `+` and the export button on
+      // the canvas offering to extend something that is not a scene.
+      if (file) {
+        const st2 = useStore.getState()
+        st2.addTake({ jobId, file, line: typedProse(st2.scene) })
+      }
     }
   }, [onLanded])
 
@@ -245,5 +285,68 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
     requestAnimationFrame(() => document.getElementById('prompt')?.focus())
   }, [run.jobId, run.file])
 
-  return { run, start, cancel, clear, chain, linking }
+  /**
+   * The whole scene, as one file.
+   *
+   * **Until this existed, a scene stayed several clips.** H3 renders about 14.4
+   * seconds at a time, so anything with more than one beat in it is several
+   * takes — and the claim this platform makes about them is that the cast, the
+   * look and the last frame carry across, which was true of the *making* and
+   * false of the result. The takes landed in the gallery as unrelated files.
+   * The owner's reading is the one that settles it: without an export "it's
+   * just a gimmick".
+   *
+   * The stitch is CPU work on its own container, and it is polled like any
+   * other job rather than awaited — a re-encode of a minute of 768p is minutes,
+   * and a still button for minutes is the wait this codebase has a rule about.
+   * What the phase says changes as often as the thing itself does: reading the
+   * takes, joining them, and whether it had to re-encode.
+   *
+   * The file is fetched and saved from a blob rather than linked to directly:
+   * `<a href="/api/file/…">` navigates in some browsers and leaves you looking
+   * at an MP4 with the app gone, which is a worse answer than a download that
+   * takes a moment to start.
+   */
+  const [exporting, setExporting] = useState<string | null>(null)
+  const exportScene = useCallback(async () => {
+    const takes = useStore.getState().takes
+    if (!takes.length || exporting) return
+    setExporting('Queued')
+    const queued = await exportSceneRoute(
+      takes.map((t) => ({ job_id: t.jobId, file: t.file })))
+    if (failed(queued)) { setExporting(null); alert(queued.error); return }
+    const jobId = String((queued as { job_id?: string }).job_id || 'export_scene')
+    try {
+      for (;;) {
+        const st = await status(jobId)
+        if (failed(st)) { alert(st.error); break }
+        if (st.status === 'completed') {
+          const name = st.files?.[0] ?? 'scene.mp4'
+          setExporting('Saving')
+          const res = await fetch(fileUrl(jobId, name))
+          if (!res.ok) throw new Error(`the file came back ${res.status}`)
+          const url = URL.createObjectURL(await res.blob())
+          const a = document.createElement('a')
+          a.href = url
+          a.download = 'scene.mp4'
+          a.click()
+          // On a timer rather than immediately: revoking before the click has
+          // been serviced cancels the download in Safari. The same 4s
+          // `SheetBuilder` waits.
+          setTimeout(() => { URL.revokeObjectURL(url) }, 4000)
+          break
+        }
+        if (st.status === 'failed') { alert(st.error ?? 'The export failed.'); break }
+        if (st.status === 'stopped') break
+        setExporting(st.phase || 'Joining')
+        // The same 400ms every other poll on this page uses — see `start`.
+        await new Promise((r) => setTimeout(r, 400))
+      }
+    } catch (e) {
+      alert(`The scene was stitched but could not be saved: ${String(e)}`)
+    }
+    setExporting(null)
+  }, [exporting])
+
+  return { run, start, cancel, clear, chain, linking, exportScene, exporting }
 }

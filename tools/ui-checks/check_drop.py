@@ -105,26 +105,34 @@ with sync_playwright() as pw:
               f"dragover_cancelled={r['acceptsDragover']} lit={r['litUp']} "
               f"drop_handled={r['handledDrop']}")
 
-    def set_duration(want_video):
-        """Duration is the switch now — there is no image/video chip to press.
-        `Still` is a photograph and anything above it is a clip, so changing sides
-        means picking a length. Index rather than a label, because the seconds a
-        model offers are per model: 0 is always Still and 1 is always its shortest
-        clip. See web/src/console/Duration.tsx."""
+    def cross(want_video):
+        """**Crossing consoles is a choice of model, not of duration.**
+
+        This drove the duration menu and picked `Still` to reach the image side,
+        which was right while a still meant Krea 2. It does not any more: H3
+        makes a still at zero seconds, so both consoles answer that length and
+        `Still` deliberately changes nothing about which engine you are on — see
+        `Duration.tsx`, and `EngineRow` in `SamplingButton.tsx` for the door that
+        replaced it.
+
+        The button clicked is the *current* console's, which is the opposite of
+        where we are going. Values are `kind:key` because the picker spans both
+        families and a bare key could name either one."""
         if pg.eval_on_selector(
             "#c-video", "e => e.classList.contains('hide')"
         ) != want_video:
             return
-        pg.click("#g-duration")
-        pg.wait_for_selector(".menu button")
-        pg.locator(".menu button").nth(1 if want_video else 0).click()
+        pg.click("#g-sampling" if want_video else "#v-sampling")
+        pg.wait_for_selector(".menu.form select")
+        pg.select_option(".menu.form select",
+                         "video:h3" if want_video else "image:turbo")
         pg.wait_for_timeout(500)
 
     def to_video():
-        set_duration(True)
+        cross(True)
 
     def to_image():
-        set_duration(False)
+        cross(False)
 
     def clear_refs():
         """Every chip's own ✕. The tray and the keyframe pair put each other out of

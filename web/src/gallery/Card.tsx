@@ -67,8 +67,19 @@ export function Card({
   // an item with no recorded size passes nothing and keeps the box.
   const shape = aspect ? { aspectRatio: aspect } : undefined
 
+  // **`data-job` below is the card saying which result it is, and nothing else
+  // on it does.** A card's identity was only ever legible through its cover's
+  // `src`, which is not the card's to hold: `Thumb` fetches the cover and
+  // replaces `src` with a `blob:` URL the moment the bytes land, so the job id
+  // sits in that attribute for a few hundred milliseconds and is then gone —
+  // and a clip card has no `<img>` in it at all. Anything asking "is this
+  // result on screen" was reading an implementation detail of the picture, on a
+  // timer. That is what `check_gallery.py` was doing, which is why it failed on
+  // a fast fetch and passed on a slow one.
+
   return (
-    <div className="gal" ref={box} aria-busy={busy || undefined} style={pending}>
+    <div className="gal" data-job={item.job_id} ref={box}
+         aria-busy={busy || undefined} style={pending}>
       {isVideo ? (
         // No cover route for a clip — web_image has no ffmpeg, and the card would
         // rather fetch the frame it needs than have the server ship a whole mp4 to

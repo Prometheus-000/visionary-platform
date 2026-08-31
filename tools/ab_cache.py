@@ -32,6 +32,18 @@ calibration despite the README (raw rel-L1, "polynomial is Phase-2"), and
 node-output caching makes a second identical execution reuse spent state —
 harmless here, one execution per arm; a 3-line fix if it ever ships.
 
+POSTSCRIPT (act two) — TeaCache won this harness at production shape (220.0s
+to 97.4s) and shipped as `comfy_nodes/visionary_step_cache`, and it has been
+pulled anyway: it distorts H3 LoRAs. A skip re-applies the previous prediction
+while the sampler takes its normal stride, so the update lands misplaced rather
+than missing; and the gate reads rel-L1 on the *input* latent to infer the
+output has not moved, which is a claim about output-per-input gain that a
+low-rank adapter is built to break. Nothing this file
+measures would have caught that, which is the point: **both arms here are
+stopwatches, and act two was a fidelity failure.** Before re-running this for
+act three, give it a fidelity arm — same seed, LoRAs loaded, stock against
+cached, and look at the faces.
+
 POSTSCRIPT (act one) — the 1.40x this file measured was real and did not survive
 production shape: at 768p on 8-10s takes the wrapper inflated computed
 steps ~50% (TaylorSeer calibrator on by default, boundary clones, residual
