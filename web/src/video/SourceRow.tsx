@@ -5,6 +5,8 @@ import { Menu } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
 import { DropTile } from '../media/DropTile'
 import { dataUrl, shrinkB64, toB64 } from '../media/files'
+import { live, type PoolFile, type SourceKind } from '../scene/model'
+import { intake } from '../scene/pool'
 import { supports, useStore } from '../store'
 
 /**
@@ -43,6 +45,42 @@ export function SourceRow() {
   const framed = !!(s.keyframe.first || s.keyframe.last)
   const maxRefs = s.state?.max_refs ?? 9
   const maxVids = s.state?.max_ref_videos ?? 3
+  // **The composer changes what this row's tiles mean, and the flat trays go
+  // dark the moment it is live** — `videoBody` sends the cast's files then,
+  // never the trays, so a chip added here would render, count for nothing and
+  // upload nothing: a control that looks live and is quietly ignored, which is
+  // the exact fault the dimming rule below exists to prevent. What each tile
+  // becomes instead is per-tile — see each one.
+  const composed = live(s.scene)
+  const srcRole = usePopover()
+  // The clip-level source video, if one is set — continue and edit are one
+  // slot with two meanings, mutually exclusive in the validator, so the chip
+  // is one chip with a role button rather than two tiles.
+  const srcKind: SourceKind | null = s.scene.sources.continue?.length
+    ? 'continue' : s.scene.sources.edit?.length ? 'edit' : null
+  const srcFile: PoolFile | undefined = srcKind
+    ? s.pool[s.scene.sources[srcKind]![0]!] : undefined
+
+  const takeSource = async (files: File[]) => {
+    const got = await intake(files[0]!)
+    if (!got) {
+      alert(`The browser could not read ${files[0]?.name || 'that video'} — an`
+            + ' MP4 works everywhere; convert it and drop it again.')
+      return
+    }
+    if (got.kind !== 'video') {
+      alert('The source tile takes a video — the clip continues from it, or edits it.')
+      return
+    }
+    const st = useStore.getState()
+    st.addFile(got)
+    // Continue by default: chaining is what this product has measured and
+    // built for, and the chip's role button is one click from `edit`. The
+    // *drop* is the choice of role here — the tile's own label says what it
+    // makes — so this is the slot-is-the-role rule, not the model inferring a
+    // task from mere presence, which the guide warns against.
+    st.setSource(srcKind ?? 'continue', got.id)
+  }
 
   const take = async (kindOf: 'img' | 'vid', files: File[]) => {
     // Re-read the bucket and the cap at drop time rather than closing over them:
@@ -107,14 +145,26 @@ export function SourceRow() {
       <DropTile id="v-drop-first" label="First frame" value={s.keyframe.first}
                 off={!!n || motion}
                 glyph={<IconFirst />}
-                title="The clip starts on this image. Drop or click; click again to clear."
+                title={composed
+                  ? 'The clip opens on this image. It travels with the cast '
+                    + 'as the keyframe anchor.'
+                  : 'The clip starts on this image. Drop or click; click again to clear.'}
                 onFile={async (f) => s.setKeyframe('first', await toB64(f))}
                 onClear={() => s.setKeyframe('first', null)} />
       {sup.last_frame && (
         <DropTile id="v-drop-last" label="Last frame" value={s.keyframe.last}
-                  off={!!n || motion}
+                  off={!!n || motion || composed}
                   glyph={<IconLast />}
-                  title="The clip ends on this image. Drop or click; click again to clear."
+                  title={composed
+                    // The first frame rides the cast run as grammar — see
+                    // `readScene` — and there is no grammar slot that says
+                    // *ends on*, so this tile is the one keyframe a cast run
+                    // genuinely cannot take. Dim with the reason, never a
+                    // silent no-op: it was live here while the generator
+                    // ignored it, which reads as the model failing.
+                    ? 'A cast run anchors its opening only — the last frame '
+                      + 'cannot be pinned with references attached.'
+                    : 'The clip ends on this image. Drop or click; click again to clear.'}
                   onFile={async (f) => s.setKeyframe('last', await toB64(f))}
                   onClear={() => s.setKeyframe('last', null)} />
       )}
@@ -153,6 +203,23 @@ export function SourceRow() {
             defeats the point of showing the reference you attached. No role bar — the
             compiler builds subjects out of <Picture n> only, and a menu that set
             something nothing reads is worse than no menu. */}
+        {/* The clip-level source video — the writer `scene.sources` never
+            had. One chip, because continue and edit are two answers to what
+            this clip *is* and the validator refuses the pair; the role button
+            swaps between them rather than a second chip appearing. */}
+        {composed && srcFile && (
+          <div className="ref" key="src">
+            <video src={`${dataUrl(srcFile.b64, 'video/mp4')}#t=0.04`} muted />
+            <b>SRC</b>
+            <button className="x" title="Remove" type="button"
+                    onClick={() => s.setSource(srcKind!, null)}>×</button>
+            <button className="role" type="button"
+                    title="What this video is to the clip — continued from, or edited into the target."
+                    onClick={(e) => srcRole.toggle(e)}>
+              {srcKind === 'edit' ? 'edited' : 'continues'}
+            </button>
+          </div>
+        )}
         {s.refVids.map((b, i) => (
           <div className="ref" key={`v${i}`}>
             <video src={`${dataUrl(b, 'video/mp4')}#t=0.04`} muted />
@@ -168,16 +235,40 @@ export function SourceRow() {
           already lettered P1/V1 to match. */}
       {sup.references && (
         <>
-          <AddTile id="v-add-ref" label="Picture" accept="image/" off={framed && !n}
+          <AddTile id="v-add-ref" label="Picture" accept="image/"
+                   off={(framed && !n) || composed}
                    glyph={<IconPhoto />}
-                   title="Add an image reference — the subject, redrawn in a new shot. The prompt refers to it as <Picture 1>."
+                   title={composed
+                     // With a cast, the flat tray never travels — <Picture N>
+                     // numbers the cast's own files — so a picture has to
+                     // belong to somebody before the run can read it. The
+                     // rejection is the absence of an invitation, with the
+                     // way in named.
+                     ? 'With a cast, a picture belongs to somebody — drop it '
+                       + 'on a member\u2019s card, or make it its own subject '
+                       + 'with @.'
+                     : 'Add an image reference — the subject, redrawn in a new shot. The prompt refers to it as <Picture 1>.'}
                    onFiles={(f) => void take('img', f)}
                    picking={addRef === 'img'} onPick={() => setAddRef('img')}
                    onDone={() => setAddRef(null)} />
-          <AddTile id="v-add-vid" label="Video" accept="video/" off={framed && !n}
+          {/* The same tile, two meanings, told apart by label: flat tray when
+              there is no composer, the clip-level source door when there is —
+              which is where continue and edit finally get a gesture. The slot
+              is the role. */}
+          <AddTile id="v-add-vid" label={composed ? 'Source' : 'Video'} accept="video/"
+                   // `framed && !n` is the flat-tray exclusivity — keyframes
+                   // against references, one transformer or the other. Under a
+                   // composer the first frame *rides along* as grammar, so a
+                   // keyframe no longer excludes anything, and leaving the old
+                   // gate here locked the Source door the moment a storyboard
+                   // frame was dropped — found by doing exactly that.
+                   off={composed ? false : framed && !n}
                    glyph={<IconFilm />}
-                   title="Add a video reference. The prompt refers to it as <Video 1>."
-                   onFiles={(f) => void take('vid', f)}
+                   title={composed
+                     ? 'A source video for the clip — it continues from it, or '
+                       + 'edits it. The chip\u2019s role button says which.'
+                     : 'Add a video reference. The prompt refers to it as <Video 1>.'}
+                   onFiles={(f) => void (composed ? takeSource(f) : take('vid', f))}
                    picking={addRef === 'vid'} onPick={() => setAddRef('vid')}
                    onDone={() => setAddRef(null)} />
           {/* Reference tokens ride through every sampling step, so this is a per-step
@@ -194,6 +285,14 @@ export function SourceRow() {
         </>
       )}
 
+      {srcRole.open && srcFile && (
+        <Menu anchor={srcRole.anchor} onClose={srcRole.close} items={[
+          { label: 'The clip continues from it', on: srcKind === 'continue',
+            run: () => s.setSource('continue', srcFile.id) },
+          { label: 'The clip is an edit of it', on: srcKind === 'edit',
+            run: () => s.setSource('edit', srcFile.id) },
+        ]} />
+      )}
       {role.open && (
         <Menu anchor={role.anchor} onClose={role.close} items={[
           { label: 'No role', on: !s.refRoles[roleFor.current],

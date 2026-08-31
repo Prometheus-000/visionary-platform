@@ -69,7 +69,12 @@ export function videoBody(s: Store): Record<string, unknown> {
   // sentence byte-for-byte — the same document a prompt box would have produced,
   // because there is no document. Its three asset lists are what `<Picture N>`
   // numbers against, so they replace the flat trays whenever it is live.
-  const sc = readScene(s.scene, s.pool)
+  // The first frame rides the scene when one is live — see `readScene`: sent
+  // as `first_frame` beside references it was silently ignored, which killed
+  // the storyboard loop (a still, opened as the first frame of a cast clip) at
+  // exactly the moment the cast made it worth having.
+  const sc = readScene(s.scene, s.pool,
+                       s.continueFrom ? null : s.keyframe.first)
   return {
     ...(sc && { scene: sc.scene }),
     // **The edit is what runs.** A document taken over by hand travels in its own
@@ -107,8 +112,12 @@ export function videoBody(s: Store): Record<string, unknown> {
     // it — the route refuses the pair, and the page should never be the stale
     // tab that sends it. The frame is kept in the store as the fallback the
     // Motion tile clears back to.
-    first_frame: s.continueFrom ? null : s.keyframe.first,
-    last_frame: s.continueFrom ? null : s.keyframe.last,
+    // Withheld when the scene is live too, not only under a motion tile: the
+    // first frame just travelled inside `references[]`, so sending it here as
+    // well would be two answers to where the take opens — and the second one
+    // ignored, which is worse than refused because nothing says so.
+    first_frame: s.continueFrom || sc ? null : s.keyframe.first,
+    last_frame: s.continueFrom || sc ? null : s.keyframe.last,
     ...(s.continueFrom && { continue_from: s.continueFrom }),
     // The cast's files when there is a cast, and the flat trays otherwise. Never
     // both: `<Picture N>` is a *position* in this array, so a cast ref pointing

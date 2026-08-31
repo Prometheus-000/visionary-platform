@@ -8757,6 +8757,14 @@ H3_TASK_TYPES = ("keyframe completion", "reference generation",
 # presence of a video does not create a type: "If a reference video provides
 # only camera movement, cuts, or rhythm, it normally belongs to reference
 # generation."
+#
+# **A member's video is always `reference`, on purpose.** Edit and continue are
+# properties of the clip, not of anybody in it, so the page says them once — at
+# clip level, through `scene.sources` — and offers no role control on a
+# member's video row: a second place to say "this clip continues from that
+# video" would be a second way to do the first thing. The two rows stay in this
+# table because `_validate_scene` accepts them wherever a client puts them; the
+# page simply never does.
 H3_VIDEO_ROLES = {"reference": "reference generation",
                   "edit": "video editing",
                   "continue": "video continuation"}
@@ -8765,6 +8773,13 @@ H3_VIDEO_ROLES = {"reference": "reference generation",
 # draws for video: copying the signal and referencing its character are two
 # different task types, and it says which marker goes with which — `fully_copy`
 # for a reuse, `reference` for a timbre. So the role decides both.
+#
+# Unlike the video roles this *is* a fact about one member's recording, so its
+# control lives on that recording's row — the toggle in `Material.tsx`. It
+# validated and compiled from the day the composer landed while nothing on the
+# page could set it, which made every recording a timbre reference and the
+# reuse half of this table dead; the same page-never-writes-it failure the
+# `H3_SOURCES` block records, wearing a different constant.
 H3_AUDIO_ROLES = {"reference": ("audio reference", "reference"),
                   "reuse": ("audio reuse", "fully_copy")}
 
@@ -8817,14 +8832,42 @@ H3_LEGACY_SLOTS = {"face": "image", "wardrobe": "image", "body": "image",
 # `retention_analysis` with an audio marker, and the speaker ID reused rather
 # than assigned. So a voice file does not fold into the subject's definition
 # the way a second photograph does; it gets a line of its own.
-H3_AUDIO_NOUN = "voice-timbre reference"
-
-# Clip-level sources — the three the composer had no way to say.
 #
-# They are **not cast references**, which is why they were unreachable: a video
-# you are continuing from is not a subject's likeness, it is a property of the
-# clip. `H3_VIDEO_ROLES` and three of `H3_TASK_TYPES` were live in the compiler
-# with nothing able to populate them.
+# Keyed by role, because a definition that contradicts its own retention line
+# is worse than either alone: a `reuse` recording compiled as "the voice-timbre
+# reference" while its retention said `fully_copy` — one document, two claims
+# about whether the signal itself lands in the clip. Unfindable while nothing
+# could set the role; the first compile after the control landed showed it.
+H3_AUDIO_NOUN = {"reference": "voice-timbre reference",
+                 "reuse": "source audio, reused directly,"}
+
+# Clip-level sources — properties of the clip, not of anybody in it.
+#
+# They are **not cast references**: a video you are continuing from is not a
+# subject's likeness. Each now has a writer on the page, and each writer is the
+# gesture that already existed, given the meaning it looked like it had:
+#
+# - `keyframe`: the first-frame tile, when a scene is live. Sent as
+#   `first_frame` beside references it was **silently ignored** — references
+#   and keyframes load different transformers and references win — so the
+#   storyboard loop (a still, opened as the first frame of a cast clip) died
+#   with no error. `readScene` now rides the picture inside `references[]` and
+#   names it here, which is the path a reference run actually reads.
+# - `continue` / `edit`: the Video tile becomes the Source door under a
+#   composer, and the chip's role button swaps between the two — one slot,
+#   because this validator refuses the pair as two answers to what the clip is.
+#
+# `continue` is still not the `Continue` button: that copies an H3MC
+# sampler-latent sidecar and passes `load_context_from` — motion carried as a
+# *mechanism* — where this is a task type and a `retention_analysis` line,
+# motion declared as *grammar*. They can coexist on one run.
+#
+# This block once read "were unreachable", past tense, directly above the
+# constant that closed only the *compiler* half — and every reader after it
+# took the whole gap for closed. That is how a validated, compiled, stored
+# field went unwritten by any gesture for its whole life: the comment made the
+# missing side unsearchable. If a claim in this block goes stale again, fix the
+# claim the day it goes stale.
 #
 # `noun` is the guide's own definition wording, `retain` the parenthetical its
 # `retention_analysis` entry carries, and `mark` the relationship marker — a
@@ -10195,7 +10238,8 @@ def _compile_h3_scene(scene: dict[str, Any], *, task: str) -> str:
                 # dropped on the floor, which made the UI's "how they sound"
                 # field a lie: worse than hiding a capability is offering one
                 # that silently does nothing.
-                defs.append(f"{_h3_asset(ref)} is the {H3_AUDIO_NOUN} for "
+                defs.append(f"{_h3_asset(ref)} is the "
+                            f"{H3_AUDIO_NOUN[ref['role']]} for "
                             f"{who}{f' ({sid})' if sid else ''}."
                             + (f" {_h3_cap(ref['note'])}."
                                if ref.get("note") else ""))

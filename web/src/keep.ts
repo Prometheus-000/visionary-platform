@@ -237,6 +237,11 @@ function normalize(patch: Partial<Store>): Partial<Store> {
         return { ...base, ...x, say: { ...base.say, ...x?.say } }
       }),
       cast: (patch.scene.cast ?? []).map((x) => ({ ...newMember('subject'), ...x })),
+      // A tab that stored its scene before sources existed hands back a scene
+      // without the key, and `live()` reads `Object.values(sc.sources)` on the
+      // way to first paint — an undefined here is the restore taking the whole
+      // app down over a field the person never used.
+      sources: patch.scene.sources ?? {},
     }
   }
   return patch

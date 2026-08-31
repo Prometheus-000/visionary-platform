@@ -15,6 +15,7 @@ import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
 import { IconBack, IconCube, IconPanel, IconPhoto, IconStack, IconTrain } from './icons'
 import { fileToB64, toB64 } from './media/files'
+import { live } from './scene/model'
 import { Settings } from './settings/Settings'
 import { warmDatasets } from './datasets/useDatasets'
 import { Train } from './train/Train'
@@ -408,6 +409,16 @@ export function App() {
             return
           }
           st.setVid({ model: m.key })
+        }
+        // With a composer live the flat trays never travel — the cast's files
+        // are what <Picture N> numbers — so pushing here would file the
+        // picture somewhere the run cannot see. Said, with the way in named,
+        // rather than a chip that renders and uploads nothing.
+        if (live(st.scene)) {
+          alert('This scene has a cast, so a reference belongs to somebody — '
+                + 'drop the picture on a member\u2019s card, or make it its '
+                + 'own subject with @.')
+          return
         }
         const img = as === 'reference'
         const max = img ? (st.state?.max_refs ?? 9) : (st.state?.max_ref_videos ?? 3)

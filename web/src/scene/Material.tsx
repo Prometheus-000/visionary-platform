@@ -84,6 +84,32 @@ export function Material({ member }: { member: CastMember }) {
               Grey and uneditable is the honest state: derived, always
               visible. Everything intent-shaped stays typed; everything the
               format dictates is written for you. */}
+          {/* **Reference or reuse — the one fact about a recording the note
+              cannot carry.** H3_AUDIO_ROLES splits what a voice file does into
+              two task types: a timbre reference guides how the line is spoken,
+              a reuse copies the signal itself in. The table was validated and
+              compiled from the day the composer landed and nothing on the page
+              could set it, so every recording was a timbre reference and the
+              reuse half of the grammar was dead. A toggle rather than a menu,
+              because the vocabulary is two words.
+
+              Video rows get no counterpart on purpose: a member's video is
+              always a plain reference, and edit/continue are clip properties
+              said once through the Source tile — see VIDEO_ROLES. */}
+          {file!.kind === 'audio' && (
+            <button type="button"
+                    className={`tsheet${(ref.role ?? 'reference') === 'reuse' ? ' on' : ''}`}
+                    title={(ref.role ?? 'reference') === 'reuse'
+                      ? 'The recording itself is copied into the clip. Click for a voice reference instead.'
+                      : 'A voice reference — the timbre guides their delivery. Click to copy the recording itself in.'}
+                    onClick={() => {
+                      s.patchRef(member.id, ref.fileId, {
+                        role: (ref.role ?? 'reference') === 'reuse' ? 'reference' : 'reuse',
+                      })
+                    }}>
+              {(ref.role ?? 'reference') === 'reuse' ? 'reused' : 'voice ref'}
+            </button>
+          )}
           {file!.kind === 'image' && (
             <button type="button"
                     className={`tsheet${ref.sheet ? ' on' : ''}`}

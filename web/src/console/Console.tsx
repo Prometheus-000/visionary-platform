@@ -12,6 +12,7 @@ import { Peek } from '../shot/Peek'
 import { ShotDoor } from '../shot/ShotDoor'
 import { Rail } from '../shot/Rail'
 import { CastCard } from '../scene/CastCard'
+import { live } from '../scene/model'
 import { SourcePane } from '../scene/SourcePane'
 import { SourceRow } from '../video/SourceRow'
 import { supports, useStore } from '../store'
@@ -336,6 +337,18 @@ function VideoNote() {
       : ''}</span>
   }
   const n = refBudget(s).total
+  // With a composer live the first frame *travels* — it rides `references[]`
+  // as the grammar's keyframe anchor — so warning that it is ignored would be
+  // wrong about the one keyframe that now works. The last frame is the one a
+  // cast run genuinely cannot take, and its tile already dims with the reason,
+  // so the note stays quiet unless one is actually being held.
+  const composed = live(s.scene)
+  if (composed) {
+    return <span id="vid-note">{s.keyframe.last
+      ? 'A cast run anchors its opening only — the last frame is ignored '
+        + 'until its tile is cleared.'
+      : ''}</span>
+  }
   const framed = !!(s.keyframe.first || s.keyframe.last)
   // `autoFirst` is whether the frame was the app's doing — the kind-switch
   // carrying the canvas still over. A warning about a decision the person

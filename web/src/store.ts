@@ -38,6 +38,7 @@ import type { LoraChip } from './lora/tokens'
 import {
   emptyScene, handleOf, newMember, newShot, rename,
   type CastKind, type CastMember, type PoolFile, type Scene, type Shot,
+  type SourceKind,
 } from './scene/model'
 
 export type Kind = 'image' | 'video'
@@ -559,7 +560,20 @@ export type Store = {
   /** A note on one attached file — what that picture or recording provides.
    *  Keyed by file rather than by slot, because a slot is only the channel now
    *  and two pictures of one subject share it. */
-  patchRef: (castId: string, fileId: string, patch: { note?: string; sheet?: boolean }) => void
+  patchRef: (castId: string, fileId: string,
+             patch: { note?: string; sheet?: boolean; role?: string }) => void
+  /**
+   * The clip-level sources' one writer — `scene.sources` had none, anywhere,
+   * ever: `setScene` shipped with zero callers, so `H3_SOURCES` sat complete
+   * in the compiler while no gesture on the page could say a clip continues
+   * from a video, edits one, or opens on a picture the cast run will actually
+   * read. Replace semantics per kind, one entry, because `continue[0]` /
+   * `edit[0]` is what the compiler reads; null clears. Setting `continue`
+   * clears `edit` and the reverse, because the validator refuses the pair as
+   * two answers to what this clip is — better unrepresentable than refused at
+   * Generate.
+   */
+  setSource: (kind: SourceKind, fileId: string | null) => void
   /** Remove one attached file. By file, not by slot: every picture shares the
    *  `image` channel now, so removing by slot would take all of them. */
   detachRef: (castId: string, fileId: string) => void
@@ -922,6 +936,13 @@ export const useStore = create<Store>((set, get) => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id !== castId ? c : {
       ...c, refs: c.refs.map((r) => (r.fileId === fileId ? { ...r, ...patch } : r)),
     })) },
+  })),
+  setSource: (kind, fileId) => set((s): Partial<Store> => ({
+    scene: { ...s.scene,
+             sources: { ...s.scene.sources,
+                        [kind]: fileId ? [fileId] : [],
+                        ...(fileId && kind === 'continue' ? { edit: [] } : null),
+                        ...(fileId && kind === 'edit' ? { continue: [] } : null) } },
   })),
   detachSlot: (castId, slot) => set((s): Partial<Store> => ({
     scene: { ...s.scene, cast: s.scene.cast.map((c) => (c.id === castId ? {

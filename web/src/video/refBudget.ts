@@ -40,7 +40,12 @@ const TOTAL = 12
 
 export function refBudget(s: Store): RefBudget {
   const composed = live(s.scene)
-  const images = composed ? assets(s.scene, 'image', s.pool).length : s.refs.length
+  // The first frame rides `references[]` when the scene is live — `readScene`'s
+  // third argument — so it spends this budget like any photograph: nine cast
+  // photos plus a keyframe is ten, and the refusal would otherwise arrive from
+  // the route instead of this note.
+  const keyed = composed && !s.continueFrom && s.keyframe.first ? 1 : 0
+  const images = (composed ? assets(s.scene, 'image', s.pool).length : s.refs.length) + keyed
   const videos = composed ? assets(s.scene, 'video', s.pool).length : s.refVids.length
   const audios = composed ? assets(s.scene, 'audio', s.pool).length : 0
   const max = {

@@ -30,7 +30,12 @@ export function useCompiled(active: boolean): string {
   useEffect(() => {
     if (!active) return
     const t = window.setTimeout(async () => {
-      const sc = s.kind === 'video' ? readScene(s.scene, s.pool) : null
+      // The same third argument the run passes, or the preview numbers one
+      // fewer <Picture N> than the run uploads and every label after the
+      // keyframe points at somebody else's face.
+      const sc = s.kind === 'video'
+        ? readScene(s.scene, s.pool, s.continueFrom ? null : s.keyframe.first)
+        : null
       const r = await compile({
         kind: s.kind,
         model: s.vid.model,
@@ -39,8 +44,8 @@ export function useCompiled(active: boolean): string {
         seconds: sceneSeconds(s.scene)
           ?? (Number(resolveVid(s).seconds) || undefined),
         ...(sc && { scene: sc.scene }),
-        first_frame: !!s.keyframe.first,
-        last_frame: !!s.keyframe.last,
+        first_frame: !!s.keyframe.first && !sc,
+        last_frame: !!s.keyframe.last && !sc,
         // The scene's own refs are indices into exactly these counts, so they
         // have to be what the run would upload rather than what is in the trays.
         references: sc ? sc.references.length : s.refs.length,

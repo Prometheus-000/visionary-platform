@@ -87,6 +87,14 @@ export const slotFor = (_kind: CastKind, media: Media): string | null =>
  * explicit that the mere presence of a video does not create a type. An image
  * has no role here: a picture attached to a slot is already told what it is by
  * the slot it landed on.
+ *
+ * **Only the audio roles get a control on a member's row.** A video that is
+ * being *edited* or *continued from* is not a subject's likeness, it is a
+ * property of the clip — which is exactly why `sources` exists — so those two
+ * are said once, at clip level, through the Source tile. A member's video is
+ * always a plain reference; offering edit/continue on their row too would be a
+ * second way to say the first thing. `VIDEO_ROLES` keeps all three because it
+ * mirrors what the server validates, not what this page offers.
  */
 export const VIDEO_ROLES = ['reference', 'edit', 'continue'] as const
 export const AUDIO_ROLES = ['reference', 'reuse'] as const
@@ -452,6 +460,21 @@ export const live = (sc: Scene) =>
 export function readScene(
   sc: Scene,
   pool: Record<string, PoolFile>,
+  /**
+   * The first-frame tile's picture, riding along as grammar.
+   *
+   * **With a cast, a keyframe sent as `first_frame` is silently ignored** —
+   * references and keyframes load different transformers and references win —
+   * so the storyboard loop (compose a still, open the clip on it, same cast)
+   * died with no error at exactly the moment it mattered. The grammar is the
+   * path that works in a reference run: the picture travels as one more entry
+   * in `references[]` and `sources.keyframe` names it, so the document says
+   * `<Picture N> is the keyframe anchor for the target video` and the task
+   * type reads `keyframe completion`. Routed here, in the one function both
+   * the run and the compile preview call, because a preview that numbers one
+   * fewer picture than the run uploads mislabels every `<Picture N>` after it.
+   */
+  keyframe?: string | null,
 ): { scene: unknown; references: string[]; ref_videos: string[]; ref_audios: string[] } | null {
   if (!live(sc)) return null
   const order: Record<Media, PoolFile[]> = {
@@ -485,6 +508,13 @@ export function readScene(
       .filter((i) => i >= 0)
     if (idx.length) sources[k] = idx
   }
+  // Appended after every pool file so no existing index moves, and pushed into
+  // the same array the indices count — the `<Picture N>` contract above.
+  const refs = order.image.map((f) => f.b64)
+  if (keyframe) {
+    refs.push(keyframe)
+    sources.keyframe = [...(sources.keyframe ?? []), refs.length - 1]
+  }
   return {
     scene: {
       style: sc.style,
@@ -502,7 +532,7 @@ export function readScene(
         },
       })),
     },
-    references: order.image.map((f) => f.b64),
+    references: refs,
     ref_videos: order.video.map((f) => f.b64),
     ref_audios: order.audio.map((f) => f.b64),
   }
