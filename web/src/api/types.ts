@@ -23,13 +23,23 @@
  * A second spelling on the client would be a translation layer between four
  * places, and three of them are on the far side of the network.
  */
-export type ShotPill = { key: string; value?: string; lang?: string }
+/** `amp` and `speed` are the guide's two other dimensions of a camera move,
+ *  and only a camera pill carries them — the storyboard sets them off the
+ *  length of an arrow; the rail shows them when present. Absent means the
+ *  pill compiles exactly as it always did. */
+export type CameraAmp = 'small' | 'medium' | 'large'
+export type CameraSpeed = 'slow' | 'normal' | 'fast'
+export type ShotPill = {
+  key: string; value?: string; lang?: string; amp?: CameraAmp; speed?: CameraSpeed
+}
 
 export type ShotItem = {
   key: string
   label: string
   glyph?: string
   phrase?: string
+  /** Present on the camera moves that take amplitude and speed. */
+  verb?: string
   /** `"dialogue"` or `"text"` — takes a typed value, preserved verbatim,
    *  punctuation included. Dialogue is the one that also carries a language,
    *  because the guide names the eleven and forbids inventing one. */

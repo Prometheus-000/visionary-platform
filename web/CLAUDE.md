@@ -1244,6 +1244,136 @@ already rendered would be results in the payload.
 - **None of it has been measured against a render.** It has been driven and read.
   `tools/prompt_ab.py` is the measurement that is not a proxy and it has not run.
 
+## The storyboard
+
+The wall, at `web/src/storyboard/`, behind the `door-storyboard` header door
+on the Playground's delivery pattern — its own record on the same volume, no
+change to either console. The door is scaffolding: the final home is an
+*altitude* of the canvas (zoom out and the render you were judging recedes
+into its slot in the sequence; touch a panel and it becomes the canvas, its
+fields under the frame being the composer), and it lands with the Phase 6
+rework because it is the same zoom, touch-decides-scope and live-element
+engineering. The north star is a storyboard in the traditional sense — the
+blueprint a director and a DP both read — and the only difference is where
+the story gets created. What it settled, in two passes (2026-09-01):
+
+- **Order is the only temporal fact the board holds.** Panels read left to
+  right and wrap; moving one is a splice and means "this happens here
+  instead". There is no duration, ruler, take seam or seconds anywhere on a
+  panel — *"storyboarding should mean storyboarding; directors and editors
+  interpret time on different mediums."* Pacing lives in the prose, and
+  seconds, seams and seeds belong to generations and live on receipts. A take
+  is a generation-time slice of the sequence, never something the board
+  draws.
+- **A panel is intent with a replaceable picture** — prose, a note to
+  yourself, and a *pointer* at a picture: a render's `{job_id, file}` (the
+  gallery's own address) or a bare filename for one dropped onto the board,
+  which lives in the board's folder. Never a copy of a render: unpinning
+  deletes nothing, and a deleted render leaves the panel's words standing
+  under "that render is gone".
+- **A panel carries a shot's own vocabulary, and that is the whole design
+  of the hand-off.** Framing, angle and the camera move are `SHOT_VOCAB`
+  pills on the panel, picked from the palette's own tiles, so becoming a
+  shot is a *copy* and not a translation. The camera pill carries the
+  guide's two other dimensions — `amp` and `speed`, base-en §4.3 — and the
+  compiler writes them in the guide's own construction, *"The camera pans
+  right with large amplitude at fast speed."*, medium and normal omitted as
+  the guide omits them. A pill without either compiles exactly as it always
+  did, which is what kept `probe_compile`'s 194 values unchanged. Three moves
+  joined the vocabulary for the storyboard's sake — zoom out, roll clockwise,
+  roll counter — because every storyboard sheet draws them.
+- **The layer on the frame is the storyboard's own language, and the two
+  arrow kinds are told apart by fill.** Solid is the camera; hollow is a
+  subject. That is the industry convention with the colour scheme taken out
+  and the logic kept, and a director reads it without a legend. The camera
+  is never drawn freehand: there is a *stencil per move* (`stencils.tsx`),
+  in the vocabulary's own keys — arrows at the top and bottom edges are a
+  pan, curved arrows at the sides a tilt, four corner arrows a zoom, a frame
+  inside the frame a push or a pull, a frame beside the frame a truck or a
+  pedestal, a ring an orbit or a roll, brackets in the corners a locked-off
+  camera — sized by the frame and by amplitude, so "a large pan" is a long
+  pair of arrows and not a word. The stencil is the pill's *picture*; it is
+  never a second language the first has to be compiled from.
+- **A subject's arrow is the cheapest gesture that writes the one thing the
+  picture cannot say.** A still already says where someone is; the export
+  cannot get from it where they *go*, and that clause is what FL2VA
+  interpolation needs most. So: a straight drag on bare picture, hollow, a
+  name on its tail, and the sentence it will write printed grey under the
+  prose the moment it exists — *"Maya enters from frame left and moves to the
+  centre of the frame."* — derived, marked as derived, and appended after
+  the person's own words at the hand-off, never inside them. Two points and
+  nothing more, deliberately: the owner is not sure subject arrows earn
+  their place, and a straight arrow is one file to delete if they do not.
+  Freehand paths, curvature and "toward camera" are not drawn; the name
+  field carries the nuance ("Maya, toward camera").
+- **What is under the press decides what the drag does.** The frame takes
+  one press and reads it four ways — on an arrow it moves that arrow, on the
+  stencil it steps the amplitude, with ⌥ held it reframes, on bare picture it
+  draws — with scope resolved toward the smaller object, the regions layer's
+  rule. Reordering is the *cell's* gesture, off the number strip, so a drag
+  on the picture never has to guess between "this panel goes there" and "she
+  goes there". Selecting an arrow is editing its name, so the field takes
+  the keys; the mark at its head removes it, and so does Backspace in an
+  empty name.
+- **Every frame is cut to the board's aspect, and a picture can be shown
+  whole under it.** The aspect is the board's (`VIDEO_ASPECTS`), the crop
+  is centred and ⌥-drag reframes it. "Show the whole picture" is the
+  tall-picture-and-a-tilt case every storyboard sheet has one of: the cell
+  takes the picture's own shape, the aspect box is drawn on it where the shot
+  *starts* and the stencil is drawn on that box, because the stencil is the
+  camera's and the camera's frame is the aspect box, not the picture.
+- **A dragged panel is carried, not marked.** Press its number and move, and
+  the panel itself comes with the hand while the others slide apart (FLIP,
+  forty lines in `flip.ts` rather than the `motion` package, whose reorder
+  list is one axis and the wall wraps). The slot is the nearest cell to the
+  hand, so it snaps by construction; a press that never travels is a
+  selection instead. The Playground's feel, not the gallery's hairline.
+- **Two selected panels are a first-and-last-frame take.** Animate lands on
+  the canvas with both keyframes, one shot whose line is the first panel's
+  (prose, then its arrows' sentences) and then *"The shot ends on the last
+  frame: …"* in front of the second panel's prose, verbatim — a connective,
+  never a rewrite. The scene is *fresh* for a pair, because keyframes and
+  references load different transformers and a cast would put the last
+  frame out of play with nothing saying so. One panel keeps the cast; the
+  whole board is a scene, one shot per panel. Where the pills land follows
+  the same fact: with no cast and one shot the run takes the flat path and
+  they go on the rail (the rail shows `pan right · large · fast`); once the
+  scene is live the compiler ignores the rail, so they go on the rows.
+- **Boards are folders.** `storyboard/<name>/board.json` beside the pictures
+  uploaded into it; `/api/storyboards` is the folder listing, and copying a
+  folder in *is* the import. A board travels whole, both ways — the page
+  owns the order, so a per-panel route would be a panel with no "and then".
+  Uploads are uprighted and capped at the reference cap on arrival, once,
+  because a panel's picture becomes a keyframe at the hand-off. Delete
+  states its blast radius: the panels and the uploads, and that renders in
+  the gallery are untouched.
+- **The gallery is the accumulator; the board is the selection.** Nothing
+  joins the wall except by a deliberate pin (`Add to storyboard` on a card,
+  images only) or a dropped file. A pin lands in the board that is open — or
+  the panel that asked for a picture, `store.board.pick` — and arrival is
+  the confirmation. Choosing a picture for a panel is a trip through the
+  gallery on the Generate stage and the pin brings you back, which is the
+  same round trip a pin always was.
+- **The document is one gesture away and not a developer tool** — "Read the
+  H3 document" in the boards menu compiles the pair or the whole board
+  through `/api/compile`, the same compiler as the run, into a sheet of
+  quiet prose with a Copy button. No client-side compiler, still.
+- **The stub's one named failure mode fired again.** `_validate_shot` grew a
+  reference to `CAMERA_AMPS` and `_from_app.py`'s named subset did not, so
+  the preview server answered every compile with `NameError` from inside
+  app.py. Pulling a name means pulling what it references; the subset is
+  named so this fails loudly, and it did.
+- **Not built, and why**: freehand or curved subject paths (above); the
+  stencil's amplitude drag is coarse — a step per gesture — and the picker
+  is the precise control; alternates stacked behind a panel; receipts
+  landing under the panels they span, going visibly stale when the order
+  changes; unifying the board and the scene composer into one record (the
+  hand-off copies board→scene instead, so the composer is untouched); a
+  JSON import (the folder is the import). Previs, animatics and 3D
+  mannequins stay vetoed: a real Krea 2 still is both the blueprint image
+  and the conditioning input, and a grey render costs about the same and is
+  neither.
+
 ## The Playground
 
 The node room, at `web/src/playground/`, behind the `door-playground` header

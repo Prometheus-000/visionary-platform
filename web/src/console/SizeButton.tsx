@@ -128,7 +128,7 @@ export function SizeButton() {
  * The video side had no size control at all for a while: a separate aspect select
  * and tier select, 1016px of strip between them.
  */
-const VIDEO_ASPECTS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']
+export const VIDEO_ASPECTS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']
 
 export function VideoSizeButton() {
   const s = useStore()

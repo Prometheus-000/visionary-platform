@@ -248,6 +248,7 @@ export function Gallery({
   onDropped,
   onMeta,
   onHandoff,
+  onBoard,
 }: {
   items: GalleryItem[]
   /** How many results exist, not how many are listed. The two differ past the cap, and
@@ -275,6 +276,9 @@ export function Gallery({
   onDropped: (jobIds: string[]) => void
   onMeta: (it: GalleryItem) => void
   onHandoff: (it: GalleryItem, as: 'first' | 'reference' | 'refvideo' | 'edit') => void
+  /** Pin this render to the storyboard — a pointer, never a copy. Images
+   *  only: a panel is a frame, and a clip is a receipt of several. */
+  onBoard: (it: GalleryItem) => void
 }) {
   const [filter, setFilter] = useState<Filter>('all')
   const [viewing, setViewing] = useState<{ rows: GalleryItem[]; i: number } | null>(null)
@@ -464,7 +468,8 @@ export function Gallery({
     ...(it.kind === 'image'
       ? [{ label: 'Edit this image', run: () => onHandoff(it, 'edit' as const) },
          { label: 'Animate from this frame', run: () => onHandoff(it, 'first' as const) },
-         { label: 'Use as reference', run: () => onHandoff(it, 'reference' as const) }]
+         { label: 'Use as reference', run: () => onHandoff(it, 'reference' as const) },
+         { label: 'Add to storyboard', run: () => onBoard(it) }]
       : [{ label: 'Use as video reference', run: () => onHandoff(it, 'refvideo' as const) }]),
     { sep: true },
     { label: 'View metadata', run: () => onMeta(it) },

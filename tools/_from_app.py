@@ -68,6 +68,7 @@ SHOT = {
     "SHOT_VOCAB", "SHOT_ITEMS",
     "_validate_shot", "_validate_ref_roles", "_h3_task",
     "_shot_phrases", "_shot_text", "_shot_sentence", "_close", "_oneline",
+    "CAMERA_AMPS", "CAMERA_SPEEDS", "_camera_phrase",
     "_shot_join",
     "_first_sentence", "_shot_audio", "_shot_body",
     "_compile_h3_prompt", "_compile_image_prompt",

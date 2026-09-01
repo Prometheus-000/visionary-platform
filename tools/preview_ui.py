@@ -140,6 +140,95 @@ def _h3_document() -> str:
         return TYPED
 
 
+# The storyboards, seeded with the states a panel is read in: a picture from
+# the gallery rows below, a panel with prose and no picture, a camera move
+# with its stencil, a subject's arrow with a name on it, a tall picture shown
+# whole under a tilt. Pictures are pointers into GALLERY so a deleted row
+# degrades the way the volume would — the words stay, the cover 404s. Uploads
+# land in BOARD_FILES and are served back by name, which is the whole of what
+# the route does.
+STORYBOARDS = {
+    "the-lookout-a1b2": {
+        "title": "The Lookout",
+        "aspect": "16:9",
+        "panels": [
+            {"id": "p1", "prose": "Empty coastal road at dusk, fog rolling over the guardrail.",
+             "note": "hold long before she enters", "fit": "crop", "focus": [0.5, 0.5],
+             "pills": [{"key": "framing.xwide"}, {"key": "camera.static"}], "motion": [],
+             "picture": {"job_id": "job000", "file": "00.png"}},
+            {"id": "p2", "prose": "Maya enters frame left, coat pulled tight, walking toward the lookout.",
+             "note": "", "fit": "crop", "focus": [0.5, 0.5],
+             "pills": [{"key": "framing.wide"},
+                       {"key": "camera.panr", "amp": "large", "speed": "slow"}],
+             "motion": [{"id": "a1", "pts": [[0.04, 0.62], [0.55, 0.5]], "label": "Maya"}],
+             "picture": {"job_id": "job001", "file": "01.png"}},
+            {"id": "p3", "prose": "Close on her hands gripping the rail, paint flaking under her fingers.",
+             "note": "", "fit": "crop", "focus": [0.5, 0.5],
+             "pills": [{"key": "framing.cu"}, {"key": "angle.high"},
+                       {"key": "camera.pushin", "amp": "small", "speed": "slow"}],
+             "motion": [],
+             "picture": {"job_id": "job002", "file": "02.png"}},
+            {"id": "p4", "prose": "She says the line — \u201cyou were supposed to wait.\u201d",
+             "note": "frame undecided — over-shoulder vs profile", "fit": "crop",
+             "focus": [0.5, 0.5], "pills": [], "motion": [], "picture": None},
+            {"id": "p5", "prose": "Reverse: the sea, grey and enormous. No music.",
+             "note": "", "fit": "whole", "focus": [0.5, 0.15],
+             "pills": [{"key": "camera.tiltd", "amp": "large", "speed": "normal"}],
+             "motion": [],
+             "picture": {"job_id": "job010", "file": "10.png"}},
+            {"id": "p6", "prose": "Elias appears beside her; neither looks at the other.",
+             "note": "", "fit": "crop", "focus": [0.5, 0.5],
+             "pills": [{"key": "framing.medium"}, {"key": "camera.zoom"}],
+             "motion": [{"id": "a2", "pts": [[0.96, 0.55], [0.66, 0.52]], "label": "Elias"}],
+             "picture": {"job_id": "job006", "file": "06.png"}},
+            {"id": "p7", "prose": "The envelope changes hands, barely.",
+             "note": "", "fit": "crop", "focus": [0.5, 0.5],
+             "pills": [{"key": "camera.orbit", "amp": "medium", "speed": "slow"}],
+             "motion": [],
+             "picture": {"job_id": "job004", "file": "04.png"}},
+            {"id": "p8", "prose": "Both figures tiny against the fog as the light dies.",
+             "note": "mirror of panel 1 — same camera height", "fit": "crop",
+             "focus": [0.5, 0.5],
+             "pills": [{"key": "framing.xwide"},
+                       {"key": "camera.craneu", "amp": "large", "speed": "slow"}],
+             "motion": [],
+             "picture": {"job_id": "job007", "file": "07.png"}},
+        ],
+        "updated": time.time(),
+    },
+    "kitchen-morning-c3d4": {
+        "title": "Kitchen, morning",
+        "aspect": "4:3",
+        "panels": [
+            {"id": "k1", "prose": "Steam off the kettle, the window fogged.",
+             "note": "", "fit": "crop", "focus": [0.5, 0.5],
+             "pills": [{"key": "camera.rack"}], "motion": [],
+             "picture": {"job_id": "job009", "file": "09.png"}},
+        ],
+        "updated": time.time() - 86400 * 2,
+    },
+}
+BOARD_FILES: dict[str, dict[str, bytes]] = {}
+
+
+def _multipart(body: bytes, ctype: str) -> list[tuple[str, bytes]]:
+    """The uploaded files out of a multipart body — name and bytes, nothing
+    else, which is all the stub needs to hand them back by name."""
+    m = re.search(r'boundary="?([^";]+)"?', ctype or "")
+    if not m:
+        return []
+    out = []
+    for part in body.split(b"--" + m.group(1).encode()):
+        if b"\r\n\r\n" not in part:
+            continue
+        head, data = part.split(b"\r\n\r\n", 1)
+        fn = re.search(rb'filename="([^"]*)"', head)
+        if not fn or not fn.group(1):
+            continue
+        out.append((fn.group(1).decode(errors="replace"), data.rstrip(b"\r\n").rstrip(b"--")))
+    return out
+
+
 GALLERY = [
     {
         "job_id": f"job{i:03d}",
@@ -1356,6 +1445,32 @@ class Handler(BaseHTTPRequestHandler):
                                "mine": True, "missing": ["a", "b", "c"]})
 
         # ── Playground ─────────────────────────────────────────────────────
+        m = re.match(r"/api/storyboard/([a-z0-9][a-z0-9_-]*)(?:/(delete|upload))?$", path)
+        if m:
+            name, verb = m.group(1), m.group(2)
+            if verb == "delete":
+                STORYBOARDS.pop(name, None)
+                BOARD_FILES.pop(name, None)
+                return self.reply({"ok": True})
+            if verb == "upload":
+                files = []
+                stamp = "%x" % int(time.time() * 1000)
+                for n, (fn, data) in enumerate(_multipart(body, self.headers.get("Content-Type", ""))):
+                    ext = Path(fn).suffix.lower() or ".png"
+                    fname = f"{stamp}{n:02d}{ext}"
+                    BOARD_FILES.setdefault(name, {})[fname] = data
+                    files.append({"file": fname, "width": 1024, "height": 1024})
+                return self.reply({"files": files})
+            # Whole document in, whole document out, like the route: the page
+            # owns the order, so the stub holds exactly what it was last given.
+            board = (json.loads(body or b"{}") or {}).get("board") or {}
+            updated = time.time()
+            STORYBOARDS[name] = {"title": str(board.get("title") or ""),
+                                 "aspect": str(board.get("aspect") or "16:9"),
+                                 "panels": list(board.get("panels") or []),
+                                 "updated": updated}
+            return self.reply({"ok": True, "updated": updated})
+
         if path == "/api/playground/seed":
             try:
                 req = json.loads(body or b"{}")
@@ -1814,6 +1929,29 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/playground/packs":
             return self.reply({"packs": PACKS_STUB})
+
+        if path == "/api/storyboards":
+            rows = []
+            for name, b in STORYBOARDS.items():
+                cover = next((p.get("picture") for p in b["panels"] if p.get("picture")), None)
+                rows.append({"name": name, "title": b["title"], "panels": len(b["panels"]),
+                             "updated": b["updated"], "cover": cover})
+            rows.sort(key=lambda r: -(r["updated"] or 0))
+            return self.reply({"boards": rows})
+        m = re.match(r"/api/storyboard/([a-z0-9][a-z0-9_-]*)/file/([^/]+)$", path)
+        if m:
+            data = BOARD_FILES.get(m.group(1), {}).get(m.group(2))
+            if data is None:
+                return self.reply({"error": "Not found."}, code=404)
+            ext = Path(m.group(2)).suffix.lower()
+            return self.reply(data, {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                                     ".webp": "image/webp"}.get(ext, "image/png"))
+        m = re.match(r"/api/storyboard/([a-z0-9][a-z0-9_-]*)$", path)
+        if m:
+            b = STORYBOARDS.get(m.group(1))
+            if b is None:
+                return self.reply({"error": f"No storyboard called {m.group(1)!r}."})
+            return self.reply({"board": {**b, "name": m.group(1)}})
 
         if path == "/api/workflows":
             return self.reply({"workflows": [

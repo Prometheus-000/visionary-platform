@@ -278,6 +278,26 @@ export const characterFileUrl = (handle: string, file: string) =>
 export const exportScene = (takes: { job_id: string; file: string }[]) =>
   post<Record<string, unknown>>('/api/export-scene', { takes })
 
+/* ---- the storyboards ------------------------------------------------- */
+
+/** A board travels whole, both ways: the page owns the order and order is the
+ *  meaning, so there is no per-panel route to get out of step with. One folder
+ *  per board on the volume, pictures uploaded into it beside `board.json`. */
+export const listStoryboards = () =>
+  api<{ boards: Record<string, unknown>[] }>('/api/storyboards')
+export const getStoryboard = (name: string) =>
+  api<{ board: Record<string, unknown> }>(`/api/storyboard/${seg(name)}`)
+export const saveStoryboard = (name: string, board: unknown) =>
+  post<{ ok?: boolean; updated?: number }>(`/api/storyboard/${seg(name)}`, { board })
+export const deleteStoryboard = (name: string) =>
+  post<{ ok?: boolean }>(`/api/storyboard/${seg(name)}/delete`)
+/** Multipart, like `upload` below: the browser writes the boundary. */
+export const uploadStoryboard = (name: string, form: FormData) =>
+  api<{ files: { file: string; width: number; height: number }[] }>(
+    `/api/storyboard/${seg(name)}/upload`, { method: 'POST', body: form })
+export const storyboardFileUrl = (name: string, file: string) =>
+  `/api/storyboard/${seg(name)}/file/${seg(file)}`
+
 export const gallery = (before = 0, limit = 200) =>
   api<Record<string, unknown>>(`/api/gallery?before=${before}&limit=${limit}`)
 export const fileUrl = (jobId: string, name: string) =>

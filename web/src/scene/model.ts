@@ -524,7 +524,9 @@ export function readScene(
       shots: sc.shots.map((s, i) => ({
         line: s.line,
         beats: w[i],
-        pills: s.pills.map((p) => ({ key: p.key, ...(p.value !== undefined && { value: p.value }), ...(p.lang && { lang: p.lang }) })),
+        pills: s.pills.map((p) => ({ key: p.key, ...(p.value !== undefined && { value: p.value }),
+                                     ...(p.lang && { lang: p.lang }),
+                                     ...(p.amp && { amp: p.amp }), ...(p.speed && { speed: p.speed }) })),
         say: {
           who: s.say.who, text: s.say.text, lang: s.say.lang,
           voice: s.say.voice, carry: s.say.carry,

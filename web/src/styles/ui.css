@@ -1332,6 +1332,12 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .gl-ca-orbit .tk,.gl-ca-arc .tk{animation:gPan 3s ease-in-out infinite alternate}
 .gl-ca-orbit .s1,.gl-ca-arc .s1{animation:gSquash 3s ease-in-out infinite}
 .gl-ca-arc .wo{animation:gPanHalf 3s ease-in-out infinite alternate}
+/* The storyboard's three: zoom out is the zoom's own loop run backwards, and
+   a roll turns the whole world about the lens axis. */
+.gl-ca-zoomout .wo{animation:gScale 2.4s ease-in-out infinite alternate-reverse}
+.gl-ca-rollcw{--d:1}
+.gl-ca-rollccw{--d:-1}
+.gl-ca-rollcw .wo,.gl-ca-rollccw .wo{animation:gRoll 2.8s ease-in-out infinite alternate;transform-origin:22px 16px}
 .gl-ca-trackside .tk,.gl-ca-trackrear .tk{animation:gStream 1.7s linear infinite}
 .gl-ca-trackrear .s1{animation:gBob 1.7s ease-in-out infinite}
 .gl-ca-handheld .wo{animation:gJit .9s steps(1,end) infinite}
@@ -1344,6 +1350,7 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
    what "the camera does not move" means. */
 
 @keyframes gScale{to{transform:scale(1.5)}}
+@keyframes gRoll{to{transform:rotate(calc(var(--d,1) * 14deg))}}
 @keyframes gCreep{to{transform:scale(1.08)}}
 @keyframes gPan{to{transform:translateX(calc(var(--d,1) * 11px))}}
 @keyframes gPanHalf{to{transform:translateX(calc(var(--d,1) * 4.5px))}}

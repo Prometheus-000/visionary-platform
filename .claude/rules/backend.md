@@ -249,6 +249,20 @@ build-order problem, and the file is navigable by its banner comments.
 
 Set `VISIONARY_VOLUME` to run a second copy against its own storage.
 
+### A storyboard is a folder
+
+`storyboard/<name>/board.json`, with the pictures dropped onto that board
+beside it. A panel's picture is a pointer — `{job_id, file}` into `outputs/`
+for a render, a bare filename for an upload in this folder — never a copy, so
+deleting a render leaves the panel's words standing and deleting a board
+touches nothing in the gallery. The folder is the whole import format: copy
+one in and `/api/storyboards` lists it. Uploads are uprighted and capped at
+`STORYBOARD_MAX_SIDE` on arrival, once, because a panel's picture becomes a
+keyframe at the hand-off and the keyframe path would resize to the same edge
+anyway — one cap, in one place, so the wall and the run read the same bytes.
+The board's pills are `_validate_shot`'s own, which is what makes a panel a
+shot's intent rather than a translation of one.
+
 ### Orientation is resolved on arrival, not by each reader
 
 An uploaded image is rewritten upright if it carries an EXIF orientation tag, so

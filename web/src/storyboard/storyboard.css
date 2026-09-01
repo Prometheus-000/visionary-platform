@@ -1,0 +1,151 @@
+/*
+ * The storyboard's own sheet, on the app's vocabulary — a room's chrome
+ * beside the room, the playground.css precedent. Every value is a token from
+ * ui.css. The wall is quiet on purpose: panels are pictures with words under
+ * them, and the only things drawn *on* a picture are the two arrow kinds,
+ * which are the storyboard's own language and are meant to be read.
+ */
+
+.view.storyboard{display:flex;flex-direction:column;min-height:0;flex:1}
+.view.storyboard.carrying,.view.storyboard.carrying *{cursor:grabbing!important;user-select:none}
+
+/* The bar, on the Playground's rule: unbounded controls, the box spent only
+   on hover. */
+.sbbar{display:flex;align-items:center;gap:8px;padding:8px 14px;
+  border-bottom:1px solid var(--line);flex:0 0 auto}
+.sbbar .grow{flex:1}
+.sbtitle{height:var(--control-h);width:260px;max-width:40vw;background:none;
+  border:1px solid transparent;border-radius:var(--r-control);color:var(--fg);
+  padding:0 10px;font-weight:600;font-size:14px}
+.sbtitle::placeholder{color:var(--dim);font-weight:500}
+.sbtitle:hover{background:var(--wash-2)}
+.sbtitle:focus{border-color:var(--line-2);background:var(--wash-2);outline:none}
+.sbcount{color:var(--mut);font-size:12.5px;font-variant-numeric:tabular-nums}
+.sbbar .opt{background:none;border-color:transparent;color:var(--mut)}
+.sbbar .opt:hover{background:var(--wash-3);color:var(--fg)}
+.sbbar .b{height:var(--control-h)}
+
+/* The wall. Infinite in extent, strict in meaning: reading order, wrapping. */
+.sbwall{flex:1;min-height:0;overflow:auto;padding:30px 32px 80px;position:relative}
+.sbwall.hot{box-shadow:inset 0 0 0 2px var(--line-2)}
+.sbrow{display:flex;flex-wrap:wrap;gap:34px 26px;align-items:flex-start;
+  max-width:1180px;margin:0 auto}
+
+.sbslot{width:264px;flex:none;border-radius:12px}
+.sbslot.hot{box-shadow:0 0 0 2px var(--line-2)}
+/* The slot the carried panel will land in: the panel is there, faded, so the
+   board always shows where the thing in your hand goes. */
+.sbslot.held .sbpanel{opacity:.28}
+
+.sbpanel{position:relative;will-change:transform}
+.sbpanel.sel .sbframe{border-color:#fff}
+
+/* The number strip: the cell's handle. A press here travels or it does not,
+   and the release says which. */
+.sbhead{display:flex;align-items:center;gap:6px;height:26px;cursor:grab;touch-action:none;
+  padding:0 2px 0 0}
+.sbidx{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:22px;
+  padding:0 7px;border-radius:999px;color:var(--mut);font-size:11.5px;font-weight:600;
+  font-variant-numeric:tabular-nums;background:var(--wash-2);position:relative}
+.sbpanel.sel .sbidx{background:#fff;color:#000}
+.sbidx[data-sel]::after{content:attr(data-sel);position:absolute;right:-7px;top:-7px;width:15px;height:15px;
+  border-radius:50%;background:var(--fg);color:var(--bg);font-size:9px;display:flex;
+  align-items:center;justify-content:center;border:2px solid var(--bg)}
+.sbhead .ico{width:26px;height:26px;opacity:0;transition:opacity .12s}
+.sbhead .ico svg{width:18px;height:18px}
+.sbpanel:hover .sbhead .ico,.sbhead .ico:focus-visible{opacity:1}
+
+/* The frame: the picture cut to the board's aspect, and the layer on it. */
+.sbframe{position:relative;border-radius:10px;border:1px solid var(--line);overflow:hidden;
+  background:var(--wash-1);touch-action:none;cursor:crosshair;transition:border-color .15s}
+.sbpanel:hover .sbframe{border-color:var(--line-2)}
+.sbframe img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;
+  pointer-events:none;user-select:none}
+.sbframe.blank{border-style:dashed;background:none}
+.sbframe .sbempty{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;color:var(--mut);font-size:12px;text-align:center;padding:0 16px;
+  pointer-events:none}
+/* The aspect box on a picture shown whole: the camera's frame, drawn where
+   the shot starts. The rest of the picture is what a tilt or a pan reveals. */
+.sbaspect{position:absolute;border:1.5px solid rgba(255,255,255,.85);border-radius:3px;
+  box-shadow:0 0 0 9999px rgba(0,0,0,.42);pointer-events:none}
+
+.sblayer{position:absolute;inset:0;display:block;overflow:visible}
+/* Solid is the camera. */
+.sblayer .cama{fill:rgba(255,255,255,.92);stroke:rgba(0,0,0,.55);stroke-width:1;
+  stroke-linejoin:round;paint-order:stroke;cursor:ns-resize}
+.sblayer .camf{fill:none;stroke:rgba(255,255,255,.9);stroke-width:1.6;
+  filter:drop-shadow(0 0 1px rgba(0,0,0,.7))}
+.sblayer .camf.ghost{stroke-dasharray:5 4;stroke:rgba(255,255,255,.7)}
+.sblayer .camm{fill:none;stroke:rgba(255,255,255,.9);stroke-width:2;stroke-linecap:round;
+  stroke-linejoin:round;filter:drop-shadow(0 0 1px rgba(0,0,0,.7))}
+.sblayer .caml{fill:#fff;font-size:10px;font-weight:700;
+  filter:drop-shadow(0 0 1px rgba(0,0,0,.8))}
+/* Hollow is a subject. */
+.sblayer .sbarrow{fill:rgba(0,0,0,.28);stroke:rgba(255,255,255,.95);stroke-width:1.7;
+  stroke-linejoin:round;cursor:move;transition:fill .12s}
+.sblayer .sbarrow:hover{fill:rgba(255,255,255,.22)}
+.sblayer .sbarrow.sel{fill:rgba(255,255,255,.3);stroke-width:2.2}
+.sblayer .sbarrow.draft{fill:rgba(0,0,0,.18);stroke-dasharray:4 3;pointer-events:none}
+
+/* The selected arrow's two controls, at its two ends. */
+.sblabel{position:absolute;transform:translate(-50%,10px);width:96px;height:22px;
+  background:rgba(0,0,0,.72);border:1px solid var(--line-2);border-radius:999px;color:var(--fg);
+  font:inherit;font-size:11.5px;padding:0 9px;outline:none;text-align:center;
+  backdrop-filter:blur(6px)}
+.sblabel::placeholder{color:var(--mut)}
+.sbx{position:absolute;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;
+  border:0;background:#fff;color:#000;font-size:13px;line-height:1;padding:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center}
+
+/* The caption line: framing, angle, camera. Each is the vocabulary, or the
+   word for what it would be — dim, so an unset one asks nothing. */
+.sbtags{display:flex;flex-wrap:wrap;gap:2px 4px;padding:7px 2px 0;min-height:24px}
+.sbtag{border:1px solid transparent;background:none;border-radius:999px;color:var(--dim);
+  font:inherit;font-size:11px;padding:1px 7px;cursor:pointer;line-height:1.5}
+.sbtag:hover{background:var(--wash-3);color:var(--fg)}
+.sbtag.set{color:var(--fg);background:var(--wash-2)}
+.sbtag+.sbtag::before{content:"";}
+
+.sbmeta{padding:4px 2px 0;display:flex;flex-direction:column;gap:2px}
+.sbprose,.sbnote{width:100%;background:none;border:0;border-bottom:1px solid transparent;
+  color:var(--fg);font:inherit;font-size:12.5px;line-height:1.45;resize:none;
+  overflow:hidden;padding:0;display:block}
+.sbprose::placeholder{color:var(--dim)}
+.sbnote{color:var(--mut);font-size:11.5px;line-height:1.4}
+.sbnote::placeholder{color:var(--dim)}
+.sbprose:focus,.sbnote:focus{outline:none;border-bottom-color:var(--line-2)}
+/* Derived, and marked as derived: what the arrows will say, after your words. */
+.sbsaid{color:var(--mut);font-size:12px;line-height:1.45;font-style:italic}
+
+/* The panel in your hand. */
+.sbghost{position:fixed;z-index:60;pointer-events:none;transform:scale(1.03);
+  transition:left .18s cubic-bezier(.2,.7,.2,1),top .18s cubic-bezier(.2,.7,.2,1)}
+.sbghost .sbframe{border-color:var(--line-2);box-shadow:var(--lift-cast);background:var(--lift)}
+.sbghost-prose{padding:8px 2px 0;font-size:12.5px;color:var(--fg);line-height:1.45;
+  text-shadow:0 1px 6px rgba(0,0,0,.8);display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow:hidden}
+
+/* Nothing on the board yet: the one place the wall says anything in words,
+   once, where the attention already is — the empty canvas's own rule. */
+.sbnone{max-width:420px;margin:12vh auto 0;text-align:center;color:var(--mut);
+  font-size:14px;line-height:1.6}
+.sbnone .b{margin-top:16px;height:var(--control-h)}
+
+.sbnote-line{padding:0 14px 8px;color:var(--mut);font-size:12px}
+
+/* The picker: the palette's sheet with one section, and the two dimensions
+   under it for a camera move. */
+.sbpal .sbdims h4{margin-top:10px}
+.sbpal .sbdims .seg{margin:0 0 4px 3px}
+
+/* The document, read: quiet prose in the app's own type, never a devtools
+   costume — see "The compiled document is one gesture away". */
+.sbdoc{padding:4px 2px}
+.sbdoc h3{margin:0 0 6px;font-size:15px}
+.sbdoc textarea{width:100%;margin-top:12px;background:var(--wash-2);border:1px solid var(--line);
+  border-radius:var(--r-control);color:var(--fg);font:inherit;font-size:13px;line-height:1.5;
+  padding:10px 12px;resize:vertical}
+.sbdoc-row{display:flex;justify-content:flex-end;margin-top:10px}
+
+@media (prefers-reduced-motion:reduce){.sbframe,.sbghost{transition:none}}

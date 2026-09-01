@@ -13,7 +13,7 @@ import { MetaSheet } from './gallery/MetaSheet'
 import { Viewer } from './gallery/Viewer'
 import type { Session } from './api/types'
 import type { GalleryItem } from './gallery/types'
-import { IconBack, IconCube, IconNodes, IconPanel, IconPhoto, IconStack, IconTrain } from './icons'
+import { IconBack, IconBoard, IconCube, IconNodes, IconPanel, IconPhoto, IconStack, IconTrain } from './icons'
 
 // Split, not imported: the graph surface is the one dependency-heavy room in
 // the product, and the page must pay for it when the door is opened, never on
@@ -23,11 +23,13 @@ const Playground = lazy(() =>
 import { fileToB64, toB64 } from './media/files'
 import { NEED_EDIT_LORA } from './lora/note'
 import { loraChips, loraIndex } from './lora/tokens'
-import { live } from './scene/model'
+import { emptyScene, live, named, newShot } from './scene/model'
 import { Settings } from './settings/Settings'
 import { warmDatasets } from './datasets/useDatasets'
 import { Train } from './train/Train'
 import { SheetBuilder } from './sheet/SheetBuilder'
+import { Storyboard } from './storyboard/Storyboard'
+import { pictureUrl, pinToBoard, type Handoff } from './storyboard/model'
 import { ThemeDot } from './theme/ThemeDot'
 import { isActive, useSessions } from './train/useSessions'
 import { supports, useStore } from './store'
@@ -240,6 +242,10 @@ export function App() {
       const t = e.target as HTMLElement | null
       if (t?.matches?.('input,textarea,select') || t?.isContentEditable) return
       if (document.querySelector('.lb,.menu,.pal,.scrim')) return
+      // Only where the canvas is on screen. In a room — the storyboard, the
+      // playground — a bare Space opened a full-screen view of a picture the
+      // page was not showing.
+      if (useStore.getState().mode !== 'generate') return
       if (!canvasSrc) return
       e.preventDefault()
       lightbox(canvasSrc, s.kind)
@@ -489,6 +495,79 @@ export function App() {
   )
 
   /**
+   * The storyboard's hand-off: a panel, a pair, or the board, arriving on the
+   * canvas as a take.
+   *
+   * A panel's picture becomes the first frame — the same hand-off Animate
+   * makes — and its line (the prose, then what its arrows say) the shot's.
+   * A pair is the guide's FL2VA shape: first and last frame, one shot
+   * describing the path, and a *fresh* scene, because keyframes and
+   * references load different transformers and a cast would put the last
+   * frame out of play with nothing saying so. The whole board is a scene,
+   * one shot per panel, and keeps whatever cast is standing.
+   *
+   * Where the pills land follows the same fact. With no cast and one shot
+   * the scene is not live, so the run takes the flat path and the pills go
+   * on the rail, where a first and a last frame travel as keyframes. Once
+   * the scene is live — a cast, or several shots — the compiler reads the
+   * rows and ignores the rail, so the pills go on the rows. Either way the
+   * board is untouched: the canvas is where a panel goes to become a take.
+   */
+  const openBoard = useCallback(async (h: Handoff) => {
+    const st = useStore.getState()
+    st.setMode('generate')
+    st.setKind('video')
+    const now = useStore.getState()
+    if (h.pair && !supports(now).last_frame) {
+      const m = now.state?.video_models.find((x) => x.supports.last_frame && x.ready)
+      if (!m) {
+        alert('A first-and-last-frame take needs MiniMax-H3 — download it under Settings.')
+        return
+      }
+      now.setVid({ model: m.key })
+    }
+    const first = h.first ? await fileToB64(pictureUrl(h.board, h.first)) : null
+    const last = h.last ? await fileToB64(pictureUrl(h.board, h.last)) : null
+    if ((h.first && !first) || (h.last && !last)) {
+      alert('Could not read a panel\'s picture back off the server — reload the page and'
+            + ' try again.')
+      return
+    }
+    const s2 = useStore.getState()
+    s2.clearTakes()
+    s2.setContinueFrom(null)
+    s2.setDoc(null)
+    s2.setKeyframe('first', first)
+    s2.setKeyframe('last', last)
+    if (!first) s2.setVid({ aspect: h.aspect })
+    const base = h.pair ? emptyScene() : s2.scene
+    const onRows = named(base.cast).length > 0 || h.shots.length > 1
+    const rows = h.shots.map((x) => ({ ...newShot(x.line), pills: onRows ? x.pills : [] }))
+    s2.setScene({ ...base, shots: rows, sources: {} })
+    s2.selectShot(rows[0]?.id ?? '')
+    useStore.setState({ shot: onRows ? [] : (h.shots[0]?.pills ?? []) })
+    setGalleryOpen(false)
+    setShown(null)
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>('#prompt')?.focus()
+    }))
+  }, [])
+
+  /* Pinning goes to the wall, the way Edit goes to the canvas: the gesture
+     follows the thing. Into the board that is open — or the panel that asked
+     for a picture — and arrival is the confirmation; the door back is one
+     press. */
+  const boardIt = useCallback(async (it: GalleryItem) => {
+    const st = useStore.getState()
+    const r = await pinToBoard(it, st.board)
+    if (failed(r)) { alert(r.error); return }
+    st.setBoard({ name: r.name, pick: null })
+    setGalleryOpen(false)
+    setShown(null)
+    st.setMode('storyboard')
+  }, [])
+
+  /**
    * **Still → 8s does not throw the picture away.** Picking a duration used to swap the
    * canvas for an empty video placeholder, and the still you had just made was gone from
    * the screen with nothing on it pointing anywhere — it survived only in the gallery
@@ -605,6 +684,20 @@ export function App() {
             <span className="door-word">Sets</span>
           </button>
         )}
+        {/* The wall. A door for now, on the Playground's delivery pattern;
+            named for where it leads, Done on the way back. */}
+        {!train && (
+          <button className="door" id="door-storyboard" type="button"
+                  title="The storyboard — the scene, in order"
+                  onClick={() => {
+                    s.setMode(s.mode === 'storyboard' ? 'generate' : 'storyboard')
+                  }}>
+            <IconBoard />
+            <span className="door-word">
+              {s.mode === 'storyboard' ? 'Done' : 'Storyboard'}
+            </span>
+          </button>
+        )}
         {/* The node room. A door on the Sheet precedent — experimenting on
             the engine is neither generating nor training — and the same
             Done rule, so two things never look equally selected. */}
@@ -646,6 +739,12 @@ export function App() {
           <Suspense fallback={null}>
             <Playground />
           </Suspense>
+        ) : s.mode === 'storyboard' ? (
+          <Storyboard onOpen={(h) => void openBoard(h)}
+                      // The gallery lives on the Generate stage, so choosing
+                      // a picture is a trip through it; the pin brings you
+                      // back, which is the same round trip a pin always was.
+                      onGallery={() => { s.setMode('generate'); setGalleryOpen(true) }} />
         ) : s.mode === 'sheet' ? (
           <SheetBuilder />
         ) : train ? (
@@ -716,6 +815,7 @@ export function App() {
               onMeta={setMeta}
               onHandoff={(it, as) => void handoff(it.job_id, it.files[0] ?? '', as, it.loras,
                                                   it.seed ?? it.seeds?.[0])}
+              onBoard={(it) => void boardIt(it)}
             />
           </div>
         )}

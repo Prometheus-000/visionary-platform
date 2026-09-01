@@ -125,6 +125,11 @@ export function Rail({ onPalette }: {
             <Glyph cls={it.glyph} />
             <b className={it.valued && p.value ? 'set' : ''}>
               {it.valued ? (p.value || it.label) : it.label}
+              {/* A move that came off the storyboard with an amplitude or a
+                  speed says so, in the same words the document will — the
+                  guide omits medium and normal, and so does this. */}
+              {p.amp && p.amp !== 'medium' ? ` · ${p.amp}` : ''}
+              {p.speed && p.speed !== 'normal' ? ` · ${p.speed}` : ''}
             </b>
             <button className="x" title="Remove" type="button" onMouseDown={remove} />
           </span>

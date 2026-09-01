@@ -26,6 +26,13 @@ because a veto that is not in context when someone adds a panel is not a veto.
 5. Video LoRA training — **not started, and the trainer is not musubi.** H3
    trains under AI Toolkit; see below.
 6. **The Dynamic Canvas** — next, and sketched rather than specified below
+   - The **storyboard** arrived first, behind a door: boards of strictly
+     ordered intent panels, no duration anywhere on them, each frame cut to
+     the board's aspect with the camera's move drawn on it in the industry's
+     own stencil language and a subject's move as a hollow arrow, compiled
+     through the machinery that exists — a panel carries a shot's pills, so
+     the hand-off is a copy. Its final home is this phase — the wall as the
+     far zoom of the one canvas. See `web/CLAUDE.md`, "The storyboard".
 
 The end state is one application where a generated still flows into a clip
 without a round trip through the filesystem — the "Animate" and "As reference"

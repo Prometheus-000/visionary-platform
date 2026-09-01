@@ -49,7 +49,11 @@ export type Kind = 'image' | 'video'
 // by hand. A door on the same argument as Sheet: experimenting on the engine
 // is neither generating nor training, and the veto list governs the product
 // canvas, not the lab.
-export type Mode = 'generate' | 'train' | 'sheet' | 'playground'
+// 'storyboard' is the wall — the scene at arm's length, one strictly ordered
+// sequence of intent panels. A door for now, on the Playground's delivery
+// pattern; its final home is an altitude of the canvas, not a room, and the
+// door is the scaffolding that gets torn down when that rework lands.
+export type Mode = 'generate' | 'train' | 'sheet' | 'playground' | 'storyboard'
 
 /** What the region layer draws. See `Store.edit` for what each one means and why
  *  editing a box's contents and redrawing the box are two states rather than one. */
@@ -336,6 +340,19 @@ export type Store = {
   mode: Mode
   kind: Kind
   setMode: (m: Mode) => void
+  /**
+   * The storyboard the gallery pins into.
+   *
+   * `name` is the board that is open — or was, last: the gallery is open in
+   * Generate, where the wall is not mounted, and "Add to storyboard" has to
+   * know which board without asking. `pick` is a panel waiting for a picture:
+   * a panel's "Choose from the gallery" sets it, the next pin fills that
+   * panel instead of appending, and it clears on arrival. Neither survives a
+   * reload — the wall opens on the most recent board, which is the same
+   * answer nearly always and an honest one when it is not.
+   */
+  board: { name: string | null; pick: string | null }
+  setBoard: (patch: Partial<Store['board']>) => void
   /**
    * **The composer is per-kind. Only the canvas and the gallery are shared.**
    *
@@ -710,6 +727,8 @@ export const useStore = create<Store>((set, get) => ({
   mode: 'generate',
   kind: 'image',
   setMode: (mode) => set({ mode }),
+  board: { name: null, pick: null },
+  setBoard: (patch) => set((s): Partial<Store> => ({ board: { ...s.board, ...patch } })),
   stash: { image: null, video: null },
   // The swap, and the only statement in the file where both sets exist at once.
   setKind: (kind) => set((s): Partial<Store> => {
@@ -1122,6 +1141,8 @@ export function readShot(shot: ShotPill[]): ShotPill[] {
     const o: ShotPill = { key: p.key }
     if (p.value !== undefined) o.value = p.value
     if (p.lang) o.lang = p.lang
+    if (p.amp) o.amp = p.amp
+    if (p.speed) o.speed = p.speed
     return o
   })
 }

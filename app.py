@@ -176,6 +176,25 @@ CHARACTERS = WORKSPACE / "characters"
 # `{name}.meta.json` sidecar — the datasets split, so a reader that ignores us
 # still gets a workflow.
 WORKFLOWS = WORKSPACE / "workflows"
+# The storyboards: one folder per board, `board.json` beside the pictures that
+# were uploaded into it. A panel's picture is a *pointer* — into outputs/ for a
+# render (job and file, the gallery's own address), or a bare filename for a
+# picture dropped onto the board, which lives in this folder. Never a copy of a
+# render, so unpinning deletes nothing and deleting a render leaves the panel's
+# words standing. Legible without the app: `cat storyboard/*/board.json` is the
+# film, and the folder is the whole import format — copy one in and it lists.
+STORYBOARD = WORKSPACE / "storyboard"
+STORYBOARD_MAX_PANELS = 400
+# Per panel. A subject arrow is two points; the cap is generous for a client
+# that is not this page.
+STORYBOARD_MAX_ARROWS = 16
+STORYBOARD_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+STORYBOARD_FILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpg|jpeg|webp)$")
+# Uploads are capped at the reference cap on the long side, because a panel's
+# picture becomes a keyframe at the hand-off and the keyframe path resizes to
+# this anyway — capping once on arrival means the wall and the run read the
+# same bytes.
+STORYBOARD_MAX_SIDE = 1536
 # Node packs the Playground installs from git, one clone per folder, each
 # carrying a `.visionary-pin` (source URL + resolved SHA). On the volume rather
 # than in the image because installing one is a gesture, not a deploy — the
@@ -8674,46 +8693,59 @@ SHOT_VOCAB: list[dict[str, Any]] = [
     ]},
     {"key": "camera", "label": "Camera", "pick": "one", "join": "sentence",
      "slot": 40, "field": "visual", "image": False, "needs": None, "items": [
-        {"key": "pushin", "label": "push in", "glyph": "ca-push",
+        {"key": "pushin", "verb": "pushes in", "label": "push in", "glyph": "ca-push",
          "phrase": "The camera pushes in slowly, a small and steady move."},
-        {"key": "pullout", "label": "pull out", "glyph": "ca-pull",
+        {"key": "pullout", "verb": "pulls out", "label": "pull out", "glyph": "ca-pull",
          "phrase": "The camera pulls out slowly, a small and steady move."},
-        {"key": "panl", "label": "pan left", "glyph": "ca-panl",
+        {"key": "panl", "verb": "pans left", "label": "pan left", "glyph": "ca-panl",
          "phrase": "The camera pans left at a moderate speed, a medium-amplitude move."},
-        {"key": "panr", "label": "pan right", "glyph": "ca-panr",
+        {"key": "panr", "verb": "pans right", "label": "pan right", "glyph": "ca-panr",
          "phrase": "The camera pans right at a moderate speed, a medium-amplitude move."},
-        {"key": "tiltu", "label": "tilt up", "glyph": "ca-tiltu",
+        {"key": "tiltu", "verb": "tilts up", "label": "tilt up", "glyph": "ca-tiltu",
          "phrase": "The camera tilts up slowly, a small move."},
-        {"key": "tiltd", "label": "tilt down", "glyph": "ca-tiltd",
+        {"key": "tiltd", "verb": "tilts down", "label": "tilt down", "glyph": "ca-tiltd",
          "phrase": "The camera tilts down slowly, a small move."},
-        {"key": "truckl", "label": "truck left", "glyph": "ca-truckl",
+        {"key": "truckl", "verb": "trucks left", "label": "truck left", "glyph": "ca-truckl",
          "phrase": "The camera trucks left at a steady, moderate speed."},
-        {"key": "truckr", "label": "truck right", "glyph": "ca-truckr",
+        {"key": "truckr", "verb": "trucks right", "label": "truck right", "glyph": "ca-truckr",
          "phrase": "The camera trucks right at a steady, moderate speed."},
-        {"key": "pedu", "label": "pedestal up", "glyph": "ca-pedu",
+        {"key": "pedu", "verb": "pedestals up", "label": "pedestal up", "glyph": "ca-pedu",
          "phrase": "The camera pedestals up slowly, a small move."},
-        {"key": "pedd", "label": "pedestal down", "glyph": "ca-pedd",
+        {"key": "pedd", "verb": "pedestals down", "label": "pedestal down", "glyph": "ca-pedd",
          "phrase": "The camera pedestals down slowly, a small move."},
-        {"key": "orbit", "label": "orbit", "glyph": "ca-orbit",
+        {"key": "orbit", "verb": "orbits the subject", "label": "orbit", "glyph": "ca-orbit",
          "phrase": "The camera orbits the subject at a slow, steady speed."},
-        {"key": "arc", "label": "arc", "glyph": "ca-arc",
+        {"key": "arc", "verb": "arcs around the subject", "label": "arc", "glyph": "ca-arc",
          "phrase": "The camera arcs around the subject in a slow, wide move."},
-        {"key": "craneu", "label": "crane up", "glyph": "ca-craneu",
+        {"key": "craneu", "verb": "cranes up", "label": "crane up", "glyph": "ca-craneu",
          "phrase": "The camera cranes up in a large, slow move."},
-        {"key": "craned", "label": "crane down", "glyph": "ca-craned",
+        {"key": "craned", "verb": "cranes down", "label": "crane down", "glyph": "ca-craned",
          "phrase": "The camera cranes down in a large, slow move."},
-        {"key": "trackside", "label": "track side", "glyph": "ca-trackside",
+        {"key": "trackside", "verb": "tracks alongside the subject", "label": "track side", "glyph": "ca-trackside",
          "phrase": "A stable side-tracking shot keeps pace with the subject."},
-        {"key": "trackrear", "label": "track rear", "glyph": "ca-trackrear",
+        {"key": "trackrear", "verb": "tracks the subject from behind", "label": "track rear", "glyph": "ca-trackrear",
          "phrase": "A stable rear tracking shot follows the subject from behind."},
         {"key": "handheld", "label": "handheld", "glyph": "ca-handheld",
          "phrase": "The camera is handheld, with small, constant, organic movement."},
-        {"key": "whip", "label": "whip pan", "glyph": "ca-whip",
+        {"key": "whip", "verb": "whip-pans", "label": "whip pan", "glyph": "ca-whip",
          "phrase": "The camera whip-pans, a large and fast move."},
         {"key": "rack", "label": "rack focus", "glyph": "ca-rack",
          "phrase": "The focus racks from the foreground to the subject."},
-        {"key": "zoom", "label": "zoom in", "glyph": "ca-zoom",
+        {"key": "zoom", "verb": "zooms in", "label": "zoom in", "glyph": "ca-zoom",
          "phrase": "The lens zooms in slowly, a small and steady move."},
+        # The three the storyboard's arrow language has that the palette did
+        # not: every storyboard sheet draws zoom out and rotate, and the guide
+        # lists both rolls as motion types. Added here rather than in the
+        # page because the vocabulary is served, never written into the page.
+        {"key": "zoomout", "verb": "zooms out", "label": "zoom out",
+         "glyph": "ca-zoomout",
+         "phrase": "The lens zooms out slowly, a small and steady move."},
+        {"key": "rollcw", "verb": "rolls clockwise", "label": "roll clockwise",
+         "glyph": "ca-rollcw",
+         "phrase": "The camera rolls clockwise around the lens axis."},
+        {"key": "rollccw", "verb": "rolls counterclockwise",
+         "label": "roll counter", "glyph": "ca-rollccw",
+         "phrase": "The camera rolls counterclockwise around the lens axis."},
         {"key": "static", "label": "locked off", "glyph": "ca-static",
          "phrase": "The camera is locked off and does not move."},
     ]},
@@ -8790,6 +8822,31 @@ SHOT_ITEMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
     f"{g['key']}.{it['key']}": (g, it) for g in SHOT_VOCAB for it in g["items"]
 }
 
+# The guide's two other dimensions of a camera move — "motion type +
+# amplitude + speed", base-en §4.3 — with its own rule that the middle of each
+# is omitted. A camera pill carrying either compiles through `_camera_phrase`
+# rather than its hand-written `phrase`; one carrying neither compiles exactly
+# as it always did, which is what keeps every existing document unchanged.
+# The storyboard is what sets them: an arrow's length is amplitude.
+CAMERA_AMPS = ("small", "medium", "large")
+CAMERA_SPEEDS = ("slow", "normal", "fast")
+
+
+def _camera_phrase(item: dict[str, Any], amp: str | None,
+                   speed: str | None) -> str:
+    """`The camera pans right with large amplitude at fast speed.` — the
+    guide's own construction, verbatim in shape, medium and normal omitted."""
+    out = f"The camera {item['verb']}"
+    if amp == "small":
+        out += " with small amplitude"
+    elif amp == "large":
+        out += " with large amplitude"
+    if speed == "slow":
+        out += " at slow speed"
+    elif speed == "fast":
+        out += " at fast speed"
+    return out + "."
+
 
 # Sixteen runs is far more than any clause has needed. The bound exists so a
 # payload cannot spell a sentence one character at a time, not because a
@@ -8864,6 +8921,19 @@ def _validate_shot(raw: Any) -> list[dict[str, Any]]:
                 raise ValueError(f"No such dialogue language: {lang!r}. "
                                  f"One of: {', '.join(H3_LANGUAGES)}")
             pill["lang"] = lang
+        if item.get("verb"):
+            # Only a move with a verb can take them — handheld and a locked-off
+            # camera have no amplitude — and only when sent: absence keeps the
+            # hand-written phrase, and with it every document written before
+            # the storyboard could say "large".
+            for field, allowed in (("amp", CAMERA_AMPS), ("speed", CAMERA_SPEEDS)):
+                v = entry.get(field)
+                if v in (None, ""):
+                    continue
+                if v not in allowed:
+                    raise ValueError(f"No such camera {field}: {v!r}. "
+                                     f"One of: {', '.join(allowed)}")
+                pill[field] = str(v)
         out.append(pill)
 
     # One camera move, one framing, one angle — the guide's rule, and the page
@@ -8960,6 +9030,8 @@ def _shot_text(group: dict[str, Any], item: dict[str, Any],
     """One pill's contribution, which for a valued pill is whatever was typed."""
     kind = item.get("valued")
     if not kind:
+        if item.get("verb") and (pill.get("amp") or pill.get("speed")):
+            return _camera_phrase(item, pill.get("amp"), pill.get("speed"))
         return item["phrase"]
     value = pill.get("value") or ""
     # An empty valued pill compiles to nothing and is never a validation error.
@@ -11404,6 +11476,106 @@ class VideoGenerator:
 # A workflow name becomes a filename on the volume, so the rule is the
 # filename's — and the error says so, because "invalid name" explains nothing.
 _WORKFLOW_NAME_RE = re.compile(r"[\w][\w .-]{0,63}")
+
+
+def _storyboard_name(raw: Any) -> str:
+    """A board's folder name. The same shape a workflow name has, lower-cased
+    because it is a path on the volume and a URL segment at once."""
+    name = str(raw or "").strip()
+    if not STORYBOARD_NAME_RE.fullmatch(name):
+        raise ValueError("A storyboard name is lowercase letters, digits, "
+                         "dashes and underscores — up to 64 of them.")
+    return name
+
+
+def _validate_storyboard(raw: Any) -> dict:
+    """
+    Structural zeros only — the page writes the whole document back on every
+    edit, so the only thing to refuse is a shape no reader could follow: a
+    panel without an id, two panels sharing one, a picture pointer missing
+    half its address, an arrow with a point outside the frame. Content is the
+    person's and travels verbatim. A picture's `file` is path-stripped because
+    it becomes half of a file address; a picture with no `job_id` lives in the
+    board's own folder, and one with a job id is a render in outputs/.
+
+    The pills are `_validate_shot`'s — a panel is a shot's intent, so it
+    carries a shot's vocabulary, camera amplitude and speed included — and
+    that is what makes the hand-off a copy rather than a translation.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("The storyboard must be an object with `panels`.")
+    panels_in = raw.get("panels")
+    if not isinstance(panels_in, list):
+        raise ValueError("`panels` must be a list.")
+    if len(panels_in) > STORYBOARD_MAX_PANELS:
+        raise ValueError(f"A storyboard holds at most {STORYBOARD_MAX_PANELS} "
+                         f"panels; this one has {len(panels_in)}.")
+    aspect = str(raw.get("aspect") or "16:9")
+    if aspect not in VIDEO_ASPECTS:
+        raise ValueError(f"Unknown aspect {aspect!r}. "
+                         f"One of: {', '.join(VIDEO_ASPECTS)}")
+    panels: list[dict] = []
+    seen: set[str] = set()
+    for i, p in enumerate(panels_in):
+        if not isinstance(p, dict):
+            raise ValueError(f"Panel {i + 1} is not an object.")
+        pid = str(p.get("id") or "")
+        if not pid or pid in seen:
+            raise ValueError(f"Panel {i + 1} needs an id no other panel has.")
+        seen.add(pid)
+        pic = p.get("picture")
+        if pic is not None:
+            if not isinstance(pic, dict) or not pic.get("file"):
+                raise ValueError(f"Panel {i + 1}'s picture needs a file.")
+            job = str(pic.get("job_id") or "")
+            if job and not NAME_RE.match(job):
+                raise ValueError(f"Panel {i + 1}'s picture has a job id no "
+                                 f"render could have: {job!r}")
+            pic = {"file": Path(str(pic["file"])).name,
+                   **({"job_id": job} if job else {})}
+        fit = str(p.get("fit") or "crop")
+        if fit not in ("crop", "whole"):
+            raise ValueError(f"Panel {i + 1}'s fit is {fit!r}; crop or whole.")
+        focus_in = p.get("focus") or [0.5, 0.5]
+        try:
+            focus = [min(1.0, max(0.0, float(focus_in[0]))),
+                     min(1.0, max(0.0, float(focus_in[1])))]
+        except (TypeError, ValueError, IndexError):
+            raise ValueError(f"Panel {i + 1}'s focus is not a point.")
+        arrows_in = p.get("motion") or []
+        if not isinstance(arrows_in, list):
+            raise ValueError(f"Panel {i + 1}'s motion is not a list.")
+        if len(arrows_in) > STORYBOARD_MAX_ARROWS:
+            raise ValueError(f"Panel {i + 1} has {len(arrows_in)} arrows; "
+                             f"at most {STORYBOARD_MAX_ARROWS}.")
+        motion: list[dict] = []
+        for a in arrows_in:
+            if not isinstance(a, dict):
+                raise ValueError(f"Panel {i + 1} has an arrow that is not "
+                                 f"an object.")
+            try:
+                pts = [[float(x), float(y)] for x, y in a.get("pts") or []]
+            except (TypeError, ValueError):
+                raise ValueError(f"Panel {i + 1} has an arrow with a point "
+                                 f"that is not a pair of numbers.")
+            if len(pts) < 2:
+                raise ValueError(f"Panel {i + 1} has an arrow with one end.")
+            if any(not (0 <= x <= 1 and 0 <= y <= 1) for x, y in pts):
+                raise ValueError(f"Panel {i + 1} has an arrow leaving the "
+                                 f"frame — points are fractions of it.")
+            motion.append({"id": str(a.get("id") or f"a{len(motion) + 1}"),
+                           "pts": pts[:2],
+                           "label": _oneline(str(a.get("label") or ""))[:80]})
+        panels.append({"id": pid,
+                       "prose": str(p.get("prose") or ""),
+                       "note": str(p.get("note") or ""),
+                       "picture": pic,
+                       "fit": fit,
+                       "focus": focus,
+                       "pills": _validate_shot(p.get("pills")),
+                       "motion": motion})
+    return {"title": str(raw.get("title") or "")[:200],
+            "aspect": aspect, "panels": panels}
 
 
 def _workflow_name(raw: Any) -> str:
@@ -14585,6 +14757,170 @@ def web():
         (WORKFLOWS / f"{name}.meta.json").unlink(missing_ok=True)
         volume.commit()
         return {"ok": True}
+
+    # ── the storyboards ───────────────────────────────────────────────
+    # A board travels whole, both ways. There is no per-panel route because
+    # the page holds the sequence and order is the meaning — a panel saved on
+    # its own would be a panel with no "and then". Several boards, one folder
+    # each, because a scene you put down on Tuesday is picked up on Friday
+    # beside the one you started on Thursday.
+    def _storyboard_dir(name: str) -> Path:
+        return STORYBOARD / _storyboard_name(name)
+
+    def _read_board(path: Path) -> dict[str, Any] | None:
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        return raw if isinstance(raw, dict) else None
+
+    @api.get("/api/storyboards")
+    def list_storyboards() -> dict[str, Any]:
+        if not STORYBOARD.is_dir():
+            _reload_volume()
+        rows: list[dict[str, Any]] = []
+        for d in (sorted(STORYBOARD.iterdir()) if STORYBOARD.is_dir() else []):
+            if not d.is_dir() or not STORYBOARD_NAME_RE.fullmatch(d.name):
+                continue
+            raw = _read_board(d / "board.json")
+            if raw is None:
+                continue
+            panels = raw.get("panels") or []
+            # The first picture is the board's face in the list — the same
+            # pointer the panel holds, resolved by the page.
+            cover = next((p.get("picture") for p in panels
+                          if isinstance(p, dict) and p.get("picture")), None)
+            rows.append({"name": d.name, "title": str(raw.get("title") or ""),
+                         "panels": len(panels), "updated": raw.get("updated"),
+                         "cover": cover})
+        rows.sort(key=lambda r: -float(r["updated"] or 0))
+        return {"boards": rows}
+
+    @api.get("/api/storyboard/{name}")
+    def get_storyboard(name: str) -> dict[str, Any]:
+        try:
+            path = _storyboard_dir(name) / "board.json"
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not path.is_file():
+            _reload_volume()
+        if not path.is_file():
+            return {"error": f"No storyboard called {name!r}."}
+        raw = _read_board(path)
+        if raw is None:
+            return {"error": f"{path} is not valid JSON."}
+        raw["name"] = name
+        return {"board": raw}
+
+    @api.post("/api/storyboard/{name}")
+    def save_storyboard(name: str, payload: dict) -> dict[str, Any]:
+        try:
+            folder = _storyboard_dir(name)
+            board = _validate_storyboard(payload.get("board"))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        board["updated"] = time.time()
+        folder.mkdir(parents=True, exist_ok=True)
+        # Staged then renamed, the weights rule: a reader arriving mid-write
+        # sees the last whole document rather than half of this one.
+        tmp = folder / "board.json.part"
+        tmp.write_text(json.dumps(board, indent=2))
+        tmp.replace(folder / "board.json")
+        volume.commit()
+        return {"ok": True, "updated": board["updated"]}
+
+    @api.post("/api/storyboard/{name}/delete")
+    def delete_storyboard(name: str) -> dict[str, Any]:
+        """The folder, whole: the board and every picture uploaded into it.
+        Renders it pointed at are in outputs/ and are not touched — the
+        confirm on the page says exactly that."""
+        try:
+            folder = _storyboard_dir(name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not folder.is_dir():
+            _reload_volume()
+        if not folder.is_dir():
+            return {"error": f"No storyboard called {name!r}."}
+        shutil.rmtree(folder)
+        volume.commit()
+        return {"ok": True}
+
+    @api.post("/api/storyboard/{name}/upload")
+    async def upload_storyboard(name: str, request: Request) -> JSONResponse:
+        """
+        Pictures dropped onto the board, into its own folder.
+
+        Uprighted and capped on arrival, once, for the reason
+        `STORYBOARD_MAX_SIDE` gives; re-encoded as PNG when the source is a
+        format nothing downstream reads (avif, bmp). Names are minted here
+        rather than kept, because two drops of `IMG_0001.jpg` from two
+        cameras are two pictures.
+        """
+        from PIL import Image, ImageOps
+
+        try:
+            folder = _storyboard_dir(name)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, 400)
+        folder.mkdir(parents=True, exist_ok=True)
+        form = await request.form()
+        out: list[dict[str, Any]] = []
+        stamp = f"{int(time.time() * 1000):x}"
+        for n, up in enumerate(form.getlist("files")):
+            filename = getattr(up, "filename", None)
+            if not filename:
+                continue
+            suffix = Path(filename).suffix.lower()
+            if suffix not in IMAGE_EXTS:
+                continue
+            ext = suffix if suffix in (".png", ".jpg", ".jpeg", ".webp") else ".png"
+            target = folder / f"{stamp}{n:02d}{ext}"
+            tmp = target.with_name(target.name + ".part")
+            with open(tmp, "wb") as fh:
+                while chunk := await up.read(1024 * 1024):
+                    fh.write(chunk)
+            try:
+                with Image.open(tmp) as im:
+                    im = ImageOps.exif_transpose(im)
+                    im.thumbnail((STORYBOARD_MAX_SIDE, STORYBOARD_MAX_SIDE))
+                    if ext in (".jpg", ".jpeg") and im.mode not in ("RGB", "L"):
+                        im = im.convert("RGB")
+                    im.save(target)
+                    w, h = im.size
+            except Exception as exc:
+                tmp.unlink(missing_ok=True)
+                return JSONResponse(
+                    {"error": f"{filename} is not a picture this can read: "
+                              f"{type(exc).__name__}: {exc}"}, 400)
+            tmp.unlink(missing_ok=True)
+            out.append({"file": target.name, "width": w, "height": h})
+        volume.commit()
+        return JSONResponse({"files": out})
+
+    @api.get("/api/storyboard/{name}/file/{file}")
+    def storyboard_file(name: str, file: str):
+        """One uploaded picture, off the spool like a render — see
+        `output_file` for why the spool and not the mount."""
+        try:
+            folder = _storyboard_dir(name)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if not STORYBOARD_FILE_RE.match(file):
+            return JSONResponse({"error": "Invalid name."}, status_code=400)
+        path = _spooled(f"storyboard/{folder.name}/{file}")
+        if path is None:
+            mounted = folder / file
+            if not mounted.is_file():
+                _reload_volume()
+            if not mounted.is_file():
+                return JSONResponse({"error": "Not found."}, status_code=404)
+            path = mounted
+        return FileResponse(
+            str(path),
+            media_type=MEDIA_TYPES.get(path.suffix.lower(), "image/png"),
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     @api.get("/api/status/{job_id}")
     def status(job_id: str) -> dict[str, Any]:

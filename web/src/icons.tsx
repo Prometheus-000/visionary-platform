@@ -186,3 +186,9 @@ export function IconStack() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="6.5" y="3.5" width="14" height="11" rx="2.2"/><path d="M17.5 18a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V9.8a2.2 2.2 0 0 1 2.2-2.2"/></svg>
   )
 }
+
+export function IconBoard() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2.5" y="7" width="5.6" height="10" rx="1.5"/><rect x="9.2" y="7" width="5.6" height="10" rx="1.5"/><rect x="15.9" y="7" width="5.6" height="10" rx="1.5"/></svg>
+  )
+}
