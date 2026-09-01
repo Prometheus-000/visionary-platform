@@ -268,6 +268,26 @@ function BoxCard(
                         s.patchRegion(i, { lora: { ...r.lora, strength: n } })
                     }} />
         </div>
+        {/* Edit path only, and only where it can act: a box whose likeness is
+            its LoRA alone. With a Photo attached the photo is already the
+            compose's subject frame, and with no plate on the frame there is
+            no compose for a portrait to feed. The cost is in the title
+            because it is real — an extra render plus a model reload, and the
+            run moves onto the sequential path. */}
+        {r.lora && !attached(r, 'identity')
+          && (['scene', 'outfit', 'object1', 'object2'] as const)
+            .some((slot) => attached(s.frame, slot)) && (
+          <button className={`opt ib${r.anchor ? ' on' : ''}`} id="r-anchor"
+                  type="button"
+                  title={'Anchor likeness through the compose: this box’s LoRA is '
+                    + 'rendered into a portrait first and composed from it as a live '
+                    + 'reference. Stronger identity, at the cost of an extra render '
+                    + 'and the slower sequential compose. Off, the LoRA and the box '
+                    + 'text carry the likeness.'}
+                  onClick={() => s.patchRegion(i, { anchor: !r.anchor })}>
+            Anchor
+          </button>
+        )}
         <span className="grow" />
         <button className="opt ib" id="r-del" type="button"
                 title="Remove this box — or select it and press ⌫"

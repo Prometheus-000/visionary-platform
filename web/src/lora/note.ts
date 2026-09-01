@@ -37,15 +37,17 @@ export function loraNote(s: Store): string {
   if (s.loras.length > max) bits.push(`Only the first ${max} LoRAs are applied.`)
 
   // The plates have a home at rest now (`PlateRow`), so a photo can arrive
-  // before any box exists — and with zero boxes the payload sends it as null.
-  // The note teaches the gesture that is missing, because the double-click is
-  // the least discoverable thing on the page and this is the one moment
-  // someone is looking for it.
-  if (s.kind === 'image' && !s.regions.length) {
+  // before any box exists — and with no boxes the backend conjures a
+  // full-canvas region out of the run's first LoRA chip, so there is nothing
+  // to say unless there is no chip either. Then the note names both fixes,
+  // because the double-click is the least discoverable thing on the page and
+  // this is the one moment someone is looking for it.
+  if (s.kind === 'image' && !s.regions.length && !s.loras.length) {
     for (const slot of PLATE_SLOTS) {
       if (attached(s.frame, slot))
-        bits.push(`The ${plateName(slot)} photo waits on a region — double-click the `
-          + 'canvas to place someone in it.')
+        bits.push(`The ${plateName(slot)} photo needs an identity to compose `
+          + 'around — add a LoRA to the prompt, or double-click the canvas '
+          + 'to place someone in it.')
     }
   }
 
@@ -70,17 +72,21 @@ export function loraNote(s: Store): string {
     if (parseFloat(s.regionWeight) === 0 && boxed.size)
       bits.push('Region weight is 0 — every box\u2019s LoRA is switched off.')
 
-    // The payload drops boxes with no words, no LoRA and no photo, and the
-    // plates ride on what survives — `imageBody` sends `outfit: null` the
-    // moment the filtered list is empty. Found by driving the page: an outfit
-    // tile showing its jacket, a rectangle on the canvas, and a request
-    // carrying no outfit and no error, because the backend's own "needs at
-    // least one region" answer only fires on a plate it is actually sent.
+    // The payload drops boxes with no words, no LoRA and no photo, so with
+    // every box empty the request carries no regions — which the backend now
+    // answers by conjuring a full-canvas row from the run's first chip. The
+    // warning therefore only stands when there is no chip to conjure from.
+    // (Found by driving the page, in its older form: an outfit tile showing
+    // its jacket, a rectangle on the canvas, and a request carrying no outfit
+    // and no error.)
     if (!readRegions([], s.regions, true).length) {
-      for (const slot of PLATE_SLOTS) {
-        if (attached(s.frame, slot))
-          bits.push(`The ${plateName(slot)} photo is not sent — every box is empty. `
-            + 'Give a box a sentence, a photo or a LoRA.')
+      if (!s.loras.length) {
+        for (const slot of PLATE_SLOTS) {
+          if (attached(s.frame, slot))
+            bits.push(`The ${plateName(slot)} photo has nothing to compose around — `
+              + 'every box is empty and no LoRA is on the run. Give a box a '
+              + 'sentence, a photo or a LoRA, or add a LoRA to the prompt.')
+        }
       }
     } else if (!s.regions.some((r) => regionArmed([], r))) {
       // The edit path only arms boxes holding a LoRA or a photo, so a plate
@@ -115,11 +121,12 @@ export function loraNote(s: Store): string {
 
   // The backend refuses an object plate whose note is empty — a reference the
   // prompt never mentions does close to nothing — so the same sentence shows
-  // here, next to the field that fixes it.
+  // here, next to the field that fixes it. A person plate is exempt: the node
+  // writes its own clause for an unnamed person, and the backend accepts it.
   if (s.kind === 'image') {
     for (const slot of ['object1', 'object2'] as const) {
       const a = s.frame.attachments.find((x) => x.role === slot)
-      if (a && !(a.note ?? '').trim())
+      if (a && !a.person && !(a.note ?? '').trim())
         bits.push('The object photo needs a sentence saying what it is — '
           + '\u201ca motorcycle she leans against\u201d.')
     }
@@ -153,10 +160,16 @@ export function regionNote(s: Store, live: number): string {
   // only under the main prompt.
   if (!live) {
     const held = (['scene', 'outfit'] as const).filter((p) => attached(s.frame, p))
-    return held.length
-      ? `Every box is empty — the ${held.join(' and ')} photo${held.length > 1 ? 's are' : ' is'} `
-        + 'not sent. Give a box a sentence, a photo or a LoRA.'
-      : ''
+    if (!held.length) return ''
+    // With a chip on the run the plates still travel: the backend composes on
+    // a conjured full-canvas region, so the card says what the run will do
+    // rather than warning about one it refuses.
+    return s.loras.length
+      ? 'Every box is empty — the compose runs on the whole frame, around the '
+        + 'prompt’s first LoRA.'
+      : `Every box is empty — the ${held.join(' and ')} photo${held.length > 1 ? 's are' : ' is'} `
+        + 'not sent. Give a box a sentence, a photo or a LoRA, or add a LoRA '
+        + 'to the prompt.'
   }
   const molds = s.regions.filter((r) => attached(r, 'identity')).length
   const tail = molds ? ` ${molds} with a reference photo.` : ''

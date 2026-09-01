@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { fileUrl } from '../api/routes'
 import { RetryImg } from '../media/thumb'
-import { IconClose, IconExpand, IconFilm, IconPhoto, IconPlay, IconPlus } from '../icons'
+import { IconClose, IconEdit, IconExpand, IconFilm, IconPhoto, IconPlay, IconPlus } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
 import { attached, regionsLive, useStore } from '../store'
@@ -52,7 +52,7 @@ export function Canvas({
   vidRun: VideoRun
   onOpen: (jobId: string, i: number) => void
   onOpenVideo: (src: string) => void
-  onHandoff: (jobId: string, file: string, as: 'first' | 'reference') => void
+  onHandoff: (jobId: string, file: string, as: 'first' | 'reference' | 'edit') => void
   /** A picture dropped on the video canvas is the frame the clip starts on. */
   onFirstFrame: (f: File) => Promise<void> | void
   onClear: () => void
@@ -317,10 +317,16 @@ export function Canvas({
                   <RetryImg src={fileUrl(strip.jobId!, f)} alt="" decoding="async"
                             width={strip.w || undefined} height={strip.h || undefined}
                             fetchPriority={i === at ? 'high' : 'auto'} />
-                  {/* Each still carries its own way into video. Two, because they are
-                      genuinely different jobs: a first frame is the shot the clip starts
-                      on, a reference is a subject the clip is about. */}
+                  {/* Each still carries its own ways onward. Three, because they are
+                      genuinely different jobs: an edit re-renders this picture around
+                      an instruction, a first frame is the shot a clip starts on, a
+                      reference is a subject the clip is about. */}
                   <span className="acts">
+                    <button type="button"
+                            title="Edit — this picture becomes the scene the next render composes into; type what should change"
+                            onClick={() => onHandoff(strip.jobId!, f, 'edit')}>
+                      <IconEdit />
+                    </button>
                     <button type="button" title="Animate — use as the first frame of a clip"
                             onClick={() => onHandoff(strip.jobId!, f, 'first')}>
                       <IconPlay />

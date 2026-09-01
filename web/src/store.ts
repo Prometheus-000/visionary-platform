@@ -93,6 +93,12 @@ export type Region = {
    *  in the field: the field is for words this performer's description needs,
    *  and which box a LoRA belongs to is said by which card you are looking at. */
   lora: LoraChip | null
+  /** Edit path only: render this box's LoRA into a portrait first and compose
+   *  from it as a live reference frame — V9's per-row portrait flag. Stronger
+   *  likeness through the compose, priced at an extra render plus a model
+   *  reload and the sequential path (the node's own docstring says ~3x), which
+   *  is why it is per-box and opt-in rather than a run-wide switch. */
+  anchor?: boolean
   /** Carried as a bool in the job record, never the bytes — it is polled. */
   attachments: Attachment[]
 }
@@ -151,6 +157,12 @@ export type Attachment = {
   role: Role
   image: string
   note?: string
+  /** Object sockets only: the plate is a person rather than a thing. The node
+   *  has both roles and writes a different clause for each — an object gets
+   *  held, a person gets "face unchanged" — and the note becomes optional,
+   *  because an unnamed person already has a clause where an unnamed object
+   *  does nothing. */
+  person?: boolean
   /** The Arsenal file this came off — see `PoolFile.from`, which carries the
    *  same fact for the video side's pool. The image side has no id to re-point,
    *  so a refresh replaces `image` where it stands. */
@@ -419,6 +431,12 @@ export type Store = {
    *  the live A/B at 1.0 pulled composition and even the subject's gender
    *  toward the reference, which is what earned this its own number. */
   styleStrength: string
+  /** The edit layer's weight when a scene/outfit/object plate is attached —
+   *  V12's `edit_lora_strength`, the node's 0.0–2.0 range around its own 0.7
+   *  default. Low keeps the picture being composed into; high lets the
+   *  instruction rewrite more of it, and the node's tooltip prices the far
+   *  end at mottled texture. A string for the reason the two above are. */
+  editStrength: string
   /** The frame is a place too, and the scene and outfit plates are its attachments.
    *  A record with a slot per plate was the same shape as a region's `ref` written
    *  twice more, and it is what made frame scope and box scope two systems. */
@@ -487,6 +505,7 @@ export type Store = {
   select: (i: number) => void
   setRegionWeight: (v: string) => void
   setStyleStrength: (v: string) => void
+  setEditStrength: (v: string) => void
   /** One picture onto one place. `where` is a region's index or the frame, and that
    *  argument is the entire difference between "this character" and "this scene" —
    *  same gesture, same record, different target. */
@@ -495,6 +514,8 @@ export type Store = {
   /** The sentence on an object plate — frame-scope only, because only the
    *  frame's attachments carry notes. */
   notePlate: (role: Role, note: string) => void
+  /** Object socket only: flip the plate between a thing and a person. */
+  personPlate: (role: Role, person: boolean) => void
   setEdit: (m: EditMode) => void
   setBoxDrag: (on: boolean) => void
   setCardOpen: (on: boolean) => void
@@ -781,6 +802,7 @@ export const useStore = create<Store>((set, get) => ({
   rsel: -1,
   regionWeight: '1',
   styleStrength: '1',
+  editStrength: '0.7',
   frame: { attachments: [] },
   edit: 'geometry',
   boxDrag: false,
@@ -792,6 +814,7 @@ export const useStore = create<Store>((set, get) => ({
   select: (i) => set((s): Partial<Store> => ({ rsel: i >= 0 && i < s.regions.length ? i : -1 })),
   setRegionWeight: (regionWeight) => set({ regionWeight }),
   setStyleStrength: (styleStrength) => set({ styleStrength }),
+  setEditStrength: (editStrength) => set({ editStrength }),
   attach: (where, role, image, from) => set((s): Partial<Store> => (
     where === 'frame'
       ? { frame: { attachments: setAttached(s.frame.attachments, role, image, from) } }
@@ -803,6 +826,10 @@ export const useStore = create<Store>((set, get) => ({
   )),
   notePlate: (role, note) => set((s): Partial<Store> => (
     { frame: { attachments: setNote(s.frame.attachments, role, note) } }
+  )),
+  personPlate: (role, person) => set((s): Partial<Store> => (
+    { frame: { attachments: s.frame.attachments.map((a) =>
+        (a.role === role ? { ...a, person } : a)) } }
   )),
   setEdit: (edit) => set({ edit }),
   setBoxDrag: (boxDrag) => set({ boxDrag }),

@@ -111,6 +111,9 @@ export function readRegions(_index: LoraFile[], regions: Region[], on: boolean) 
         loras: r.lora ? [{ path: r.lora.path, unet: r.lora.strength }] : [],
         ref: attached(r, 'identity'),
         x: r.x, y: r.y, width: r.w, height: r.h,
+        // Only when set: on every plain row the key would be noise, and the
+        // backend treats absence and false identically.
+        ...(r.anchor ? { anchor: true } : {}),
       }
     })
     .filter((r) => r.prompt || r.loras.length || r.ref)

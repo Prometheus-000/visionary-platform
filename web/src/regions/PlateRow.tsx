@@ -31,12 +31,12 @@ const STYLE_ROLE = 'style1' as const
  * doesn't exist. So the tiles moved here — moved, not copied, because two live
  * homes for one attachment is a second way to do the first thing.
  *
- * Visible whenever the composer is on images, boxes or none. The plates do
- * need a region, but a dead tile teaches nothing — the natural order is often
- * plate first ("compose into this"), boxes second, and the store has no
- * problem holding a plate while the canvas is still empty. What carries the
- * gate is the note under the prompt, which names the gesture that is missing
- * rather than refusing the drop.
+ * Visible whenever the composer is on images, boxes or none. A plate needs an
+ * identity to compose around, and a box is only one way to hold it: with no
+ * boxes drawn the backend conjures a full-canvas region out of the run's
+ * first LoRA chip, so the commonest render — one character, no boxes — takes
+ * a scene or an outfit directly. What still carries a gate is the note under
+ * the prompt, which speaks up only when *neither* a box nor a chip exists.
  *
  * Locked, not hidden, without the edit weight — the card's original argument,
  * verbatim: an install without the edit LoRA is one download away from scene
@@ -73,13 +73,33 @@ export function PlateRow() {
       ))}
 
       {objects.map(({ role, image }) => {
-        const note = s.frame.attachments.find((a) => a.role === role)?.note ?? ''
+        const a = s.frame.attachments.find((x) => x.role === role)
+        const note = a?.note ?? ''
+        const person = !!a?.person
         return (
           <div key={role} className="tref plate-obj">
             <img src={dataUrl(image!)} alt="" draggable={false} />
+            {/* Thing or person — the node's own two free roles, and they read
+                the photograph differently: an object gets held, a person gets
+                "face unchanged". The pill is `.tsheet`, the row family's
+                existing toggle, and it flips the note from required to
+                optional because an unnamed person already has a clause where
+                an unnamed object does nothing. */}
+            <button type="button" className={`tsheet${person ? ' on' : ''}`}
+                    id={`g-${role}-person`}
+                    title={person
+                      ? 'A person: their face is carried from the photo as-is. '
+                        + 'Click to treat the photo as a thing instead.'
+                      : 'A thing composed into the picture. Click if the photo '
+                        + 'is a person — their face is then carried as-is.'}
+                    onClick={() => s.personPlate(role, !person)}>
+              {person ? 'person' : 'object'}
+            </button>
             <input className="trefnote" value={note} spellCheck={false}
                    id={`g-${role}-note`}
-                   placeholder="what it is — a motorcycle she leans against"
+                   placeholder={person
+                     ? 'who they are — optional; “the drummer, on the left”'
+                     : 'what it is — a motorcycle she leans against'}
                    onChange={(e) => s.notePlate(role, e.target.value)} />
             <button type="button" className="x" title="Remove this object"
                     onClick={() => s.attach('frame', role, null)}>×</button>
@@ -102,6 +122,23 @@ export function PlateRow() {
                     if (b64) s.attach('frame', free, b64)
                   }}
                   onClear={() => {}} />
+      )}
+
+      {/* Shown only while an edit plate is attached — the style strength's own
+          rule, one control over. This is V12's edit_lora_strength, hardcoded
+          at the node's 0.7 default until now: low keeps more of the photo the
+          run composes into, high lets the instruction rewrite more of it, and
+          past ~1 the node's own tooltip prices it at mottled texture (the
+          edit and character deltas add in one forward). */}
+      {(['scene', 'outfit', 'object1', 'object2'] as const)
+        .some((slot) => attached(s.frame, slot)) && (
+        <div className="opt n" id="g-edit-strength-wrap" data-lb="Edit">
+          <span className="lead">Edit</span>
+          <NumInput id="g-edit-strength" value={s.editStrength}
+                    fine={0.05} bigStep={0.25}
+                    title="How hard the edit layer drives the compose. 0.7 is the node's default; lower keeps more of the attached photo, higher follows the instruction harder and past ~1 the texture goes mottled."
+                    onValue={s.setEditStrength} />
+        </div>
       )}
 
       {/* Style by reference — a different engine from the plates: whole-frame,

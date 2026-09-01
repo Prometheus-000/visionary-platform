@@ -117,24 +117,28 @@ export function imageBody(s: Store): Record<string, unknown> {
     loras: readChips(s.loras, s.state?.max_loras ?? 6),
     regions,
     region_weight: s.regionWeight,
-    // Only when there are boxes to compose around — the backend rejects a plate
-    // without regions, and sending one anyway would turn a hidden tile that still
-    // holds an image into an error nobody could see the cause of.
-    scene: regions.length ? attached(s.frame, 'scene') : null,
-    outfit: regions.length ? attached(s.frame, 'outfit') : null,
-    // Sockets 3 and 4 — a photo and the user's sentence about it, compacted
-    // so removing the first object does not send a hole.
+    // Sent whether or not boxes exist: with none, the backend conjures a
+    // full-canvas region out of the run's first LoRA chip, and with neither
+    // boxes nor chips it answers with a form error naming both fixes — which
+    // the note under the prompt has already said by then. The old gate here
+    // (`regions.length ? … : null`) predates the conjuring and silently
+    // dropped a plate the tile was still showing.
+    scene: attached(s.frame, 'scene'),
+    outfit: attached(s.frame, 'outfit'),
+    // Sockets 3 and 4 — a photo, the user's sentence about it, and whether it
+    // is a thing or a person; compacted so removing the first object does not
+    // send a hole.
     // Style rides with or without boxes — it is the no-boxes engine — and the
     // route answers the conflicting pair with a form error the note has
     // already explained.
     style_refs: [attached(s.frame, 'style1')].filter(Boolean),
     style_strength: s.styleStrength,
-    objects: regions.length
-      ? (['object1', 'object2'] as const)
-          .map((role) => s.frame.attachments.find((a) => a.role === role))
-          .filter(Boolean)
-          .map((a) => ({ image: a!.image, note: (a!.note ?? '').trim() }))
-      : null,
+    edit_strength: s.editStrength,
+    objects: (['object1', 'object2'] as const)
+      .map((role) => s.frame.attachments.find((a) => a.role === role))
+      .filter(Boolean)
+      .map((a) => ({ image: a!.image, note: (a!.note ?? '').trim(),
+                     role: a!.person ? 'person' : 'object' })),
     width,
     height,
     num_images: s.img.n,

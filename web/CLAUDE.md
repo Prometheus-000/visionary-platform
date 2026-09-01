@@ -299,11 +299,13 @@ and two domains, and the page follows the domains.
   Changing one thing about a picture that already exists cannot be the start of
   something new, so there is nothing left to infer and the seed simply holds.
 
-  There is no such surface yet. Inpainting is sketched under Phase 6 and the
-  krea2edit compose exists for scene and outfit plates, but neither is somebody
-  sitting in front of a render changing one thing about it. **Until that exists,
-  a pin has no honest trigger** — which is why this is deleted rather than left
-  behind a flag.
+  That surface exists now, and the pin came back exactly as scoped. "Edit this
+  image" — the gallery card's menu, and the pencil on a canvas still — makes
+  the picture the scene the next render composes into, and the gallery path
+  types the source run's seed into the box: visible, clearable, and honest,
+  because changing one thing about a picture that already exists cannot be the
+  start of something new. Nothing else pins; the ungated version stays the trap
+  it always was.
 
   **And a pin is never cleared when the size or the model changes.** Considered
   and rejected, and recorded because it looks like a bug for as long as it is
@@ -692,6 +694,33 @@ and two domains, and the page follows the domains.
   keyframe to ignore. It said it unconditionally, which made the page's one
   mention of keyframes a warning about something you did not have, pointing at
   a control this layout had already made unfindable.
+
+- **A plate needs an identity, and a box is only one way to hold one.** The
+  edit path arms boxes carrying a LoRA or a photo, and for a long time the page
+  translated that into "a plate needs a region" — which taxed the commonest
+  render, one character with no boxes, with a full-frame rectangle that added
+  no information. The backend now conjures that rectangle itself: no boxes plus
+  a LoRA chip becomes a derived full-canvas region built from the first chip
+  (recorded `derived: true` in the sidecar, skipped by Reuse — the chip comes
+  back as a chip, not as a box nobody drew). The note under the prompt speaks
+  only when *neither* a box nor a chip exists, and names both fixes.
+
+  Around the same contract, four smaller surfaces, all on things that already
+  exist rather than new rows: the free plates carry a `.tsheet` pill flipping
+  object ↔ person (the node's own two free roles — an object gets held, a
+  person gets "face unchanged", and a person's note is optional because the
+  node writes that clause itself); an `Edit` number appears beside the plates
+  while one is attached (V12's `edit_lora_strength`, the node's 0.7 default —
+  lower keeps the attached photo, higher follows the instruction and past ~1
+  buys mottled texture); a box whose likeness is its LoRA alone grows an
+  `Anchor` toggle while a plate is attached (V9's per-row portrait flag —
+  stronger likeness through the compose, priced in its title at an extra
+  render and the sequential path); and "Edit this image" on a card or a still
+  attaches that picture as the scene, carries the run's chips, clears the
+  prompt for the instruction, and pins the seed (see the seed note above).
+  The compose's internal seed follows the main seed now, so a pinned seed
+  pins the staging too — the node's fixed default staged every multi-subject
+  compose identically however the seed rolled.
 
 - **A box takes a photograph as well as a LoRA.** `regions_json.ref_image` is a
   latent mold: it pulls that rectangle toward that face during sampling, stacks

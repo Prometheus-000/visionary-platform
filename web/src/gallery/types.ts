@@ -58,12 +58,25 @@ export type GalleryItem = {
             text_encoder?: number | null }[]
   /** As `_validate_regions` writes them *back*: `lora`/`strength` rather than the
    *  `loras` stack the page sends, and the box as a four-tuple. Reuse reads this shape,
-   *  not the one it posted. */
-  regions?: { prompt?: string; lora?: string; strength?: number; box?: number[] }[]
+   *  not the one it posted. `anchor` and `derived` appear only when true — a derived
+   *  row is one the backend conjured (the run's first chip on a full canvas), which is
+   *  why Reuse skips it: the chip comes back in `loras`, and restoring the row too
+   *  would draw a box nobody drew. */
+  regions?: { prompt?: string; lora?: string; strength?: number; box?: number[]
+              anchor?: boolean; derived?: boolean }[]
   references?: number
   ref_videos?: number
   ref_roles?: string[]
   region_weight?: number
+  /** Which plates a krea2edit run composed around — slot names and object notes,
+   *  never the photos. Absent on every other run and on records from before the
+   *  field existed. */
+  plates?: string[]
+  /** The edit layer's weight and the compose pass's seed, recorded only when a
+   *  compose ran. `compose_seed` is the effective value — it follows the main
+   *  seed unless overridden, and "followed" is not reconstructible later. */
+  edit_strength?: number
+  compose_seed?: number
 }
 
 export type Filter = 'all' | 'image' | 'video'

@@ -45,6 +45,11 @@ export function MetaSheet({ item, onClose }: { item: GalleryItem; onClose: () =>
       + (l.expert && l.expert !== 'both' ? ` (${l.expert} noise)` : '')
       + (l.applied === false ? ' (not applied)' : '')).join(', ')],
     ['Regions', (item.regions ?? []).map((r) => r.prompt).filter(Boolean).join(' | ')],
+    // Slot names and object notes, never the photos — what a krea2edit run
+    // composed around, plus the two numbers it ran at. Absent on every other
+    // run, so the rows only exist when there is something to say.
+    ['Plates', (item.plates ?? []).join(', ')],
+    ['Edit strength', item.edit_strength],
     // The pills by name, so a run is readable without decompiling its document — and
     // readable a year later, when the labels may have moved but `camera.pushin` still
     // says what was picked.

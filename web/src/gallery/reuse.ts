@@ -89,7 +89,10 @@ export function reuse(it: GalleryItem): void {
     // The plates deliberately do not come back — they were uploaded bytes, not something
     // the sidecar keeps, and the note under the stack will say the run is the one-pass
     // kind until one is dropped again.
-    const saved = it.regions ?? []
+    // Derived rows are skipped: the backend conjured them out of the run's
+    // first chip, that chip is already back in the prompt from `loras`, and a
+    // restored full-canvas box would be a rectangle nobody drew — drawn.
+    const saved = (it.regions ?? []).filter((r) => !r.derived)
     s.setRegions(saved.map((r) => {
       // `r.lora` is the path relative to loras/, which is what `resolveLora` matches
       // first — reducing it to a stem here would break exactly the ambiguous names the
@@ -99,6 +102,7 @@ export function reuse(it: GalleryItem): void {
       return newRegion({
         prompt: r.prompt ?? '',
         lora: hit ? { ...chipFrom(hit, true), strength: r.strength ?? 1.3 } : null,
+        anchor: !!r.anchor,
         // The sidecar records whether a box had a photo, never the photo — it was
         // uploaded bytes staged into a container that is long gone.
         attachments: [],
@@ -110,6 +114,10 @@ export function reuse(it: GalleryItem): void {
     }))
     s.select(saved.length ? 0 : -1)
     if (it.region_weight != null) s.setRegionWeight(String(it.region_weight))
+    // Only when the run recorded one — same rule as region_weight. The plates
+    // themselves do not come back (uploaded bytes, see below), but the number
+    // they ran at should be waiting when one is dropped again.
+    if (it.edit_strength != null) s.setEditStrength(String(it.edit_strength))
     // Reuse restores boxes onto an empty canvas, so they are meant to be seen and
     // adjusted — that is the geometry surface, not a render to keep clean.
     s.setEdit('geometry')

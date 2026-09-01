@@ -148,6 +148,21 @@ def _variants() -> list[tuple[str, dict]]:
             **krea, loras=[], regions=boxes, scene="s.png",
             objects=[{"image": "obj1.png", "note": "a motorcycle she leans against"},
                      {"image": "obj2.png", "note": "a paper lantern overhead"}])),
+        # The conjured shape: a plate over zero drawn boxes rides a derived
+        # full-canvas row the job manufactures from the run's first LoRA chip.
+        # Beside it, the rest of the new edit surface in one graph — a
+        # person-role plate (noteless on purpose: the node writes its own
+        # clause), a row anchored through V9's per-row portrait flag, and the
+        # two exposed numbers. One variant because they share every node name;
+        # what goes stale here is an input key, not a class_type.
+        ("krea2 krea2edit conjured + person + anchor", _krea2_graph(
+            **krea, loras=[], scene="s.png",
+            regions=[{"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+                      "prompt": "", "lora": "a.safetensors", "strength": 1.0,
+                      "derived": True},
+                     {**boxes[1], "anchor": True}],
+            objects=[{"image": "p1.png", "note": "", "role": "person"}],
+            edit_strength=0.5, compose_seed=7)),
         ("krea2 style reference", _krea2_graph(
             **krea, loras=[], regions=[], style_refs=["style.jpg"],
             style_strength=0.8)),

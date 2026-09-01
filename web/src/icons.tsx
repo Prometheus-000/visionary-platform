@@ -139,6 +139,12 @@ export function IconFilm() {
   )
 }
 
+export function IconEdit() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 5.7l3.8 3.8L8.6 19.2l-4.4.6.6-4.4z"/><path d="M16.7 3.5a1.9 1.9 0 0 1 2.7 0l1.1 1.1a1.9 1.9 0 0 1 0 2.7l-1.2 1.2-3.8-3.8z"/></svg>
+  )
+}
+
 export function IconScene() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M3.5 15.5l4.6-4a1.8 1.8 0 0 1 2.4 0l5.4 4.7"/><path d="M14.6 13.2l1.6-1.4a1.8 1.8 0 0 1 2.4 0l1.9 1.7"/><circle cx="8.4" cy="9.6" r="1.3" fill="currentColor" stroke="none"/></svg>

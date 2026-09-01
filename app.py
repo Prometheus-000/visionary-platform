@@ -3269,6 +3269,12 @@ def _caption_shape(processor: Any, instruction: str, repo: str,
     )
 
 
+# How long a caption run goes between commits. Small enough that the page's
+# mid-run tile refresh shows real progress, large enough that the commit's
+# pause is noise against the per-image inference it interrupts.
+CAPTION_COMMIT_S = 20
+
+
 def _caption_images(
     image_dir: Path, trigger_word: str, job_id: str,
     preset: str, length: str, write_mode: str, model_key: str,
@@ -3325,6 +3331,7 @@ def _caption_images(
         print(f"[caption] hf cache commit skipped: {exc}")
 
     written = refused = 0
+    last_commit = time.time()
     for i, img_path in enumerate(todo, 1):
         if _stop_requested(job_id):
             print("[caption] stop requested")
@@ -3399,6 +3406,14 @@ def _caption_images(
 
         _publish(job_id, phase="caption", step=i, total_steps=len(todo),
                  percent=round(i / len(todo) * 100))
+        # Committed as it goes, not only at the end: the page refreshes tiles
+        # mid-run, and against an end-only commit that refresh could never
+        # show a thing — "captions land visibly" was a fiction for the whole
+        # run. Time-based, so the cost tracks the clock (about a second of
+        # idle every twenty), not the size of the set.
+        if time.time() - last_commit >= CAPTION_COMMIT_S:
+            volume.commit()
+            last_commit = time.time()
 
     del model
     torch.cuda.empty_cache()
@@ -4993,15 +5008,104 @@ def _dataset_videos(d: Path) -> list[Path]:
     return sorted(p for p in d.iterdir() if p.suffix.lower() in VIDEO_EXTS) if d.is_dir() else []
 
 
-def _caption_of(img: Path) -> str:
+def _caption_of(img: Path, overlay: dict[str, str] | None = None) -> str:
     txt = img.with_suffix(".txt")
+    if overlay is not None and txt.name in overlay:
+        return overlay[txt.name].strip()
     try:
         return txt.read_text().strip() if txt.is_file() else ""
     except OSError:
         return ""
 
 
-def _dataset_stats(d: Path) -> dict[str, Any]:
+# ── caption sidecars are read through a committed-state overlay ────────────
+#
+# The `.txt` sidecars are the one thing under datasets/ with a second writer:
+# `caption_job` runs in its own container and commits, and this container's
+# mount only catches up when a reload succeeds. During use it rarely does — a
+# reload is refused while any request holds a file open, and the burst that
+# opens a set (thumbs, headers, sidecars) holds descriptors for most of the
+# window — and every dataset route ignored `_reload_volume()`'s False. The
+# stale view was then served with a straight face: find & replace substituted
+# in the mount's old text and committed it back over a caption run's output,
+# and a refetch repainted captions that had already been replaced. The live
+# web container's log holds the receipt: "reload skipped … path datasets is
+# open".
+#
+# So the sidecars are read the way the gallery is read: committed state, by
+# RPC, which no descriptor can refuse. One listdir per set answers every
+# sidecar's committed (mtime, size) in a single round trip, and bytes are
+# fetched only for files whose committed copy is ahead of the mount's — this
+# container's own writes are always at least that new, so a set nobody else
+# has touched costs the listdir and nothing more. The mount stays what it is
+# everywhere else here: the write target.
+_OVERLAY_CACHE: dict[str, tuple[int, int, str]] = {}
+_OVERLAY_CACHE_MAX = 4096
+
+
+def _committed_sidecars(d: Path) -> dict[str, tuple[int, int]]:
+    """{sidecar name: (mtime, size)} in committed state, one RPC. Empty on
+    any failure — the overlay then falls back to the mount, which is the view
+    we were serving anyway."""
+    try:
+        rel = d.relative_to(WORKSPACE)
+    except ValueError:
+        return {}
+    out: dict[str, tuple[int, int]] = {}
+    try:
+        for e in volume.listdir(f"/{rel}", recursive=False):
+            if e.type != modal.volume.FileEntryType.FILE:
+                continue
+            name = e.path.rsplit("/", 1)[-1]
+            if name.endswith(".txt"):
+                out[name] = (int(e.mtime), int(e.size))
+    except modal.exception.NotFoundError:
+        pass  # nothing committed under this set yet — a brand-new draft
+    except Exception as exc:  # noqa: BLE001 — any RPC failure falls back
+        print(f"[overlay] listdir {rel} failed ({type(exc).__name__}: {exc})"
+              f" — captions read off the mount, which may be stale", flush=True)
+    return out
+
+
+def _caption_overlay(d: Path,
+                     committed: dict[str, tuple[int, int]] | None = None,
+                     ) -> dict[str, str]:
+    """{sidecar name: committed text} for every sidecar whose committed copy
+    is ahead of this mount's. Raw text, not stripped — replace needs the
+    bytes as written."""
+    if committed is None:
+        committed = _committed_sidecars(d)
+    rel_dir = d.relative_to(WORKSPACE)
+    out: dict[str, str] = {}
+    for name, (mt, size) in committed.items():
+        p = d / name
+        try:
+            # Strict: the RPC's mtime is integer seconds, so a write of our
+            # own in the same second keeps the mount's copy — the newer of
+            # the two by construction.
+            if int(p.stat().st_mtime) >= mt:
+                continue
+        except OSError:
+            pass  # not on the mount at all — committed is the only copy
+        rel = f"{rel_dir}/{name}"
+        hit = _OVERLAY_CACHE.get(rel)
+        if hit and hit[0] == mt and hit[1] == size:
+            out[name] = hit[2]
+            continue
+        raw = _volume_bytes(rel)
+        if raw is None:
+            continue
+        text = raw.decode("utf-8", "replace")
+        if len(_OVERLAY_CACHE) >= _OVERLAY_CACHE_MAX:
+            _OVERLAY_CACHE.clear()  # blunt, and sized to never fire in practice
+        _OVERLAY_CACHE[rel] = (mt, size, text)
+        out[name] = text
+    return out
+
+
+def _dataset_stats(d: Path,
+                   committed: dict[str, tuple[int, int]] | None = None,
+                   ) -> dict[str, Any]:
     """
     One scandir pass, and no caption file is ever opened.
 
@@ -5046,6 +5150,12 @@ def _dataset_stats(d: Path) -> dict[str, Any]:
                     continue  # a file swept mid-listing costs the file, not the set
     except OSError:
         pass
+    # A sidecar the caption container committed that this mount has not
+    # caught up to still counts: the rail's count is the first place a
+    # finished run shows, and it read 0-of-80 until a reload happened to
+    # succeed.
+    if committed:
+        sidecars.update(n[:-4] for n, (_, size) in committed.items() if size)
     images.sort()
     # The sidecar replaces the media suffix (`photo.jpg` → `photo.txt`), so
     # membership is by the same stem `with_suffix` produces.
@@ -5117,7 +5227,8 @@ def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any
     than a recomputed one.
     """
     images = _dataset_images(d)
-    captions = [(p.name, _caption_of(p)) for p in images]
+    overlay = _caption_overlay(d)
+    captions = [(p.name, _caption_of(p, overlay)) for p in images]
     non_empty = [(n, c) for n, c in captions if c]
 
     trigger = (trigger or "").strip()
@@ -6678,6 +6789,18 @@ def _validate_regions(raw: Any) -> list[dict[str, Any]]:
             "lora": lora[0]["name"] if lora else "None",
             "strength": lora[0]["unet"] if lora else 1.0,
             "ref": ref or "",
+            # V9's per-row portrait toggle: render this region's LoRA into a
+            # portrait and feed it back as a live reference frame during the
+            # compose. Costs an extra render plus a model reload and forces
+            # the sequential path — the node's own docstring prices it at
+            # roughly 3x — which is why it is per-region and opt-in rather
+            # than the global auto_portrait switch.
+            "anchor": bool(entry.get("anchor")),
+            # Marks a row the backend conjured rather than the user drew —
+            # see the conjuring note in ImageGenerator.generate. Carried
+            # through validation because this function runs twice on the
+            # same rows and dropping it on the second pass would un-mark it.
+            "derived": bool(entry.get("derived")),
         })
     return out
 
@@ -6695,6 +6818,13 @@ def _validate_objects(raw: Any) -> list[dict[str, Any]]:
     that looks attached is worse than a refusal, so the refusal happens here,
     in milliseconds, with the fix in the sentence.
 
+    A plate is an object or a person — two of the node's five reference
+    roles, and the two whose clauses have been read in its source rather than
+    guessed. A person plate is a photograph standing in for somebody with no
+    LoRA: the node writes "the person from the Nth reference, face unchanged"
+    itself, which is why the note is optional there and required for objects —
+    an unnamed object does nothing, an unnamed person already has a clause.
+
     Same stdlib-importable shape as `_validate_regions`, for the same reason:
     a malformed object should be a form error, not a dead job on a warm H100.
     """
@@ -6710,14 +6840,23 @@ def _validate_objects(raw: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict) or not isinstance(entry.get("image"), str) \
                 or not entry.get("image"):
             raise ValueError(f"Object {i + 1} is missing its photograph.")
+        role = str(entry.get("role") or "object").strip().lower()
+        if role not in ("object", "person"):
+            # "scene" and "style" are real roles upstream but arrive here by
+            # other doors — the scene tile and the style engine — and letting
+            # them in as objects would be a second way to do the first thing.
+            raise ValueError(
+                f"Object {i + 1} has role {role!r}; a free plate is "
+                "\"object\" or \"person\"."
+            )
         note = str(entry.get("note") or "").strip()
-        if not note:
+        if not note and role == "object":
             raise ValueError(
                 f"Object {i + 1} needs a sentence saying what it is — "
                 "\"a motorcycle she leans against\". A reference the prompt "
                 "never mentions does nothing."
             )
-        out.append({"image": entry["image"], "note": note})
+        out.append({"image": entry["image"], "note": note, "role": role})
     return out
 
 
@@ -6844,6 +6983,12 @@ def _compose_caption(prompt: str, regions: list[dict[str, Any]]) -> str:
                         or bool(region.get("ref_image")))
         if not described and not has_identity:
             continue
+        # A conjured full-canvas row exists to arm the edit path, not to place
+        # anybody — "here" is the whole frame, so a placement clause for it
+        # says nothing and its "one single person only" would be wrong the
+        # moment the picture being edited holds two people.
+        if region.get("derived") and not described:
+            continue
         # A box with an identity and no direction is still someone standing
         # there; the LoRA or the photo says who, so the words only have to say
         # that a single person is present.
@@ -6932,6 +7077,8 @@ def _krea2_graph(
     style_refs: list[str] | None = None,
     style_strength: float = 1.0,
     region_weight: float = 1.0,
+    edit_strength: float = 0.7,
+    compose_seed: int | None = None,
 ) -> dict[str, Any]:
     """
     Build ComfyUI's API-format graph for one Krea 2 render.
@@ -7086,10 +7233,15 @@ def _krea2_graph(
         # what `_Comfy.stage()` returns — the caller has already staged each
         # region's photo and written the name back onto the row. Empty is the
         # common case and means "identity comes from the LoRA alone".
+        # `portrait` is V9's per-row anchor: the region's LoRA rendered into a
+        # portrait and fed back as a live reference frame during the compose.
+        # It reads the row, not the global auto_portrait switch — which stays
+        # False below precisely so that one anchored region does not anchor
+        # them all.
         regions_json = json.dumps([
             {"lora": r["lora"], "strength": r["strength"], "enable": True,
              "ref_image": r.get("ref_image", ""), "prompt": r["prompt"],
-             "portrait": False}
+             "portrait": bool(r.get("anchor"))}
             for r in regions
         ])
 
@@ -7134,10 +7286,27 @@ def _krea2_graph(
             # every reference to 1024, which its tooltip says "costs likeness
             # for speed". Both are the declared defaults now, spelled here so
             # the disagreement can never be silent again.
-            "edit_lora_strength": 0.7,
+            #
+            # edit_lora_strength is the page's "Fidelity" number: the node's
+            # 0.0–2.0 range, defaulting to its own 0.7. Low keeps the picture
+            # being edited, high lets the instruction rewrite more of it.
+            "edit_lora_strength": edit_strength,
             "compose_steps": 10,
-            "compose_seed": 0,
+            # The node's tooltip claims 0 reuses the incoming noise seed; its
+            # code does no such thing — `_compose_once` gets seed + 10000 + i,
+            # so 0 is a *fixed* seed and every multi-subject compose staged
+            # identically however the main seed rolled. Following the main
+            # seed makes staging reroll with the run and pin with the pin.
+            "compose_seed": seed if compose_seed is None else compose_seed,
             "ref_max_side": 0,
+            # Declared defaults, written out per the optional-inputs rule
+            # above — these three were missed when that rule landed.
+            # grounding_px is a real dial upstream (lower = stronger scene
+            # edits, higher = stronger identity) and stays at the default
+            # until somebody measures it.
+            "grounding_px": 1024,
+            "portrait_steps": 8,
+            "portrait_seed": 0,
             # What each plate socket *is*, declared positionally: entry 1 is
             # extra_ref_1, entry 2 is extra_ref_2. Always both, whichever
             # sockets are wired, because roles are matched to sockets and the
@@ -7166,11 +7335,14 @@ def _krea2_graph(
                 {"role": "scene"},
                 {"role": "object", "note": "outfit, worn by the subject"},
                 # Sockets 3 and 4 are the free-role plates: the user's own
-                # sentence about what each photograph is. The note is
-                # validated non-empty before this builds, because an
-                # unreferenced frame does close to nothing — the same lesson
-                # the outfit's fixed note above records.
-                *({"role": "object", "note": o["note"]} for o in (objects or [])),
+                # sentence about what each photograph is, under a role the
+                # validator has pinned to "object" or "person". An object
+                # note is validated non-empty before this builds, because an
+                # unreferenced frame does close to nothing; a person plate
+                # may arrive noteless because the node's own clause covers
+                # it — "the person from the Nth reference, face unchanged".
+                *({"role": o.get("role", "object"), "note": o["note"]}
+                  for o in (objects or [])),
             ]),
             # A *force* flag, not the switch. V9 computes
             # `use_edit = bool(extras) or use_krea2edit or force_edit_mode`, so
@@ -7410,16 +7582,43 @@ class ImageGenerator:
             # errors keep naming the thing that was attached.
             plate_slots = [s for s in ("scene", "outfit") if params.get(s)]
             plate_slots += ["object"] * len(objects)
-            for slot in plate_slots:
-                if not regions:
-                    # The plates are inputs to V12 and V12 is only in the
-                    # graph when there are boxes. Silently ignoring one
-                    # would be a dropped reference image with a normal
-                    # picture to show for it.
+            # Validated here rather than at the bottom of this block because
+            # the conjuring below moves one entry out of the chain; still
+            # validated exactly once, which is what the note further down is
+            # protecting. `loras_sent` keeps the user's own stack for the
+            # record — same split as prompt/prompt_typed: the sidecar's
+            # `loras` is what was chosen, the derived region row is where
+            # the first one actually ran.
+            loras = _validate_loras(params.get("loras"))
+            loras_sent = [dict(l) for l in loras]
+            if plate_slots and not regions:
+                # A plate with no boxes used to be a form error ("draw a
+                # box"), which taxed the commonest render — one character,
+                # whole canvas, no boxes drawn — with a gesture that adds no
+                # information: the box would be the full frame. The edit path
+                # still needs an armed region (V12's own assertion), so the
+                # run's first LoRA is moved into a conjured full-canvas row —
+                # the same thing a hand-drawn full-frame box holding that
+                # chip would be. Moved, not copied: the deltas add in one
+                # forward, and a LoRA applied twice is the mottled-texture
+                # failure the edit-strength default exists to avoid. What
+                # the move costs is the chip's text-encoder strength — a
+                # region applies unet-only — which matches what a drawn box
+                # already does with the same LoRA.
+                if not loras:
                     raise ValueError(
-                        f"A {slot} reference needs at least one region — "
-                        "the scene is composed around the boxes."
+                        f"A {plate_slots[0]} reference needs an identity to "
+                        "compose around — put a LoRA on the run, or draw a "
+                        "region holding a LoRA or a photo."
                     )
+                first, loras = loras[0], loras[1:]
+                regions = [{
+                    "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+                    "prompt": "", "lora": first["name"],
+                    "strength": first["unet"], "ref": "",
+                    "anchor": False, "derived": True,
+                }]
+            for slot in plate_slots:
                 if not _armed_regions(regions):
                     # The edit path only arms boxes that hold a LoRA or a
                     # photo (`has_lora(r) or has_ref(r)` in the node), so a
@@ -7466,10 +7665,9 @@ class ImageGenerator:
                     _fit_reference(COMFY / "input" / region["ref_image"],
                                    REGION_REF_MAX_SIDE, "image")
 
-            # Once, and reused by both the graph and the sidecar. Validating
-            # again after the render would re-stat the volume, so a LoRA deleted
-            # during a run could fail the job that already produced the picture.
-            loras = _validate_loras(params.get("loras"))
+            # `loras` was validated once, above the plate gates — again would
+            # re-stat the volume, so a LoRA deleted during a run could fail
+            # the job that already produced the picture.
             shift = float(params.get("shift") or 1.15)
             # A style run's default sampler is the engine's tested route — see
             # STYLE_DEFAULTS. The route resolves this too; here again because
@@ -7489,6 +7687,16 @@ class ImageGenerator:
             region_weight = 1.0 if raw_weight in (None, "") else float(raw_weight)
             raw_style = params.get("style_strength")
             style_strength = 1.0 if raw_style in (None, "") else float(raw_style)
+            # Clamped to the node's declared 0.0–2.0, not rejected — same
+            # treatment as a box dragged off the canvas. 0 is a real state
+            # (the instruction layer off, plates become near no-ops) and
+            # reaches the node intact for the same reason region_weight's
+            # zero does.
+            raw_edit = params.get("edit_strength")
+            edit_strength = (0.7 if raw_edit in (None, "")
+                             else max(0.0, min(2.0, float(raw_edit))))
+            raw_cseed = params.get("compose_seed")
+            compose_seed = None if raw_cseed in (None, "") else int(raw_cseed)
 
             seed = params.get("seed")
             seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "big")
@@ -7518,6 +7726,7 @@ class ImageGenerator:
                 loras=loras, regions=regions, region_weight=region_weight,
                 objects=objects, style_refs=style_refs,
                 style_strength=style_strength,
+                edit_strength=edit_strength, compose_seed=compose_seed,
                 **plates,
             )
 
@@ -7553,8 +7762,12 @@ class ImageGenerator:
         report = {
             "sampler": sampler, "scheduler": scheduler,
             "cfg_scale": cfg, "shift": shift,
+            # `loras_sent`, not the chain that ran: when a row was conjured
+            # the first chip moved into it, and the record keeps what was
+            # *chosen* here — same split as prompt/prompt_typed. The derived
+            # region row below is where it went; Reuse restores the chips.
             "loras": [{"name": l["name"], "unet": l["unet"],
-                       "text_encoder": l["text_encoder"]} for l in loras],
+                       "text_encoder": l["text_encoder"]} for l in loras_sent],
             # Boxes as a 4-list in the order the row's fields read, so `reuse`
             # can put them straight back into x/y/w/h without a schema.
             #
@@ -7563,10 +7776,17 @@ class ImageGenerator:
             # something on that loop is the exact failure the "keep the polled
             # thing small" rule exists for. The staged file is gone with the
             # container anyway, so there is nothing here a caller could reuse.
+            #
+            # `anchor` and `derived` only when true — on every plain row they
+            # would be two fields of noise, and older readers tolerate their
+            # absence the same way they tolerate `ref`'s.
             "regions": [{"box": [r["x"], r["y"], r["width"], r["height"]],
                          "lora": r["lora"], "strength": r["strength"],
                          "prompt": r["prompt"],
-                         "ref": bool(r.get("ref_image"))} for r in regions],
+                         "ref": bool(r.get("ref_image")),
+                         **({"anchor": True} if r.get("anchor") else {}),
+                         **({"derived": True} if r.get("derived") else {})}
+                        for r in regions],
             "region_weight": region_weight,
             # Only when it differs from what was typed. A caption nobody wrote
             # is the one thing about a regional render that cannot be worked
@@ -7589,9 +7809,17 @@ class ImageGenerator:
             # record said the engine and not the reason, so an outfit render
             # was not distinguishable from a scene one; verified missing on job
             # gen2026082413552761e9. Older records lack the field and every
-            # reader must keep tolerating that.
+            # reader must keep tolerating that. A person plate may have no
+            # note, so the role alone is the entry.
             **({"plates": sorted(plates)
-                + [f"object: {o['note']}" for o in objects]}
+                + [f"{o.get('role', 'object')}: {o['note']}" if o["note"]
+                   else o.get("role", "object") for o in objects]}
+               if plates or objects else {}),
+            # The two numbers a compose ran at, recorded only when one ran —
+            # compose_seed is the *effective* value, because "followed the
+            # main seed" is not reconstructible after the fact.
+            **({"edit_strength": edit_strength,
+                "compose_seed": seed if compose_seed is None else compose_seed}
                if plates or objects else {}),
             **info,
         }
@@ -12180,6 +12408,18 @@ def web():
                 shutil.rmtree(raw, ignore_errors=True)
             return JSONResponse({"error": "No images or clips found in the upload."}, 400)
 
+        # Thumbs are built on arrival, not on first view. The upload already
+        # decoded every image once to bake the rotation in, and a set whose
+        # first open fired eighty full-resolution decodes held the sheet
+        # blank for thirty seconds — while holding the mount open, which is
+        # what kept refusing the reloads (see the overlay note). Incremental:
+        # an append stats the existing thumbs and builds only its own.
+        for img in _dataset_images(raw):
+            try:
+                _ensure_thumb(raw, img)
+            except Exception as exc:
+                print(f"[upload] thumb {img.name}: {exc}")
+
         # `.aio()` rather than the blocking call every other route uses: this
         # is the one handler that has to stay `async def`, because it awaits
         # the multipart stream. A blocking commit here stalls the event loop
@@ -12425,11 +12665,12 @@ def web():
         heartbeat already sweeps, fires on page load and then periodically, and
         nobody is watching its latency; housekeeping lives there.
         """
-        _reload_volume()
         DATASETS.mkdir(parents=True, exist_ok=True)
         DRAFTS.mkdir(parents=True, exist_ok=True)
+        # No reload, and stats carry the committed sidecar listing: one RPC
+        # per set replaces a whole-volume reload that was mostly refused.
         out = [
-            _dataset_stats(d)
+            _dataset_stats(d, _committed_sidecars(d))
             for root in (DATASETS, DRAFTS)
             for d in sorted(root.iterdir())
             if d.is_dir() and not d.name.startswith(".")
@@ -12502,10 +12743,13 @@ def web():
         which put a 200-image dataset at ~6.6 MB before a single tile rendered
         and rebuilt every thumbnail on every load.
         """
-        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
+        # No reload: captions come through the committed-state overlay, and
+        # everything else in this folder is this container's own writing.
+        committed = _committed_sidecars(d)
+        overlay = _caption_overlay(d, committed)
 
         from concurrent.futures import ThreadPoolExecutor
 
@@ -12530,7 +12774,7 @@ def web():
                 # bytes the browser fetches anyway — the same trade the gallery
                 # card makes for a clip.
                 return {"name": img.name, "kind": "video",
-                        "caption": _caption_of(img),
+                        "caption": _caption_of(img, overlay),
                         "bytes": st.st_size, "mtime": st.st_mtime}
             # Pixel dimensions alongside filesize: together they are what
             # actually informs a keep/cut call. PIL parses the header only, so
@@ -12551,7 +12795,7 @@ def web():
                 except Exception:
                     pass
             return {"name": img.name, "kind": "image",
-                    "caption": _caption_of(img), "bytes": st.st_size,
+                    "caption": _caption_of(img, overlay), "bytes": st.st_size,
                     "width": w, "height": h, "mtime": st.st_mtime}
 
         # Images first, then clips: a mixed set is browsed by kind far more
@@ -12562,7 +12806,7 @@ def web():
         files = _dataset_images(d) + _dataset_videos(d)
         with ThreadPoolExecutor(max_workers=min(16, max(1, len(files)))) as ex:
             items = [r for r in ex.map(measure, files) if r]
-        return {**_dataset_stats(d), "images": items}
+        return {**_dataset_stats(d, committed), "images": items}
 
     @api.post("/api/datasets/{name}/meta")
     def dataset_meta(name: str, payload: dict) -> dict[str, Any]:
@@ -12586,16 +12830,38 @@ def web():
         volume.commit()
         return {"ok": True}
 
+    def _ensure_thumb(d: Path, img: Path) -> Path:
+        """The cached thumbnail for one image, built if the cache is stale.
+
+        Cached by mtime, so re-editing a caption never re-encodes the image
+        and replacing an image does invalidate it. Deliberately no
+        volume.commit() here — thumbnails are derived data, and committing
+        per thumbnail turned a grid of 700 tiles into 700 volume commits;
+        whoever calls this in bulk owns the one commit.
+        """
+        from PIL import Image
+
+        thumbs = d / THUMB_DIR
+        thumbs.mkdir(exist_ok=True)
+        cached = thumbs / (img.stem + ".jpg")
+        if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
+            with Image.open(img) as im:
+                # Upright before thumbnailing: browsers rotate the original
+                # from EXIF and PIL does not, so without this the tile and
+                # the full-screen view of the same file disagreed by 90°.
+                im = _upright(im).convert("RGB")
+                im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=78, optimize=True)
+                cached.write_bytes(buf.getvalue())
+        return cached
+
     @api.get("/api/thumb/{name}/{filename}")
     def thumb(name: str, filename: str):
-        """
-        One thumbnail, cached beside the dataset, served with a long max-age.
-
-        Cached by mtime, so re-editing a caption never re-encodes the image and
-        replacing an image does invalidate it.
-        """
+        """One thumbnail, cached beside the dataset, served with a long
+        max-age. The cache is usually warm — the upload builds it on arrival
+        — so this is the fallback for sets that predate that."""
         from fastapi.responses import Response
-        from PIL import Image
 
         d, err = _dataset_or_error(name)
         if err:
@@ -12604,25 +12870,8 @@ def web():
         if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
             return JSONResponse({"error": "Image not found."}, status_code=404)
 
-        thumbs = d / THUMB_DIR
-        thumbs.mkdir(exist_ok=True)
-        cached = thumbs / (img.stem + ".jpg")
         try:
-            if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
-                with Image.open(img) as im:
-                    # Upright before thumbnailing: browsers rotate the original
-                    # from EXIF and PIL does not, so without this the tile and
-                    # the full-screen view of the same file disagreed by 90°.
-                    im = _upright(im).convert("RGB")
-                    im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
-                    buf = io.BytesIO()
-                    im.save(buf, "JPEG", quality=78, optimize=True)
-                    cached.write_bytes(buf.getvalue())
-                # Deliberately no volume.commit() here. Thumbnails are derived
-                # data — if a container dies before the write is durable, the
-                # next request regenerates one. Committing per thumbnail turned
-                # a grid of 700 tiles into 700 volume commits.
-            data = cached.read_bytes()
+            data = _ensure_thumb(d, img).read_bytes()
         except Exception as exc:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
@@ -12678,7 +12927,6 @@ def web():
     @api.post("/api/datasets/{name}/caption")
     def save_caption(name: str, payload: dict) -> dict[str, Any]:
         """One caption, saved on blur. Bulk save was how edits went missing."""
-        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -12688,10 +12936,12 @@ def web():
         # a caption box on the tile that silently saved nothing.
         if img.suffix.lower() not in IMAGE_EXTS | VIDEO_EXTS or not img.is_file():
             return {"error": "Image not found."}
-        img.with_suffix(".txt").write_text(
-            str(payload.get("caption") or "").strip()[:MAX_CAPTION_CHARS])
+        saved = str(payload.get("caption") or "").strip()[:MAX_CAPTION_CHARS]
+        img.with_suffix(".txt").write_text(saved)
         volume.commit()
-        return {"ok": True}
+        # Echoed so the page patches its own state from the reply — the
+        # response is the truth, and a refetch is a second chance to be wrong.
+        return {"ok": True, "caption": saved}
 
     @api.post("/api/datasets/{name}/remove")
     def remove_image(name: str, payload: dict) -> dict[str, Any]:
@@ -12744,7 +12994,6 @@ def web():
 
     @api.get("/api/datasets/{name}/insight")
     def dataset_insight(name: str, trigger: str = "") -> dict[str, Any]:
-        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
@@ -12790,15 +13039,15 @@ def web():
         if not trigger:
             return {"error": "A trigger word is required."}
 
-        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
+        overlay = _caption_overlay(d)
 
         changed = 0
         for img in _dataset_images(d):
             txt = img.with_suffix(".txt")
-            cur = txt.read_text().strip() if txt.exists() else ""
+            cur = _caption_of(img, overlay)
             if not cur:
                 new = trigger
             else:
@@ -12988,10 +13237,14 @@ def web():
         replace = str(payload.get("replace") or "")
         match_case = bool(payload.get("match_case"))
 
-        _reload_volume()
         d, err = _dataset_or_error(name)
         if err:
             return err
+        # Read through the overlay, never the bare mount. This is the route
+        # that turned a stale view into committed data: it substituted in old
+        # text and wrote the result back over a caption run's output, which
+        # is why a replace could need three passes and still miss instances.
+        overlay = _caption_overlay(d)
 
         wanted = payload.get("images")
         names = {str(n) for n in wanted} if isinstance(wanted, list) else None
@@ -12999,20 +13252,28 @@ def web():
         # The lambda replacement keeps backslashes in the replacement literal
         # too — re.sub would otherwise read "\1" as a group reference.
         pat = re.compile(re.escape(find), 0 if match_case else re.IGNORECASE)
-        changed = 0
-        for img in _dataset_images(d):
+        changed: dict[str, str] = {}
+        # Clips too: their captions are the same sidecars, and a replace that
+        # skipped them would be the caption box's silent no-op one route over.
+        for img in _dataset_images(d) + _dataset_videos(d):
             if names is not None and img.name not in names:
                 continue
             txt = img.with_suffix(".txt")
-            if not txt.exists():
+            if txt.name in overlay:
+                cur = overlay[txt.name]
+            elif txt.exists():
+                cur = txt.read_text()
+            else:
                 continue
-            cur = txt.read_text()
             new = pat.sub(lambda _m: replace, cur)
             if new != cur:
-                txt.write_text(new.strip()[:MAX_CAPTION_CHARS])
-                changed += 1
+                final = new.strip()[:MAX_CAPTION_CHARS]
+                txt.write_text(final)
+                changed[img.name] = final
         volume.commit()
-        return {"ok": True, "changed": changed}
+        # The new text rides the reply so the page patches its state directly
+        # instead of refetching — see save_caption.
+        return {"ok": True, "changed": len(changed), "captions": changed}
 
     # ---- training sessions ------------------------------------------------
     #
@@ -13314,16 +13575,23 @@ def web():
                              "engines — remove one. Style applies to the "
                              "whole frame."}
 
-        # The plates are inputs to the regional node, so they mean nothing
-        # without boxes. Caught here rather than in the job because the answer
-        # is "draw a box", which is a thing to say while the reference image is
-        # still on screen. Objects are plates too — same sockets, same engine.
+        # A plate still needs an identity to compose around, but a box is only
+        # one way to hold it: with no boxes drawn, the job conjures a
+        # full-canvas region out of the run's first LoRA chip — the commonest
+        # render is one character with no boxes, and demanding a full-frame
+        # box there was a gesture that added no information. Caught here when
+        # neither exists, because the answer names two fixes and both are on
+        # screen. Objects are plates too — same sockets, same engine.
         plated = [slot for slot in ("scene", "outfit") if payload.get(slot)]
         plated += ["object"] * len(objects)
         for slot in plated:
             if not regions:
-                return {"error": f"A {slot} reference needs at least one region — "
-                                 "the scene is composed around the boxes."}
+                if not stack:
+                    return {"error": f"A {slot} reference needs an identity "
+                                     "to compose around — put a LoRA on the "
+                                     "run, or draw a region holding a LoRA "
+                                     "or a photo."}
+                break
             # Same fact the job checks, caught while the plate is on screen:
             # the edit path only arms boxes holding a LoRA or a photo, and a
             # plate over described-only boxes is a dead job after a cold load
@@ -13369,6 +13637,11 @@ def web():
             "objects": objects,
             "style_refs": style_refs,
             "style_strength": num("style_strength", 1.0, float),
+            # None, not a default: the job derives compose_seed from the main
+            # seed when unset, and edit_strength's default lives beside its
+            # clamp so the two cannot drift.
+            "edit_strength": num("edit_strength", None, float),
+            "compose_seed": num("compose_seed", None, int),
             "width": num("width", 1024, int),
             "height": num("height", 1024, int),
             "num_images": max(1, min(4, num("num_images", 1, int))),
@@ -13888,6 +14161,63 @@ def web():
         # to hold it, which is a different problem from a bad id.
         return {"ok": True, "removed": removed,
                 **({"missing": missing} if missing else {})}
+
+    @api.get("/api/outputs/zip")
+    def zip_outputs(ids: str = ""):
+        """
+        One zip of the named results, built from committed state on local
+        disk and streamed from there.
+
+        A GET, because a download has to be a navigable URL — an <a> click is
+        the one gesture every browser turns into a saved file without holding
+        the bytes in page memory, which a fetch-into-blob would and a
+        selection of clips would blow through. ZIP_STORED, because every
+        member is already compressed media and deflating it again is CPU
+        spent making the file marginally larger. Entries are prefixed with
+        the job id: two runs' files are routinely both called 00.png. Built
+        from `_spooled`, so nothing here opens the mount and a slow selection
+        cannot refuse anyone's reload.
+        """
+        from fastapi.responses import FileResponse
+        from starlette.background import BackgroundTask
+
+        job_ids = [j for j in ids.split(",") if j]
+        if not job_ids or len(job_ids) > 500:
+            return JSONResponse({"error": "ids is a comma-separated list of "
+                                          "job ids (at most 500)."},
+                                status_code=400)
+        if any(not NAME_RE.match(j) for j in job_ids):
+            return JSONResponse({"error": "Invalid job_id."}, status_code=400)
+
+        entries = _output_entries()
+        picked = [(j, sorted(n for n, _ in entries.get(j, [])))
+                  for j in dict.fromkeys(job_ids)]
+        if not any(files for _, files in picked):
+            return JSONResponse({"error": "None of those results were "
+                                          "found."}, status_code=404)
+
+        fd, tmp = tempfile.mkstemp(suffix=".zip", prefix="visionary-sel-")
+        os.close(fd)
+        out = Path(tmp)
+        n = 0
+        try:
+            with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
+                for job_id, files_ in picked:
+                    for fname in files_:
+                        src = _spooled(f"outputs/{job_id}/{fname}")
+                        if src is not None:
+                            zf.write(src, f"{job_id}/{fname}")
+                            n += 1
+        except Exception:
+            out.unlink(missing_ok=True)
+            raise
+        return FileResponse(
+            str(out), media_type="application/zip",
+            filename=f"visionary-{n}-files.zip",
+            # Unlinked once the response has streamed. It lives on /tmp, so
+            # the open descriptor refuses nothing while it does.
+            background=BackgroundTask(out.unlink, missing_ok=True),
+        )
 
     # There was a GET /api/outputs/{job_id} here that returned every PNG of a run
     # base64'd into one JSON body. It is gone rather than left unused: /api/file

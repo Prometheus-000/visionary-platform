@@ -21,6 +21,8 @@ import { IconBack, IconCube, IconNodes, IconPanel, IconPhoto, IconStack, IconTra
 const Playground = lazy(() =>
   import('./playground/Playground').then((m) => ({ default: m.Playground })))
 import { fileToB64, toB64 } from './media/files'
+import { NEED_EDIT_LORA } from './lora/note'
+import { loraChips, loraIndex } from './lora/tokens'
 import { live } from './scene/model'
 import { Settings } from './settings/Settings'
 import { warmDatasets } from './datasets/useDatasets'
@@ -393,7 +395,16 @@ export function App() {
    * streamed `<img src>`, so the base64 the video side needs does not exist client-side.
    */
   const handoff = useCallback(
-    async (jobId: string, file: string, as: 'first' | 'reference' | 'refvideo') => {
+    async (jobId: string, file: string,
+           as: 'first' | 'reference' | 'refvideo' | 'edit',
+           loras?: GalleryItem['loras'], seed?: number) => {
+      // Refused before the fetch, with the same sentence the locked tiles
+      // carry — an Edit that attached a scene to a feature one download away
+      // would be a tile showing a photo the run cannot take.
+      if (as === 'edit' && !useStore.getState().state?.edit_lora) {
+        alert(NEED_EDIT_LORA)
+        return
+      }
       const b64 = await fileToB64(fileUrl(jobId, file))
       if (!b64) {
         // A modal, still: this is the whole of what the press was for, so it has
@@ -405,6 +416,39 @@ export function App() {
         return
       }
       const st = useStore.getState()
+      if (as === 'edit') {
+        // The picture becomes the scene the next render composes into — the
+        // same plate the tile takes, reached from the thing being edited.
+        // From the gallery the run's own chips ride along so the compose has
+        // an identity to arm; from the canvas the chips are already in the
+        // strip, so nothing is passed and nothing is stomped. The prompt is
+        // cleared for the instruction — the same licence Reuse already takes
+        // when it overwrites the box from a card — because an edit's sentence
+        // is what should *change*, and the old one is one Reuse away in the
+        // sidecar. (Selecting it instead was tried and lost: the prompt's
+        // caret machinery collapses a programmatic selection.)
+        st.setKind('image')
+        st.attach('frame', 'scene', b64)
+        st.setPrompt('')
+        if (loras) useStore.setState({ loras: loraChips(loraIndex(st.state), loras, false) })
+        // The seed pin, back on the one surface it was ever honest for. The
+        // note under "The seed rolls until you type one" names the condition:
+        // a surface where editing an image is the thing you are doing answers
+        // "iterating, not starting" by construction, so the source run's seed
+        // goes into the box — typed, visible, clearable — and iterations on
+        // the instruction move only what the instruction implies.
+        if (seed != null) st.setImg({ seed: String(seed) })
+        setGalleryOpen(false)
+        setShown(null)
+        // Two frames, not one: the menu that ran this is still mounted when a
+        // single rAF fires, and its unmount in the following commit dropped
+        // focus back to the body — observed driving the stub, where the caret
+        // never reached the prompt. The second frame lands after that commit.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          document.querySelector<HTMLTextAreaElement>('#prompt')?.focus()
+        }))
+        return
+      }
       if (as === 'first') {
         st.setKeyframe('first', b64)
       } else {
@@ -670,7 +714,8 @@ export function App() {
               onMore={more}
               onDropped={drop}
               onMeta={setMeta}
-              onHandoff={(it, as) => void handoff(it.job_id, it.files[0] ?? '', as)}
+              onHandoff={(it, as) => void handoff(it.job_id, it.files[0] ?? '', as, it.loras,
+                                                  it.seed ?? it.seeds?.[0])}
             />
           </div>
         )}
