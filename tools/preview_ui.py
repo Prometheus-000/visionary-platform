@@ -1169,20 +1169,26 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"error": f"No captioner {key!r} — reopen "
                                         "Settings to refresh the list."})
 
-        # Find & replace answers with the count it was scoped to. The captions
-        # themselves are generated per request here, so the honest half is the
-        # count and the reload the page does next.
+        # Find & replace answers the way the real route does now: the new
+        # text rides the reply and the page patches its tiles from it, no
+        # refetch. A stub that returned only the count would preview a
+        # replace that visibly does nothing — the exact fault the real route
+        # just stopped having.
         m = re.match(r"/api/datasets/([^/]+)/replace$", path)
         if m:
             try:
                 p = json.loads(body or b"{}")
             except json.JSONDecodeError:
                 p = {}
-            if not str(p.get("find") or ""):
+            find = str(p.get("find") or "")
+            if not find:
                 return self.reply({"error": "Nothing to find."})
-            asked = p.get("images")
-            n = len(asked) if isinstance(asked, list) else 0
-            return self.reply({"ok": True, "changed": n})
+            repl = str(p.get("replace") or "")
+            asked = p.get("images") if isinstance(p.get("images"), list) else []
+            caps = {str(name): f"a caption where {find!r} became {repl!r}"
+                    for name in asked}
+            return self.reply({"ok": True, "changed": len(caps),
+                               "captions": caps})
 
         # Google Drive. Driven by what is in the url field, because the states
         # worth looking at here are the failures: a link that is not shared and

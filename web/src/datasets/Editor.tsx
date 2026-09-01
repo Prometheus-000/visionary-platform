@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { everyMs, failed } from '../api/client'
 import {
@@ -491,9 +491,18 @@ function Frame({ set, item, onLightbox }: {
  *  rather than adding a line, because a caption is a sentence and the box is one row. */
 function CaptionBox({ image, onSave }: { image: DatasetImage; onSave: (v: string) => void }) {
   const [value, setValue] = useState(image.caption ?? '')
+  const box = useRef<HTMLTextAreaElement>(null)
+  // Synced when fresh text arrives — a run finishing, a replace, a refetch.
+  // `useState` alone seeds once and never again, so the tile kept painting
+  // old text over a fresh listing: the page could be right and still look
+  // stale, which is half of why "did the replace take?" needed a full
+  // reload. The box being typed in is exempt — focus is the claim.
+  useEffect(() => {
+    if (document.activeElement !== box.current) setValue(image.caption ?? '')
+  }, [image.caption])
   const dirty = value !== (image.caption ?? '')
   return (
-    <textarea className={dirty ? 'dirty' : ''} placeholder="No caption" spellCheck={false}
+    <textarea ref={box} className={dirty ? 'dirty' : ''} placeholder="No caption" spellCheck={false}
               value={value}
               onChange={(e) => setValue(e.target.value)}
               onBlur={() => onSave(value.trim())}
@@ -804,7 +813,15 @@ function FindReplace({ ds, visible }: { ds: Ds; visible: DatasetImage[] }) {
     if (failed(r)) return ds.setEditError(r.error)
     const n = Number(r.changed ?? 0)
     setNote(`${n} caption${n === 1 ? '' : 's'} changed.`)
-    await ds.loadTiles(ds.open)
+    // The reply carries the new text, so the tiles are patched from it
+    // directly. The refetch this replaces used to read the same stale mount
+    // the replace had just written through, and repainted the text you had
+    // just replaced — which is what made "did it take?" unanswerable.
+    const caps = (r as { captions?: Record<string, string> }).captions ?? {}
+    ds.setImages(ds.images.map((i) => {
+      const c = caps[i.name]
+      return c === undefined ? i : { ...i, caption: c }
+    }))
     await ds.refreshInsight(ds.open, ds.trigger.trim())
   }
 

@@ -36,10 +36,19 @@ export function Card({
   onMenu,
   busy,
   aspect,
+  selected,
+  onPick,
 }: {
   item: GalleryItem
   onOpen: () => void
   onMenu: (anchor: HTMLElement) => void
+  /** Ringed as part of the grid's selection. */
+  selected?: boolean
+  /** Capture-phase click, so the gallery can claim a modified click for the
+   *  selection before the picture's own open handler sees it. Optional
+   *  because only the full grid selects — a drawer card ⌘-clicked into an
+   *  invisible selection would arm a Delete bar nobody is looking at. */
+  onPick?: (e: React.MouseEvent) => void
   /** The picture's own shape, `w/h`, when the card is being packed by one. Handed
    *  down rather than read from the item here because the two homes that are not
    *  the masonry want the stylesheet's box: the drawer is a single column, and
@@ -78,7 +87,8 @@ export function Card({
   // a fast fetch and passed on a slow one.
 
   return (
-    <div className="gal" data-job={item.job_id} ref={box}
+    <div className={`gal${selected ? ' picked' : ''}`} data-job={item.job_id}
+         ref={box} onClickCapture={onPick}
          aria-busy={busy || undefined} style={pending}>
       {isVideo ? (
         // No cover route for a clip — web_image has no ffmpeg, and the card would

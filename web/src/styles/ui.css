@@ -1125,6 +1125,9 @@ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#bbb}
 .masonry{display:flex;align-items:flex-start}
 .masonry>.mcol{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
 .gal{border:1px solid var(--line);background:var(--wash-1);border-radius:var(--r-panel);overflow:hidden;position:relative}
+/* The selection ring, the osx app's own treatment — inside the edge so packed
+   columns cannot clip it. */
+.gal.picked{outline:2px solid var(--fg);outline-offset:-2px}
 .gal:hover{border-color:var(--line-2)}
 /* 4/3 is the fallback, not the rule. A card whose run is on the volume with no
    sidecar beside it has no recorded size (see `_gallery`, which lists it

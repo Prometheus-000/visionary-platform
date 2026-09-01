@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { failed, type ApiError } from '../api/client'
-import { deleteOutput, fileUrl, gallery, purgeOutputs } from '../api/routes'
+import { deleteOutput, fileUrl, gallery, purgeOutputs, zipOutputsUrl } from '../api/routes'
 import { IconBack, IconExpand, IconRefresh } from '../icons'
 import { ErrorNote } from '../ui/ErrorNote'
 import { Masonry } from '../ui/Masonry'
@@ -274,7 +274,7 @@ export function Gallery({
   onMore: () => void
   onDropped: (jobIds: string[]) => void
   onMeta: (it: GalleryItem) => void
-  onHandoff: (it: GalleryItem, as: 'first' | 'reference' | 'refvideo') => void
+  onHandoff: (it: GalleryItem, as: 'first' | 'reference' | 'refvideo' | 'edit') => void
 }) {
   const [filter, setFilter] = useState<Filter>('all')
   const [viewing, setViewing] = useState<{ rows: GalleryItem[]; i: number } | null>(null)
@@ -286,6 +286,48 @@ export function Gallery({
   // outlives the menu it was started from — the menu closes on the click — so there is no
   // card-shaped thing left to hang the failure on by the time it arrives.
   const [err, setErr] = useState<ApiError | string | null>(null)
+
+  /**
+   * The selection, the osx app's model: ⌘-click starts it, shift-click
+   * ranges from the anchor, and while anything is selected a plain click
+   * toggles. Toggle rather than the app's replace-on-click, deliberately:
+   * this grid has no lasso, so a batch is built click by click, and a plain
+   * click that replaced the selection would cost the whole batch to one
+   * stray press. A plain click at rest keeps opening the viewer — selection
+   * never taxes the common case.
+   */
+  const [sel, setSel] = useState<Set<string>>(() => new Set())
+  const anchor = useRef<string | null>(null)
+  const clearSel = useCallback(() => {
+    setSel(new Set())
+    anchor.current = null
+  }, [])
+  /** A one-line answer to a silent wait: a navigation download reports
+   *  nothing while the server builds the zip, so the page says what the
+   *  quiet is. Cleared on a timer because nothing else can clear it — the
+   *  page is never told when the download starts. */
+  const [zipNote, setZipNote] = useState(false)
+
+  // Pruned against the listing, so a card deleted elsewhere cannot stay
+  // counted in a bar it no longer has a picture under.
+  useEffect(() => {
+    setSel((s) => {
+      if (!s.size) return s
+      const live = new Set(items.map((i) => i.job_id))
+      const kept = new Set([...s].filter((id) => live.has(id)))
+      return kept.size === s.size ? s : kept
+    })
+  }, [items])
+
+  // Esc clears — unless the viewer is up, whose own Esc it must not eat.
+  useEffect(() => {
+    if (!sel.size || viewing) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') clearSel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sel.size, viewing, clearSel])
 
   const shown = useMemo(
     () => (filter === 'all' ? items : items.filter((i) => i.kind === filter)),
@@ -358,12 +400,70 @@ export function Gallery({
     await onReload()
   })
 
+  const pick = (it: GalleryItem, e: React.MouseEvent) => {
+    // The ⋯ menu stays reachable whatever is selected.
+    if ((e.target as HTMLElement).closest('.more')) return
+    if (!sel.size && !e.metaKey && !e.ctrlKey && !e.shiftKey) return
+    e.preventDefault()
+    e.stopPropagation()
+    setSel((s) => {
+      const next = new Set(s)
+      if (e.shiftKey && anchor.current) {
+        // The range runs over the visible order, from the anchor — the osx
+        // model's own arithmetic, one layer up from Python.
+        const order = shown.map((i) => i.job_id)
+        const a = order.indexOf(anchor.current)
+        const b = order.indexOf(it.job_id)
+        if (a >= 0 && b >= 0) {
+          for (let k = Math.min(a, b); k <= Math.max(a, b); k++) {
+            const id = order[k]
+            if (id) next.add(id)
+          }
+          return next
+        }
+      }
+      if (next.has(it.job_id)) next.delete(it.job_id)
+      else next.add(it.job_id)
+      anchor.current = it.job_id
+      return next
+    })
+  }
+
+  const picked = useMemo(() => items.filter((i) => sel.has(i.job_id)), [items, sel])
+
+  const removeSel = () => run('delsel', async () => {
+    const ids = picked.map((i) => i.job_id)
+    const files = picked.reduce((n, i) => n + i.files.length, 0)
+    if (!ids.length) return
+    // The dialog states the blast radius in both units, because the card is
+    // the thing selected and the file is the thing unlinked.
+    if (!confirm(`Permanently delete ${ids.length} result${ids.length === 1 ? '' : 's'}`
+      + ` — ${files} file${files === 1 ? '' : 's'}?\n\n`
+      + 'The files are unlinked from the volume. This cannot be undone.')) return
+    setErr(null)
+    const r = await purgeOutputs({ confirm: 'delete', job_ids: ids })
+    if (failed(r)) return setErr(r)
+    onDropped(ids)
+    clearSel()
+    await onReload()
+  })
+
+  const downloadSel = () => {
+    const a = document.createElement('a')
+    a.href = zipOutputsUrl(picked.map((i) => i.job_id))
+    a.download = ''
+    a.click()
+    setZipNote(true)
+    window.setTimeout(() => setZipNote(false), 8000)
+  }
+
   /** What you can do to one result. Reuse first, because it is the reason the sidecar is
    *  kept at all; Delete last and red, because it unlinks. */
   const menuItems = (it: GalleryItem): MenuItem[] => [
     { label: 'Reuse prompt & settings', run: () => reuse(it) },
     ...(it.kind === 'image'
-      ? [{ label: 'Animate from this frame', run: () => onHandoff(it, 'first' as const) },
+      ? [{ label: 'Edit this image', run: () => onHandoff(it, 'edit' as const) },
+         { label: 'Animate from this frame', run: () => onHandoff(it, 'first' as const) },
          { label: 'Use as reference', run: () => onHandoff(it, 'reference' as const) }]
       : [{ label: 'Use as video reference', run: () => onHandoff(it, 'refvideo' as const) }]),
     { sep: true },
@@ -385,6 +485,8 @@ export function Gallery({
   const card = (it: GalleryItem, all: GalleryItem[], packed: boolean) => (
     <Card key={`${it.job_id}:${it.files[0]}`} item={it}
           busy={busy === `del:${it.job_id}`}
+          selected={open && sel.has(it.job_id)}
+          onPick={open ? (e) => pick(it, e) : undefined}
           aspect={packed ? aspectOf(it) : null}
           onOpen={() => setViewing({ rows: all, i: Math.max(0, all.indexOf(it)) })}
           onMenu={(anchor) => {
@@ -449,14 +551,33 @@ export function Gallery({
               <IconBack />
             </button>
             <span className="grow" />
-            {(['all', 'image', 'video'] as const).map((f) => (
+            {sel.size > 0 && (
+              /* The batch bar replaces the filter row rather than joining
+                 it: two delete buttons with different scopes in one strip is
+                 the confusion the purge dialog exists to prevent. */
+              <>
+                <span className="muted">{sel.size} selected</span>
+                <button className="pill" type="button" onClick={downloadSel}>
+                  Download zip
+                </button>
+                <button className="pill danger" type="button" disabled={!!busy}
+                        onClick={() => void removeSel()}>
+                  {busy === 'delsel' ? 'Deleting…' : `Delete ${sel.size}`}
+                </button>
+                <button className="pill" type="button" title="Clear selection"
+                        onClick={clearSel}>
+                  ✕
+                </button>
+              </>
+            )}
+            {sel.size === 0 && (['all', 'image', 'video'] as const).map((f) => (
               <button key={f} type="button"
                       className={`pill${filter === f ? ' on' : ''}`}
                       onClick={() => setFilter(f)}>
                 {f === 'all' ? 'All' : f === 'image' ? 'Images' : 'Video'}
               </button>
             ))}
-            {/* The one place the listing admits it is behind, and only once it has
+            {sel.size === 0 && <>{/* The one place the listing admits it is behind, and only once it has
                 stopped trying. A tooltip naming a state on a control whose home you are
                 already in is what the icon rule licenses; a banner over the grid is
                 not. */}
@@ -479,7 +600,14 @@ export function Gallery({
                 : `Delete ${shown.length} ${filter === 'all' ? 'result' : filter}`
                   + (shown.length === 1 ? '' : 's')}
             </button>
+            </>}
           </div>
+
+          {zipNote && (
+            <p className="muted" style={{ marginBottom: 10 }}>
+              Zipping — the download starts when the file is built.
+            </p>
+          )}
 
           {/* Above the grid it is about, which is the thing the alert could not do: a modal
               covers the panel to say one sentence, and you have to agree to it before you

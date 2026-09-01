@@ -5067,6 +5067,36 @@ def _committed_sidecars(d: Path) -> dict[str, tuple[int, int]]:
     return out
 
 
+def _committed_sidecar_tree(root: Path) -> dict[str, dict[str, tuple[int, int]]]:
+    """{set name: {sidecar: (mtime, size)}} for every set under one root, in
+    one recursive RPC. The listing used to ask per set, which put one round
+    trip per row on the route the page waits on with a blank screen — 2.4s
+    on a handful of sets, sequentially, for information one call answers."""
+    try:
+        rel = root.relative_to(WORKSPACE)
+    except ValueError:
+        return {}
+    out: dict[str, dict[str, tuple[int, int]]] = {}
+    try:
+        for e in volume.listdir(f"/{rel}", recursive=True):
+            if e.type != modal.volume.FileEntryType.FILE:
+                continue
+            path = e.path.lstrip("/")
+            if path.startswith(f"{rel}/"):
+                path = path[len(f"{rel}/"):]
+            parts = path.split("/")
+            # Exactly set/sidecar.txt — anything deeper is .thumbs and its kin.
+            if len(parts) != 2 or not parts[1].endswith(".txt"):
+                continue
+            out.setdefault(parts[0], {})[parts[1]] = (int(e.mtime), int(e.size))
+    except modal.exception.NotFoundError:
+        pass  # nothing committed under this root yet
+    except Exception as exc:  # noqa: BLE001 — any RPC failure falls back
+        print(f"[overlay] listdir {rel} failed ({type(exc).__name__}: {exc})"
+              f" — set stats read off the mount, which may be stale", flush=True)
+    return out
+
+
 def _caption_overlay(d: Path,
                      committed: dict[str, tuple[int, int]] | None = None,
                      ) -> dict[str, str]:
@@ -6208,6 +6238,10 @@ def _infotext(
         plates = report.get("plates") or []
         if plates:
             add("Plates", ", ".join(plates))
+            # The two numbers a compose ran at. Same tolerance as `plates`:
+            # records from before them simply omit the fields.
+            add("Edit strength", report.get("edit_strength"))
+            add("Compose seed", report.get("compose_seed"))
     # Outside the regions block — style is the whole-frame engine and runs
     # with no boxes at all.
     if report.get("style_refs"):
@@ -12413,12 +12447,20 @@ def web():
         # first open fired eighty full-resolution decodes held the sheet
         # blank for thirty seconds — while holding the mount open, which is
         # what kept refusing the reloads (see the overlay note). Incremental:
-        # an append stats the existing thumbs and builds only its own.
-        for img in _dataset_images(raw):
-            try:
-                _ensure_thumb(raw, img)
-            except Exception as exc:
-                print(f"[upload] thumb {img.name}: {exc}")
+        # an append stats the existing thumbs and builds only its own. Off
+        # the event loop for the same reason the commit below is `.aio()` —
+        # this is the one async handler, and a stretch of PIL decodes inline
+        # would stall every poll the page has out.
+        def _warm_thumbs() -> None:
+            for img in _dataset_images(raw):
+                try:
+                    _ensure_thumb(raw, img)
+                except Exception as exc:
+                    print(f"[upload] thumb {img.name}: {exc}")
+
+        import asyncio
+
+        await asyncio.to_thread(_warm_thumbs)
 
         # `.aio()` rather than the blocking call every other route uses: this
         # is the one handler that has to stay `async def`, because it awaits
@@ -12667,10 +12709,13 @@ def web():
         """
         DATASETS.mkdir(parents=True, exist_ok=True)
         DRAFTS.mkdir(parents=True, exist_ok=True)
-        # No reload, and stats carry the committed sidecar listing: one RPC
-        # per set replaces a whole-volume reload that was mostly refused.
+        # No reload, and stats carry the committed sidecar listing — two
+        # recursive RPCs for the whole library, never one per set: the
+        # per-set version ran them sequentially and put 2.4s on the route
+        # the page waits on with a blank screen.
+        trees = {root: _committed_sidecar_tree(root) for root in (DATASETS, DRAFTS)}
         out = [
-            _dataset_stats(d, _committed_sidecars(d))
+            _dataset_stats(d, trees[root].get(d.name))
             for root in (DATASETS, DRAFTS)
             for d in sorted(root.iterdir())
             if d.is_dir() and not d.name.startswith(".")

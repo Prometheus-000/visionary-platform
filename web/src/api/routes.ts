@@ -297,6 +297,10 @@ export const deleteOutput = (jobId: string, body?: unknown) =>
   post<Record<string, unknown>>(`/api/outputs/${seg(jobId)}/delete`, body)
 export const purgeOutputs = (body?: unknown) =>
   post<Record<string, unknown>>('/api/outputs/purge', body)
+/** A navigable URL, not a fetch — the browser streams the zip to disk, so a
+ *  selection of clips never sits in page memory. */
+export const zipOutputsUrl = (ids: string[]) =>
+  `/api/outputs/zip?ids=${ids.map(seg).join(',')}`
 
 /* ---- playground ------------------------------------------------------- */
 
