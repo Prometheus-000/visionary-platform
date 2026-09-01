@@ -19,6 +19,10 @@ because a veto that is not in context when someone adds a panel is not a veto.
    LoRA — done. One backend, one image, two GPU classes.
    - A box per character, each LoRA masked to its own rectangle
    - Scene and outfit transfer, when the identity-edit LoRA is downloaded
+   - Editing an existing image: "Edit this image" makes a render the scene
+     the next one composes into, boxes optional (a LoRA chip arms the
+     compose through a conjured full-canvas region), person plates, a
+     fidelity number, and a per-box likeness anchor
 5. Video LoRA training — **not started, and the trainer is not musubi.** H3
    trains under AI Toolkit; see below.
 6. **The Dynamic Canvas** — next, and sketched rather than specified below
