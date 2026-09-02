@@ -143,16 +143,24 @@ export function useCatalogue(): {
   const [tick, setTick] = useState(0)
   useEffect(() => {
     let dead = false
+    let timer: number | undefined
     void (async () => {
       const r = await playgroundNodes()
       if (dead) return
       if (failed(r)) { setError(r.error); return }
-      if ((r as { missing?: boolean }).missing) { setMissing(true); return }
+      const body = r as { missing?: boolean; harvesting?: string }
+      if (body.missing) {
+        setMissing(true)
+        // A missing catalogue is already being harvested — the route starts
+        // it — so come back for it rather than leaving the room to press.
+        if (body.harvesting) timer = window.setTimeout(() => setTick((t) => t + 1), 5000)
+        return
+      }
       setMissing(false)
       setError(null)
       setCat(r as NodeCatalogue)
     })()
-    return () => { dead = true }
+    return () => { dead = true; window.clearTimeout(timer) }
   }, [tick])
   return { cat, missing, error, reload: () => setTick((t) => t + 1) }
 }

@@ -157,6 +157,6 @@ DUPES = {
     "_upright", "_dataset_images", "_caption_of",
     "_dhash", "_phash", "_sharpness", "_crop_variants",
     "_embedder", "_embed", "_emb_vec",
-    "_fingerprint", "_fingerprints", "_link", "_components",
+    "_fingerprint", "_fingerprints", "_set_cache", "_link", "_components",
     "_keep_rank", "_keep_reason", "_duplicate_groups",
 }

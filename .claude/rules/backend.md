@@ -286,21 +286,26 @@ that reaches the volume. The consequence to design for: anything that rents a
 container — captioning, dedupe, insight, training — reads a *saved* set,
 because a draft on this container's disk is invisible to every other one.
 
-**Known violations, awaiting the layout pass** (each is a workaround, none is
-a record): `outputs/<job>/visionary.json` sidecars; `outputs/<job>/.thumbs/`;
-`drafts/.sessions` heartbeat markers; `work/` scratch; `.node_catalogue.json`;
-`drafts/` itself; and the job folders, which exist only to keep a batch beside
-its sidecar. The pass that retires them: the record into each file, covers
-written once by whatever wrote the file, one flat `outputs/`, heartbeats in
-the sessions Dict, drafts on container disk. The one honest second file that
-survives is a clip's motion-context tensor, which is bytes rather than a
-record, named after the clip it belongs to.
+**What the pass retired (2026-09-02), so nobody re-derives the list:** the
+`visionary.json` sidecar (the record is a PNG `tEXt` chunk or an MP4
+metadata key now, `_output_record` and `_read_record`); the job folders
+(`outputs/` is flat, `{job}_{NN}.png`, `{job}.mp4`, and the run is read off
+the name by `_group_of`); `.thumbs/` under runs and under sets (covers and
+thumbnails are built by whoever has the pixels and kept in the spool);
+`drafts/.sessions` (a timestamp in the sessions Dict); `drafts/` itself
+(container disk); `work/` (each container's own scratch); and
+`.node_catalogue.json` (the harvest's *return value*, read once by call id
+and kept in the spool). A one-time job moves legacy job folders into place,
+started on first sight from the listing; legacy volume drafts are adopted
+into `datasets/` rather than lost, once, with a log line. The one honest
+second file that survives is a clip's motion-context tensor, `{job}.context.
+safetensors`, which is bytes rather than a record.
 
 ### A storyboard is a folder
 
 `storyboard/<name>/board.json`, with the pictures dropped onto that board
-beside it. A panel's picture is a pointer — `{job_id, file}` into `outputs/`
-for a render, a bare filename for an upload in this folder — never a copy, so
+beside it. A panel's picture is a pointer — `{file, gallery: true}` into the
+flat `outputs/` for a render, `{file}` for an upload in this folder — never a copy, so
 deleting a render leaves the panel's words standing and deleting a board
 touches nothing in the gallery. The folder is the whole import format: copy
 one in and `/api/storyboards` lists it. Uploads are uprighted and capped at
@@ -362,36 +367,35 @@ and ComfyUI validates them against a directory listing, so the resolver was the
 only place on the path where two distinct files became one name.
 
 **The resolver outlived the syntax that needed it.** Nobody types a name any
-more, so nothing goes "untypeable" — but a *sidecar* records what ran as a name
+more, so nothing goes "untypeable" — but the *record* keeps what ran as a name
 rather than a path, so `reuse.ts` still starts from one and still has to land on
 the right file. The failure would just arrive somewhere else now: a reused card
 silently coming back with one fewer LoRA than the run it claims to reproduce.
 
 ### Saving a set is a choice, and it is the only thing `drafts/` means
 
-*(Written when drafts lived on the volume. Under the rule above they move to
-the container's disk; the paragraph below is still right about what a draft
-*means*, and wrong about where it sits until the layout pass lands.)*
+Dropping images makes a **draft**. It filters, captions by hand and reviews
+exactly like a saved set — same folder shape, same sidecars, same code path —
+and the difference is where it sits: **on the web container's disk**, under
+`DRAFTS`, not on the volume. Saving moves the folder into `datasets/` under
+the name you type, which is a copy across filesystems and the one gesture
+that reaches the volume; the page never asks for a name before the images
+are in front of you, because "is this worth keeping" is not a question you
+can answer at drop time.
 
-Dropping images makes a **draft**. It captions, filters and trains exactly like a
-saved set — same folder, same sidecars, same code path — and the only difference
-it has is which parent it sits under. Saving moves the folder into `datasets/`
-under the name you type; the page never asks for one before the images are in
-front of you, because "is this worth keeping" is not a question you can answer at
-drop time. Most sets are dropped once to answer one question, and making each of
-those a permanent named entry taxes the common case to serve the rare one.
+What that costs, and is designed for: anything that rents another container
+reads a *saved* set. The captioner and the trainer refuse a draft with a
+sentence that names Save, because a folder on this container is invisible
+to every other machine. The dedupe scan and the insight run in-process and
+work on a draft as they are.
 
-A draft belongs to the window that made it. The page holds an id in
-`sessionStorage` — surviving a reload, dying with the tab — and heartbeats it to
-`/api/session`; a draft whose session has been quiet for fifteen minutes is
-swept. There is no server-side "app closed" event to use instead: the web
-container scales to zero on Modal's schedule, not yours, so a cold start would
-be a lifecycle signal that means nothing about whether you are still working.
-
-Sweeping and deleting both **unlink**. The sweep is the one deletion nobody asks
-for by name, so the grace period is what protects it: fifteen minutes of silence
-from the session, and the folder's own mtime counted as a heartbeat so an upload
-still writing cannot be swept out from under itself.
+A draft lives as long as the container, twenty minutes past the last request,
+and the drop surface says so. Within that life the window that made it still
+heartbeats `/api/session` — a timestamp in the sessions Dict, never a file —
+and a draft whose window has been quiet for fifteen minutes is swept, the
+folder's own mtime counting as a heartbeat so an upload still writing cannot
+be swept out from under itself. The overlay that reads committed captions
+knows a draft has nothing committed and reads the disk.
 
 ### A duplicate is a copy; a similar image is a photograph
 
@@ -636,8 +640,8 @@ nobody has looked at.
   descriptors most of all, so painting pictures froze the view the next
   picture needed, and a render that had just finished 404'd on the canvas
   while its files sat on the volume. The whole read path is off the mount
-  now: the listing's entry set (`_entries_by_rpc`), the sidecars
-  (`_volume_bytes`), the covers and the files themselves (`_spooled`) all
+  now: the listing's entry set (`_entries_by_rpc`), the records
+  (`_read_record`, off each file's head), the covers and the files themselves (`_spooled`) all
   read the volume's *committed state* by RPC, which both job writers commit
   immediately and which no open descriptor can refuse. A file is pulled once
   onto local disk and served from there — so a clip's range requests land on

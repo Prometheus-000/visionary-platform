@@ -289,6 +289,18 @@ export const getStoryboard = (name: string) =>
   api<{ board: Record<string, unknown> }>(`/api/storyboard/${seg(name)}`)
 export const saveStoryboard = (name: string, board: unknown) =>
   post<{ ok?: boolean; updated?: number }>(`/api/storyboard/${seg(name)}`, { board })
+/** The same save, fired as the page is leaving. `sendBeacon` is the one
+ *  request a browser promises to finish after unload; a fetch started there
+ *  is cancelled with the page. A Blob typed as JSON is what makes the route
+ *  read it as a body. */
+export const beaconStoryboard = (name: string, board: unknown): boolean => {
+  try {
+    const body = new Blob([JSON.stringify({ board })], { type: 'application/json' })
+    return navigator.sendBeacon(`/api/storyboard/${seg(name)}`, body)
+  } catch {
+    return false
+  }
+}
 export const deleteStoryboard = (name: string) =>
   post<{ ok?: boolean }>(`/api/storyboard/${seg(name)}/delete`)
 /** Multipart, like `upload` below: the browser writes the boundary. */

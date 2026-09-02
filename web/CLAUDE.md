@@ -238,7 +238,7 @@ and two domains, and the page follows the domains.
   **Nothing is measured, because the server already knows.** `/api/gallery` and
   `/api/dataset` carry the pixel dimensions of every item, so the layout is
   decided before a byte of picture is fetched and a card with a slow cover does
-  not move the ones around it. The fallback for a result with no sidecar is the
+  not move the ones around it. The fallback for a result with no record is the
   4:3 box it always had, and the fallback is written in both places on purpose:
   a packer and a stylesheet disagreeing about one card is a gap under it.
 
@@ -287,7 +287,7 @@ and two domains, and the page follows the domains.
   with them rather than being ungated by default.
 
   **What made that safe to lose is that the seed is on the render.** It is drawn
-  once, sent to the sampler, written to the sidecar beside the file, shown on the
+  once, sent to the sampler, written into the file's own record, shown on the
   metadata sheet and restored by Reuse. A generation knows its own seed forever;
   what is gone is only the input box filling itself in.
 
@@ -701,7 +701,7 @@ and two domains, and the page follows the domains.
   render, one character with no boxes, with a full-frame rectangle that added
   no information. The backend now conjures that rectangle itself: no boxes plus
   a LoRA chip becomes a derived full-canvas region built from the first chip
-  (recorded `derived: true` in the sidecar, skipped by Reuse — the chip comes
+  (recorded `derived: true` in the record, skipped by Reuse — the chip comes
   back as a chip, not as a box nobody drew). The note under the prompt speaks
   only when *neither* a box nor a chip exists, and names both fixes.
 
@@ -1159,7 +1159,7 @@ metaphor is the **access pattern** only:
 `prompt_compiled` is its own key on `/api/video` rather than a rewrite of
 `prompt`, and this is the case that separates the two halves of a run:
 `prompt_typed` stays the prose somebody wrote and only the receipt is overridden.
-Folded together, the sidecar's intent field would hold a six-field schema and
+Folded together, the record's intent field would hold a six-field schema and
 Reuse would load it into the first shot's row and compile *that* on the next run.
 It is stripped and never `_oneline`d — that function exists because a newline
 inside a *field* ends it early, and this is the document, where one field per
@@ -1266,7 +1266,7 @@ the story gets created. What it settled, in two passes (2026-09-01):
   is a generation-time slice of the sequence, never something the board
   draws.
 - **A panel is intent with a replaceable picture** — prose, a note to
-  yourself, and a *pointer* at a picture: a render's `{job_id, file}` (the
+  yourself, and a *pointer* at a picture: a render's `{file, gallery: true}` (the
   gallery's own address) or a bare filename for one dropped onto the board,
   which lives in the board's folder. Never a copy of a render: unpinning
   deletes nothing, and a deleted render leaves the panel's words standing
@@ -1358,6 +1358,16 @@ the story gets created. What it settled, in two passes (2026-09-01):
   H3 document" in the boards menu compiles the pair or the whole board
   through `/api/compile`, the same compiler as the run, into a sheet of
   quiet prose with a Copy button. No client-side compiler, still.
+- **The wall cannot lose work.** Every edit saves 600 ms later, and three
+  things close the windows that left: a failed save retries on a backoff
+  and says so in the bar ("not saved — trying again") rather than waiting
+  for a keystroke that may not come; a tab leaving mid-edit fires the save
+  as a `sendBeacon`, the one request a browser finishes after unload; and
+  every edit lands in a `localStorage` shadow that a successful save
+  clears, so a board opened with a shadow still standing gets those edits
+  back, says "restored unsaved edits", and saves them at once. The bar is
+  quiet at rest — the word appears only while something is unsaved — which
+  is the never-labelled rule and the antifragile rule agreeing.
 - **The stub's one named failure mode fired again.** `_validate_shot` grew a
   reference to `CAMERA_AMPS` and `_from_app.py`'s named subset did not, so
   the preview server answered every compile with `NameError` from inside

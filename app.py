@@ -156,12 +156,23 @@ LORAS = WORKSPACE / "loras"
 # and caches into, and is disposable.
 DATASETS = WORKSPACE / "datasets"
 # A set you have not kept yet. Identical folder shape to a dataset — images
-# with .txt sidecars — so captioning, the contact sheet and the trainer never
-# learn which root a set came from, and saving one is a move rather than a
+# with .txt sidecars — so the contact sheet and the caption box never learn
+# which root a set came from, and saving one is a move rather than a
 # conversion. The split is the whole meaning of "saved": what is under
 # datasets/ is your library, and nothing else is promised to survive.
-DRAFTS = WORKSPACE / "drafts"
-WORK = WORKSPACE / "work"
+#
+# **On the container's disk, not the volume**, since 2026-09-01: the volume
+# holds weights and what you pressed Save on, and an unsaved set is neither.
+# It lives as long as the web container does — twenty minutes past the last
+# request — and Save is the one gesture that reaches the volume. The cost to
+# design for: anything that rents another container (captioning, dedupe on a
+# GPU, training) reads a *saved* set, because this folder is invisible to
+# every other machine. The owner refused a named exception: *"exceptions have
+# a way of setting precedence … unsaved datasets aren't holy."*
+DRAFTS = Path("/tmp/visionary-drafts")
+# Per-run scratch for the trainer's resized copy and the Drive puller's
+# staging — each on the disk of the container doing the work, disposable.
+WORK = Path("/tmp/visionary-work")
 OUTPUTS = WORKSPACE / "outputs"
 # The Arsenal's first shelf: characters, saved deliberately and recalled by
 # typing their name. A character is a folder of the files that make them —
@@ -202,10 +213,12 @@ STORYBOARD_MAX_SIDE = 1536
 # generators pick the folder up through extra_model_paths.yaml at ComfyUI
 # start, and a fresh pack loads on the next engine restart.
 PLAYGROUND_NODES = WORKSPACE / "playground_nodes"
-# /object_info, harvested by a CPU container and served to the editor. A file
-# on the volume rather than a Dict entry because it is megabytes and a Dict is
-# for things that are polled.
-NODE_CATALOGUE = WORKSPACE / ".node_catalogue.json"
+# /object_info, harvested by a CPU container and served to the editor.
+# Derived, so it lives on the web container's disk and is rebuilt when a
+# cold start finds it missing: the harvest job hands the catalogue back as
+# its *return value* (megabytes, which a Dict polled every 400 ms is not
+# for) and the web container reads that result once and keeps it here.
+NODE_CATALOGUE = Path("/tmp/visionary-spool/node_catalogue.json")
 # On the models volume, beside what it stages for. The download path promises
 # "same filesystem, so this is an instant rename rather than a 26 GB copy" —
 # staging on the data volume would quietly turn that rename into a five-minute
@@ -217,6 +230,14 @@ STAGING = MODELS / ".cache" / "hf-staging"
 # code writes into it any more.
 LEGACY_TRASH_DIR = ".trash"
 THUMB_DIR = ".thumbs"
+
+
+def _set_cache(d: Path) -> Path:
+    """Where a set's derived files live — thumbnails and dedupe fingerprints —
+    on this container's disk, under the spool's LRU. They were `.thumbs/`
+    inside the set on the volume; a cache the writer rebuilds does not belong
+    beside the record it is derived from."""
+    return Path("/tmp/visionary-spool") / "datasets" / d.name
 MUSUBI = Path("/opt/musubi-tuner")
 
 # Both inference paths are Hopper now, for one reason each. Video: SageAttention
@@ -4861,7 +4882,6 @@ class _Comfy:
 # stopped saying it is open is the only honest signal there is. The grace period
 # is long enough that a laptop asleep through a coffee break is still open.
 DRAFT_GRACE_S = 15 * 60
-SESSIONS_DIR = ".sessions"
 
 
 def _check_name(name: str) -> str:
@@ -4888,13 +4908,28 @@ def _name_taken(name: str) -> bool:
     return (DATASETS / name).exists() or (DRAFTS / name).exists()
 
 
+def _window_key(sid: str) -> str:
+    return f"win:{sid}"
+
+
 def _touch_session(sid: str) -> None:
-    """Record that a window is still open. The mtime is the entire payload."""
+    """Record that a window is still open. A timestamp in the sessions Dict
+    is the entire payload — it used to be an empty file's mtime under
+    `drafts/.sessions`, a volume write and a commit per beat per tab, for
+    a fact that is liveness and not a record."""
     if not NAME_RE.match(sid or ""):
         return
-    marker = DRAFTS / SESSIONS_DIR / sid
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("")
+    try:
+        sessions[_window_key(sid)] = time.time()
+    except Exception as exc:  # noqa: BLE001 — a missed beat is a late sweep, not a fault
+        print(f"[session] beat {sid}: {type(exc).__name__}: {exc}", flush=True)
+
+
+def _window_seen(sid: str) -> float:
+    try:
+        return float(sessions.get(_window_key(sid)) or 0.0)
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def _upright(im):
@@ -5048,12 +5083,7 @@ def _sweep_drafts() -> int:
             sid = str(json.loads((d / "dataset.json").read_text()).get("session") or "")
         except (OSError, json.JSONDecodeError):
             pass
-        seen = 0.0
-        if NAME_RE.match(sid or ""):
-            try:
-                seen = (DRAFTS / SESSIONS_DIR / sid).stat().st_mtime
-            except OSError:
-                seen = 0.0
+        seen = _window_seen(sid) if NAME_RE.match(sid or "") else 0.0
         # The folder's own mtime counts as a heartbeat, so a draft created
         # seconds ago by a page whose first ping has not landed — or one made by
         # a caller that never sends a session at all — is not swept out from
@@ -5078,20 +5108,78 @@ def _sweep_drafts() -> int:
 
     # This is the app's periodic housekeeping pass, which makes it the one place
     # a one-time migration can run without waiting for the user to delete
-    # something in each root. Both are no-ops on a volume that never had a
-    # `.trash/`, and on one that did they run once and then cost a stat.
-    _drop_legacy_trash(DRAFTS)
+    # something in each root. Each is a no-op on a volume that never had the
+    # thing, and on one that did it runs once and then costs a stat.
     _drop_legacy_trash(DATASETS)
+    _adopt_legacy_volume_drafts()
+    _drop_legacy_thumbs(DATASETS)
 
-    # Markers outlive the drafts they kept alive; a day is well past the point
-    # where one can still be protecting anything.
-    for marker in (DRAFTS / SESSIONS_DIR).glob("*"):
-        try:
-            if now - marker.stat().st_mtime > 86400:
-                marker.unlink()
-        except OSError:
-            pass
+    # Heartbeats outlive the drafts they kept alive; a day is well past the
+    # point where one can still be protecting anything.
+    try:
+        for key in list(sessions.keys()):
+            if isinstance(key, str) and key.startswith("win:"):
+                if now - float(sessions.get(key) or 0.0) > 86400:
+                    sessions.pop(key, None)
+    except Exception as exc:  # noqa: BLE001 — housekeeping never fails a beat
+        print(f"[sweep] heartbeats: {type(exc).__name__}: {exc}", flush=True)
     return swept
+
+
+_ADOPTED_LEGACY = False
+
+
+def _adopt_legacy_volume_drafts() -> None:
+    """
+    Drafts left on the volume from before drafts moved off it, kept rather
+    than lost.
+
+    A set under the old `drafts/` was never saved, so under the rule it has
+    no claim on the volume — but deleting somebody's eighty images because a
+    rule changed is the wrong side of that rule. Each one is moved into
+    `datasets/` under its own name, once, and the log says so; deleting it
+    is one press in Sets. `.sessions` markers go with the folder. Once per
+    container, and a no-op on a volume that has no `drafts/`.
+    """
+    global _ADOPTED_LEGACY
+    if _ADOPTED_LEGACY:
+        return
+    _ADOPTED_LEGACY = True
+    legacy = WORKSPACE / "drafts"
+    if not legacy.is_dir():
+        return
+    moved = 0
+    for d in sorted(legacy.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        target = DATASETS / d.name
+        if target.exists():
+            target = DATASETS / f"{d.name}-recovered"
+        try:
+            DATASETS.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(d), str(target))
+            _write_dataset_meta(target, session="")
+            moved += 1
+            print(f"[sweep] kept the unsaved set {d.name!r} as {target.name!r}: "
+                  f"drafts live on the container now, and a rule change is "
+                  f"not a reason to lose it", flush=True)
+        except OSError as exc:
+            print(f"[sweep] could not keep {d.name!r}: {exc}", flush=True)
+    shutil.rmtree(legacy, ignore_errors=True)
+    if moved:
+        volume.commit()
+
+
+def _drop_legacy_thumbs(root: Path) -> None:
+    """The `.thumbs/` caches that used to sit inside every set on the volume.
+    Derived, and rebuilt on the container now, so the volume copy is only
+    bytes; swept once per set found holding one."""
+    if not root.is_dir():
+        return
+    for d in root.iterdir():
+        cache = d / THUMB_DIR
+        if d.is_dir() and cache.is_dir():
+            shutil.rmtree(cache, ignore_errors=True)
 
 
 def _dataset_images(d: Path) -> list[Path]:
@@ -5205,8 +5293,12 @@ def _caption_overlay(d: Path,
     bytes as written."""
     if committed is None:
         committed = _committed_sidecars(d)
-    rel_dir = d.relative_to(WORKSPACE)
     out: dict[str, str] = {}
+    # A draft on this container's disk has no committed copy to be behind:
+    # what is on disk is the only copy, written by this container.
+    if not committed:
+        return out
+    rel_dir = d.relative_to(WORKSPACE)
     for name, (mt, size) in committed.items():
         p = d / name
         try:
@@ -5863,7 +5955,7 @@ def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, i
     Only the decodes are on the clock.
     """
     images = _dataset_images(d)
-    cache_path = d / THUMB_DIR / FINGERPRINT_FILE
+    cache_path = _set_cache(d) / FINGERPRINT_FILE
     cached: dict[str, Any] = {}
     if cache_path.is_file():
         try:
@@ -12243,7 +12335,6 @@ def playground_catalogue_job(job_id: str, url: str | None = None,
             proc.terminate()
 
         info = json.loads(raw)
-        NODE_CATALOGUE.write_text(json.dumps(info))
         volume.commit()
         res = {"status": "completed", "job_id": job_id, "files": [],
                "nodes": len(info),
@@ -12257,7 +12348,11 @@ def playground_catalogue_job(job_id: str, url: str | None = None,
             res["note"] = ("Installed. Restart the engine to load it into "
                            "a warm generator.")
         _publish(job_id, **res)
-        return res
+        # The catalogue rides the *return value*, never the record: the
+        # record is polled every 400 ms and this is megabytes. The web
+        # container reads the result once by call id and keeps it on its
+        # own disk.
+        return {**res, "catalogue": info}
     except StopRequested:
         res = {"status": "stopped", "job_id": job_id, "files": [],
                "duration_s": round(time.time() - started, 1)}
@@ -13135,11 +13230,12 @@ def web():
         """
         DATASETS.mkdir(parents=True, exist_ok=True)
         DRAFTS.mkdir(parents=True, exist_ok=True)
-        # No reload, and stats carry the committed sidecar listing — two
-        # recursive RPCs for the whole library, never one per set: the
-        # per-set version ran them sequentially and put 2.4s on the route
-        # the page waits on with a blank screen.
-        trees = {root: _committed_sidecar_tree(root) for root in (DATASETS, DRAFTS)}
+        # No reload, and stats carry the committed sidecar listing — one
+        # recursive RPC for the whole library, never one per set: the per-set
+        # version ran them sequentially and put 2.4s on the route the page
+        # waits on with a blank screen. Drafts are this container's own disk
+        # and have nothing committed to overlay.
+        trees = {DATASETS: _committed_sidecar_tree(DATASETS), DRAFTS: {}}
         out = [
             _dataset_stats(d, trees[root].get(d.name))
             for root in (DATASETS, DRAFTS)
@@ -13147,7 +13243,40 @@ def web():
             if d.is_dir() and not d.name.startswith(".")
         ]
         out.sort(key=lambda r: -r["modified"])
+        _warm_set_thumbs([DATASETS / r["name"] for r in out if r["saved"]])
         return {"datasets": out}
+
+    _WARMED = {"done": False}
+
+    def _warm_set_thumbs(sets: list[Path]) -> None:
+        """
+        Refill a cold container's thumbnails for the library, in the
+        background, most recent set first.
+
+        The upload builds a thumbnail on arrival, so a warm container never
+        pays for one on first view. A container that has just started has
+        none, and the grid would build them one tile at a time as it scrolled
+        — which was the cost that used to justify keeping them on the volume.
+        Once per container, bounded, and off the request thread: the listing
+        returns at once and the grid fills as they land.
+        """
+        if _WARMED["done"]:
+            return
+        _WARMED["done"] = True
+
+        def run() -> None:
+            budget = 600
+            for d in sets:
+                for img in _dataset_images(d):
+                    if budget <= 0:
+                        return
+                    try:
+                        _ensure_thumb(d, img)
+                    except Exception as exc:  # noqa: BLE001 — one bad file
+                        print(f"[thumbs] {d.name}/{img.name}: {exc}", flush=True)
+                    budget -= 1
+
+        threading.Thread(target=run, name="warm-thumbs", daemon=True).start()
 
     @api.post("/api/datasets")
     def create_dataset(payload: dict) -> dict[str, Any]:
@@ -13198,7 +13327,13 @@ def web():
             return {"error": f"A set named {new!r} already exists."}
         DATASETS.mkdir(parents=True, exist_ok=True)
         target = DATASETS / new
+        # Across filesystems now — a draft is on this container's disk and
+        # the library is the volume — so this is a copy and a delete, which
+        # is what "saved" costs. The derived cache follows the name.
         shutil.move(str(d), str(target))
+        if new != name and _set_cache(d).is_dir():
+            shutil.rmtree(_set_cache(target), ignore_errors=True)
+            shutil.move(str(_set_cache(d)), str(_set_cache(target)))
         # Drop the session: a saved set has no window it belongs to, and leaving
         # a stale id on it would be a fact that stops being true.
         _write_dataset_meta(target, session="")
@@ -13230,7 +13365,7 @@ def web():
         # stamp still matches, and read only the headers it has not covered.
         prints: dict[str, Any] = {}
         try:
-            prints = json.loads((d / THUMB_DIR / FINGERPRINT_FILE).read_text())
+            prints = json.loads((_set_cache(d) / FINGERPRINT_FILE).read_text())
         except (OSError, json.JSONDecodeError):
             prints = {}
 
@@ -13297,6 +13432,7 @@ def web():
         if err:
             return err
         shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(_set_cache(d), ignore_errors=True)
         _drop_legacy_trash(d.parent)
         volume.commit()
         return {"ok": True}
@@ -13305,15 +13441,15 @@ def web():
         """The cached thumbnail for one image, built if the cache is stale.
 
         Cached by mtime, so re-editing a caption never re-encodes the image
-        and replacing an image does invalidate it. Deliberately no
-        volume.commit() here — thumbnails are derived data, and committing
-        per thumbnail turned a grid of 700 tiles into 700 volume commits;
-        whoever calls this in bulk owns the one commit.
+        and replacing an image does invalidate it. On the container, never
+        the volume: derived, and the writer that has the pixels rebuilds it —
+        the upload warms it on arrival, and `_warm_set_thumbs` refills a cold
+        container's for the library in the background.
         """
         from PIL import Image
 
-        thumbs = d / THUMB_DIR
-        thumbs.mkdir(exist_ok=True)
+        thumbs = _set_cache(d)
+        thumbs.mkdir(parents=True, exist_ok=True)
         cached = thumbs / (img.stem + ".jpg")
         if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
             with Image.open(img) as im:
@@ -13446,7 +13582,7 @@ def web():
                 continue
             for part in (img, img.with_suffix(".txt")):
                 part.unlink(missing_ok=True)
-            (d / THUMB_DIR / (img.stem + ".jpg")).unlink(missing_ok=True)
+            (_set_cache(d) / (img.stem + ".jpg")).unlink(missing_ok=True)
             removed.append(img.name)
         _drop_legacy_trash(d)
 
@@ -13544,6 +13680,11 @@ def web():
         d, err = _dataset_or_error(name)
         if err:
             return err
+        if d.parent == DRAFTS:
+            # The captioner is another machine, and a draft is on this one.
+            return {"error": f"Save {name!r} first — captioning runs on a GPU "
+                             f"container, and only a saved set is on the volume "
+                             f"it reads."}
         trigger = str(payload.get("trigger_word") or "")
         if trigger:
             _write_dataset_meta(d, trigger_word=trigger)
@@ -13838,6 +13979,10 @@ def web():
             "error": "Pick a set to train on."})
         if err:
             return err
+        if d.parent == DRAFTS:
+            return {"error": f"Save {dataset!r} first — the trainer runs on a "
+                             f"GPU container, and only a saved set is on the "
+                             f"volume it reads."}
         if not _dataset_images(d):
             return {"error": f"{dataset!r} has no images."}
         lora_name = str(rec.get("lora_name") or "").strip()
@@ -14795,7 +14940,7 @@ def web():
         """
         t_route = time.time()
         known = None
-        raw = _volume_bytes(".node_catalogue.json")
+        raw = _node_catalogue_bytes()
         if raw:
             try:
                 known = set(json.loads(raw))
@@ -14855,17 +15000,77 @@ def web():
         decode-and-re-encode here would buy nothing.
         """
         from fastapi.responses import Response
-        raw = _volume_bytes(".node_catalogue.json")
+        raw = _node_catalogue_bytes()
         if raw is None:
-            return Response(json.dumps({"missing": True}),
+            # Nothing on this container and no result to read: harvest, as a
+            # visible job, and say so — the room polls until it lands.
+            return Response(json.dumps({"missing": True,
+                                        "harvesting": _harvest_if_missing()}),
                             media_type="application/json")
         return Response(raw, media_type="application/json")
+
+    def _spawn_catalogue(job_id: str, **kw: Any) -> None:
+        """Spawn a harvest and remember the call, so its return value — the
+        catalogue itself — can be read back by whichever web container is
+        alive when it lands."""
+        _publish(job_id, status="running", percent=0, phase="Queued", files=[])
+        fc = playground_catalogue_job.spawn(job_id=job_id, **kw)
+        try:
+            config["node_catalogue_call"] = {"job_id": job_id, "call_id": fc.object_id}
+        except Exception as exc:  # noqa: BLE001 — a lost id is a re-harvest later
+            print(f"[catalogue] could not record call {fc.object_id}: {exc}", flush=True)
+
+    def _node_catalogue_bytes() -> bytes | None:
+        """
+        The catalogue, off this container's disk — or off the last harvest's
+        return value, read once and kept here. None when neither exists.
+
+        Derived data, so it never touches the volume: a cold container reads
+        the last harvest back by its call id, and only when Modal no longer
+        holds that result does a harvest have to run again.
+        """
+        try:
+            if NODE_CATALOGUE.is_file():
+                return NODE_CATALOGUE.read_bytes()
+        except OSError:
+            pass
+        try:
+            call = config.get("node_catalogue_call") or {}
+            cid = str(call.get("call_id") or "")
+            if not cid:
+                return None
+            res = modal.FunctionCall.from_id(cid).get(timeout=0)
+        except Exception:  # noqa: BLE001 — not done, expired, or gone
+            return None
+        info = (res or {}).get("catalogue") if isinstance(res, dict) else None
+        if not info:
+            return None
+        raw = json.dumps(info).encode()
+        try:
+            NODE_CATALOGUE.parent.mkdir(parents=True, exist_ok=True)
+            NODE_CATALOGUE.write_bytes(raw)
+        except OSError:
+            pass
+        return raw
+
+    def _harvest_if_missing() -> str:
+        """One harvest at a time: the recorded call's job is the lock."""
+        try:
+            call = config.get("node_catalogue_call") or {}
+            cur = jobs.get(str(call.get("job_id") or "")) or {}
+            if cur.get("status") == "running":
+                return str(call["job_id"])
+        except Exception:  # noqa: BLE001
+            pass
+        job_id = f"pgcat{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+        _spawn_catalogue(job_id)
+        return job_id
 
     @api.post("/api/playground/refresh")
     def playground_refresh() -> dict[str, Any]:
         """Re-harvest the catalogue — a visible job, since it boots ComfyUI."""
         job_id = f"pgcat{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        playground_catalogue_job.spawn(job_id=job_id)
+        _spawn_catalogue(job_id)
         return {"ok": True, "job_id": job_id}
 
     @api.get("/api/playground/packs")
@@ -14897,9 +15102,8 @@ def web():
             return {"error": "A pack installs from an https git URL — e.g. "
                              "https://github.com/owner/repo."}
         job_id = f"pack{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        playground_catalogue_job.spawn(
-            job_id=job_id, url=url,
-            ref=str(payload.get("ref") or "").strip() or None)
+        _spawn_catalogue(job_id, url=url,
+                         ref=str(payload.get("ref") or "").strip() or None)
         return {"ok": True, "job_id": job_id}
 
     @api.post("/api/playground/packs/delete")

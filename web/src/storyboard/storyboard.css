@@ -21,6 +21,9 @@
 .sbtitle:hover{background:var(--wash-2)}
 .sbtitle:focus{border-color:var(--line-2);background:var(--wash-2);outline:none}
 .sbcount{color:var(--mut);font-size:12.5px;font-variant-numeric:tabular-nums}
+.sbsave{color:var(--mut);font-size:12px}
+.sbsave.failed{color:var(--warn)}
+.sbsave.restored{color:var(--fg)}
 .sbbar .opt{background:none;border-color:transparent;color:var(--mut)}
 .sbbar .opt:hover{background:var(--wash-3);color:var(--fg)}
 .sbbar .b{height:var(--control-h)}

@@ -30,7 +30,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { failed, type ApiError } from '../api/client'
 import {
-  compile, deleteStoryboard, getStoryboard, listStoryboards, saveStoryboard, uploadStoryboard,
+  beaconStoryboard, compile, deleteStoryboard, getStoryboard, listStoryboards, saveStoryboard,
+  uploadStoryboard,
 } from '../api/routes'
 import { VIDEO_ASPECTS } from '../console/SizeButton'
 import { IconPlus, IconStack } from '../icons'
@@ -45,6 +46,39 @@ import {
 } from './model'
 import { PanelCard } from './Panel'
 import './storyboard.css'
+
+/**
+ * The shadow: the board as last edited, in this browser, until the volume
+ * has it.
+ *
+ * Every edit is saved 600 ms later, and that is still a window a closed tab,
+ * a dropped connection or a refused write can fall into. So every edit also
+ * lands here, and a successful save clears it; a board opened with a shadow
+ * still standing is a board whose last edits never reached the volume, and
+ * they are put back and saved before anything else happens. Session
+ * recovery, not memory — the same lifetime `keep.ts` argues for — and it
+ * is cleared the moment the volume agrees.
+ */
+const SHADOW = 'sb-shadow:'
+const shadowOf = (name: string): Board | null => {
+  try {
+    const raw = localStorage.getItem(SHADOW + name)
+    return raw ? (JSON.parse(raw) as Board) : null
+  } catch {
+    return null
+  }
+}
+const shadow = (b: Board | null, keep: boolean) => {
+  try {
+    if (b && keep) localStorage.setItem(SHADOW + b.name, JSON.stringify(b))
+    else if (b) localStorage.removeItem(SHADOW + b.name)
+  } catch { /* quota or private mode: the volume is still the record */ }
+}
+
+/** Backoff for a save that failed: quick, then patient, never silent. */
+const RETRY_MS = [2000, 5000, 10000, 30000]
+
+type Saving = 'saved' | 'saving' | 'unsaved' | 'failed'
 
 type Drag = {
   id: string
@@ -78,6 +112,8 @@ export function Storyboard({ onOpen, onGallery }: {
   const [over, setOver] = useState<string | null>(null)
   const [doc, setDoc] = useState<string | null>(null)
   const [busy, setBusy] = useState(0)
+  const [saving, setSaving] = useState<Saving>('saved')
+  const [restored, setRestored] = useState(false)
   const wallRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const fileFor = useRef<string | null>(null)
@@ -89,14 +125,31 @@ export function Storyboard({ onOpen, onGallery }: {
   const latest = useRef<Board | null>(null)
   const dirty = useRef(false)
   const timer = useRef<number | undefined>(undefined)
+  const tries = useRef(0)
 
   const flush = useCallback(async () => {
     window.clearTimeout(timer.current)
     const b = latest.current
     if (!dirty.current || !b) return
     dirty.current = false
+    setSaving('saving')
     const r = await saveStoryboard(b.name, b)
-    if (failed(r)) { setErr(r); dirty.current = true; return }
+    if (failed(r)) {
+      // Not lost: still dirty, still shadowed, and tried again on a backoff
+      // — a save that fails once and then waits for the next keystroke is a
+      // save that never happens if the keystroke does not come.
+      dirty.current = true
+      setSaving('failed')
+      setErr(r)
+      const wait = RETRY_MS[Math.min(tries.current++, RETRY_MS.length - 1)]!
+      timer.current = window.setTimeout(() => void flush(), wait)
+      return
+    }
+    tries.current = 0
+    setErr(null)
+    // Only if nothing was typed while the save was in flight: a later edit
+    // has its own timer and its own shadow.
+    if (!dirty.current) { shadow(b, false); setSaving('saved') }
     setRows((rs) => rs?.map((x) => (x.name === b.name
       ? { ...x, title: b.title, panels: b.panels.length, updated: r.updated ?? x.updated,
           cover: b.panels.find((p) => p.picture)?.picture ?? null }
@@ -109,23 +162,55 @@ export function Storyboard({ onOpen, onGallery }: {
       const n = fn(b)
       latest.current = n
       dirty.current = true
+      shadow(n, true)
       return n
     })
+    setSaving('unsaved')
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => void flush(), 600)
   }, [flush])
 
+  // The tab leaving mid-edit: the one save a browser will finish for us is
+  // a beacon, so the dirty board goes out that way, and the shadow stays
+  // until the next open confirms the volume has it.
+  useEffect(() => {
+    const leave = () => {
+      const b = latest.current
+      if (!dirty.current || !b) return
+      if (beaconStoryboard(b.name, b)) dirty.current = false
+    }
+    const hidden = () => { if (document.visibilityState === 'hidden') leave() }
+    window.addEventListener('pagehide', leave)
+    document.addEventListener('visibilitychange', hidden)
+    return () => {
+      window.removeEventListener('pagehide', leave)
+      document.removeEventListener('visibilitychange', hidden)
+    }
+  }, [])
+
   const open = useCallback(async (name: string) => {
     await flush()
+    setRestored(false)
     const r = await getStoryboard(name)
     if (failed(r)) { setErr(r); return }
-    const b = readBoard(r.board, name)
+    let b = readBoard(r.board, name)
+    // A shadow still standing means the last edits never reached the
+    // volume. They come back, and go out again at once.
+    const s = shadowOf(name)
+    const lost = s && JSON.stringify({ ...s, updated: 0 }) !== JSON.stringify({ ...b, updated: 0 })
+    if (s && lost) {
+      b = { ...s, name }
+      setRestored(true)
+    }
     latest.current = b
-    dirty.current = false
+    dirty.current = !!(s && lost)
     setBoard(b)
     setSel([])
     setErr(null)
+    setSaving(dirty.current ? 'unsaved' : 'saved')
     setBoardSlot({ name })
+    if (dirty.current) void flush()
+    else shadow(b, false)
   }, [flush, setBoardSlot])
 
   // The list, then the board that was open last — or the most recent, which
@@ -185,6 +270,8 @@ export function Storyboard({ onOpen, onGallery }: {
                      ...(rs ?? [])])
     latest.current = r
     dirty.current = false
+    setRestored(false)
+    setSaving('saved')
     setBoard(r)
     setSel([])
     setBoardSlot({ name: r.name })
@@ -387,6 +474,23 @@ export function Storyboard({ onOpen, onGallery }: {
           {board ? `${panels.length} panel${panels.length === 1 ? '' : 's'}` : ''}
           {busy ? ' · uploading…' : ''}
         </span>
+        {/* Says what it is doing, and only while it is doing something: at
+            rest the board is saved and the bar is quiet. A failed save says
+            so and that it is trying again, because a wall that silently
+            stopped saving is the one loss this room must never take. */}
+        {board && saving !== 'saved' && (
+          <span className={`sbsave ${saving}`} id="sb-save" role="status">
+            {saving === 'saving' ? 'saving…'
+              : saving === 'failed' ? 'not saved — trying again'
+              : 'unsaved'}
+          </span>
+        )}
+        {restored && (
+          <span className="sbsave restored" role="status"
+                title="Edits this browser kept while the volume did not have them">
+            restored unsaved edits
+          </span>
+        )}
         <span className="grow" />
         {board && label.length > 0 && (
           <button className="b" id="sb-animate" type="button"
