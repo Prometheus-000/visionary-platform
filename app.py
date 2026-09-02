@@ -12047,6 +12047,14 @@ def playground_catalogue_job(job_id: str, url: str | None = None,
 @app.function(
     image=web_image, cpu=1.0, timeout=900, volumes={"/workspace": volume, "/models": models_volume},
     max_containers=1,
+    # Modal's maximum, and the one line that retires a family of bandages.
+    # With no window set the container died about a minute after the last
+    # request, so a cold start was the steady state and the mount was the
+    # only place guaranteed to exist — which is why the read path, the
+    # covers, the drafts and the session markers all ended up on the volume.
+    # Twenty warm minutes cost cents; the spool stays warm across a coffee
+    # and a draft on this disk outlives a glance away. See the Storage rule.
+    scaledown_window=20 * 60,
 )
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app()
