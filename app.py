@@ -4085,9 +4085,14 @@ def _train_params(payload: dict[str, Any]) -> dict[str, Any]:
 # about ancestral samplers rather than stochastic ones: it is an ER-SDE solver,
 # so the noise it adds is scheduled by the solver rather than injected on top of
 # the step, and it holds together at Turbo's step count where `euler_a` does not.
+# `sa_solver` is the same class — a stochastic Adams solver whose noise is
+# scheduled by a tau interval the solver owns — and it is in core at COMFY_SHA,
+# so listing it is the whole install. Unmeasured at Turbo's 8 steps: its
+# predictor is third order, and with that few steps the history it builds on
+# is thin, so treat it as a RAW sampler until a Turbo render says otherwise.
 SAMPLERS = [
     "er_sde", "euler", "res_multistep", "dpmpp_2m", "heun", "ddpm", "lcm",
-    "deis", "ipndm",
+    "deis", "ipndm", "sa_solver",
 ]
 # Krea 2 is flow-matching, so these are the schedules that mean something on a
 # sigma curve that starts at 1. "Automatic" is gone with Forge: it was Forge
@@ -8801,7 +8806,7 @@ VIDEO_MODELS: dict[str, dict[str, Any]] = {
         # picture. A model that cannot make one simply has no 0 here, which is
         # why there is no `supports.still` beside it saying the same thing.
         "lengths": [0, 5, 6, 8, 10, 12, 14],
-        "samplers": ["res_multistep", "euler", "dpmpp_2m"],
+        "samplers": ["res_multistep", "euler", "dpmpp_2m", "sa_solver"],
         "schedulers": ["simple", "normal", "beta"],
         "defaults": {"steps": 20, "sampler": "res_multistep", "scheduler": "simple",
                      "tier": "full", "seconds": 5},

@@ -427,7 +427,7 @@ STATE = {
         {"key": "h3", "label": "MiniMax-H3",
          "note": "Sound and picture in one pass",
          "tiers": {"full": "768p", "draft": "544p draft"},
-         "samplers": ["res_multistep", "euler", "dpmpp_2m"],
+         "samplers": ["res_multistep", "euler", "dpmpp_2m", "sa_solver"],
          "schedulers": ["simple", "normal", "beta"],
          "defaults": {"steps": 20, "sampler": "res_multistep",
                       "scheduler": "simple", "tier": "full", "seconds": 5},
@@ -450,7 +450,8 @@ STATE = {
     # ComfyUI's spellings, which is what the image side sends into a graph now.
     # The old Forge labels ("Euler a", "Automatic") were not a different way of
     # writing these — they are values KSampler rejects.
-    "samplers": ["euler", "res_multistep", "er_sde", "dpmpp_2m", "heun"],
+    "samplers": ["euler", "res_multistep", "er_sde", "dpmpp_2m", "heun",
+                 "sa_solver"],
     "schedulers": ["simple", "normal", "beta", "sgm_uniform", "karras"],
     # Deliberately not first in either list, which they are in app.py: the page
     # has to *select* these rather than fall through to whatever sits at the
@@ -778,7 +779,7 @@ NODE_CATALOGUE_STUB = {
             "steps": ["INT", {"default": 20, "min": 1, "max": 10000}],
             "cfg": ["FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}],
             "sampler_name": [["er_sde", "euler", "euler_ancestral",
-                              "res_multistep"], {}],
+                              "res_multistep", "sa_solver"], {}],
             "scheduler": [["sgm_uniform", "simple", "normal"], {}],
             "positive": ["CONDITIONING", {}],
             "negative": ["CONDITIONING", {}],
