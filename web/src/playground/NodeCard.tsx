@@ -126,7 +126,7 @@ function Row({ id, row, value, set }: {
           ))}
         </select>
       ) : kind === 'number' ? (
-        <input className="nodrag pgval" type="number"
+        <input autoComplete="off" className="nodrag pgval" type="number"
                value={value === undefined ? '' : String(value)}
                step={row.type === 'INT' ? 1 : 'any'}
                onChange={(e) => {
@@ -138,7 +138,7 @@ function Row({ id, row, value, set }: {
         <input className="nodrag pgval" type="checkbox" checked={!!value}
                onChange={(e) => set(row.name, e.target.checked)} />
       ) : kind === 'text' ? (
-        <input className="nodrag pgval" type="text"
+        <input autoComplete="off" className="nodrag pgval" type="text"
                value={value === undefined ? '' : String(value)}
                onChange={(e) => set(row.name, e.target.value)} />
       ) : kind === 'file' ? (

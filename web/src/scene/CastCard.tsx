@@ -115,7 +115,7 @@ export function CastCard({ member }: { member: CastMember }) {
           numbering is assigned behind this and never surfaces. */}
       <div className="tname-row">
         <span className="at">@</span>
-        <input id={`cast-name-${member.id}`} ref={name} className="tname"
+        <input autoComplete="off" id={`cast-name-${member.id}`} ref={name} className="tname"
                value={member.name} spellCheck={false} placeholder="name"
                onChange={(e) => { s.patchCast(member.id, { name: handleOf(e.target.value) }) }} />
       </div>
@@ -127,7 +127,7 @@ export function CastCard({ member }: { member: CastMember }) {
           `<Subject 1> is the person in <Picture 1>, mid-thirties`; with none it is
           the whole of what the encoder is told, and the alternative is the literal
           word "sam". */}
-      <input id={`cast-note-${member.id}`} className="tnote" value={member.note}
+      <input autoComplete="off" id={`cast-note-${member.id}`} className="tnote" value={member.note}
              spellCheck={false}
              // One placeholder, because there is one kind — and the guide's own
              // example is exactly this shape: "<Subject 1> is *the young woman*

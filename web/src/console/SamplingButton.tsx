@@ -204,13 +204,13 @@ function WorkflowRows({ kind }: { kind: 'image' | 'video' }) {
               <input type="checkbox" checked={!!val}
                      onChange={(e) => setExtra(ex, e.target.checked)} />
             ) : ex.type === 'number' ? (
-              <input type="number" value={val === undefined ? '' : String(val)}
+              <input autoComplete="off" type="number" value={val === undefined ? '' : String(val)}
                      onChange={(e) => {
                        const n = parseFloat(e.target.value)
                        setExtra(ex, Number.isFinite(n) ? n : 0)
                      }} />
             ) : (
-              <input type="text" value={String(val ?? '')}
+              <input autoComplete="off" type="text" value={String(val ?? '')}
                      onChange={(e) => setExtra(ex, e.target.value)} />
             )}
           </Row>

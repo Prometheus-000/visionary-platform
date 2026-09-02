@@ -253,7 +253,7 @@ export function Editor({ ds, onLightbox, lead }: {
               {/* A zip dropped as `portraits.zip` already suggested `portraits`; carrying
                   it in means Save is usually one click rather than one click and some
                   typing. */}
-              <input id="ds-save-name" placeholder="name to save it" spellCheck={false}
+              <input autoComplete="off" id="ds-save-name" placeholder="name to save it" spellCheck={false}
                      value={saveName || ds.open}
                      onChange={(e) => setSaveName(e.target.value)}
                      onKeyDown={(e) => {
@@ -650,7 +650,7 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
       <div className="opts" style={{ marginTop: 0 }}>
         <div className="opt mid">
           <IconTag />
-          <input id="ds-trig" placeholder="trigger word" spellCheck={false}
+          <input autoComplete="off" id="ds-trig" placeholder="trigger word" spellCheck={false}
                  value={ds.trigger}
                  onChange={(e) => ds.setTrigger(e.target.value)}
                  onBlur={() => void ds.commitTrigger(ds.trigger)} />
@@ -750,19 +750,19 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
               plausibility, and a bare number is not a value. */}
           <div className="opt" data-lb="Max tokens">
             <span className="lead">Max tokens</span>
-            <input type="number" id="cap-max-tokens" min={16} max={1024} step={16}
+            <input autoComplete="off" type="number" id="cap-max-tokens" min={16} max={1024} step={16}
                    style={{ width: 64 }} value={maxTokens}
                    onChange={(e) => setMaxTokens(Number(e.target.value) || 320)} />
           </div>
           <div className="opt" data-lb="Temperature">
             <span className="lead">Temperature</span>
-            <input type="number" id="cap-temp" min={0} max={1.5} step={0.05}
+            <input autoComplete="off" type="number" id="cap-temp" min={0} max={1.5} step={0.05}
                    style={{ width: 64 }} value={temperature}
                    onChange={(e) => setTemperature(Number(e.target.value))} />
           </div>
           <div className="opt" data-lb="Top-p">
             <span className="lead">Top-p</span>
-            <input type="number" id="cap-top-p" min={0.05} max={1} step={0.05}
+            <input autoComplete="off" type="number" id="cap-top-p" min={0.05} max={1} step={0.05}
                    style={{ width: 64 }} value={topP}
                    onChange={(e) => setTopP(Number(e.target.value))} />
           </div>
@@ -828,12 +828,12 @@ function FindReplace({ ds, visible }: { ds: Ds; visible: DatasetImage[] }) {
   return (
     <div className="opts" id="cap-replace" style={{ marginTop: 10 }}>
       <div className="opt mid">
-        <input id="fr-find" placeholder="find in captions" spellCheck={false}
+        <input autoComplete="off" id="fr-find" placeholder="find in captions" spellCheck={false}
                value={find} onChange={(e) => { setFind(e.target.value); setNote(null) }}
                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void run() } }} />
       </div>
       <div className="opt mid">
-        <input id="fr-replace" placeholder="replace with" spellCheck={false}
+        <input autoComplete="off" id="fr-replace" placeholder="replace with" spellCheck={false}
                value={repl} onChange={(e) => setRepl(e.target.value)}
                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void run() } }} />
       </div>

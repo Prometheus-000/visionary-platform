@@ -95,7 +95,7 @@ export function PlateRow() {
                     onClick={() => s.personPlate(role, !person)}>
               {person ? 'person' : 'object'}
             </button>
-            <input className="trefnote" value={note} spellCheck={false}
+            <input autoComplete="off" className="trefnote" value={note} spellCheck={false}
                    id={`g-${role}-note`}
                    placeholder={person
                      ? 'who they are — optional; “the drummer, on the left”'

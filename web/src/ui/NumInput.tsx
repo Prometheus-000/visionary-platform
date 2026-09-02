@@ -121,8 +121,11 @@ export function NumInput({
     [shown, onValue, fine, bigStep, base, onEnter, onCommit],
   )
 
+  // Browser form history is memory from outside the app: Chrome and Safari
+  // resurface old values under any input they have seen, which breaks the
+  // never-remembers rule. Off by default; a caller can still pass its own.
   return (
-    <input {...rest} value={shown} inputMode={rest.inputMode ?? 'decimal'}
+    <input autoComplete="off" {...rest} value={shown} inputMode={rest.inputMode ?? 'decimal'}
            onChange={(e) => { setTyped(e.target.value); onValue(e.target.value) }}
            // Leaving the field is what hands the spelling back: a box left
            // holding "1.40", or holding nothing because the parent refused an

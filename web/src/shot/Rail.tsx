@@ -98,7 +98,7 @@ export function Rail({ onPalette }: {
                   {(s.state?.shot_langs ?? []).map((l) => <option key={l}>{l}</option>)}
                 </select>
               )}
-              <input className="v" autoFocus value={p.value ?? ''}
+              <input autoComplete="off" className="v" autoFocus value={p.value ?? ''}
                      placeholder={it.hint || it.label}
                      onChange={(e) => s.setPill(p.key, { value: e.target.value })}
                      // Tabbing away collapses it too. Guarded on relatedTarget

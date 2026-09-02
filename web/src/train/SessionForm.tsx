@@ -132,7 +132,7 @@ export function SessionForm({
       <span className="lead">{DIALS[k].label}</span>
       {/* `a-{key}`, matching the ids every check addresses these by — a control
           a check cannot find reads as a feature that is not there. */}
-      <input id={`a-${SHORT[k]}`} type="number" title={DIALS[k].title}
+      <input autoComplete="off" id={`a-${SHORT[k]}`} type="number" title={DIALS[k].title}
              step={'step' in DIALS[k] ? (DIALS[k] as { step: number }).step : undefined}
              disabled={k === 'discrete_flow_shift' && params.timestep_sampling !== 'shift'}
              value={String(params[k] ?? '')}
@@ -168,12 +168,12 @@ export function SessionForm({
       <div className="opts">
         <div className="opt wide">
           <IconTag />
-          <input id="lname" placeholder="LoRA name" spellCheck={false} autoFocus
+          <input autoComplete="off" id="lname" placeholder="LoRA name" spellCheck={false} autoFocus
                  value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="opt mid">
           <IconTrigger />
-          <input id="ltrig" placeholder="trigger word" spellCheck={false}
+          <input autoComplete="off" id="ltrig" placeholder="trigger word" spellCheck={false}
                  value={trig} onChange={(e) => setTrig(e.target.value)} />
         </div>
       </div>

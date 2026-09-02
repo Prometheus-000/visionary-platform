@@ -243,7 +243,7 @@ function NameField({ onSave }: { onSave: (name: string) => Promise<void> }) {
   const value = draft ?? pg.name
   return (
     <span className="pgname-box">
-      <input className="pgwf" type="text" placeholder="untitled"
+      <input autoComplete="off" className="pgwf" type="text" placeholder="untitled"
              value={value} id="pg-name"
              onChange={(e) => setDraft(e.target.value)}
              onKeyDown={(e) => {
@@ -346,7 +346,7 @@ function AddButton() {
       {pop.open && (
         <Popover anchor={pop.anchor} className="form pgadd"
                  onClose={() => { pop.close(); setQ('') }}>
-          <input type="text" placeholder="Search nodes…" value={q} autoFocus
+          <input autoComplete="off" type="text" placeholder="Search nodes…" value={q} autoFocus
                  onChange={(e) => setQ(e.target.value)} />
           <div className="pgadd-list">
             {!cat && (
@@ -415,7 +415,7 @@ function PacksButton({ onInstall, onRestart, onHarvest }: {
             <span className="pgadd-none">No packs installed.</span>
           )}
           <div className="pgpack-add">
-            <input type="text" placeholder="https://github.com/owner/repo"
+            <input autoComplete="off" type="text" placeholder="https://github.com/owner/repo"
                    value={url} onChange={(e) => setUrl(e.target.value)} />
             <button className="opt" type="button" disabled={!url.trim()}
                     onClick={() => {

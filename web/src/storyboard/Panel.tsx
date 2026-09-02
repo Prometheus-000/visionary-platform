@@ -268,7 +268,7 @@ export function PanelCard({ panel, i, board, aspect, sel, onPatch, onGrab, onMen
                      sel={arrow} frame={cam} />
         {selArrow && (
           <>
-            <input className="sblabel" autoFocus placeholder="who moves"
+            <input autoComplete="off" className="sblabel" autoFocus placeholder="who moves"
                    value={selArrow.label}
                    style={{ left: `${selArrow.pts[0][0] * 100}%`, top: `${selArrow.pts[0][1] * 100}%` }}
                    onPointerDown={(e) => e.stopPropagation()}

@@ -374,7 +374,7 @@ export function Storyboard({ onOpen, onGallery }: {
                 onClick={(e) => setBoards(e.currentTarget)}>
           <IconStack />
         </button>
-        <input className="sbtitle" id="sb-title" placeholder="Untitled storyboard"
+        <input autoComplete="off" className="sbtitle" id="sb-title" placeholder="Untitled storyboard"
                value={board?.title ?? ''} disabled={!board}
                onChange={(e) => edit((b) => ({ ...b, title: e.target.value }))} />
         {board && (

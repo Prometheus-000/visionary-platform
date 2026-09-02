@@ -174,13 +174,13 @@ export function SheetBuilder() {
         {/* The header fields are the sheet's header — name, role, the
             visual-ID note the skill asks for. Typed here, drawn there; the
             canvas repaints on each keystroke so the two are never apart. */}
-        <input className="sh-name" value={name} spellCheck={false}
+        <input autoComplete="off" className="sh-name" value={name} spellCheck={false}
                placeholder="character name"
                onChange={(e) => setName(e.target.value)} />
-        <input className="sh-role" value={role} spellCheck={false}
+        <input autoComplete="off" className="sh-role" value={role} spellCheck={false}
                placeholder="role — protagonist, thief, grandma…"
                onChange={(e) => setRole(e.target.value)} />
-        <input className="sh-note" value={note} spellCheck={false}
+        <input autoComplete="off" className="sh-note" value={note} spellCheck={false}
                placeholder="do-not-change traits — age, build, hair, outfit colours, signature props…"
                onChange={(e) => setNote(e.target.value)} />
         <span className="grow" />

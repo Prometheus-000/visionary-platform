@@ -125,7 +125,7 @@ export function Material({ member }: { member: CastMember }) {
                     title="The compiler cites the sheet — its views and written notes define their appearance.">
                 views &amp; notes define them — written for you
               </span>
-            : <input className="trefnote" value={ref.note ?? ''} spellCheck={false}
+            : <input autoComplete="off" className="trefnote" value={ref.note ?? ''} spellCheck={false}
                  // One line, and it is teaching rather than labelling: a
                  // photograph can lend *part* of itself — the face, the coat,
                  // the light — and nothing else on the page can say so. The

@@ -184,7 +184,7 @@ function BoxCard(
             already looking — the card can announce a capability where an icon
             cannot. */}
         <div className="opt wide">
-          <input id="r-prompt" ref={field} value={r.prompt}
+          <input autoComplete="off" id="r-prompt" ref={field} value={r.prompt}
                  placeholder="e.g. a man in a denim jacket, laughing"
                  title="This performer only — who they are and what they are doing. Their face is the Photo or LoRA below; a scene or outfit photo for the whole frame goes on the frame card, behind the corner button. Where they stand is the box — do not write a position here, it is already said."
                  onChange={(e) => s.patchRegion(i, { prompt: e.target.value })}
@@ -356,7 +356,7 @@ function CharacterRow({ r, i }: { r: Region; i: number }) {
       <div className="rins-row">
         <div className="tname-row grow">
           <span className="at">@</span>
-          <input id="r-name" className="tname" value={r.name} spellCheck={false}
+          <input autoComplete="off" id="r-name" className="tname" value={r.name} spellCheck={false}
                  placeholder="name — and how you get them back"
                  title="Who this box is. Naming them is what lets you keep them: save below, and typing the name in any future session offers them back with their photo, their sentence and their LoRA."
                  onFocus={() => { setOpen(true) }}
