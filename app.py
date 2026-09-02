@@ -54,6 +54,7 @@ import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
@@ -368,11 +369,13 @@ H3MC_REPO = "https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context"
 H3MC_CONTEXT_FRAMES = 22
 H3MC_AUDIO_CONTEXT = 24  # one second on the model's 40 Hz audio grid
 
-# What a take's saved latent is called in its job directory on the volume.
-# ComfyUI's output folder is container disk, so the latent is harvested beside
-# the clip — a chain that only worked while the container stayed warm would be
-# a chain that breaks precisely on the long think between takes.
-H3MC_SIDECAR = "context.safetensors"
+# What a take's saved latent is called beside its clip: `{job}.context.safetensors`
+# in the flat outputs/. ComfyUI's output folder is container disk, so the
+# latent is harvested beside the clip — a chain that only worked while the
+# container stayed warm would be a chain that breaks precisely on the long
+# think between takes. The one honest second file in outputs/: bytes rather
+# than a record, which is why it is not inside the clip.
+H3MC_SUFFIX = ".context.safetensors"
 
 # Style-by-reference: nkxx188's training-free K/V injection. This REPLACED the
 # ostris reference-LoRA path, and the decision was a measurement, not an
@@ -2299,13 +2302,12 @@ def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
     """
     _publish(job_id, status="running", percent=0, phase="Reading the takes")
     _reload_volume()
-    out_dir = OUTPUTS / job_id
+    out = OUTPUTS / f"{job_id}.mp4"
     try:
         srcs: list[Path] = []
         for i, t in enumerate(takes):
-            jid = Path(str(t.get("job_id") or "")).name
             name = Path(str(t.get("file") or "")).name
-            f = OUTPUTS / jid / name
+            f = OUTPUTS / name
             if not f.is_file():
                 # Named, with the take number, because the fix is on the page:
                 # a take deleted from the gallery is still in the scene's chain
@@ -2336,8 +2338,14 @@ def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
         shape = lambda s: {k: v for k, v in s.items() if k != "dur"}  # noqa: E731
         same = all(shape(s) == shape(shapes[0]) for s in shapes)
 
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out = out_dir / "scene.mp4"
+        OUTPUTS.mkdir(parents=True, exist_ok=True)
+        # The record rides the scene's own metadata like every other clip;
+        # `use_metadata_tags` is what lets ffmpeg carry a key of ours.
+        record = _output_record(
+            kind="video", job_id=job_id, model="export", prompt="",
+            created=time.time(), takes=[s.name for s in srcs])
+        tagged = ["-movflags", "use_metadata_tags+faststart",
+                  "-metadata", f"{RECORD_KEY}={_record_json(record)}"]
         work = Path(tempfile.mkdtemp(prefix="export-"))
         if same:
             _publish(job_id, percent=10,
@@ -2349,7 +2357,7 @@ def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
             (work / "takes.txt").write_text(listing + "\n")
             cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
                    "-i", str(work / "takes.txt"), "-c", "copy",
-                   "-movflags", "+faststart", str(out)]
+                   *tagged, str(out)]
         else:
             _publish(job_id, percent=10,
                      phase=f"Joining {len(srcs)} takes — re-encoding, they differ")
@@ -2387,7 +2395,7 @@ def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
             cmd += ["-filter_complex", graph, "-map", "[v]", "-map", "[a]",
                     "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-                    "-movflags", "+faststart", str(out)]
+                    *tagged, str(out)]
 
         _stop_gate(job_id, "stitching")
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=55 * 60)
@@ -2403,22 +2411,95 @@ def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
         # on and the one `pollStatus` reads. The record is what the page sees —
         # the return value is only this function's own answer — so both are
         # written, the way `_download_weight` does it.
-        res = {"status": "completed", "job_id": job_id, "files": ["scene.mp4"],
+        res = {"status": "completed", "job_id": job_id, "files": [out.name],
                "kind": "video", "takes": len(srcs), "percent": 100,
                "bytes": out.stat().st_size, "reencoded": not same}
         _publish(job_id, **res)
         return res
     except StopRequested:
-        shutil.rmtree(out_dir, ignore_errors=True)
+        out.unlink(missing_ok=True)
         res = {"status": "stopped", "job_id": job_id}
         _publish(job_id, **res)
         return res
     except Exception as exc:  # noqa: BLE001 - the record is the only report
-        shutil.rmtree(out_dir, ignore_errors=True)
+        out.unlink(missing_ok=True)
         res = {"status": "failed", "job_id": job_id, "error": str(exc)[:400]}
         _publish(job_id, **res)
         return res
 
+
+
+MIGRATE_JOB = "migrate_outputs"
+
+
+@app.function(image=export_image, cpu=2.0, timeout=4 * 60 * 60,
+              volumes={"/workspace": volume})
+def migrate_outputs_job(job_id: str) -> dict[str, Any]:
+    """
+    Move every job folder under outputs/ into the flat layout, once.
+
+    Each folder's `visionary.json` becomes the record inside each of its
+    files — PNGs re-encoded with the chunk, clips remuxed with the key, which
+    is why this runs on the container that has ffmpeg — and the files take
+    the run's id as their name: `{job}_{NN}.png`, `{job}.mp4`,
+    `{job}.context.safetensors`. The folder goes with its caches. Progress is
+    published because a volume with a year of renders on it is minutes of
+    work, and a gallery that says "moving older results into place" is a
+    gallery that has not gone blank.
+
+    Per folder, so a crash mid-way leaves whole folders and whole files and
+    never half of either; re-running picks up where it stopped.
+    """
+    _publish(job_id, status="running", percent=0, phase="Finding older results")
+    _reload_volume()
+    dirs = sorted(p for p in OUTPUTS.iterdir()
+                  if p.is_dir() and not p.name.startswith(".")) if OUTPUTS.is_dir() else []
+    moved, failed = 0, []
+    for i, d in enumerate(dirs):
+        _publish(job_id, percent=int(100 * i / max(1, len(dirs))),
+                 phase=f"Moving {i + 1} of {len(dirs)} into place")
+        try:
+            record: dict[str, Any] = {}
+            meta = d / LEGACY_META
+            if meta.is_file():
+                try:
+                    record = json.loads(meta.read_text())
+                except (OSError, ValueError):
+                    record = {}
+            record.setdefault("job_id", d.name)
+            media = sorted(p for p in d.iterdir()
+                           if p.is_file() and _keep_entry(p.name))
+            for n, p in enumerate(media):
+                ext = p.suffix.lower()
+                # A batch keeps its index; a lone clip or a scene export
+                # takes the run's bare name, which is what the flat writers
+                # produce today.
+                m = re.search(r"_(\d{2})$", p.stem)
+                idx = m.group(1) if m else (f"{n:02d}" if ext == ".png" else None)
+                name = f"{d.name}_{idx}{ext}" if idx else f"{d.name}{ext}"
+                target = OUTPUTS / name
+                if ext == ".png":
+                    _png_with_record(p, target, record)
+                elif ext == ".mp4":
+                    _mp4_with_record(p, target, record)
+                else:
+                    shutil.copyfile(p, target)
+            ctx = d / "context.safetensors"
+            if ctx.is_file():
+                shutil.copyfile(ctx, OUTPUTS / f"{d.name}{H3MC_SUFFIX}")
+            shutil.rmtree(d, ignore_errors=True)
+            moved += 1
+        except Exception as exc:  # noqa: BLE001 — one folder must not stop the rest
+            failed.append(f"{d.name}: {type(exc).__name__}: {exc}")
+            print(f"[migrate] {d.name}: {type(exc).__name__}: {exc}", flush=True)
+        if (i + 1) % 10 == 0:
+            volume.commit()
+    volume.commit()
+    res = {"status": "completed", "job_id": job_id, "percent": 100,
+           "moved": moved, "files": [],
+           **({"failed": failed[:20]} if failed else {})}
+    _publish(job_id, **res)
+    return res
 
 
 @app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
@@ -6159,7 +6240,6 @@ def _on_gpu(cls: Any, requested: Any, allowed: tuple[str, ...], default: str) ->
     return cls.with_options(gpu=gpu)
 
 
-OUTPUT_META = "visionary.json"
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
                # The dataset clip route serves whatever a set holds, and a set
                # is whatever was dropped on it — so the containers a browser
@@ -6169,7 +6249,13 @@ MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
                ".mp4": "video/mp4", ".mov": "video/quicktime",
                ".webm": "video/webm", ".mkv": "video/x-matroska",
                ".m4v": "video/x-m4v"}
-OUTPUT_FILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpg|webp|mp4)$")
+OUTPUT_FILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}\.(png|jpg|webp|mp4)$")
+# The run record's key, inside the file: a PNG `tEXt` chunk and an MP4
+# metadata key by the same name. See `_output_record`.
+RECORD_KEY = "visionary"
+# What the job folders used to carry beside their files. Read by the
+# migration only; nothing writes it any more.
+LEGACY_META = "visionary.json"
 
 
 def _infotext(
@@ -6276,38 +6362,219 @@ def _infotext(
     return "\n".join(lines)
 
 
-def _write_output_meta(out_dir: Path, **fields: Any) -> None:
+def _output_record(**fields: Any) -> dict[str, Any]:
     """
-    Describe a result beside the result, in the same shape loras/ already uses.
+    The run's record — what you would want a week later: the prompt, the
+    seed, the model, the pills, the boxes. It goes *inside* the file it
+    describes, never beside it.
 
-    The job Dict is live state, not a record: it is polled during a run and
-    means nothing afterwards. Everything you would want a week later — the
-    prompt, the seed, the model — has to live next to the file or it is gone,
-    which is why the gallery reads the volume rather than replaying job ids.
-    Non-fatal: an unwritable sidecar must not lose you the image it describes.
+    It was a `visionary.json` beside the files in a folder per job, and that
+    folder existed only to keep the record beside the batch. A file dragged out
+    of the browser then left its record behind, which is the sentence-is-the-
+    record thesis backwards; and the folder-per-job was the shape every cache
+    and address in the app had grown around. The job Dict is still live state,
+    not a record: it is polled during a run and means nothing afterwards.
+
+    Never bytes. Every writer already keeps photographs out of the record —
+    counts and booleans stand in for them — because this dict is also what the
+    status route polls every 400 ms.
     """
+    return dict(fields)
+
+
+def _record_json(fields: dict[str, Any]) -> str:
+    """ASCII on purpose: a PNG `tEXt` chunk is Latin-1, and PIL silently
+    switches to an `iTXt` chunk for anything else — a second shape for the
+    reader to know. Escaped JSON is the same record in one shape."""
+    return json.dumps(fields, separators=(",", ":"))
+
+
+def _png_with_record(src: Path, dst: Path, fields: dict[str, Any],
+                     extra: dict[str, str] | None = None) -> None:
+    """Re-encode `src` to `dst` with the record in a `tEXt` chunk, plus any
+    other text chunks a writer wants beside it (A1111's `parameters`, ComfyUI's
+    `prompt`). Text chunks land before the image data, which is what lets a
+    reader take the record off the file's head."""
+    from PIL import Image, PngImagePlugin
+
+    with Image.open(src) as im:
+        info = PngImagePlugin.PngInfo()
+        for k, v in (extra or {}).items():
+            info.add_text(k, v)
+        info.add_text(RECORD_KEY, _record_json(fields))
+        im.save(dst, pnginfo=info)
+
+
+def _mp4_with_record(src: Path, dst: Path, fields: dict[str, Any],
+                     extra: dict[str, str] | None = None) -> bool:
+    """
+    Copy `src` to `dst` with the record as an MP4 metadata key, streams
+    untouched.
+
+    `use_metadata_tags` is load-bearing: without it ffmpeg writes only the
+    handful of tags it knows (`comment`, `title`) and silently drops ours.
+    `faststart` puts `moov` — and the record inside it — at the head of the
+    file, so a reader never has to pull a clip to learn what it is. Needs
+    ffmpeg, which every container that writes a clip has; the web container
+    does not, and never writes one.
+    """
+    cmd = ["ffmpeg", "-y", "-i", str(src), "-c", "copy",
+           "-movflags", "use_metadata_tags+faststart"]
+    for k, v in (extra or {}).items():
+        cmd += ["-metadata", f"{k}={v}"]
+    cmd += ["-metadata", f"{RECORD_KEY}={_record_json(fields)}", str(dst)]
+    done = subprocess.run(cmd, capture_output=True, text=True)
+    if done.returncode != 0:
+        tail = (done.stderr or "").strip().splitlines()[-1:]
+        print(f"[record] {dst.name}: ffmpeg could not embed the record "
+              f"({' '.join(tail)}) — copied plain", flush=True)
+        shutil.copyfile(src, dst)
+        return False
+    return True
+
+
+def _record_from_png(head: bytes) -> dict[str, Any] | None:
+    """The record chunk out of a PNG's head. None when the head is too short
+    to say; `{}` when the file has no record (the image data began)."""
+    if not head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return {} if len(head) >= 8 else None
+    pos = 8
+    while pos + 8 <= len(head):
+        length, ctype = struct.unpack(">I4s", head[pos:pos + 8])
+        if ctype in (b"IDAT", b"IEND"):
+            return {}
+        body = head[pos + 8:pos + 8 + length]
+        if len(body) < length:
+            return None
+        if ctype in (b"tEXt", b"iTXt"):
+            key, _, val = body.partition(b"\x00")
+            if key == RECORD_KEY.encode():
+                if ctype == b"iTXt":
+                    # flag, method, language\0, translated keyword\0, text.
+                    # Read for a file written by some other tool; ours is
+                    # always ASCII and lands in tEXt.
+                    flag = val[0:1]
+                    rest = val[2:].split(b"\x00", 2)
+                    val = rest[2] if len(rest) == 3 else b""
+                    if flag == b"\x01":
+                        import zlib
+                        val = zlib.decompress(val)
+                try:
+                    return json.loads(val.decode("utf-8", "replace"))
+                except ValueError:
+                    return {}
+        pos += 8 + length + 4
+    return None
+
+
+def _mp4_atoms(buf: bytes, start: int, end: int):
+    pos = start
+    while pos + 8 <= end:
+        size, atype = struct.unpack(">I4s", buf[pos:pos + 8])
+        hdr = 8
+        if size == 1:
+            if pos + 16 > end:
+                return
+            size = struct.unpack(">Q", buf[pos + 8:pos + 16])[0]
+            hdr = 16
+        elif size == 0:
+            size = end - pos
+        if size < hdr or pos + size > end:
+            return
+        yield atype, pos + hdr, pos + size
+        pos += size
+
+
+def _record_from_mp4(head: bytes) -> dict[str, Any] | None:
+    """
+    The record key out of `moov/udta/meta`, in ffmpeg's `use_metadata_tags`
+    shape — a `keys` atom naming the entries, an `ilst` indexed from one —
+    with the plain four-character `ilst` form accepted too. None until a
+    whole `moov` is in the head; `{}` for a clip that has none.
+    """
+    for atype, a, b in _mp4_atoms(head, 0, len(head)):
+        if atype == b"mdat":
+            return {}  # data before moov: no record on the head
+        if atype != b"moov":
+            continue
+        keys: list[bytes] = []
+        items: dict[bytes, bytes] = {}
+        for t, c, d in _mp4_atoms(head, a, b):
+            if t != b"udta":
+                continue
+            for u, e, f in _mp4_atoms(head, c, d):
+                if u != b"meta":
+                    continue
+                for v, g, h in _mp4_atoms(head, e + 4, f):
+                    if v == b"keys":
+                        n = struct.unpack(">I", head[g + 4:g + 8])[0]
+                        p = g + 8
+                        for _ in range(n):
+                            ksize = struct.unpack(">I", head[p:p + 4])[0]
+                            keys.append(head[p + 8:p + ksize])
+                            p += ksize
+                    elif v == b"ilst":
+                        for w, i, j in _mp4_atoms(head, g, h):
+                            for x, k, m in _mp4_atoms(head, i, j):
+                                if x == b"data":
+                                    items[w] = head[k + 8:m]
+        for w, val in items.items():
+            if w[0] == 0 and keys:
+                idx = struct.unpack(">I", w)[0] - 1
+                name = keys[idx] if 0 <= idx < len(keys) else b""
+            else:
+                name = w
+            if name.split(b".")[-1] == RECORD_KEY.encode():
+                try:
+                    return json.loads(val.decode("utf-8"))
+                except ValueError:
+                    return {}
+        return {}
+    return None
+
+
+# Past this much of a file with no record found, the file has none. A PNG's
+# text chunks and a faststart clip's `moov` both sit in the first few KB.
+_RECORD_HEAD_MAX = 4 << 20
+
+
+def _read_record(rel: str) -> dict[str, Any]:
+    """The record out of one committed file's head, by RPC — chunks pulled
+    only until the record can be read, never the whole render."""
+    parse = _record_from_png if rel.lower().endswith(".png") else _record_from_mp4
+    head = b""
     try:
-        (out_dir / OUTPUT_META).write_text(json.dumps(fields, indent=2))
-    except OSError as exc:
-        print(f"[meta] {out_dir.name}: {exc}")
+        for chunk in _read_committed(rel):
+            head += chunk
+            got = parse(head)
+            if got is not None:
+                return got
+            if len(head) > _RECORD_HEAD_MAX:
+                break
+    except Exception as exc:  # noqa: BLE001 — a record is best-effort
+        if not isinstance(exc, FileNotFoundError):
+            print(f"[record] {rel}: {type(exc).__name__}: {exc}", flush=True)
+        return {}
+    return parse(head) or {}
 
 
-def _keep_entry(job: str, name: str) -> bool:
+def _group_of(name: str) -> str:
+    """Which run a file belongs to, read off its name: `{job}_{NN}.png` and
+    `{job}.mp4` both group under `{job}`. The batch is a property of the name,
+    which is what let the folder go."""
+    stem = name.split(".")[0]
+    return re.sub(r"_\d{2}$", "", stem)
+
+
+def _keep_entry(name: str) -> bool:
     """
-    Is `outputs/{job}/{name}` a result, rather than something beside one?
+    Is `outputs/{name}` a result, rather than something beside one?
 
     Shared by both listing sources so they cannot disagree about what a
-    gallery item is — which they would, because they fail differently. The
-    mount walk is protected by `p.is_file()` skipping the `.thumbs/`
-    directory; a flat recursive listing has no such protection, and a cover
-    is a `.jpg`, which is in `MEDIA_TYPES`. Every cover the gallery generates
-    would come back as a result to make a cover of.
+    gallery item is. A motion-context tensor sits beside its clip and is not
+    a result; a dotfile never is.
     """
-    return (
-        not job.startswith(".")
-        and not name.startswith(".")
-        and Path(name).suffix.lower() in MEDIA_TYPES
-    )
+    return not name.startswith(".") and Path(name).suffix.lower() in MEDIA_TYPES
 
 
 # ── results are served off the container, and the volume is the record ─────
@@ -6412,112 +6679,113 @@ def _trim_spool() -> None:
                 break
 
 
-def _entries_by_rpc() -> dict[str, list[tuple[str, float]]]:
+def _entries_by_rpc() -> tuple[dict[str, list[tuple[str, float]]], list[str]]:
     """
-    {job_id: [(filename, mtime)]} asked of Modal, not of the mount.
+    ({group: [(filename, mtime)]}, [legacy job folders]) asked of Modal, not
+    of the mount.
 
     `volume.listdir` is a metadata RPC against the volume's committed state.
     It does not read `/workspace`, so it needs no `volume.reload()` — and
     therefore **cannot be refused for open files**, which is the whole reason
-    it is here. Listing off the mount made the gallery's freshness a
-    downstream consequence of its own picture-loading: every `/api/file` is a
-    `FileResponse` holding a descriptor, a grid opens dozens at once, and a
-    reload refused for the length of that is a listing frozen at whenever this
-    container last synced. One container serves everybody (`max_containers=1`),
-    so that frozen view is what everybody got until it scaled down — results
-    from an arbitrary earlier moment, catching up, then freezing again
-    somewhere else.
+    it is here. One container serves everybody (`max_containers=1`), so a
+    listing frozen by its own picture-loading was what everybody got.
 
-    Committed state is exactly the right state to ask for: both job writers
-    `volume.commit()` immediately after their sidecar, so anything a reload
-    could have brought forward is already in this answer.
-
-    Two segments exactly, because the listing is recursive and flat — see
-    `_keep_entry`. Filtering on the count rather than on the name `.thumbs`
-    means anything else ever nested under a job is excluded by construction,
-    rather than by a blocklist somebody has to remember to extend.
+    Non-recursive now: outputs/ is flat, and a file's run is read off its
+    name. A directory under it is a job folder from before the record lived
+    inside the file; those are reported separately so the migration can be
+    started, and never listed as results while they wait — a legacy file has
+    no address the page could ask for.
     """
     out: dict[str, list[tuple[str, float]]] = {}
-    for e in volume.listdir("/outputs", recursive=True):
-        if e.type != modal.volume.FileEntryType.FILE:
+    legacy: list[str] = []
+    for e in volume.listdir("/outputs", recursive=False):
+        name = e.path.rstrip("/").rsplit("/", 1)[-1]
+        if e.type == modal.volume.FileEntryType.DIRECTORY:
+            if not name.startswith("."):
+                legacy.append(name)
             continue
-        rel = e.path.lstrip("/")
-        # Returned volume-relative in testing, even though "/outputs" went in.
-        # Tolerating both spellings costs one line and survives either.
-        if rel.startswith("outputs/"):
-            rel = rel[len("outputs/"):]
-        parts = rel.split("/")
-        if len(parts) != 2 or not _keep_entry(parts[0], parts[1]):
+        if e.type != modal.volume.FileEntryType.FILE or not _keep_entry(name):
             continue
-        out.setdefault(parts[0], []).append((parts[1], float(e.mtime)))
-    return out
+        out.setdefault(_group_of(name), []).append((name, float(e.mtime)))
+    return out, legacy
 
 
-def _entries_by_walk() -> dict[str, list[tuple[str, float]]]:
+def _entries_by_walk() -> tuple[dict[str, list[tuple[str, float]]], list[str]]:
     """The same answer off the mount, for when the RPC cannot give one."""
     out: dict[str, list[tuple[str, float]]] = {}
+    legacy: list[str] = []
     if not OUTPUTS.is_dir():
-        return out
-    for d in OUTPUTS.iterdir():
-        if not d.is_dir() or d.name.startswith("."):
+        return out, legacy
+    for p in OUTPUTS.iterdir():
+        if p.is_dir():
+            if not p.name.startswith("."):
+                legacy.append(p.name)
             continue
-        files = [(p.name, p.stat().st_mtime) for p in d.iterdir()
-                 if p.is_file() and _keep_entry(d.name, p.name)]
-        if files:
-            out[d.name] = files
-    return out
+        if p.is_file() and _keep_entry(p.name):
+            out.setdefault(_group_of(p.name), []).append((p.name, p.stat().st_mtime))
+    return out, legacy
 
 
-def _output_entries() -> dict[str, list[tuple[str, float]]]:
+def _output_entries() -> tuple[dict[str, list[tuple[str, float]]], list[str]]:
     """
-    {job_id: [(filename, mtime)]}, by RPC, falling back to the mount.
+    ({group: [(filename, mtime)]}, legacy folders), by RPC, falling back to
+    the mount.
 
     Not silent: a fallback that says nothing makes "the gallery is behind
     again" indistinguishable from "the RPC has been failing all week", which
     is the same reason `_reload_volume` prints when it skips. An empty or
     absent `outputs/` is not a failure — it is a volume nobody has generated
-    on yet, which is what the mount walk's own `is_dir()` check has always
-    said.
+    on yet.
     """
     try:
         return _entries_by_rpc()
     except modal.exception.NotFoundError:
-        return {}
+        return {}, []
     except Exception as exc:  # noqa: BLE001 — any RPC failure falls back
         print(f"[gallery] listdir failed ({type(exc).__name__}: {exc}) — "
               f"listing off the mount, which may be stale", flush=True)
         return _entries_by_walk()
 
 
-def _gallery(limit: int = 200, before: float = 0.0) -> tuple[list[dict[str, Any]], int]:
-    """
-    A page of output folders, newest first, and how many there are in total.
+def _group_files(group: str) -> list[str]:
+    """Every file of one run in outputs/, results and the context tensor
+    alike — what a delete takes. Off the mount, after the caller's reload."""
+    if not NAME_RE.match(group):
+        return []
+    try:
+        return sorted(p.name for p in OUTPUTS.iterdir()
+                      if p.is_file() and _group_of(p.name) == group)
+    except OSError:
+        return []
 
-    Keyed by what is on disk, not by a job id the browser happened to keep:
-    a reload, a redeploy, or a job whose record expired all leave the work
-    reachable. A folder with no sidecar still lists — older results predate
-    the metadata and are not less real for it.
+
+def _gallery(limit: int = 200, before: float = 0.0) -> tuple[list[dict[str, Any]], int, list[str]]:
+    """
+    A page of runs, newest first, how many there are in total, and any job
+    folders still waiting to be migrated.
+
+    Keyed by what is on the volume, not by a job id the browser happened to
+    keep: a reload, a redeploy, or a job whose record expired all leave the
+    work reachable. A file with no record still lists — older results predate
+    the record and are not less real for it.
 
     `before` is the previous page's last sort key, so paging is a window over
-    a stable order rather than an offset into a list that grows under it: a
-    run landing between two pages shifts every offset by one and would show
-    you the same card twice. The total is returned because the cap used to be
-    silent, and a purge dialog counting a truncated list said "all 200" on a
-    volume holding 340.
+    a stable order rather than an offset into a list that grows under it.
 
-    The sidecar is read only for the page being returned. That is what the
-    RPC buys beyond freshness — mtimes arrive without touching `/workspace`,
-    so the sort and the window are both decided before a single file is
-    opened, and a deep gallery costs the same per request as a shallow one.
+    The record is read only for the page being returned, off the head of
+    each run's first file by RPC — mtimes arrive without touching
+    `/workspace`, so the sort and the window are both decided before a byte
+    of picture is pulled, and a deep gallery costs the same per request as a
+    shallow one.
     """
-    entries = _output_entries()
+    entries, legacy = _output_entries()
 
     rows: list[tuple[float, str, list[str]]] = []
-    for job, files in entries.items():
+    for group, files in entries.items():
         files.sort(key=lambda f: f[0])
-        rows.append((max(m for _, m in files), job, [n for n, _ in files]))
+        rows.append((max(m for _, m in files), group, [n for n, _ in files]))
 
-    # Descending, with the job id breaking ties. `mtime` is integer seconds off
+    # Descending, with the group breaking ties. `mtime` is integer seconds off
     # the RPC, so two runs in the same second tie, and nothing promises a stable
     # order underneath — an unstable sort reshuffles the grid between reloads,
     # which is indistinguishable from the staleness this listing exists to fix.
@@ -6526,65 +6794,78 @@ def _gallery(limit: int = 200, before: float = 0.0) -> tuple[list[dict[str, Any]
     if before:
         rows = [r for r in rows if r[0] < before]
 
-    # Sidecars by RPC, like everything else this listing reads: the mount would
-    # need a reload to see a fresh run's sidecar, and reload is the dependency
-    # this route spent three redesigns removing. Cached per job because a job
-    # directory never changes after the run that wrote it — except the moments
-    # right after it lands, so an *empty* answer is only cached once the job is
-    # old enough that the sidecar is either committed or never coming. Serial,
-    # this was the page's whole wait: 200 sidecars one at a time.
+    # Records by RPC, like everything else this listing reads. Cached per run
+    # because a finished file never changes — except the moments right after
+    # it lands, so an *empty* answer is only cached once the run is old enough
+    # that the record is either committed or never coming. Parallel, because
+    # serial was the page's whole wait.
     page = rows[:limit]
-    need = [(job, modified) for modified, job, _ in page if job not in _META_CACHE]
+    need = [(group, modified, names[0]) for modified, group, names in page
+            if group not in _META_CACHE]
     if need:
         from concurrent.futures import ThreadPoolExecutor
 
-        def fetch(row: tuple[str, float]) -> tuple[str, float, dict[str, Any]]:
-            job, modified = row
-            raw = _volume_bytes(f"outputs/{job}/{OUTPUT_META}")
-            try:
-                return job, modified, json.loads(raw) if raw else {}
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                return job, modified, {}
+        def fetch(row: tuple[str, float, str]) -> tuple[str, float, dict[str, Any]]:
+            group, modified, first = row
+            return group, modified, _read_record(f"outputs/{first}")
 
         with ThreadPoolExecutor(max_workers=min(16, len(need))) as ex:
             fetched = list(ex.map(fetch, need))
         now = time.time()
-        for job, modified, meta in fetched:
+        for group, modified, meta in fetched:
             if meta or now - modified > 300:
-                _META_CACHE[job] = meta
-        fresh_meta = {job: meta for job, _, meta in fetched}
+                _META_CACHE[group] = meta
+        fresh_meta = {group: meta for group, _, meta in fetched}
     else:
         fresh_meta = {}
 
     out: list[dict[str, Any]] = []
-    for modified, job, names in page:
-        meta = _META_CACHE.get(job, fresh_meta.get(job, {}))
+    for modified, group, names in page:
+        meta = _META_CACHE.get(group, fresh_meta.get(group, {}))
         out.append({
-            # The sidecar first, so the derived fields win. It used to be last,
-            # where its `job_id` and `kind` overrode them and happened to agree.
-            # Off an RPC they can disagree, and a directory holding an .mp4
-            # whose sidecar says "image" renders an <img> at a video URL. The
-            # sidecar describes the run; the directory is the result.
+            # The record first, so the derived fields win: the record
+            # describes the run, the files are the result.
             **meta,
-            "job_id": job,
+            "job_id": group,
             "kind": "video" if names[0].lower().endswith(".mp4") else "image",
             "files": names,
             "modified": modified,
         })
-    return out, total
+    return out, total, legacy
 
 
-# Sidecars already read, for the life of the container. Safe because a job
-# directory is immutable once written; evicted on delete so a re-used id can
-# never wear a dead run's metadata.
+# Records already read, for the life of the container. Safe because a
+# finished file is immutable; evicted on delete so a re-used id can never
+# wear a dead run's metadata.
 _META_CACHE: dict[str, dict[str, Any]] = {}
 
 
-def _forget_output(job_id: str) -> None:
-    """A deleted run takes its caches with it — the sidecar entry and the
-    spooled bytes — or a re-used id would wear a dead run's face."""
-    _META_CACHE.pop(job_id, None)
-    shutil.rmtree(SPOOL / "outputs" / job_id, ignore_errors=True)
+def _start_migration() -> str:
+    """Spawn the outputs migration unless one is already running. The job
+    record is the lock: a second listing while it runs reads `running` and
+    does not spawn again."""
+    try:
+        cur = jobs.get(MIGRATE_JOB) or {}
+    except Exception:  # noqa: BLE001 — a Dict hiccup must not stop a spawn
+        cur = {}
+    if cur.get("status") == "running":
+        return MIGRATE_JOB
+    _publish(MIGRATE_JOB, status="running", percent=0, phase="Queued", files=[])
+    migrate_outputs_job.spawn(MIGRATE_JOB)
+    return MIGRATE_JOB
+
+
+def _forget_output(group: str) -> None:
+    """A deleted run takes its caches with it — the record entry, the spooled
+    bytes and the covers — or a re-used id would wear a dead run's face."""
+    _META_CACHE.pop(group, None)
+    for d in (SPOOL / "outputs", SPOOL / "outputs" / ".covers"):
+        try:
+            for p in d.iterdir():
+                if p.is_file() and _group_of(p.name) == group:
+                    p.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # Where a LoRA the mount cannot show us is pulled to, and the second directory
@@ -7807,11 +8088,7 @@ class ImageGenerator:
             _publish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
             raise
 
-        from PIL import Image, PngImagePlugin
-
-        out_dir = OUTPUTS / job_id
-        out_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%H%M%S")
+        OUTPUTS.mkdir(parents=True, exist_ok=True)
         report = {
             "sampler": sampler, "scheduler": scheduler,
             "cfg_scale": cfg, "shift": shift,
@@ -7876,50 +8153,45 @@ class ImageGenerator:
                if plates or objects else {}),
             **info,
         }
-        names = []
-        for i, src in enumerate(out_names):
-            name = f"{stamp}_{i:02d}.png"
-            # Re-encoded rather than copied, because the parameters block has to
-            # go in and ComfyUI ran with --disable-metadata. The alternative is
-            # a PNG whose settings live only in a job record that expires,
-            # which is the thing every existing tool — PNG Info tabs, ComfyUI,
-            # the gallery — reads a file to avoid.
-            with Image.open(COMFY / "output" / src) as im:
-                png = PngImagePlugin.PngInfo()
-                png.add_text("parameters", _infotext(
-                    prompt=str(params.get("prompt") or ""),
-                    negative_prompt=str(params.get("negative_prompt") or ""),
-                    model=model,
-                    # Per-image seed, not the batch's first: ComfyUI advances
-                    # the noise seed per latent in a batch, so a metadata block
-                    # reporting the same seed for all four cannot reproduce
-                    # three of them.
-                    seed=seed + i,
-                    report=report,
-                ))
-                im.save(out_dir / name, pnginfo=png)
-            names.append(name)
-
-        _write_output_meta(
-            out_dir, kind="image", job_id=job_id, model=model,
+        record = _output_record(
+            kind="image", job_id=job_id, model=model,
             prompt=str(params.get("prompt") or ""),
             negative_prompt=str(params.get("negative_prompt") or ""),
             created=time.time(), **_shot_meta(params), **report,
-            # Which saved workflow the toggle ran, when one did — the sidecar
+            # Which saved workflow the toggle ran, when one did — the record
             # is the only place that can still answer that a week later.
             **({"workflow_name": params["workflow"]}
                if params.get("workflow") else {}),
         )
+        names = []
+        for i, src in enumerate(out_names):
+            name = f"{job_id}_{i:02d}.png"
+            # Re-encoded rather than copied, because the record and the
+            # parameters block have to go in and ComfyUI ran with
+            # --disable-metadata. The alternative is a PNG whose settings live
+            # only in a job record that expires, which is the thing every
+            # existing tool — PNG Info tabs, ComfyUI, the gallery — reads a
+            # file to avoid. A1111's `parameters` stays beside ours for those
+            # tools; the per-image seed is theirs, because ComfyUI advances
+            # the noise seed per latent in a batch and a block reporting the
+            # same seed for all four cannot reproduce three of them.
+            _png_with_record(COMFY / "output" / src, OUTPUTS / name, record, {
+                "parameters": _infotext(
+                    prompt=str(params.get("prompt") or ""),
+                    negative_prompt=str(params.get("negative_prompt") or ""),
+                    model=model, seed=seed + i, report=report),
+            })
+            names.append(name)
         volume.commit()
 
         # Only filenames go into the job record. The PNGs themselves are served
-        # by /api/file/{job_id}/{name} straight off the volume — a 1024px base64
-        # image is megabytes, and this dict is polled several times a second.
-        # `files` is also what the canvas builds its <img> tags from, so the
-        # completed record is the last round trip a run needs.
+        # by /api/file/{name} off the volume — a 1024px base64 image is
+        # megabytes, and this dict is polled several times a second. `files`
+        # is also what the canvas builds its <img> tags from, so the completed
+        # record is the last round trip a run needs.
         res = {
             "status": "completed", "job_id": job_id, "files": names,
-            "model": model, "output_dir": str(out_dir),
+            "model": model, "output_dir": str(OUTPUTS),
             "duration_s": round(time.time() - started, 1),
             **report,
         }
@@ -11239,8 +11511,14 @@ class VideoGenerator:
             _publish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
             raise
 
-        out_dir = OUTPUTS / job_id
-        out_dir.mkdir(parents=True, exist_ok=True)
+        OUTPUTS.mkdir(parents=True, exist_ok=True)
+        record = _output_record(
+            kind="image" if still else "video", job_id=job_id, model=model,
+            prompt=params["prompt"], created=time.time(),
+            **_shot_meta(params), **info, **plan["meta"],
+            **({"workflow_name": params["workflow"]}
+               if params.get("workflow") else {}),
+        )
         if still:
             # **Every decoded frame is kept, and that is the feature rather
             # than the leftover.** Which frame is cleanest moves with the
@@ -11250,36 +11528,28 @@ class VideoGenerator:
             # expensive to think in: the cost amortises across the candidates.
             #
             # Indexed in the filename because that index is the record. A still
-            # whose sidecar says which take it came from but not which frame is
-            # a still nobody can make again.
-            stamp = time.strftime("%H%M%S")
+            # whose record says which take it came from but not which frame is
+            # a still nobody can make again. `kind="image"` in the record
+            # because what came out is a picture, and everything downstream
+            # sorts on what a thing *is* rather than on which model made it.
             names = []
             for i, src in enumerate(out_names):
-                names.append(f"{stamp}_{i:02d}.png")
-                shutil.copyfile(COMFY / "output" / src, out_dir / names[-1])
-            # `kind="image"` because what came out is a picture, and everything
-            # downstream sorts on what a thing *is* rather than on which model
-            # made it — the gallery, Use as reference, and the first-frame
-            # picker this exists to feed.
-            _write_output_meta(
-                out_dir, kind="image", job_id=job_id, model=model,
-                prompt=params["prompt"], created=time.time(),
-                **_shot_meta(params), **info, **plan["meta"],
-                **({"workflow_name": params["workflow"]}
-                   if params.get("workflow") else {}),
-            )
+                names.append(f"{job_id}_{i:02d}.png")
+                _png_with_record(COMFY / "output" / src, OUTPUTS / names[-1], record)
             volume.commit()
             res = {"status": "completed", "job_id": job_id, "files": names,
-                   "output_dir": str(out_dir), "model": model,
+                   "output_dir": str(OUTPUTS), "model": model,
                    "duration_s": round(time.time() - started, 1), **info}
             _publish(job_id, **res)
             return res
 
-        name = f"{time.strftime('%H%M%S')}.mp4"
+        name = f"{job_id}.mp4"
         # One clip per graph, so the first is the only one. Taking [0] rather
         # than asserting length: a save node that ever emitted a poster frame
-        # beside the mp4 should cost the poster, not the take.
-        shutil.copyfile(COMFY / "output" / out_names[0], out_dir / name)
+        # beside the mp4 should cost the poster, not the take. The record
+        # rides the clip's own metadata; a clip ffmpeg cannot rewrite is
+        # copied plain and the log says which.
+        _mp4_with_record(COMFY / "output" / out_names[0], OUTPUTS / name, record)
         # The take's motion context, harvested beside its clip. ComfyUI's
         # output folder is container disk, and the take that needs this file is
         # the *next* one — which arrives after exactly the kind of gap that
@@ -11290,24 +11560,17 @@ class VideoGenerator:
         # trade twice.
         ctx = COMFY / "output" / "h3_context" / f"{job_id}_00000.safetensors"
         if ctx.exists():
-            shutil.copyfile(ctx, out_dir / H3MC_SIDECAR)
+            shutil.copyfile(ctx, OUTPUTS / f"{job_id}{H3MC_SUFFIX}")
             ctx.unlink()
         else:
             print(f"[video] {job_id} no motion context saved "
                   f"(wanted {ctx}) — Continue will fall back to the last "
                   f"frame", flush=True)
-        _write_output_meta(
-            out_dir, kind="video", job_id=job_id, model=model,
-            prompt=params["prompt"], created=time.time(),
-            **_shot_meta(params), **info, **plan["meta"],
-            **({"workflow_name": params["workflow"]}
-               if params.get("workflow") else {}),
-        )
         volume.commit()
 
         res = {
             "status": "completed", "job_id": job_id, "files": [name],
-            "output_dir": str(out_dir), "model": model,
+            "output_dir": str(OUTPUTS), "model": model,
             "duration_s": round(time.time() - started, 1), **info,
         }
         _publish(job_id, **res)
@@ -11340,7 +11603,7 @@ class VideoGenerator:
         # trade for a cap the duration menu already respects.
         continue_from = str(params.get("continue_from") or "") or None
         if continue_from:
-            src = OUTPUTS / continue_from / H3MC_SIDECAR
+            src = OUTPUTS / f"{continue_from}{H3MC_SUFFIX}"
             # Diagnose here, on this container, with the three facts that
             # distinguish the causes: the job asked for, the path wanted, what
             # is actually there. The web route already checked the volume, so
@@ -11527,12 +11790,13 @@ def _validate_storyboard(raw: Any) -> dict:
         if pic is not None:
             if not isinstance(pic, dict) or not pic.get("file"):
                 raise ValueError(f"Panel {i + 1}'s picture needs a file.")
-            job = str(pic.get("job_id") or "")
-            if job and not NAME_RE.match(job):
-                raise ValueError(f"Panel {i + 1}'s picture has a job id no "
-                                 f"render could have: {job!r}")
-            pic = {"file": Path(str(pic["file"])).name,
-                   **({"job_id": job} if job else {})}
+            # `gallery` says which folder: a render in outputs/, or a picture
+            # dropped onto the board. Either way the file is the address.
+            name = Path(str(pic["file"])).name
+            if pic.get("gallery") and not OUTPUT_FILE_RE.match(name):
+                raise ValueError(f"Panel {i + 1}'s picture names a render no "
+                                 f"run could have written: {name!r}")
+            pic = {"file": name, **({"gallery": True} if pic.get("gallery") else {})}
         fit = str(p.get("fit") or "crop")
         if fit not in ("crop", "whole"):
             raise ValueError(f"Panel {i + 1}'s fit is {fit!r}; crop or whole.")
@@ -11781,16 +12045,25 @@ def _playground_run(comfy: _Comfy, job_id: str,
         _publish(job_id, phase="loading", step=0, percent=0)
         out_names = comfy.run(job_id, graph, what="output")
 
-        out_dir = OUTPUTS / job_id
-        out_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%H%M%S")
+        OUTPUTS.mkdir(parents=True, exist_ok=True)
         graph_json = json.dumps(graph)
         clip_exts = (".mp4", ".mov", ".m4v", ".webm", ".mkv")
+        # `kind` by what came out, because everything downstream sorts on
+        # what a thing *is* rather than on which surface made it. The graph
+        # goes in the record too: the PNG's `prompt` copy is for ComfyUI,
+        # this one is for readers of the record.
+        exts = [(COMFY / "output" / s).suffix.lower() for s in out_names]
+        record = _output_record(
+            kind="video" if any(e in clip_exts for e in exts) else "image",
+            job_id=job_id, model="playground", prompt="", created=time.time(),
+            workflow=graph,
+            workflow_name=str(params.get("workflow_name") or "") or None,
+        )
         names: list[str] = []
         for i, src in enumerate(out_names):
             srcp = COMFY / "output" / src
             ext = srcp.suffix.lower() or ".bin"
-            name = f"{stamp}_{i:02d}{ext}"
+            name = f"{job_id}_{i:02d}{ext}"
             if ext == ".png":
                 # Re-encoded rather than copied, same trade as the image
                 # path: ComfyUI ran with --disable-metadata, and a PNG whose
@@ -11798,46 +12071,19 @@ def _playground_run(comfy: _Comfy, job_id: str,
                 # existing tool reads a file to avoid. `prompt` is ComfyUI's
                 # own key, so a stock install loads this straight back onto
                 # its canvas — the PNG *is* the workflow.
-                with Image.open(srcp) as im:
-                    png = PngImagePlugin.PngInfo()
-                    png.add_text("prompt", graph_json)
-                    im.save(out_dir / name, pnginfo=png)
+                _png_with_record(srcp, OUTPUTS / name, record, {"prompt": graph_json})
             elif ext in clip_exts:
                 # The same embed for a clip, via the container's ffmpeg: the
-                # graph rides the comment tag, streams copied untouched.
-                # Best-effort — failing a finished render over its metadata
-                # is the wrong trade, so a clip ffmpeg cannot rewrite is
-                # copied plain and the log says which.
-                done = subprocess.run(
-                    ["ffmpeg", "-y", "-i", str(srcp), "-c", "copy",
-                     "-movflags", "use_metadata_tags",
-                     "-metadata", f"comment={graph_json}",
-                     str(out_dir / name)],
-                    capture_output=True, text=True)
-                if done.returncode != 0:
-                    tail = (done.stderr or "").strip().splitlines()[-1:]
-                    print(f"[playground] {job_id} could not embed the graph "
-                          f"in {name}: {' '.join(tail)}", flush=True)
-                    shutil.copyfile(srcp, out_dir / name)
+                # graph rides the comment tag beside the record, streams
+                # copied untouched.
+                _mp4_with_record(srcp, OUTPUTS / name, record, {"comment": graph_json})
             else:
-                shutil.copyfile(srcp, out_dir / name)
+                shutil.copyfile(srcp, OUTPUTS / name)
             names.append(name)
-
-        # `kind` by what came out, because everything downstream sorts on
-        # what a thing *is* rather than on which surface made it. The graph
-        # goes in the sidecar too: the PNG's copy is for ComfyUI, this one is
-        # for readers of the record.
-        kind = ("video" if any(n.lower().endswith(clip_exts) for n in names)
-                else "image")
-        _write_output_meta(
-            out_dir, kind=kind, job_id=job_id, model="playground",
-            prompt="", created=time.time(), workflow=graph,
-            workflow_name=str(params.get("workflow_name") or "") or None,
-        )
         volume.commit()
 
         res = {"status": "completed", "job_id": job_id, "files": names,
-               "output_dir": str(out_dir), "model": "playground",
+               "output_dir": str(OUTPUTS), "model": "playground",
                "duration_s": round(time.time() - started, 1)}
         _publish(job_id, **res)
         return res
@@ -12720,9 +12966,9 @@ def web():
         for t in takes:
             if not isinstance(t, dict):
                 continue
-            jid, name = str(t.get("job_id") or ""), str(t.get("file") or "")
-            if jid and name:
-                rows.append({"job_id": jid, "file": name})
+            name = Path(str(t.get("file") or "")).name
+            if name and OUTPUT_FILE_RE.match(name):
+                rows.append({"file": name})
         if not rows:
             return {"error": "The takes carried no filenames — reload and try "
                              "again."}
@@ -13938,9 +14184,9 @@ def web():
         if continue_from:
             if not re.fullmatch(r"vid[0-9a-z]+", continue_from):
                 return {"error": f"Not a video job id: {continue_from!r}"}
-            if not (OUTPUTS / continue_from / H3MC_SIDECAR).exists():
+            if not (OUTPUTS / f"{continue_from}{H3MC_SUFFIX}").exists():
                 _reload_volume()
-            if not (OUTPUTS / continue_from / H3MC_SIDECAR).exists():
+            if not (OUTPUTS / f"{continue_from}{H3MC_SUFFIX}").exists():
                 return {"error":
                         f"That take's motion context is no longer on the "
                         f"volume ({continue_from}) — it was rendered before "
@@ -14173,11 +14419,18 @@ def web():
         the page that still reads it, and it is now always false, because
         there is no mount left in this path to be behind.
         """
-        items, total = _gallery(limit=max(1, min(limit, 500)), before=before)
-        return {"items": items, "total": total, "stale": False}
+        items, total, legacy = _gallery(limit=max(1, min(limit, 500)), before=before)
+        out: dict[str, Any] = {"items": items, "total": total, "stale": False}
+        if legacy:
+            # Job folders from before the record lived inside the file. They
+            # are moved into place by a one-time job, started here on first
+            # sight; until it lands they are not results the page can address,
+            # so the reply says how many are still on their way.
+            out["migrating"] = {"job_id": _start_migration(), "pending": len(legacy)}
+        return out
 
-    @api.get("/api/file/{job_id}/{name}")
-    def output_file(job_id: str, name: str):
+    @api.get("/api/file/{name}")
+    def output_file(name: str):
         """
         Stream one result off the volume, image or video.
 
@@ -14190,7 +14443,8 @@ def web():
 
         Matching the whole filename, not its stem: `Path("../../x").stem` is
         "x", which passes NAME_RE while the joined path still escapes outputs/.
-        The separators have to be visible to the regex to be rejected.
+        The separators have to be visible to the regex to be rejected. One
+        segment: outputs/ is flat and the name carries its run.
 
         **Served off the spool, never the mount.** The mount needs a reload to
         see a fresh run, reload is refusable — by this route's own descriptors
@@ -14201,21 +14455,19 @@ def web():
         clip's range requests on local disk: the browser re-asking for byte
         ranges used to be a descriptor on /workspace per ask.
         """
-        if not NAME_RE.match(job_id) or not OUTPUT_FILE_RE.match(name):
+        if not OUTPUT_FILE_RE.match(name):
             return JSONResponse({"error": "Invalid name."}, status_code=400)
 
-        path = _spooled(f"outputs/{job_id}/{name}")
+        path = _spooled(f"outputs/{name}")
         if path is None:
             # The mount, for the one thing the spool cannot answer: bytes
             # written on THIS container that were never committed, and any
-            # RPC failure. `_listed` + `_sizes_on_disk` rather than a second
-            # `is_file()` because the first miss cached a negative entry the
-            # reload does not clear.
-            mounted = OUTPUTS / job_id / name
+            # RPC failure. `_sizes_on_disk` rather than `is_file()` because
+            # a first miss cached a negative entry the reload does not clear.
+            mounted = OUTPUTS / name
             if not mounted.is_file():
                 _reload_volume()
-                if not (_listed(mounted.parent, OUTPUTS)
-                        and _sizes_on_disk([mounted])[mounted]):
+                if not _sizes_on_disk([mounted])[mounted]:
                     return JSONResponse({"error": "Not found."}, status_code=404)
             path = mounted
         return FileResponse(
@@ -14224,8 +14476,8 @@ def web():
             headers={"Cache-Control": "private, max-age=3600"},
         )
 
-    @api.get("/api/cover/{job_id}/{name}")
-    def output_cover(job_id: str, name: str):
+    @api.get("/api/cover/{name}")
+    def output_cover(name: str):
         """
         One gallery cover: the same result at 320px, and never a descriptor.
 
@@ -14236,23 +14488,27 @@ def web():
 
         The expensive half is that `/api/file` answers with `FileResponse`,
         which holds a descriptor open on /workspace for the length of the
-        transfer *to the client* — so its width is set by the viewer's
-        connection, not by the file. Modal refuses `volume.reload()` while
-        anything on the volume is open, and a grid opens dozens at once, so
-        painting the gallery is what froze the gallery's own listing. Reading
-        the bytes into memory and answering with `Response` closes the
-        descriptor before anything goes on the wire, which is the entire point
-        of this route existing rather than a `?w=320` on the other one.
+        transfer *to the client*. Reading the bytes into memory and answering
+        with `Response` closes the descriptor before anything goes on the
+        wire, which is the entire point of this route existing rather than a
+        `?w=320` on the other one.
+
+        **Derived, so it lives on this container and nowhere else.** A copy
+        used to be written onto the volume "for the next container", which
+        was reasoning correctly about a web container that died a minute
+        after the last request. With the scaledown window at twenty minutes
+        the spool is warm for a session, and a cover rebuilt after a genuine
+        cold start is the honest price of not keeping caches on the volume.
 
         Named `/api/cover/...` rather than `/api/thumb/...` because the dataset
-        thumbnail route is also two segments: FastAPI resolves by registration
+        thumbnail route is two segments: FastAPI resolves by registration
         order, and a gallery cover reaching that handler 404s as "Image not
         found" for a dataset that was never named.
         """
         from fastapi.responses import Response
         from PIL import Image
 
-        if not NAME_RE.match(job_id) or not OUTPUT_FILE_RE.match(name):
+        if not OUTPUT_FILE_RE.match(name):
             return JSONResponse({"error": "Invalid name."}, status_code=400)
         if name.lower().endswith(".mp4"):
             # Not a fallthrough to the clip. A cover route that sometimes
@@ -14263,95 +14519,74 @@ def web():
                 {"error": "No cover for a clip: web_image has no ffmpeg."},
                 status_code=404)
 
-        # The size is in the cache name, which `thumb()` does not do and should.
-        # Its invalidation compares the cached mtime against the source's, and
-        # that knows nothing about THUMB_PX — so raising the constant leaves
-        # every existing thumbnail at the old size, forever and silently. Here
-        # the constant is part of the key, so a raise invalidates by
-        # construction and the orphans go with the folder on delete. No mtime
-        # check beside it: a job directory never changes after the run that
-        # wrote it.
-        stem = Path(name).stem
-        cover_rel = f"outputs/{job_id}/{THUMB_DIR}/{stem}@{THUMB_PX}.jpg"
-        local = SPOOL / cover_rel
+        # The size is in the cache name, so raising the constant invalidates
+        # by construction. No mtime check beside it: a finished file never
+        # changes.
+        local = SPOOL / "outputs" / ".covers" / f"{name}@{THUMB_PX}.jpg"
         try:
-            if not local.is_file():
-                # A cover an earlier container already paid for, off committed
-                # state by RPC — the cold-start case that used to re-encode a
-                # whole page of them.
-                data = _volume_bytes(cover_rel)
-                if data is None:
-                    src = _spooled(f"outputs/{job_id}/{name}")
-                    if src is None:
-                        # The mount as last resort, same two-step as /api/file.
-                        src = OUTPUTS / job_id / name
-                        if not src.is_file():
-                            _reload_volume()
-                            if not (_listed(src.parent, OUTPUTS)
-                                    and _sizes_on_disk([src])[src]):
-                                return JSONResponse({"error": "Not found."},
-                                                    status_code=404)
-                    with Image.open(src) as im:
-                        # Upright even for our own renders: the viewer shows
-                        # this same file at full size and browsers rotate from
-                        # EXIF while PIL does not, so without this the card and
-                        # the full-screen view of one file disagree by 90°.
-                        im = _upright(im).convert("RGB")
-                        im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
-                        buf = io.BytesIO()
-                        im.save(buf, "JPEG", quality=78, optimize=True)
-                    data = buf.getvalue()
-                    # Best-effort onto the volume for the next container. No
-                    # commit — a cover is derived data and a grid of them would
-                    # be a grid of commits; the session heartbeat's commit
-                    # carries them within a couple of minutes.
-                    try:
-                        vol_cache = OUTPUTS / job_id / THUMB_DIR
-                        vol_cache.mkdir(exist_ok=True)
-                        (vol_cache / f"{stem}@{THUMB_PX}.jpg").write_bytes(data)
-                    except OSError:
-                        pass
+            if local.is_file():
+                os.utime(local)
+                data = local.read_bytes()
+            else:
+                src = _spooled(f"outputs/{name}")
+                if src is None:
+                    # The mount as last resort, same two-step as /api/file.
+                    src = OUTPUTS / name
+                    if not src.is_file():
+                        _reload_volume()
+                        if not _sizes_on_disk([src])[src]:
+                            return JSONResponse({"error": "Not found."},
+                                                status_code=404)
+                with Image.open(src) as im:
+                    # Upright even for our own renders: the viewer shows this
+                    # same file at full size and browsers rotate from EXIF
+                    # while PIL does not, so without this the card and the
+                    # full-screen view of one file disagree by 90°.
+                    im = _upright(im).convert("RGB")
+                    im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    im.save(buf, "JPEG", quality=78, optimize=True)
+                data = buf.getvalue()
                 local.parent.mkdir(parents=True, exist_ok=True)
                 local.write_bytes(data)
-            else:
-                data = local.read_bytes()
         except Exception as exc:
             return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
-        # A day rather than /api/file's hour: a job directory never changes
-        # after the run that wrote it, so a cover derived from one is immutable
-        # in a way a dataset image — which you can replace in place — is not.
+        # A day rather than /api/file's hour: a finished file never changes,
+        # so a cover derived from one is immutable in a way a dataset image —
+        # which you can replace in place — is not.
         return Response(content=data, media_type="image/jpeg",
                         headers={"Cache-Control": "private, max-age=86400"})
 
     @api.post("/api/outputs/{job_id}/delete")
     def delete_output(job_id: str) -> dict[str, Any]:
-        """Delete a result and its files. Unlinked, not recoverable."""
+        """Delete a run and every file of it — the results and the motion
+        context beside them. Unlinked, not recoverable."""
         if not NAME_RE.match(job_id):
             return {"error": "Invalid job_id."}
         # Insisting, because the card you are most likely to delete on impulse
         # is the one that just appeared, and a refused reload turns that into
-        # "Not found" about a folder that is sitting on the volume.
+        # "Not found" about files that are sitting on the volume.
         _reload_insist()
-        d = OUTPUTS / job_id
-        if not _listed(d, OUTPUTS):
+        files = _group_files(job_id)
+        if not files:
             return {"error": "Not found."}
-        shutil.rmtree(d, ignore_errors=True)
-        _forget_listed(job_id, OUTPUTS)
+        for name in files:
+            (OUTPUTS / name).unlink(missing_ok=True)
+            _forget_listed(name, OUTPUTS)
         _forget_output(job_id)
-        _drop_legacy_trash(OUTPUTS)
         volume.commit()
-        return {"ok": True}
+        return {"ok": True, "removed": len(files)}
 
     @api.post("/api/outputs/purge")
     def purge_outputs(payload: dict) -> dict[str, Any]:
         """
-        Delete many results in one request.
+        Delete many runs in one request.
 
         Two guards, because deletion here does not go anywhere first.
 
         `confirm` has to be in the body, so a bare POST to a guessed URL cannot
-        fire it. And the caller names the folders rather than describing them:
+        fire it. And the caller names the runs rather than describing them:
         re-deriving the set here from a filter would delete whatever matched at
         request time, which is not the set the user was shown a count of and
         agreed to. A run that finished during the confirm dialog would go
@@ -14369,10 +14604,11 @@ def web():
         _reload_insist()
         removed, missing = 0, []
         for job_id in dict.fromkeys(job_ids):
-            d = OUTPUTS / job_id
-            if _listed(d, OUTPUTS):
-                shutil.rmtree(d, ignore_errors=True)
-                _forget_listed(job_id, OUTPUTS)
+            files = _group_files(job_id)
+            if files:
+                for name in files:
+                    (OUTPUTS / name).unlink(missing_ok=True)
+                    _forget_listed(name, OUTPUTS)
                 _forget_output(job_id)
                 removed += 1
             else:
@@ -14381,7 +14617,7 @@ def web():
         _drop_legacy_trash(OUTPUTS)
         volume.commit()
         # Named, not just subtracted from the count. The list is the agreement,
-        # so a folder in it that could not be found is the one thing this route
+        # so a run in it that could not be found is the one thing this route
         # owes an answer about — and the cause is nearly always a view too old
         # to hold it, which is a different problem from a bad id.
         return {"ok": True, "removed": removed,
@@ -14398,8 +14634,7 @@ def web():
         the bytes in page memory, which a fetch-into-blob would and a
         selection of clips would blow through. ZIP_STORED, because every
         member is already compressed media and deflating it again is CPU
-        spent making the file marginally larger. Entries are prefixed with
-        the job id: two runs' files are routinely both called 00.png. Built
+        spent making the file marginally larger. Built
         from `_spooled`, so nothing here opens the mount and a slow selection
         cannot refuse anyone's reload.
         """
@@ -14414,7 +14649,7 @@ def web():
         if any(not NAME_RE.match(j) for j in job_ids):
             return JSONResponse({"error": "Invalid job_id."}, status_code=400)
 
-        entries = _output_entries()
+        entries, _legacy = _output_entries()
         picked = [(j, sorted(n for n, _ in entries.get(j, [])))
                   for j in dict.fromkeys(job_ids)]
         if not any(files for _, files in picked):
@@ -14427,11 +14662,13 @@ def web():
         n = 0
         try:
             with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
-                for job_id, files_ in picked:
+                for _job_id, files_ in picked:
                     for fname in files_:
-                        src = _spooled(f"outputs/{job_id}/{fname}")
+                        src = _spooled(f"outputs/{fname}")
                         if src is not None:
-                            zf.write(src, f"{job_id}/{fname}")
+                            # Its own name: the run is in it, so two runs'
+                            # files can no longer both be called 00.png.
+                            zf.write(src, fname)
                             n += 1
         except Exception:
             out.unlink(missing_ok=True)

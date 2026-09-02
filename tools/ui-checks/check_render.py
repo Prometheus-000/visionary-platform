@@ -85,7 +85,8 @@ with sync_playwright() as pw:
     # Streamed by filename rather than inlined as base64: each <img> paints as
     # its own bytes land, off the same route and cache the gallery uses.
     check("every still actually painted", all(w > 0 for w in d["painted"]), str(d["painted"]))
-    check("each still carries both handoffs", d["acts"] == 2, f"{d['acts']} buttons")
+    # Three since Edit became a verb a picture has: edit, first frame, reference.
+    check("each still carries its three hand-offs", d["acts"] == 3, f"{d['acts']} buttons")
 
     # A batch is two columns; a single still gets the canvas. Both are set from
     # the measured fit rather than by CSS, so an empty --shot-h means the stills

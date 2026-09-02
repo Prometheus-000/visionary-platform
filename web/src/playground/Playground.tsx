@@ -200,9 +200,9 @@ export function Playground() {
           <div className="pgresults">
             {run.files.map((f) => f.toLowerCase().endsWith('.png')
               || f.toLowerCase().endsWith('.jpg') ? (
-                <img key={f} src={fileUrl(run.jobId!, f)} alt={f} />
+                <img key={f} src={fileUrl(f)} alt={f} />
               ) : (
-                <video key={f} src={fileUrl(run.jobId!, f)} controls loop />
+                <video key={f} src={fileUrl(f)} controls loop />
               ))}
           </div>
         )}

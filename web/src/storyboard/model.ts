@@ -26,7 +26,9 @@ import {
 import type { CameraAmp, CameraSpeed, ShotGroup, ShotPill } from '../api/types'
 import { promptOf, type GalleryItem } from '../gallery/types'
 
-export type Picture = { job_id?: string; file: string }
+/** A file, and which folder: a render in outputs/ (`gallery`), or one
+ *  dropped onto the board, in the board's own folder. */
+export type Picture = { file: string; gallery?: true }
 export type Fit = 'crop' | 'whole'
 export type Pt = [number, number]
 /** A subject's move: two points, fractions of the picture, and who moves. */
@@ -126,7 +128,7 @@ export function readBoard(raw: Record<string, unknown> | undefined, name: string
         prose: String(o.prose ?? ''),
         note: String(o.note ?? ''),
         picture: pic && pic.file
-          ? { file: String(pic.file), ...(pic.job_id ? { job_id: String(pic.job_id) } : {}) }
+          ? { file: String(pic.file), ...(pic.gallery ? { gallery: true as const } : {}) }
           : null,
         fit: o.fit === 'whole' ? 'whole' : 'crop',
         focus: [clamp01(focus[0] ?? 0.5), clamp01(focus[1] ?? 0.5)],
@@ -161,7 +163,7 @@ export function readRows(raw: Record<string, unknown> | undefined): BoardRow[] {
       panels: Number(o.panels) || 0,
       updated: typeof o.updated === 'number' ? o.updated : null,
       cover: pic && pic.file
-        ? { file: String(pic.file), ...(pic.job_id ? { job_id: String(pic.job_id) } : {}) }
+        ? { file: String(pic.file), ...(pic.gallery ? { gallery: true as const } : {}) }
         : null,
     }]
   })
@@ -171,7 +173,7 @@ export function readRows(raw: Record<string, unknown> | undefined): BoardRow[] {
  *  it — its cover for the wall, the file for a keyframe; an upload is the
  *  board's own file either way. */
 export function pictureUrl(board: string, pic: Picture, cover = false): string {
-  if (pic.job_id) return cover ? coverUrl(pic.job_id, pic.file) : fileUrl(pic.job_id, pic.file)
+  if (pic.gallery) return cover ? coverUrl(pic.file) : fileUrl(pic.file)
   return storyboardFileUrl(board, pic.file)
 }
 
@@ -363,7 +365,7 @@ export async function pinToBoard(
     if (failed(made)) return made
     board = made
   }
-  const picture = { job_id: it.job_id, file }
+  const picture: Picture = { file, gallery: true }
   const target = at.pick ? board.panels.find((p) => p.id === at.pick) : null
   if (target) {
     target.picture = picture

@@ -295,7 +295,7 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
     // it is what the Motion tile falls back to when cleared, and what the
     // route's own degrade points at when a latent has gone missing. Cheap —
     // the bytes are already in the <video> on the canvas.
-    const frame = await lastFrame(fileUrl(run.jobId, run.file))
+    const frame = await lastFrame(fileUrl(run.file))
     setLinking(false)
     s.setContinueFrom(run.jobId)
     s.setKeyframe('first', frame)
@@ -336,7 +336,7 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
     if (!takes.length || exporting) return
     setExporting('Queued')
     const queued = await exportSceneRoute(
-      takes.map((t) => ({ job_id: t.jobId, file: t.file })))
+      takes.map((t) => ({ file: t.file })))
     if (failed(queued)) { setExporting(null); alert(queued.error); return }
     const jobId = String((queued as { job_id?: string }).job_id || 'export_scene')
     try {
@@ -344,9 +344,9 @@ export function useVideo(onLanded: (it: GalleryItem) => void) {
         const st = await status(jobId)
         if (failed(st)) { alert(st.error); break }
         if (st.status === 'completed') {
-          const name = st.files?.[0] ?? 'scene.mp4'
+          const name = st.files?.[0] ?? `${jobId}.mp4`
           setExporting('Saving')
-          const res = await fetch(fileUrl(jobId, name))
+          const res = await fetch(fileUrl(name))
           if (!res.ok) throw new Error(`the file came back ${res.status}`)
           const url = URL.createObjectURL(await res.blob())
           const a = document.createElement('a')

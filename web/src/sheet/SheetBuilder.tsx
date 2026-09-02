@@ -252,7 +252,7 @@ export function SheetBuilder() {
         <div className="sheet-strip" id="sheet-strip">
           {recent.map((it) => (
             <img key={it.job_id + it.files[0]!}
-                 src={coverUrl(it.job_id, it.files[0]!)} alt="" draggable
+                 src={coverUrl(it.files[0]!)} alt="" draggable
                  title="Drag onto a slot — or click for the next empty one"
                  /* The coarse-input path. A drag from strip to well is the
                     precise gesture and stays primary; a click was a dead press,
@@ -262,7 +262,7 @@ export function SheetBuilder() {
                     aiming at a *particular* well is what the drag is for. */
                  onClick={() => {
                    const slot = SHEET_SLOTS.find((sl) => !held[sl.id])?.id
-                   if (slot) void placeUrl(slot, fileUrl(it.job_id, it.files[0]!))
+                   if (slot) void placeUrl(slot, fileUrl(it.files[0]!))
                  }}
                  onDragStart={(e) => {
                    // **Absolute, or it does not survive the drag.** A native
@@ -276,7 +276,7 @@ export function SheetBuilder() {
                    // hands over the same live DataTransfer and never crosses
                    // the pasteboard, so it cannot see this. text/plain rides
                    // along for anything that strips uri-list entirely.
-                   const abs = new URL(fileUrl(it.job_id, it.files[0]!), window.location.href).href
+                   const abs = new URL(fileUrl(it.files[0]!), window.location.href).href
                    e.dataTransfer.setData('text/uri-list', abs)
                    e.dataTransfer.setData('text/plain', abs)
                    e.dataTransfer.effectAllowed = 'copy'

@@ -91,7 +91,7 @@ export function fullUrl(it: GalleryItem): string {
   // dataset image, which is addressed by set and filename, and the canvas's own
   // full-screen, which already has the src it is displaying. Making those synthesise a
   // job id to get a URL back out would be a lie in a field other code reads.
-  return it.src ?? fileUrl(it.job_id, it.files[0] ?? '')
+  return it.src ?? fileUrl(it.files[0] ?? '')
 }
 
 /**
@@ -107,7 +107,7 @@ export function fullUrl(it: GalleryItem): string {
  * to a route that would have to invent a job id to answer.
  */
 export function coverOf(it: GalleryItem): string {
-  return it.src ?? coverUrl(it.job_id, it.files[0] ?? '')
+  return it.src ?? coverUrl(it.files[0] ?? '')
 }
 
 /**

@@ -51,7 +51,7 @@ import { useVideo } from './video/useVideo'
  */
 export function App() {
   const s = useStore()
-  const { items, reload, record, drop, total, behind, more, done } = useGallery()
+  const { items, reload, record, drop, total, behind, more, done, migrating } = useGallery()
   const [galleryOpen, setGalleryOpen] = useState(false)
   /* Closed. The canvas is the largest thing on screen, always — and the drawer is
      the one piece of chrome that takes width from it rather than height, 320px of
@@ -225,8 +225,8 @@ export function App() {
 
   /* What is on the canvas right now, if anything — the thing Space acts on. */
   const canvasSrc = s.kind === 'video'
-    ? (vid.run.jobId && vid.run.file ? fileUrl(vid.run.jobId, vid.run.file) : null)
-    : (gen.run.jobId && gen.run.files[0] ? fileUrl(gen.run.jobId, gen.run.files[0]) : null)
+    ? (vid.run.jobId && vid.run.file ? fileUrl(vid.run.file) : null)
+    : (gen.run.jobId && gen.run.files[0] ? fileUrl(gen.run.files[0]) : null)
 
   const lightbox = useCallback((src: string, kind: 'image' | 'video') => {
     setShown({ rows: [{ job_id: '', kind, files: [], src }], i: 0 })
@@ -401,7 +401,7 @@ export function App() {
    * streamed `<img src>`, so the base64 the video side needs does not exist client-side.
    */
   const handoff = useCallback(
-    async (jobId: string, file: string,
+    async (file: string,
            as: 'first' | 'reference' | 'refvideo' | 'edit',
            loras?: GalleryItem['loras'], seed?: number) => {
       // Refused before the fetch, with the same sentence the locked tiles
@@ -411,7 +411,7 @@ export function App() {
         alert(NEED_EDIT_LORA)
         return
       }
-      const b64 = await fileToB64(fileUrl(jobId, file))
+      const b64 = await fileToB64(fileUrl(file))
       if (!b64) {
         // A modal, still: this is the whole of what the press was for, so it has
         // nothing to fall through to and silence would read as a dead button. What
@@ -610,7 +610,7 @@ export function App() {
     void (async () => {
       // Fetched, not reused: the canvas stills are a streamed `<img src>`, so the base64
       // the video side needs does not exist client-side. Same as `handoff`.
-      const b64 = await fileToB64(fileUrl(jobId, file))
+      const b64 = await fileToB64(fileUrl(file))
       // Silent when the fetch fails, and deliberately: nobody asked for this, they asked
       // for 8 seconds. A modal explaining that a courtesy did not happen would interrupt
       // a mode switch to report something that was never promised — and the still is
@@ -769,7 +769,7 @@ export function App() {
                 chaining={vid.linking}
                 onExport={() => void vid.exportScene()}
                 exporting={vid.exporting}
-                onHandoff={(jobId, file, as) => void handoff(jobId, file, as)}
+                onHandoff={(file, as) => void handoff(file, as)}
                 onFirstFrame={async (f) => {
                   const b64 = await toB64(f)
                   if (b64) useStore.getState().setKeyframe('first', b64)
@@ -802,6 +802,7 @@ export function App() {
               items={items}
               total={total}
               behind={behind}
+              migrating={migrating}
               done={done}
               open={galleryOpen}
               drawerOpen={drawerOpen}
@@ -813,7 +814,7 @@ export function App() {
               onMore={more}
               onDropped={drop}
               onMeta={setMeta}
-              onHandoff={(it, as) => void handoff(it.job_id, it.files[0] ?? '', as, it.loras,
+              onHandoff={(it, as) => void handoff(it.files[0] ?? '', as, it.loras,
                                                   it.seed ?? it.seeds?.[0])}
               onBoard={(it) => void boardIt(it)}
             />

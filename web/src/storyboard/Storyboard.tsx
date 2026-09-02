@@ -193,7 +193,7 @@ export function Storyboard({ onOpen, onGallery }: {
 
   const destroy = async () => {
     if (!board) return
-    const uploads = board.panels.filter((p) => p.picture && !p.picture.job_id).length
+    const uploads = board.panels.filter((p) => p.picture && !p.picture.gallery).length
     const what = board.title.trim() || board.name
     if (!confirm(`Delete "${what}"?\n\nIt has ${board.panels.length} panel${board.panels.length === 1 ? '' : 's'}`
                  + (uploads ? ` and ${uploads} uploaded picture${uploads === 1 ? '' : 's'}, which go with it.` : '.')
@@ -448,7 +448,7 @@ export function Storyboard({ onOpen, onGallery }: {
         <div className="sbghost" style={{ left: drag.x, top: drag.y, width: drag.w }}>
           <div className="sbframe" style={{ aspectRatio: board!.aspect.replace(':', '/') }}>
             {carried.picture && (
-              <img src={pictureUrl(board!.name, carried.picture, !!carried.picture.job_id)} alt=""
+              <img src={pictureUrl(board!.name, carried.picture, !!carried.picture.gallery)} alt=""
                    style={{ objectPosition: `${carried.focus[0] * 100}% ${carried.focus[1] * 100}%` }} />
             )}
           </div>

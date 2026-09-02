@@ -50,6 +50,10 @@ export function useGallery() {
   const [error, setError] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   const [total, setTotal] = useState(0)
+  /** Job folders from before the record lived inside the file, still being
+   *  moved into place by a one-time job. The listing says how many; the
+   *  page says so and comes back until it stops saying it. */
+  const [migrating, setMigrating] = useState(0)
   // Results this window made. Held in a ref as well as in `items` because every merge
   // needs it and a re-render must not be the thing that keeps it alive.
   const own = useRef<GalleryItem[]>(mine())
@@ -93,9 +97,11 @@ export function useGallery() {
     const r = await gallery(0, PAGE)
     if (mine_ !== gen.current) return
     if (failed(r)) return setError(r.error)
-    const body = r as { items?: GalleryItem[]; total?: number; stale?: boolean }
+    const body = r as { items?: GalleryItem[]; total?: number; stale?: boolean
+                        migrating?: { pending?: number } }
     setError(null)
     setStale(!!body.stale)
+    setMigrating(body.migrating?.pending ?? 0)
     setTotal(body.total ?? 0)
     const page = (body.items ?? []).filter((i) => i.files?.length)
     // A refetch is page one again: a land or a delete changed what "newest"
@@ -181,8 +187,17 @@ export function useGallery() {
   // Only once it has given up. While it is still retrying there is nothing to say —
   // the route's own docstring is right that a listing catching up is not an error and
   // not something to apologise for on screen.
+  // While older results are being moved into place, come back for them. A
+  // clock here rather than a reply-armed retry, because the reply is the
+  // same until the job lands and the job is minutes on a deep volume.
+  useEffect(() => {
+    if (!migrating) return
+    const t = window.setTimeout(() => void refetch(), 4000)
+    return () => window.clearTimeout(t)
+  }, [migrating, items, refetch])
+
   const behind = stale && tries >= STALE_TRIES
-  return { items, error, reload, record, drop, total, behind, more, done }
+  return { items, error, reload, record, drop, total, behind, more, done, migrating }
 }
 
 /**
@@ -239,6 +254,7 @@ export function Gallery({
   items,
   total,
   behind,
+  migrating,
   done,
   open,
   drawerOpen,
@@ -256,6 +272,8 @@ export function Gallery({
   total: number
   /** The listing stopped catching up. Said on the Refresh button and nowhere else. */
   behind: boolean
+  /** How many older results are still being moved into place, or 0. */
+  migrating: number
   /** Every page is loaded; the sentinels render nothing. */
   done: boolean
   open: boolean
@@ -344,7 +362,7 @@ export function Gallery({
     // about names.
     for (const f of it.files) {
       const a = document.createElement('a')
-      a.href = fileUrl(it.job_id, f)
+      a.href = fileUrl(f)
       a.download = f
       a.click()
     }
@@ -582,7 +600,13 @@ export function Gallery({
                 {f === 'all' ? 'All' : f === 'image' ? 'Images' : 'Video'}
               </button>
             ))}
-            {sel.size === 0 && <>{/* The one place the listing admits it is behind, and only once it has
+            {sel.size === 0 && <>{migrating > 0 && (
+              // Says what it is doing while it does it — the wait costs what
+              // it shows. Once, in words, where the listing's own controls are.
+              <span className="muted" id="gal-migrating">
+                Moving {migrating} older result{migrating === 1 ? '' : 's'} into place…
+              </span>
+            )}{/* The one place the listing admits it is behind, and only once it has
                 stopped trying. A tooltip naming a state on a control whose home you are
                 already in is what the icon rule licenses; a banner over the grid is
                 not. */}

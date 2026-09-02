@@ -22,6 +22,9 @@ import hashlib
 import json
 import math
 import re
+import shutil
+import struct
+import subprocess
 import time
 import typing
 from pathlib import Path
@@ -56,7 +59,8 @@ def pull(names: set[str]) -> dict:
     # pull them and only pays when it calls one.
     ns: dict = {"Any": typing.Any, "Path": Path, "json": json,
                 "hashlib": hashlib, "math": math, "re": re, "time": time,
-                "base64": base64}
+                "base64": base64, "struct": struct, "subprocess": subprocess,
+                "shutil": shutil}
     exec(compile(ast.Module(body=body, type_ignores=[]), str(APP), "exec"), ns)
     return ns
 

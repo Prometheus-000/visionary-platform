@@ -155,19 +155,19 @@ STORYBOARDS = {
             {"id": "p1", "prose": "Empty coastal road at dusk, fog rolling over the guardrail.",
              "note": "hold long before she enters", "fit": "crop", "focus": [0.5, 0.5],
              "pills": [{"key": "framing.xwide"}, {"key": "camera.static"}], "motion": [],
-             "picture": {"job_id": "job000", "file": "00.png"}},
+             "picture": {"file": "job000_00.png", "gallery": True}},
             {"id": "p2", "prose": "Maya enters frame left, coat pulled tight, walking toward the lookout.",
              "note": "", "fit": "crop", "focus": [0.5, 0.5],
              "pills": [{"key": "framing.wide"},
                        {"key": "camera.panr", "amp": "large", "speed": "slow"}],
              "motion": [{"id": "a1", "pts": [[0.04, 0.62], [0.55, 0.5]], "label": "Maya"}],
-             "picture": {"job_id": "job001", "file": "01.png"}},
+             "picture": {"file": "job001_00.png", "gallery": True}},
             {"id": "p3", "prose": "Close on her hands gripping the rail, paint flaking under her fingers.",
              "note": "", "fit": "crop", "focus": [0.5, 0.5],
              "pills": [{"key": "framing.cu"}, {"key": "angle.high"},
                        {"key": "camera.pushin", "amp": "small", "speed": "slow"}],
              "motion": [],
-             "picture": {"job_id": "job002", "file": "02.png"}},
+             "picture": {"file": "job002_00.png", "gallery": True}},
             {"id": "p4", "prose": "She says the line — \u201cyou were supposed to wait.\u201d",
              "note": "frame undecided — over-shoulder vs profile", "fit": "crop",
              "focus": [0.5, 0.5], "pills": [], "motion": [], "picture": None},
@@ -175,24 +175,24 @@ STORYBOARDS = {
              "note": "", "fit": "whole", "focus": [0.5, 0.15],
              "pills": [{"key": "camera.tiltd", "amp": "large", "speed": "normal"}],
              "motion": [],
-             "picture": {"job_id": "job010", "file": "10.png"}},
+             "picture": {"file": "job010_00.png", "gallery": True}},
             {"id": "p6", "prose": "Elias appears beside her; neither looks at the other.",
              "note": "", "fit": "crop", "focus": [0.5, 0.5],
              "pills": [{"key": "framing.medium"}, {"key": "camera.zoom"}],
              "motion": [{"id": "a2", "pts": [[0.96, 0.55], [0.66, 0.52]], "label": "Elias"}],
-             "picture": {"job_id": "job006", "file": "06.png"}},
+             "picture": {"file": "job006_00.png", "gallery": True}},
             {"id": "p7", "prose": "The envelope changes hands, barely.",
              "note": "", "fit": "crop", "focus": [0.5, 0.5],
              "pills": [{"key": "camera.orbit", "amp": "medium", "speed": "slow"}],
              "motion": [],
-             "picture": {"job_id": "job004", "file": "04.png"}},
+             "picture": {"file": "job004_00.png", "gallery": True}},
             {"id": "p8", "prose": "Both figures tiny against the fog as the light dies.",
              "note": "mirror of panel 1 — same camera height", "fit": "crop",
              "focus": [0.5, 0.5],
              "pills": [{"key": "framing.xwide"},
                        {"key": "camera.craneu", "amp": "large", "speed": "slow"}],
              "motion": [],
-             "picture": {"job_id": "job007", "file": "07.png"}},
+             "picture": {"file": "job007_00.png", "gallery": True}},
         ],
         "updated": time.time(),
     },
@@ -203,7 +203,7 @@ STORYBOARDS = {
             {"id": "k1", "prose": "Steam off the kettle, the window fogged.",
              "note": "", "fit": "crop", "focus": [0.5, 0.5],
              "pills": [{"key": "camera.rack"}], "motion": [],
-             "picture": {"job_id": "job009", "file": "09.png"}},
+             "picture": {"file": "job009_00.png", "gallery": True}},
         ],
         "updated": time.time() - 86400 * 2,
     },
@@ -233,7 +233,8 @@ GALLERY = [
     {
         "job_id": f"job{i:03d}",
         "kind": "video" if i % 5 == 3 else "image",
-        "files": [f"{i:02d}.mp4" if i % 5 == 3 else f"{i:02d}.png"],
+        # Flat outputs/: the name carries the run, `{job}_{NN}.png` / `{job}.mp4`.
+        "files": [f"job{i:03d}.mp4" if i % 5 == 3 else f"job{i:03d}_00.png"],
         "created": time.time() - i * 3600,
         "modified": time.time() - i * 3600,
         "prompt": _h3_document() if i % 5 == 3 else LONG_PROMPT,
@@ -1133,7 +1134,7 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 data = {}
             takes = [x for x in (data.get("takes") or [])
-                     if isinstance(x, dict) and x.get("job_id") and x.get("file")]
+                     if isinstance(x, dict) and x.get("file")]
             if not takes:
                 return self.reply({"error": "Nothing to export — render a take "
                                             "first."})
@@ -1746,15 +1747,17 @@ class Handler(BaseHTTPRequestHandler):
         # Any job id, not just the gallery's: the canvas now streams a finished
         # run's stills off this route by (job, file), so a pattern that only
         # matched `job\d+` served the gallery and left the canvas broken.
-        m = re.match(r"/api/(?:file|cover)/([A-Za-z0-9_-]+)/(.+)$", path)
+        m = re.match(r"/api/(?:file|cover)/([A-Za-z0-9_-]+\.[a-z0-9]+)$", path)
         if m:
-            item = next((i for i in GALLERY if i["job_id"] == m.group(1)), None)
+            # One segment: the run is read off the name, as the route does.
+            job = re.sub(r"_\d{2}$", "", m.group(1).split(".")[0])
+            item = next((i for i in GALLERY if i["job_id"] == job), None)
             w, h = (item["width"], item["height"]) if item else (1024, 1024)
             # Labelled and coloured by *file*, not by job. Every frame of a batch
             # comes off one job id, so seeding on that alone drew four identical
             # rectangles — and the film strip's whole job is to move between them,
             # which is unfalsifiable when every frame looks the same.
-            tag = f"{m.group(1)} · {m.group(2)}"
+            tag = m.group(1)
             # **A clip gets a clip.** This served the same SVG for `.mp4` as for
             # a still, on the reasoning that a card which renders beats a card
             # that is honest about being empty. True of a *card*, and it made
@@ -1765,7 +1768,7 @@ class Handler(BaseHTTPRequestHandler):
             # here, which is how a 720p clip came to overflow the canvas on the
             # deployed app with every check in this directory passing. See
             # `CLIP_720P`.
-            if m.group(2).lower().endswith((".mp4", ".webm", ".mov")):
+            if m.group(1).lower().endswith((".mp4", ".webm", ".mov")):
                 return self.reply(CLIP_720P, "video/mp4")
             return self.reply(swatch(w, h, tag, hash(tag)), "image/svg+xml")
 
@@ -1790,7 +1793,7 @@ class Handler(BaseHTTPRequestHandler):
                     "phase": f"Joining {EXPORT['takes']} takes — no re-encode"})
             return self.reply({
                 "status": "completed", "percent": 100, "kind": "video",
-                "files": ["scene.mp4"], "takes": EXPORT["takes"],
+                "files": ["export_scene.mp4"], "takes": EXPORT["takes"],
                 "bytes": 18_400_000, "reencoded": False})
 
         if path == "/api/status/dl_gdrive":
@@ -1836,7 +1839,7 @@ class Handler(BaseHTTPRequestHandler):
                 # exactly as the gallery does, and stubbing the old inlined shape
                 # would be testing a path the page no longer takes. As many as were
                 # asked for, so the film strip has something to page through.
-                "files": ["120000_%02d.png" % i for i in range(n)],
+                "files": ["%s_%02d.png" % (m.group(1), i) for i in range(n)],
                 "job_id": m.group(1), "output_dir": "/workspace/outputs/" + m.group(1),
                 "seeds": [4242 + i for i in range(n)], "sampler": "Euler", "scheduler": "Simple",
                 "steps": 8, "cfg_scale": 1.0, "shift": 1.15, "duration_s": 6.2,
@@ -1878,13 +1881,13 @@ class Handler(BaseHTTPRequestHandler):
                 # differently for a still.
                 return self.reply({
                     "status": "completed", "percent": 100, "still": True,
-                    "files": ["%02d.png" % i for i in range(H3_STILL_FRAMES)],
+                    "files": ["%s_%02d.png" % (m.group(1), i) for i in range(H3_STILL_FRAMES)],
                     "job_id": m.group(1), "width": 1344, "height": 768,
                     "frames": H3_STILL_FRAMES, "seed": 4242, "steps": 4,
                     "duration_s": 11.4,
                 })
             return self.reply({
-                "status": "completed", "percent": 100, "files": ["clip.mp4"],
+                "status": "completed", "percent": 100, "files": ["%s.mp4" % m.group(1)],
                 "job_id": m.group(1), "width": 1280, "height": 720,
                 "seconds": 5, "frames": 120, "fps": 24, "seed": 4242,
                 "steps": 20, "duration_s": 214.0,
@@ -1994,7 +1997,7 @@ class Handler(BaseHTTPRequestHandler):
                     "error_node": "boom", "error_node_type": "KSampler"})
             return self.reply({
                 "status": "completed", "percent": 100,
-                "files": ["120000_00.png", "120000_01.png"],
+                "files": [m.group(1) + "_00.png", m.group(1) + "_01.png"],
                 "job_id": m.group(1), "model": "playground",
                 "output_dir": "/workspace/outputs/" + m.group(1),
                 "duration_s": 6.2})
@@ -2027,7 +2030,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path.startswith("/api/status/"):
             return self.reply({
-                "status": "completed", "percent": 100, "files": ["clip.mp4"],
+                "status": "completed", "percent": 100, "files": ["%s.mp4" % m.group(1)],
                 "seeds": [4242, 4243], "sampler": "Euler", "scheduler": "Simple",
                 "steps": 8, "cfg_scale": 1.0, "shift": 1.15, "duration_s": 6.2,
                 "width": 1024, "height": 1024,

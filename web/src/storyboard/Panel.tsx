@@ -88,7 +88,7 @@ export function PanelCard({ panel, i, board, aspect, sel, onPatch, onGrab, onMen
   const [pick, setPick] = useState<{ group: string; anchor: HTMLElement } | null>(null)
   const gesture = useRef<Gesture | null>(null)
 
-  const src = panel.picture ? pictureUrl(board, panel.picture, !!panel.picture.job_id) : null
+  const src = panel.picture ? pictureUrl(board, panel.picture, !!panel.picture.gallery) : null
   useEffect(() => { setGone(false); setNat(null) }, [src])
 
   const ratio = ratioOf(aspect)

@@ -32,12 +32,12 @@ export function LastShot({ items, onOpen }: {
       {it.kind === 'video'
         // No cover for a clip, so this one keeps the original and the `#t=` seek. One
         // element, always on screen, so there is nothing to gate.
-        ? <video src={`${fileUrl(it.job_id, it.files[0])}#t=0.04`} preload="metadata"
+        ? <video src={`${fileUrl(it.files[0])}#t=0.04`} preload="metadata"
                  muted playsInline />
         // 36px, 44px on touch — and until now it was handed the full-resolution PNG,
         // holding a descriptor on the volume for the newest file in the gallery at
         // exactly the moment the listing wants to reload.
-        : <img src={coverUrl(it.job_id, it.files[0])} alt="" />}
+        : <img src={coverUrl(it.files[0])} alt="" />}
     </button>
   )
 }

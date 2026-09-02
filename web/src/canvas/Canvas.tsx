@@ -52,7 +52,7 @@ export function Canvas({
   vidRun: VideoRun
   onOpen: (jobId: string, i: number) => void
   onOpenVideo: (src: string) => void
-  onHandoff: (jobId: string, file: string, as: 'first' | 'reference' | 'edit') => void
+  onHandoff: (file: string, as: 'first' | 'reference' | 'edit') => void
   /** A picture dropped on the video canvas is the frame the clip starts on. */
   onFirstFrame: (f: File) => Promise<void> | void
   onClear: () => void
@@ -93,7 +93,7 @@ export function Canvas({
   // construction: `finish` fills one or the other, so the canvas never has to
   // choose between them.
   const vidSrc = !image && vidRun.jobId && vidRun.file
-    ? fileUrl(vidRun.jobId, vidRun.file)
+    ? fileUrl(vidRun.file)
     : null
 
   /** Which frame of the strip is the canvas. Local, because nothing outside this
@@ -314,7 +314,7 @@ export function Canvas({
                   {/* RetryImg, not <img>: a still that failed to load once is a
                       finished render showing nothing, and the element never
                       asks again on its own. */}
-                  <RetryImg src={fileUrl(strip.jobId!, f)} alt="" decoding="async"
+                  <RetryImg src={fileUrl(f)} alt="" decoding="async"
                             width={strip.w || undefined} height={strip.h || undefined}
                             fetchPriority={i === at ? 'high' : 'auto'} />
                   {/* Each still carries its own ways onward. Three, because they are
@@ -324,15 +324,15 @@ export function Canvas({
                   <span className="acts">
                     <button type="button"
                             title="Edit — this picture becomes the scene the next render composes into; type what should change"
-                            onClick={() => onHandoff(strip.jobId!, f, 'edit')}>
+                            onClick={() => onHandoff(f, 'edit')}>
                       <IconEdit />
                     </button>
                     <button type="button" title="Animate — use as the first frame of a clip"
-                            onClick={() => onHandoff(strip.jobId!, f, 'first')}>
+                            onClick={() => onHandoff(f, 'first')}>
                       <IconPlay />
                     </button>
                     <button type="button" title="Use as a reference image"
-                            onClick={() => onHandoff(strip.jobId!, f, 'reference')}>
+                            onClick={() => onHandoff(f, 'reference')}>
                       <IconPhoto />
                     </button>
                   </span>
