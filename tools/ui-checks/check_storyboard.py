@@ -194,6 +194,17 @@ with sync_playwright() as pw:
     finally:
         tmp.unlink(missing_ok=True)
 
+    # Autosave: an edit is shadowed in this browser until the volume has it,
+    # the bar says "unsaved" only while it is, and both clear on the save.
+    page.locator(".sbpanel").nth(0).locator(".sbnote").fill("hold on the fog")
+    page.wait_for_selector("#sb-save", timeout=2000)
+    board_name = page.evaluate(
+        "() => Object.keys(localStorage).find((k) => k.startsWith('sb-shadow:')) || ''")
+    check("an edit is shadowed until saved", board_name.startswith("sb-shadow:"), board_name)
+    page.wait_for_function("!document.querySelector('#sb-save')", timeout=5000)
+    check("the shadow clears when the volume has it",
+          page.evaluate("() => !Object.keys(localStorage).some((k) => k.startsWith('sb-shadow:'))"))
+
     # Boards are a list.
     page.click("#sb-boards")
     page.wait_for_selector(".menu button", timeout=3000)
