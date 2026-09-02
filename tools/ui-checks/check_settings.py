@@ -16,8 +16,15 @@ worth pinning are the ones whose failure costs bandwidth or a file:
     with. A check is the only thing that stops it being re-added as an
     obvious convenience.
   * **The GPU options are a property of what the images were compiled for**,
-    not a preference. SageAttention is built for sm_90, so an A100 in this
-    list is a run that loads the model and then cannot allocate a kernel.
+    not a preference. SageAttention is built for the arch list in comfy_image
+    — Hopper and Ada now — so a card in this list that is not in that string
+    is a run that loads the model and then cannot allocate a kernel. L40S is
+    asserted present on every select because it is the one that was kept off
+    by a build arg read as a law.
+  * **"One container for both" collapses the two selects into one**, and the
+    switch confirms before it is made — the trade (a picture behind a clip) is
+    stated where it is chosen. A checkbox that silently flipped the class every
+    request lands on would be the exact silent sharing the backend rule bans.
   * The LoRA total, because it is the one number that says what the volume is
     actually holding.
 """
@@ -53,6 +60,8 @@ READ = """
     loraTotal: document.querySelector('#lora-total')?.textContent?.trim(),
     gpuImage: [...document.querySelectorAll('#g-gpu option')].map(o => o.textContent.trim()),
     gpuVideo: [...document.querySelectorAll('#v-gpu option')].map(o => o.textContent.trim()),
+    gpuBoth: [...document.querySelectorAll('#b-gpu option')].map(o => o.textContent.trim()),
+    oneContainer: document.querySelector('#one-container')?.checked ?? null,
     // The button that must not come back.
     catalogueWide: [...document.querySelectorAll('button')]
       .map(b => (b.textContent || '').trim().toLowerCase())
@@ -99,8 +108,48 @@ with sync_playwright() as pw:
               str(f["note"]))
 
     check("no catalogue-wide Download", not d["catalogueWide"], str(d["catalogueWide"]))
-    check("image GPUs are Hopper only", d["gpuImage"] == ["H100", "H200"], str(d["gpuImage"]))
-    check("video GPUs are Hopper only", d["gpuVideo"] == ["H100", "H200"], str(d["gpuVideo"]))
+    check("image GPUs are the compiled set", d["gpuImage"] == ["H100", "H200", "L40S"],
+          str(d["gpuImage"]))
+    check("video GPUs are the compiled set", d["gpuVideo"] == ["H100", "H200", "L40S"],
+          str(d["gpuVideo"]))
+    check("two containers at rest", d["oneContainer"] is False and not d["gpuBoth"],
+          f"one={d['oneContainer']} both={d['gpuBoth']}")
+
+    # Flip it. The confirm is the point — a declined one must leave the pair
+    # standing, an accepted one must collapse them into the shared select.
+    dialogs: list[str] = []
+
+    def decline(dlg):
+        dialogs.append(dlg.message)
+        dlg.dismiss()
+
+    pg.once("dialog", decline)
+    pg.evaluate("() => document.querySelector('#one-container').click()")
+    pg.wait_for_timeout(200)
+    d2 = pg.evaluate(READ)
+    check("the switch confirms", bool(dialogs) and "picture" in dialogs[0], str(dialogs[:1]))
+    check("declined leaves two selects", d2["oneContainer"] is False and not d2["gpuBoth"],
+          f"one={d2['oneContainer']} both={d2['gpuBoth']}")
+    pg.once("dialog", lambda dlg: dlg.accept())
+    pg.evaluate("() => document.querySelector('#one-container').click()")
+    pg.wait_for_timeout(200)
+    d3 = pg.evaluate(READ)
+    check("accepted collapses to one select",
+          d3["oneContainer"] is True and d3["gpuBoth"] == ["H200", "H100", "L40S"]
+          and not d3["gpuImage"] and not d3["gpuVideo"],
+          f"one={d3['oneContainer']} both={d3['gpuBoth']} image={d3['gpuImage']}")
+    # The 48 GB card says what it costs before it is chosen, on every select.
+    notes: list[str] = []
+
+    def note(dlg):
+        notes.append(dlg.message)
+        dlg.dismiss()
+
+    pg.once("dialog", note)
+    pg.select_option("#b-gpu", "L40S")
+    pg.wait_for_timeout(200)
+    check("L40S names its memory", bool(notes) and "48 GB" in notes[0], str(notes[:1])[:120])
+    check("declined card stays put", pg.evaluate("() => document.querySelector('#b-gpu').value") == "H200")
 
     # Not just "is there a total". `bool(total)` passed while the two front ends
     # printed 5.85 GB and 5.4 GB for the same eight files — a 1024-based

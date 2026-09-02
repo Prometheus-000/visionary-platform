@@ -5,7 +5,7 @@ import { exportScene as exportSceneRoute, fileUrl, status, stop, video } from '.
 import type { JobStatus } from '../api/types'
 import type { GalleryItem } from '../gallery/types'
 import { readVidChips, stripLoras } from '../lora/tokens'
-import { readShot, useStore, type Store } from '../store'
+import { pickGpu, readShot, useStore, type Store } from '../store'
 import { refreshArsenal } from '../scene/arsenal'
 import { readScene, sceneSeconds, typedProse } from '../scene/model'
 import { resolveVid } from '../console/resolve'
@@ -127,7 +127,8 @@ export function videoBody(s: Store): Record<string, unknown> {
     ref_videos: sc ? sc.ref_videos : s.refVids,
     ...(sc && { ref_audios: sc.ref_audios }),
     ref_size: s.vid.refSize,
-    gpu: s.gpu.video,
+    gpu: pickGpu(s, 'video'),
+    container: s.container,
     // The Playground toggle — same rule as the image side: only while set.
     ...(s.vid.workflow && {
       workflow: s.vid.workflow,

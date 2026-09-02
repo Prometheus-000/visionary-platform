@@ -331,10 +331,16 @@ Two things that were true of the old arrangement and are not true now:
   FlexAttention kernel for the masked case and delegates unmasked blocks to
   whatever backend is installed, so `--use-sage-attention` is on for both
   paths and the two families share one image.
-- **The image side is Hopper-only.** That is the bill for sharing: SageAttention
-  is compiled for sm_90, so the A100-40GB Krea 2 used to run on is gone from
-  `IMAGE_GPUS`. Moving either list means changing `TORCH_CUDA_ARCH_LIST` and
-  forcing a rebuild.
+- **The image side became Hopper-only, and then was not.** That was the bill
+  for sharing: SageAttention was compiled for sm_90, so the A100-40GB Krea 2
+  used to run on went from `IMAGE_GPUS`. It read as a law for a year and was a
+  build arg — on 2026-09-02 `TORCH_CUDA_ARCH_LIST` grew `8.9` and L40S joined
+  every list, at the price of one rebuild. What the 48 GB card actually costs
+  is memory, and that is stated per card in `app.py` beside the lists rather
+  than enforced by leaving it off them. The same day added the one-container
+  mode, which bends the one-container-per-checkpoint rule on purpose and from
+  the gear; the rule stays the default, and `.claude/rules/backend.md` carries
+  the judgment it proxies.
 
 What did *not* survive the move is Forge's sampler and scheduler menus. Those
 were labels — "Euler a", "Automatic" — and `KSampler` validates `sampler_name`

@@ -201,12 +201,22 @@ Each job type picks its own class, and most are switchable in the UI:
 | ---------------- | --------- | ---------- |
 | Training         | A100-40GB | —          |
 | Captioning       | A100-40GB | —          |
-| Image generation | H100      | H100, H200 |
-| Video generation | H100      | H100, H200 |
+| Image generation | H100      | H100, H200, L40S |
+| Video generation | H100      | H100, H200, L40S |
+| Both, one container | H200  | H200, H100, L40S |
 
-Image and video generation share one image whose SageAttention kernels are
-compiled for Hopper, so both want an H100/H200. Video would run slow on
-anything else; images want the card for the memory a regional render peaks at.
+Image and video generation share one image, and its SageAttention kernels are
+compiled for every card on these lists. What separates the cards is memory:
+Krea 2 wants the headroom a regional render with reference photos peaks at,
+and H3 is 42.5 GB of weights before any activations. L40S is the cheap 48 GB
+card — a plain picture fits, a regional render with references may not, and
+video runs with its weights paged and several times slower than an H100. An
+out-of-memory error names the card it happened on.
+
+"One container for both", under the gear, puts both families on one warm
+card instead of two. On H200 both checkpoints stay resident; on H100 or L40S
+they take turns through host memory. A picture queues behind a clip in
+progress — that is the trade, and the setting says so before it is made.
 
 Containers stay warm between requests (10 minutes for images, 15 for video) so
 consecutive takes skip the model load, then scale to zero. You are billed for

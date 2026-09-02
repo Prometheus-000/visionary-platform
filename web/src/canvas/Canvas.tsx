@@ -5,7 +5,7 @@ import { RetryImg } from '../media/thumb'
 import { IconClose, IconEdit, IconExpand, IconFilm, IconPhoto, IconPlay, IconPlus } from '../icons'
 import { Frame } from '../regions/Frame'
 import { RegionLayer } from '../regions/RegionLayer'
-import { attached, regionsLive, useStore } from '../store'
+import { attached, pickGpu, regionsLive, useStore } from '../store'
 import { layoutClip, layoutShots } from './layoutShots'
 import type { RunState } from './useGenerate'
 import type { VideoRun } from '../video/useVideo'
@@ -378,7 +378,7 @@ export function Canvas({
         <p className="muted" id="gen-meta" ref={capRef} style={{ margin: '12px 2px' }}
            aria-live="polite">
           {run.running
-            ? [s.gpu.image, run.phase || 'Working…'].filter(Boolean).join(' · ')
+            ? [pickGpu(s, 'image'), run.phase || 'Working…'].filter(Boolean).join(' · ')
             : run.meta.join(' · ')}
           {/* Not a fact about the render but a report that something you asked for did
               not happen, so it carries `.warn` — the same amber the LoRA note uses for
@@ -456,7 +456,7 @@ export function Canvas({
         <p className="muted" id="vid-meta" ref={vidCapRef} style={{ margin: '12px 2px' }}
            aria-live="polite">
           {vidRun.running
-            ? [s.gpu.video, vidRun.phase || 'Working…'].filter(Boolean).join(' · ')
+            ? [pickGpu(s, 'video'), vidRun.phase || 'Working…'].filter(Boolean).join(' · ')
             : vidRun.meta.join(' · ')}
         </p>
       )}

@@ -464,8 +464,9 @@ STATE = {
     # ever gets, and the cap that keeps it from pushing the canvas out of frame
     # is only worth checking against that. Flip it to see the tiles absent.
     "edit_lora": True,
-    "gpus": {"image": {"options": ["H100", "H200"], "default": "H100"},
-             "video": {"options": ["H100", "H200"], "default": "H100"}},
+    "gpus": {"image": {"options": ["H100", "H200", "L40S"], "default": "H100"},
+             "video": {"options": ["H100", "H200", "L40S"], "default": "H100"},
+             "both": {"options": ["H200", "H100", "L40S"], "default": "H200"}},
 }
 
 # The capabilities come from the deployment rather than being remembered. This

@@ -115,7 +115,7 @@ function EngineRow({ current, onCross }: { current: string; onCross: () => void 
         }
         // The earliest honest signal of which container this session is about
         // to want — the same reason `Duration` warms on its own switch.
-        void warm(hit.kind)
+        void warm(hit.kind, useStore.getState().container)
       }}>
         {list.map((x) => (
           <option key={`${x.kind}:${x.key}`} value={`${x.kind}:${x.key}`} disabled={!x.ready}>

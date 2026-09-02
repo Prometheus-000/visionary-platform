@@ -430,8 +430,13 @@ export type Store = {
   setPg: (p: Partial<Playground>) => void
   /** Chosen once a session, and it already confirms a cold start when it
    *  changes — so it lives under the gear rather than in the strip. */
-  gpu: { image: string; video: string }
-  setGpu: (patch: Partial<{ image: string; video: string }>) => void
+  gpu: { image: string; video: string; both: string }
+  setGpu: (patch: Partial<{ image: string; video: string; both: string }>) => void
+  /** Two containers, one per family, or one container serving both. The trade is
+   *  the user's and travels with every request, so the class a press lands on is
+   *  decided by the tab that pressed, never by server state another tab set. */
+  container: 'two' | 'one'
+  setContainer: (c: 'two' | 'one') => void
 
   /* ---- regions ---------------------------------------------------------- */
   // There is no `regional` flag. Regions are on when there is a rectangle on the
@@ -814,8 +819,10 @@ export const useStore = create<Store>((set, get) => ({
 
   pg: PLAYGROUND,
   setPg: (patch) => set((s): Partial<Store> => ({ pg: { ...s.pg, ...patch } })),
-  gpu: { image: '', video: '' },
+  gpu: { image: '', video: '', both: '' },
   setGpu: (patch) => set((s): Partial<Store> => ({ gpu: { ...s.gpu, ...patch } })),
+  container: 'two',
+  setContainer: (container) => set({ container }),
 
   regions: [],
   rsel: -1,
@@ -1145,4 +1152,13 @@ export function readShot(shot: ShotPill[]): ShotPill[] {
     if (p.speed) o.speed = p.speed
     return o
   })
+}
+
+/** The card a request for `side` runs on: the one-container class's card when the
+ *  gear says one container, that family's own otherwise. Every body sends this
+ *  beside `container`, and the running label shows it, so the card on screen is the
+ *  card that was asked for — a label reading `s.gpu.image` while the run went to
+ *  the shared class would be the page naming a container it did not use. */
+export function pickGpu(s: Pick<Store, 'gpu' | 'container'>, side: 'image' | 'video'): string {
+  return s.container === 'one' ? s.gpu.both : s.gpu[side]
 }

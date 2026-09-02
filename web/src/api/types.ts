@@ -177,7 +177,8 @@ export type AppState = {
   image_defaults: { sampler: string; scheduler: string }
   krea2_defaults: Record<string, { steps: number; cfg: number }>
   edit_lora: boolean
-  gpus: { image: GpuChoice; video: GpuChoice }
+  /** `both` is the one-container class: one card serving both families. */
+  gpus: { image: GpuChoice; video: GpuChoice; both: GpuChoice }
   shot_vocab: ShotGroup[]
   shot_langs: string[]
   shot_roles: ShotRole[]

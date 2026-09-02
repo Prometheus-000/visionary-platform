@@ -71,7 +71,7 @@ const shapeOf = () => [...MAIN, ...BIN].join(',')
  */
 const MAIN = [
   'kind', 'prompt', 'negative', 'negOn', 'shot', 'loras', 'stash',
-  'img', 'vid', 'gpu', 'scene', 'shotSel', 'takes', 'continueFrom',
+  'img', 'vid', 'gpu', 'container', 'scene', 'shotSel', 'takes', 'continueFrom',
   // The taken-over document and its pane together. `doc` alone would restore a
   // run driven by an override with nothing on screen saying so — the one bit
   // `SourcePane` exists to keep visible.

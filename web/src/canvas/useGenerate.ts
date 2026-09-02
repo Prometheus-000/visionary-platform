@@ -7,7 +7,7 @@ import type { GalleryItem } from '../gallery/types'
 import { loraIndex, readChips, stripLoras } from '../lora/tokens'
 import { readRegions } from '../regions/geometry'
 import { refreshArsenal } from '../scene/arsenal'
-import { attached, negAllowed, readShot, regionsLive, useStore, type Store } from '../store'
+import { attached, negAllowed, pickGpu, readShot, regionsLive, useStore, type Store } from '../store'
 import { readSize } from '../console/size'
 
 /**
@@ -148,7 +148,8 @@ export function imageBody(s: Store): Record<string, unknown> {
     steps: s.img.steps,
     cfg_scale: s.img.cfg,
     shift: s.img.shift,
-    gpu: s.gpu.image,
+    gpu: pickGpu(s, 'image'),
+    container: s.container,
     // The Playground toggle. Only while set — a request that names no
     // workflow must be byte-identical to one from before the feature.
     ...(s.img.workflow && {

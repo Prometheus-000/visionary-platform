@@ -13,7 +13,7 @@ import {
   installPack, playgroundRefresh, playgroundRestart, playgroundRun, stop,
   status,
 } from '../api/routes'
-import { useStore } from '../store'
+import { pickGpu, useStore } from '../store'
 
 export type PgRun = {
   running: boolean
@@ -91,7 +91,11 @@ export function usePlayground(onDone?: (doing: PgRun['doing']) => void) {
       host: s.pg.host,
       attachments: s.pg.attachments,
       workflow_name: s.pg.name || undefined,
-      gpu: s.gpu || undefined,
+      // The host's card, not the whole `gpu` object: this sent the object once,
+      // the server stringified it, found it on no list, and every Playground run
+      // quietly landed on the default card whatever the gear said.
+      gpu: pickGpu(s, s.pg.host),
+      container: s.container,
     })
     if (failed(r)) {
       setRun((p) => ({ ...p, error: r, errorNode: null }))
@@ -106,7 +110,9 @@ export function usePlayground(onDone?: (doing: PgRun['doing']) => void) {
   }, [run.runId])
 
   const restart = useCallback(async () => {
-    const r = await playgroundRestart(useStore.getState().pg.host)
+    const s = useStore.getState()
+    const r = await playgroundRestart({ host: s.pg.host, gpu: pickGpu(s, s.pg.host),
+                                        container: s.container })
     if (failed(r)) { setRun((p) => ({ ...p, error: r })); return }
     watch(r.job_id, 'restart')
   }, [watch])

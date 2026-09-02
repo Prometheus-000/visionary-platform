@@ -153,7 +153,7 @@ export function App() {
     // the same event — the page opened — and a second effect would be a second
     // thing to keep in step with it. The kind rides along because it decides
     // *which* container is warmed, and the page opens on stills.
-    void warm(useStore.getState().kind)
+    void warm(useStore.getState().kind, useStore.getState().container)
     // The sets listing too, and for the same reason the sessions door gets its
     // rows at app level: Sets is a front-door destination now, and the click
     // that opens it should find the rows already waiting rather than start the
@@ -166,7 +166,8 @@ export function App() {
   // on redeploy, and rebuilding it would reset a card chosen between two polls.
   useEffect(() => {
     if (!s.state || s.gpu.image) return
-    s.setGpu({ image: s.state.gpus.image.default, video: s.state.gpus.video.default })
+    s.setGpu({ image: s.state.gpus.image.default, video: s.state.gpus.video.default,
+               both: s.state.gpus.both.default })
   }, [s])
 
   /* A file is over the window: light every place it could go. See the drag-intent block in

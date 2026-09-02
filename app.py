@@ -240,24 +240,26 @@ def _set_cache(d: Path) -> Path:
     return Path("/tmp/visionary-spool") / "datasets" / d.name
 MUSUBI = Path("/opt/musubi-tuner")
 
-# Both inference paths are Hopper now, for one reason each. Video: SageAttention
-# is compiled for sm_90 in comfy_image, so a card of any other architecture
-# loads the weights, finds no kernel, and silently runs on the slow path.
-# Images: memory. Krea 2 used to have an A100-40GB of its own, sized against a
-# measured 29.26 GiB peak at 1024px — that headroom does not survive V12, whose
-# own regression notes record a 30.27 GiB block-mask build and a 17.88 GiB dense
-# score tensor at the sequence lengths reference frames produce. Sage stopped
-# being the image side's reason when `_krea2_graph` opted out of it; the
-# rebuild-forcing arch pin below is still shared, because the image is.
+# The default card for each family. Both default to Hopper for one reason
+# each, and the reason is memory, not kernels. Images: Krea 2 used to have an
+# A100-40GB of its own, sized against a measured 29.26 GiB peak at 1024px —
+# that headroom does not survive V12, whose own regression notes record a
+# 30.27 GiB block-mask build and a 17.88 GiB dense score tensor at the sequence
+# lengths reference frames produce. Video: the H3 stack is 42.5 GB of weights
+# before any activations. SageAttention used to be the other reason — compiled
+# for sm_90 alone — until the arch list below grew Ada; it was a build arg
+# functioning as a law.
 GPU = os.environ.get("VISIONARY_IMAGE_GPU", "H100")
-
-# Video is still its own GPU class, and still for the original reason: the H3
-# stack is 42.5 GB of weights before any activations, so it does not share a
-# card with training or Krea 2. Sharing the *image* is new; sharing the
-# container is not on the table while both hold a checkpoint resident.
 VIDEO_GPU = os.environ.get("VISIONARY_VIDEO_GPU", "H100")
 
-# Cards the UI may ask for, per feature.
+# The card for the one-container mode, where a single ComfyUI serves both
+# families. H200 because it is the only card here where both checkpoints stay
+# resident at once (35 GB of Krea 2 and 42.5 GB of H3 in 141 GB); on an 80 GB
+# card they take turns, paged through host RAM by ComfyUI's dynamic VRAM
+# loading — seconds, not the 400 s volume reload, but not nothing.
+BOTH_GPU = os.environ.get("VISIONARY_BOTH_GPU", "H200")
+
+# Cards the UI may ask for, per class.
 #
 # Modal's Cls.with_options() returns a variant that autoscales independently of
 # the base configuration — which is exactly the point (one class, any card) and
@@ -266,13 +268,21 @@ VIDEO_GPU = os.environ.get("VISIONARY_VIDEO_GPU", "H100")
 # reason, and requests for the default are sent to the base class rather than
 # through with_options so the common path keeps its warm container.
 #
-# Both lists are Hopper-only on purpose: SageAttention is compiled for sm_90 in
-# comfy_image. B200 is sm_100 and would load the model fine and then fall back
-# off the fast kernels — the failure this list exists to prevent. Adding it
-# means changing TORCH_CUDA_ARCH_LIST and forcing an image rebuild. The A100
-# entries that used to be here went with the same rebuild: sm_80 is not sm_90.
-IMAGE_GPUS = ("H100", "H200")
-VIDEO_GPUS = ("H100", "H200")
+# Every card here must be in TORCH_CUDA_ARCH_LIST in comfy_image, or it loads
+# the model fine and then falls back off SageAttention's kernels with no error
+# to say so — the failure these lists exist to prevent. Hopper is 9.0, Ada
+# (L40S) is 8.9; B200 is sm_100 and still needs "10.0" added and a rebuild
+# forced. The A100 entries that used to be here went with sm_80, and could
+# come back the same way L40S did.
+#
+# L40S is on every list because it is the cheap 48 GB card, and 48 GB is the
+# number to know: a plain Krea 2 render fits (it ran on 40 GB), a regional
+# render with reference frames may not, and H3's 42.5 GB of weights run with
+# the DiT paged and the denoise loop several times slower than Hopper. The OOM
+# error names the card so the second attempt is on a bigger one.
+IMAGE_GPUS = ("H100", "H200", "L40S")
+VIDEO_GPUS = ("H100", "H200", "L40S")
+BOTH_GPUS = ("H200", "H100", "L40S")
 
 # ComfyUI is the inference backend for both images and video, pinned by commit
 # rather than vendored.
@@ -665,11 +675,14 @@ caption_image = (
 
 # Inference: ComfyUI on a CUDA 13 torch wheel. Images and video both.
 #
-# One image, two GPU classes. They stay separate classes because each holds a
-# checkpoint resident and `max_containers=1` is per class — merging them would
-# make an image request wait behind a ten-minute clip. They share the *build*
-# because there is nothing per-family in it: the same ComfyUI, the same torch,
-# the same attention kernels, and one node pack that only the image side loads.
+# One image, one class body, three placements. Image and video are separate
+# classes by default because each holds a checkpoint resident and
+# `max_containers=1` is per class — on one class an image request waits behind
+# a ten-minute clip. The third placement, `BothGenerator`, is that trade made
+# on purpose from the gear: one warm card instead of two, and the wait. They
+# all share the *build* because there is nothing per-family in it: the same
+# ComfyUI, the same torch, the same attention kernels, and one node pack that
+# only the image side loads.
 #
 # The CUDA version is the whole point of this image, not an incidental pin.
 # ComfyUI's quant_ops.py reads torch.version.cuda and disables comfy-kitchen's
@@ -719,11 +732,13 @@ comfy_image = (
     # install and silently get no attention backend at all. SageAttention is
     # what ComfyUI's own H3 documentation names, and it is worth roughly 2x.
     #
-    # TORCH_CUDA_ARCH_LIST must match every card in IMAGE_GPUS and VIDEO_GPUS.
-    # 9.0 is Hopper (H100/H200); move to "10.0" for B200 and force a rebuild, or
-    # the kernels will not load. This is also what keeps Krea 2 off the A100 it
-    # used to run on — one image means one architecture, and sm_80 is not sm_90.
-    .env({"TORCH_CUDA_ARCH_LIST": "9.0", "MAX_JOBS": "8"})
+    # TORCH_CUDA_ARCH_LIST must cover every card in IMAGE_GPUS, VIDEO_GPUS and
+    # BOTH_GPUS. 9.0 is Hopper (H100/H200), 8.9 is Ada (L40S); add "10.0" for
+    # B200 and force a rebuild, or the kernels will not load. One image means
+    # one list, and a card missing from it is a model that loads and then runs
+    # on the slow path with nothing to say so — which is how the A100 Krea 2
+    # used to run on left, and how L40S came in: a string here, and a rebuild.
+    .env({"TORCH_CUDA_ARCH_LIST": "8.9;9.0", "MAX_JOBS": "8"})
     # --no-build-isolation is required (the build imports the torch installed
     # above rather than a fresh one), but it also means pip supplies nothing:
     # without `wheel` the build dies on `invalid command 'bdist_wheel'`, and
@@ -1631,7 +1646,7 @@ def _note_queue_wait(tag: str, job_id: str, params: dict[str, Any]) -> float:
     How long this job waited between being spawned and being given to a
     container, and a line when that is not instant.
 
-    **The gap nothing could see.** Both GPU classes are `max_containers=1` with
+    **The gap nothing could see.** The GPU classes are `max_containers=1` with
     `@modal.concurrent(max_inputs=1)`, so anything already holding that slot
     delays everything behind it. `/api/motion` used to hold it, on the same
     container renders run on, and a ten-minute wait came out of that — the trade
@@ -4272,6 +4287,12 @@ class _Comfy:
         # stream, where they interleave. See `_drain`.
         self.tag = tag
         self.job_id: str | None = None
+        # The card under this process, read once at start. An out-of-memory
+        # error that does not say which card it ran out of is an error you hit
+        # twice: the same graph on a 48 GB L40S and an 80 GB H100 fails and
+        # fits, and the fix is under the gear, not in the graph.
+        self.card = ""
+        self.card_gb = 0
         # Keys a LoRA carried that this DiT has no home for. Counted rather than
         # logged-and-forgotten because it is the one LoRA failure with no
         # symptom: the graph runs, the clip arrives, and nothing anywhere says
@@ -4392,6 +4413,30 @@ class _Comfy:
         )
         threading.Thread(target=self._drain, daemon=True).start()
         self._wait_ready()
+        self._read_card()
+
+    def _read_card(self) -> None:
+        """
+        Which card, and how much of it, from ComfyUI's own view of the device.
+
+        Best effort and once: the first `/system_stats` after ready. It feeds
+        the out-of-memory error in `run` and one log line here, which is the
+        line that says whether the cheap card somebody picked under the gear
+        is the card this process actually got.
+        """
+        try:
+            dev = ((self.get("/system_stats") or {}).get("devices") or [{}])[0]
+            name = str(dev.get("name") or "")
+            total = int(dev.get("vram_total") or 0)
+        except Exception:
+            return
+        # "cuda:0 NVIDIA L40S : cudaMallocAsync" — the middle is the card.
+        parts = [p.strip() for p in name.split(":") if p.strip()]
+        self.card = parts[1] if len(parts) > 1 else name
+        self.card_gb = round(total / 10**9)
+        if self.card:
+            print(f"[{self.tag}] on {self.card}, {total / 2**30:.1f} GiB",
+                  flush=True)
 
     def _drain(self) -> None:
         """
@@ -4723,6 +4768,13 @@ class _Comfy:
             # come through here and does not pay for a reload it never earned.
             if COMFY_OOM_MARK in str(exc):
                 self._reclaim()
+                if self.card:
+                    # The card, because the same graph fits on the next size
+                    # up and the fix is under the gear — see `card` in init.
+                    raise RuntimeError(
+                        f"{exc} This container is on {self.card} "
+                        f"({self.card_gb} GB); a larger card is under the "
+                        f"gear, and costs one cold start.") from exc
             raise
         finally:
             self.job_id = None
@@ -6337,6 +6389,24 @@ def _on_gpu(cls: Any, requested: Any, allowed: tuple[str, ...], default: str) ->
     return cls.with_options(gpu=gpu)
 
 
+def _host(family: str, payload: dict[str, Any]) -> Any:
+    """
+    The class a request lands on: its family's own, or the one-container
+    class when the gear says so.
+
+    `container` rides every request rather than living in server state so a
+    tab that switched the mode does not change what another tab's next press
+    runs on — the same reason `gpu` travels with the body. An absent or
+    unknown value is the two-container default, because a stale tab must still
+    get its picture.
+    """
+    if str(payload.get("container") or "") == "one":
+        return _on_gpu(BothGenerator, payload.get("gpu"), BOTH_GPUS, BOTH_GPU)
+    if family == "video":
+        return _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
+    return _on_gpu(ImageGenerator, payload.get("gpu"), IMAGE_GPUS, GPU)
+
+
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
                # The dataset clip route serves whatever a set holds, and a set
                # is whatever was dropped on it — so the containers a browser
@@ -7228,7 +7298,7 @@ def _validate_regions(raw: Any) -> list[dict[str, Any]]:
             # than the global auto_portrait switch.
             "anchor": bool(entry.get("anchor")),
             # Marks a row the backend conjured rather than the user drew —
-            # see the conjuring note in ImageGenerator.generate. Carried
+            # see the conjuring note in _ImageSide.generate_image. Carried
             # through validation because this function runs twice on the
             # same rows and dropping it on the second pass would un-mark it.
             "derived": bool(entry.get("derived")),
@@ -7916,56 +7986,29 @@ def _krea2_graph(
     return graph
 
 
-@app.cls(
-    image=comfy_image, gpu=GPU, cpu=4.0, timeout=60 * 60,
-    volumes={"/workspace": volume, "/models": models_volume},
-    # One container: the checkpoint is ~35 GB across DiT/VAE/TE, so a second
-    # replica costs a full cold load rather than sharing the warm one.
-    max_containers=1,
-    scaledown_window=10 * 60,
-)
-@modal.concurrent(max_inputs=1)  # one GPU, one sampling loop
-class ImageGenerator:
-    """Holds a warm ComfyUI process, loaded with a Krea 2 checkpoint."""
+# The image family's half of the generator body. Not a Modal class: the three
+# placements — image alone, video alone, both on one card — are declared
+# together after the video half, and each inherits what it serves. Modal
+# collects `@modal.method()` up the MRO, so the body lives once.
+#
+# The nodes this half needs at startup, checked once rather than per request:
+# a custom node that fails to import leaves ComfyUI running happily without
+# it, and the first symptom would otherwise be a queued graph rejected for an
+# unknown class_type — which reads as our graph builder naming a node wrong,
+# minutes into a warm GPU, when the traceback that explains it scrolled past
+# during startup.
+IMAGE_NODES = (KREA2_REGIONAL_NODE, "VisionaryBoxes", "VisionaryFreeRegional",
+               "VisionaryEditArity", K2ST_REF_NODE, K2ST_TRANSFER_NODE)
 
-    @modal.enter()
-    def setup(self):
-        self._comfy = _Comfy("image")
-        self._comfy.start()
-        # Checked once at startup rather than per request. A custom node that
-        # fails to import leaves ComfyUI running happily without it, and the
-        # first symptom would otherwise be a queued graph rejected for an
-        # unknown class_type — which reads as our graph builder naming a node
-        # wrong, minutes into a warm GPU, when the traceback that explains it
-        # scrolled past during startup.
-        self._comfy.require_nodes(KREA2_REGIONAL_NODE, "VisionaryBoxes",
-                                  "VisionaryFreeRegional", "VisionaryEditArity",
-                                  K2ST_REF_NODE, K2ST_TRANSFER_NODE)
-        # **One model in this container, which is how it started.** A second
-        # lived here for a while — Qwen3-VL for the prompt rewrite — loaded at
-        # `enter` as a *ComfyUI graph*, which holds the single queue for the 132
-        # seconds it takes, right at the moment a cold container is about to be
-        # asked for a render.
+
+class _ImageSide:
+    """A Krea 2 render on this container's warm ComfyUI."""
+
+    _comfy: _Comfy
 
     @modal.method()
-    def warm(self) -> dict[str, Any]:
-        """A knock, so the page can start this container on load. `enter` is
-        what does the work; arriving here at all means it has run."""
-        return {"ok": True}
-
-    @modal.method()
-    def playground(self, job_id: str,
-                   params: dict[str, Any]) -> dict[str, Any]:
-        """A user-authored graph on this warm engine — see _playground_run."""
-        return _playground_run(self._comfy, job_id, params)
-
-    @modal.method()
-    def restart_engine(self, job_id: str) -> dict[str, Any]:
-        """Replace the warm ComfyUI on request — see _Comfy.restart."""
-        return _restart_engine(self._comfy, job_id)
-
-    @modal.method()
-    def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    def generate_image(self, job_id: str,
+                       params: dict[str, Any]) -> dict[str, Any]:
         started = time.time()
         # Same three lines as the video side, and for the same reason: the
         # window between accepting a job and queueing its graph was unlit, and
@@ -11463,61 +11506,26 @@ def _validate_video_loras(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
-@app.cls(
-    image=comfy_image, gpu=VIDEO_GPU, cpu=4.0, timeout=60 * 60,
-    volumes={"/workspace": volume, "/models": models_volume},
-    max_containers=1,
-    # Longer than the image side's 10 min: 42.5 GB is a slow thing to reload,
-    # and video is worked in takes — you watch one clip, then adjust and go again.
-    scaledown_window=15 * 60,
-)
-@modal.concurrent(max_inputs=1)
-class VideoGenerator:
-    """Holds a warm ComfyUI process, loaded with a video checkpoint."""
+# The video half of the generator body — see `_ImageSide` for why it is not a
+# Modal class of its own. Named at startup for the reason the image side names
+# its six: a node that failed to import leaves ComfyUI running happily without
+# it, and the first symptom is otherwise a rewrite rejected for an unknown
+# class_type — minutes into a session, with the traceback long scrolled. The
+# call went missing once while the comment beside it survived — two sessions
+# editing one tree — so the sentence and the tuple travel together now.
+VIDEO_NODES = ("MiniMaxH3MotionContext", "MiniMaxH3MotionContextTrim",
+               "MiniMaxH3MotionContextSaveLatent",
+               "MiniMaxH3MotionContextLoadLatent")
 
-    @modal.enter()
-    def setup(self):
-        self._comfy = _Comfy("video")
-        self._comfy.start()
-        # Named at startup for the reason the image side names its four: a node
-        # that failed to import leaves ComfyUI running happily without it, and
-        # the first symptom is otherwise a rewrite rejected for an unknown
-        # class_type — minutes into a session, with the traceback long scrolled.
-        # The call went missing once while the comment above survived — two
-        # sessions editing one tree — so the sentence and the check travel
-        # together now.
-        self._comfy.require_nodes(
-            "MiniMaxH3MotionContext", "MiniMaxH3MotionContextTrim",
-            "MiniMaxH3MotionContextSaveLatent",
-            "MiniMaxH3MotionContextLoadLatent")
-        # **Nothing but ComfyUI starts here now.** This container held a second
-        # model for a while — Qwen3-VL beside H3, for the prompt rewrite and
-        # then for the motion panel — and it cost more than it returned. It
-        # rides `@modal.concurrent(max_inputs=1)`, so a suggestion in flight is
-        # a render that cannot be *delivered*; loaded eagerly it put a 132s
-        # graph in front of every cold render; loaded lazily it still took the
-        # slot on first press. A ten-minute wait came out of that and was blamed
-        # on the wrong feature, because nothing anywhere said so.
+
+class _VideoSide:
+    """A MiniMax-H3 take on this container's warm ComfyUI."""
+
+    _comfy: _Comfy
 
     @modal.method()
-    def warm(self) -> dict[str, Any]:
-        """A knock, so the page can start this container on load. `enter` is
-        what does the work; arriving here at all means it has run."""
-        return {"ok": True}
-
-    @modal.method()
-    def playground(self, job_id: str,
-                   params: dict[str, Any]) -> dict[str, Any]:
-        """A user-authored graph on this warm engine — see _playground_run."""
-        return _playground_run(self._comfy, job_id, params)
-
-    @modal.method()
-    def restart_engine(self, job_id: str) -> dict[str, Any]:
-        """Replace the warm ComfyUI on request — see _Comfy.restart."""
-        return _restart_engine(self._comfy, job_id)
-
-    @modal.method()
-    def generate(self, job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    def generate_video(self, job_id: str,
+                       params: dict[str, Any]) -> dict[str, Any]:
         """
         Run one clip.
 
@@ -11817,6 +11825,116 @@ class VideoGenerator:
             info["fps"] = H3_FPS
         return {"graph": graph, "info": info, "meta": meta}
 
+
+class _Generator(_ImageSide, _VideoSide):
+    """
+    One warm ComfyUI, and whichever families the placement below serves.
+
+    `families` is the only thing a placement sets. It decides which node
+    packs are checked at startup and what the log lines are tagged with; the
+    methods are the same on all three, so a request that lands on the wrong
+    class still runs — it just runs on a card that may not have been chosen
+    for it. The routes go through `_host`, which is where the choice is made.
+    """
+
+    families: tuple[str, ...] = ()
+
+    @modal.enter()
+    def setup(self):
+        tag = "both" if len(self.families) > 1 else self.families[0]
+        self._comfy = _Comfy(tag)
+        self._comfy.start()
+        if "image" in self.families:
+            self._comfy.require_nodes(*IMAGE_NODES)
+        if "video" in self.families:
+            self._comfy.require_nodes(*VIDEO_NODES)
+        # **Nothing but ComfyUI starts here.** Each container held a second
+        # model for a while — Qwen3-VL beside the checkpoint, for the prompt
+        # rewrite and then for the motion panel — and it cost more than it
+        # returned. Loaded at `enter` as a *ComfyUI graph* it held the single
+        # queue for the 132 seconds it takes, right at the moment a cold
+        # container was about to be asked for a render; loaded lazily it still
+        # took the slot on first press, because `@modal.concurrent(max_inputs=1)`
+        # means a suggestion in flight is a render that cannot be delivered. A
+        # ten-minute wait came out of that and was blamed on the wrong feature,
+        # because nothing anywhere said so.
+
+    @modal.method()
+    def warm(self) -> dict[str, Any]:
+        """A knock, so the page can start this container on load. `enter` is
+        what does the work; arriving here at all means it has run."""
+        return {"ok": True}
+
+    @modal.method()
+    def playground(self, job_id: str,
+                   params: dict[str, Any]) -> dict[str, Any]:
+        """A user-authored graph on this warm engine — see _playground_run."""
+        return _playground_run(self._comfy, job_id, params)
+
+    @modal.method()
+    def restart_engine(self, job_id: str) -> dict[str, Any]:
+        """Replace the warm ComfyUI on request — see _Comfy.restart."""
+        return _restart_engine(self._comfy, job_id)
+
+
+# Three placements of the one body. `max_containers=1` on each: a checkpoint
+# is 35 or 42.5 GB, so a second replica costs a full cold load rather than
+# sharing the warm one. `@modal.concurrent(max_inputs=1)`: one GPU, one
+# sampling loop.
+
+@app.cls(
+    image=comfy_image, gpu=GPU, cpu=4.0, timeout=60 * 60,
+    volumes={"/workspace": volume, "/models": models_volume},
+    max_containers=1,
+    scaledown_window=10 * 60,
+)
+@modal.concurrent(max_inputs=1)
+class ImageGenerator(_Generator):
+    """Holds a warm ComfyUI process, loaded with a Krea 2 checkpoint."""
+    families = ("image",)
+
+
+@app.cls(
+    image=comfy_image, gpu=VIDEO_GPU, cpu=4.0, timeout=60 * 60,
+    volumes={"/workspace": volume, "/models": models_volume},
+    max_containers=1,
+    # Longer than the image side's 10 min: 42.5 GB is a slow thing to reload,
+    # and video is worked in takes — you watch one clip, then adjust and go again.
+    scaledown_window=15 * 60,
+)
+@modal.concurrent(max_inputs=1)
+class VideoGenerator(_Generator):
+    """Holds a warm ComfyUI process, loaded with a video checkpoint."""
+    families = ("video",)
+
+
+@app.cls(
+    image=comfy_image, gpu=BOTH_GPU, cpu=4.0, timeout=60 * 60,
+    volumes={"/workspace": volume, "/models": models_volume},
+    max_containers=1,
+    # The video side's window, because the more expensive reload is the one
+    # to keep warm.
+    scaledown_window=15 * 60,
+    # Host RAM for both checkpoints at once. On H200 they share the card; on an
+    # 80 GB card ComfyUI pages the idle family out to RAM and back, and a
+    # container without the room for that pays the 400 s volume reload on
+    # every switch instead. 96 GiB is a starting figure, not a measurement —
+    # read `vram before run` and the page-in time on the first H100 session
+    # and move it.
+    memory=96 * 1024,
+)
+@modal.concurrent(max_inputs=1)
+class BothGenerator(_Generator):
+    """
+    One warm ComfyUI serving both families — the gear's one-container mode.
+
+    The trade it makes on purpose: one warm card instead of two, and a
+    picture that waits behind a clip in progress, because one class is one
+    queue. The rule this bends — one container per loaded checkpoint — stays
+    the default; this is the user choosing the other side of it, told what
+    it costs.
+    """
+    families = ("image", "video")
 
 
 # --------------------------------------------------------------------------
@@ -12617,6 +12735,7 @@ def web():
             "gpus": {
                 "image": {"options": list(IMAGE_GPUS), "default": GPU},
                 "video": {"options": list(VIDEO_GPUS), "default": VIDEO_GPU},
+                "both": {"options": list(BOTH_GPUS), "default": BOTH_GPU},
             },
             "max_refs": MAX_H3_REFS,
             "max_ref_audios": MAX_H3_REF_AUDIOS,
@@ -12747,7 +12866,9 @@ def web():
         """
         kind = "video" if str(payload.get("kind") or "") == "video" else "image"
         try:
-            (VideoGenerator() if kind == "video" else ImageGenerator()).warm.spawn()
+            # The base class, never a with_options variant: a knock on a card
+            # nobody has picked would start a container nobody will use.
+            _host(kind, {"container": payload.get("container")})().warm.spawn()
         except Exception as exc:
             print(f"[warm] {kind} warm-up failed: {exc}", flush=True)
         return {"ok": True}
@@ -14231,8 +14352,7 @@ def web():
             return {"error": str(exc)}
 
         job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        runner = _on_gpu(ImageGenerator, payload.get("gpu"), IMAGE_GPUS, GPU)
-        runner().generate.spawn(job_id=job_id, params={
+        _host("image", payload)().generate_image.spawn(job_id=job_id, params={
             **({"workflow": wf[0], "workflow_graph": wf[1],
                 "workflow_extras": payload.get("workflow_extras") or {}}
                if wf else {}),
@@ -14478,8 +14598,7 @@ def web():
             return {"error": str(exc)}
 
         job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        runner = _on_gpu(VideoGenerator, payload.get("gpu"), VIDEO_GPUS, VIDEO_GPU)
-        runner().generate.spawn(job_id=job_id, params={
+        _host("video", payload)().generate_video.spawn(job_id=job_id, params={
             **({"workflow": wf[0], "workflow_graph": wf[1],
                 "workflow_extras": payload.get("workflow_extras") or {}}
                if wf else {}),
@@ -14965,13 +15084,7 @@ def web():
         host = ("video" if str(payload.get("host") or "image") == "video"
                 else "image")
         job_id = f"pg{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        if host == "video":
-            runner = _on_gpu(VideoGenerator, payload.get("gpu"),
-                             VIDEO_GPUS, VIDEO_GPU)
-        else:
-            runner = _on_gpu(ImageGenerator, payload.get("gpu"),
-                             IMAGE_GPUS, GPU)
-        runner().playground.spawn(job_id=job_id, params={
+        _host(host, payload)().playground.spawn(job_id=job_id, params={
             "queued_at": time.time(),
             "graph": graph,
             "attachments": atts,
@@ -14986,13 +15099,7 @@ def web():
         host = ("video" if str(payload.get("host") or "image") == "video"
                 else "image")
         job_id = f"pgrst{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        if host == "video":
-            runner = _on_gpu(VideoGenerator, payload.get("gpu"),
-                             VIDEO_GPUS, VIDEO_GPU)
-        else:
-            runner = _on_gpu(ImageGenerator, payload.get("gpu"),
-                             IMAGE_GPUS, GPU)
-        runner().restart_engine.spawn(job_id=job_id)
+        _host(host, payload)().restart_engine.spawn(job_id=job_id)
         return {"ok": True, "job_id": job_id}
 
     @api.get("/api/playground/nodes")

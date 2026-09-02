@@ -253,8 +253,8 @@ export const compile = (body: {
  * Fire and forget: nothing on screen depends on it, and a slow first press is
  * the only cost of it failing.
  */
-export const warm = (kind: 'image' | 'video' = 'image') =>
-  post<{ ok: boolean }>('/api/warm', { kind })
+export const warm = (kind: 'image' | 'video' = 'image', container: 'two' | 'one' = 'two') =>
+  post<{ ok: boolean }>('/api/warm', { kind, container })
 
 /* ---- outputs and the gallery ----------------------------------------- */
 
@@ -346,8 +346,8 @@ export const playgroundSeed = (body: unknown) =>
 export const playgroundRun = (body: unknown) =>
   post<{ job_id: string }>('/api/playground/run', body)
 /** The engine-restart lever — a job, so the page can watch it land. */
-export const playgroundRestart = (host: string) =>
-  post<{ job_id: string }>('/api/playground/restart', { host })
+export const playgroundRestart = (body: { host: string; gpu?: string; container?: string }) =>
+  post<{ job_id: string }>('/api/playground/restart', body)
 /** The cached /object_info. `{missing: true}` until first harvested. */
 export const playgroundNodes = () =>
   api<NodeCatalogue & { missing?: boolean }>('/api/playground/nodes')

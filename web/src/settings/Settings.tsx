@@ -31,6 +31,8 @@ export function Settings({
 }) {
   const [token, setTokenValue] = useState('')
   const [tokenNote, setTokenNote] = useState<string | null>(null)
+  const container = useStore((s) => s.container)
+  const setContainer = useStore((s) => s.setContainer)
   const [driveUrl, setDriveUrl] = useState('')
   const [driveFolder, setDriveFolder] = useState('')
   /* Off, because the answer is right for the run you actually repeat: pasting
@@ -117,12 +119,42 @@ export function Settings({
 
         <div className="card">
           <label>GPU</label>
-          <div className="row" style={{ gap: 10 }}>
-            <GpuSelect id="g-gpu" label="Image" side="image" spec={state?.gpus.image} />
-            <GpuSelect id="v-gpu" label="Video" side="video" spec={state?.gpus.video} />
-          </div>
+          {container === 'one' ? (
+            <div className="row" style={{ gap: 10 }}>
+              <GpuSelect id="b-gpu" label="Both" side="both" spec={state?.gpus.both} />
+            </div>
+          ) : (
+            <div className="row" style={{ gap: 10 }}>
+              <GpuSelect id="g-gpu" label="Image" side="image" spec={state?.gpus.image} />
+              <GpuSelect id="v-gpu" label="Video" side="video" spec={state?.gpus.video} />
+            </div>
+          )}
+          {/* The trade is stated before it is made, in the confirm, and again
+              under the control once it is — the second so the reason a picture
+              is waiting is on screen when it waits. */}
+          <label className="row" style={{ gap: 7, margin: '9px 0 0', color: '#ddd', fontSize: 13 }}>
+            <input type="checkbox" id="one-container" style={{ width: 'auto' }}
+                   checked={container === 'one'}
+                   onChange={(e) => {
+                     const next = e.target.checked ? 'one' : 'two'
+                     if (confirm(next === 'one'
+                       ? 'One container for both?\n\nOne card holds both models, so one '
+                         + 'container stays warm instead of two — and a picture waits behind '
+                         + 'a clip in progress. The shared container is cold, so the next run '
+                         + 'pays a cold start while it loads.'
+                       : 'Back to a container per family?\n\nThe next run lands on that '
+                         + "family's own container, which may be cold.")) {
+                       setContainer(next)
+                     }
+                   }} />
+            One container for both
+          </label>
           <p className="muted" style={{ margin: '9px 2px 0' }}>
-            Changing a card costs one cold start while the model loads. Runs after it are warm.
+            {container === 'one'
+              ? 'On H200 both models stay loaded. On H100 or L40S they take turns through '
+                + 'memory, so switching between a picture and a clip costs a reload. '
+                + 'A picture queues behind a clip in progress.'
+              : 'Changing a card costs one cold start while the model loads. Runs after it are warm.'}
           </p>
         </div>
 
@@ -483,10 +515,23 @@ function CaptionModels({ state, onReload }: {
  * `gpu` off the store, so a select nothing wrote to would send the deployment's default
  * on every run no matter what this said.
  */
+/** What a card costs beyond the cold start, said before it is chosen. Only the
+ *  48 GB card has something to say: it is the one where a graph that fits
+ *  elsewhere may not, and the one where video pays in speed. The numbers are the
+ *  backend's (`IMAGE_GPUS` in app.py); the sentence lives here because the
+ *  confirm is where it is read. */
+function switchNote(card: string, side: 'image' | 'video' | 'both'): string {
+  if (card !== 'L40S') return ''
+  const image = 'A plain picture fits in its 48 GB; a regional render with reference '
+    + 'photos may not. '
+  const video = 'Video runs with its weights paged through 48 GB, several times slower '
+    + 'than an H100. '
+  return side === 'image' ? image : side === 'video' ? video : image + video
+}
 function GpuSelect({ id, label, side, spec }: {
   id: string
   label: string
-  side: 'image' | 'video'
+  side: 'image' | 'video' | 'both'
   spec: GpuChoice | undefined
 }) {
   const value = useStore((s) => s.gpu[side])
@@ -498,9 +543,9 @@ function GpuSelect({ id, label, side, spec }: {
               onChange={(e) => {
                 const next = e.target.value
                 if (next === spec?.default
-                    || confirm(`Switch to ${next}?\n\nThis card has no warm container, `
-                      + 'so the next run pays a cold start while the model loads. '
-                      + 'Runs after it are warm.')) {
+                    || confirm(`Switch to ${next}?\n\n${switchNote(next, side)}`
+                      + 'This card has no warm container, so the next run pays a cold '
+                      + 'start while the model loads. Runs after it are warm.')) {
                   setGpu({ [side]: next })
                 }
               }}>

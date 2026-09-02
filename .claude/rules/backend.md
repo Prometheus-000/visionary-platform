@@ -114,7 +114,11 @@ Scale here means the axis that actually binds: not requests per second, but
   eight-minute job into a twenty-three minute one. Storage boundaries follow
   write patterns, not tidiness.
 - **One container per loaded checkpoint.** `max_containers=1` on GPU classes: a
-  second replica pays a full cold load rather than sharing a warm one.
+  second replica pays a full cold load rather than sharing a warm one. The
+  judgment it proxies: a class is one queue, so two checkpoints on one class
+  put a picture behind a clip. `BothGenerator` bends it on purpose, from the
+  gear, with the wait stated before the switch — the rule is the default, not
+  a veto, and what it must never become is silent sharing.
 
 ## Future-proof
 
