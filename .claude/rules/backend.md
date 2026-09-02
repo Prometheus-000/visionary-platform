@@ -251,12 +251,18 @@ Set `VISIONARY_VOLUME` to run a second copy against its own storage.
 
 ### The volume holds weights and what you saved, and nothing else
 
-Stated by the owner on 2026-09-01, after every gallery freshness bug had
-traced back to one dependency: something on the read path touching the mount,
-and the mount refusing to reload while it was touched. Each cache and marker
-that had been put on the volume was a workaround for that loop, not a design.
-*"I hate relying on modal volume for anything except model files or anything I
-intentionally tell to save."*
+Stated by the owner on 2026-09-01, and the root cause was found the same
+afternoon: the web function set no `scaledown_window`, so the container died
+about a minute after the last request. A cold start was the steady state, and
+under that fact the mount was the only place guaranteed to exist — so it
+became the read path, and every cache, marker and draft followed it onto the
+volume because nowhere else lasted two minutes. The reload freeze that every
+gallery bug traced to was the *cost* of that dependence, not its cause. *"I
+hate relying on modal volume for anything except model files or anything I
+intentionally tell to save."* With the window at Modal's maximum the
+container is what it was taken for: fast, free, roomy, and there when you come
+back. Reading committed state by RPC stays, because a longer-lived container
+sees a mount that lags longer — the two fixes are complementary.
 
 The test before writing a file to the volume is which of two things it is:
 
