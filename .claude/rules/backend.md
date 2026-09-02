@@ -249,6 +249,47 @@ build-order problem, and the file is navigable by its banner comments.
 
 Set `VISIONARY_VOLUME` to run a second copy against its own storage.
 
+### The volume holds weights and what you saved, and nothing else
+
+Stated by the owner on 2026-09-01, after every gallery freshness bug had
+traced back to one dependency: something on the read path touching the mount,
+and the mount refusing to reload while it was touched. Each cache and marker
+that had been put on the volume was a workaround for that loop, not a design.
+*"I hate relying on modal volume for anything except model files or anything I
+intentionally tell to save."*
+
+The test before writing a file to the volume is which of two things it is:
+
+- **Derived** — a thumbnail, an index, a heartbeat, a scratch copy, a node
+  catalogue. It goes on the web container's own disk (`SPOOL`, fast, free,
+  LRU-trimmed, and gone when the container is) or in a Modal Dict, and it must
+  be rebuildable from what *is* on the volume. A cold start pays to rebuild
+  it; that is the honest price of a container that scales to zero.
+- **A record** — what you made, and what you meant by it. It goes *inside* the
+  file it describes: a PNG text chunk, an MP4 comment atom. Never a JSON beside
+  it, because a file dragged out of the browser then leaves its record behind,
+  which is the sentence-is-the-record thesis backwards.
+
+**There is no named exception, and that is deliberate.** `drafts/` looked like
+one — an unsaved set kept on the volume so an upload survives the web
+container dying — and the owner refused it: *"exceptions have a way of setting
+precedence … unsaved datasets aren't holy. If I do a lot of work on a dataset,
+I will simply press save."* So an unsaved set lives on the container's disk
+and dies with it, which is what unsaved means, and Save is the one gesture
+that reaches the volume. The consequence to design for: anything that rents a
+container — captioning, dedupe, insight, training — reads a *saved* set,
+because a draft on this container's disk is invisible to every other one.
+
+**Known violations, awaiting the layout pass** (each is a workaround, none is
+a record): `outputs/<job>/visionary.json` sidecars; `outputs/<job>/.thumbs/`;
+`drafts/.sessions` heartbeat markers; `work/` scratch; `.node_catalogue.json`;
+`drafts/` itself; and the job folders, which exist only to keep a batch beside
+its sidecar. The pass that retires them: the record into each file, covers
+written once by whatever wrote the file, one flat `outputs/`, heartbeats in
+the sessions Dict, drafts on container disk. The one honest second file that
+survives is a clip's motion-context tensor, which is bytes rather than a
+record, named after the clip it belongs to.
+
 ### A storyboard is a folder
 
 `storyboard/<name>/board.json`, with the pictures dropped onto that board
@@ -321,6 +362,10 @@ the right file. The failure would just arrive somewhere else now: a reused card
 silently coming back with one fewer LoRA than the run it claims to reproduce.
 
 ### Saving a set is a choice, and it is the only thing `drafts/` means
+
+*(Written when drafts lived on the volume. Under the rule above they move to
+the container's disk; the paragraph below is still right about what a draft
+*means*, and wrong about where it sits until the layout pass lands.)*
 
 Dropping images makes a **draft**. It captions, filters and trains exactly like a
 saved set — same folder, same sidecars, same code path — and the only difference

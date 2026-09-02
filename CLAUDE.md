@@ -139,7 +139,8 @@ below.
   is a declaration, not a binding — bumping one is editing a number, and what
   binds you is the cost of the bump. A pin that moves is a seed; a pin that has
   not moved in two years is a fossil.
-- **Storage layout is the contract, not the code.** Datasets are folders of
+- **Storage layout is the contract, not the code — and the volume holds
+  weights and what you pressed Save on, nothing derived.** Datasets are folders of
   images with `.txt` sidecars beside them — the same thing the trainer reads.
   Nothing here is required to get your data back out.
 - **Do not build a second way to do the first thing.** New capability extends
