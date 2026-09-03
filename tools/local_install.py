@@ -79,7 +79,14 @@ SHAPES = (
     ("checkout", re.compile(r"^cd (?P<dir>\S+) && git checkout (?P<ref>\S+)$")),
     ("pip",      re.compile(r"^cd (?P<dir>\S+) && pip install (?P<args>.+)$")),
     ("npm",      re.compile(r"^cd (?P<dir>\S+) && npm (?P<args>.+)$")),
-    ("python",   re.compile(r'^python -c "(?P<script>.*)"$', re.S)),
+    # Both quote styles, and an optional `cd` in front. The `cd … && python -c
+    # '…'` form arrived with the SageAttention gencode patch, and this matcher
+    # refused it rather than skipping it — which is the whole design: a build
+    # step silently skipped is a package silently missing, hours later, in a
+    # container. It cost one regex to teach and found the change in a second on
+    # a laptop.
+    ("python",   re.compile(r"""^(?:cd (?P<dir>\S+) && )?python -c """
+                            r"""(?P<q>["'])(?P<script>.*)(?P=q)$""", re.S)),
     # The Node tarball, which a local machine supplies itself. Matched so it is
     # skipped deliberately and reported, rather than falling through to a fail.
     ("node",     re.compile(r"^(curl -fsSL https://nodejs\.org/|mkdir -p /opt/node|"
