@@ -725,9 +725,12 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
             {draft && <option value="__draft__">New preset</option>}
           </select>
         </div>
-        {presetSpec?.custom && (
+        {/* One ✕ for both: it deletes a saved preset of yours, and it drops an
+            unsaved draft. A second word for the second case is clutter. */}
+        {(presetSpec?.custom || draft) && (
           <button className="s" id="cap-preset-del" type="button"
-                  title="Delete this preset" onClick={() => void removePreset()}>✕</button>
+                  title={draft ? 'Drop this draft' : 'Delete this preset'}
+                  onClick={() => draft ? endDraft() : void removePreset()}>✕</button>
         )}
         <div className="opt">
           <select id="cap-model" value={curModel} onChange={(e) => setModel(e.target.value)}>
@@ -800,10 +803,6 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
                   disabled={!shownInstr.trim()} onClick={() => void savePreset()}>
             Save as preset
           </button>
-          <button className="s" id="cap-instr-reset" type="button"
-                  title="Back to the house prompt" onClick={endDraft}>
-            Discard
-          </button>
         </div>
       )}
       {!house && !draft && !edited && (
@@ -875,28 +874,29 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
  * filters are the targeting tool — and the count is on the button, because a
  * number that changes when you touch a filter is only trustworthy if you can
  * see it change before you press. The count is computed the same way the
- * server matches (literal string, optional case fold), so what the button
+ * server matches (literal string, exact case), so what the button
  * promises is what the route does.
  */
 function FindReplace({ ds, visible }: { ds: Ds; visible: DatasetImage[] }) {
   const [find, setFind] = useState('')
   const [repl, setRepl] = useState('')
-  const [caseOn, setCaseOn] = useState(false)
   const [note, setNote] = useState<string | null>(null)
 
   const hits = useMemo(() => {
     if (!find) return 0
-    const f = caseOn ? find : find.toLowerCase()
+    const f = find
     return visible.filter((i) => {
       const cap = i.caption || ''
-      return (caseOn ? cap : cap.toLowerCase()).includes(f)
+      return cap.includes(f)
     }).length
-  }, [visible, find, caseOn])
+  }, [visible, find])
 
   const run = async () => {
     if (!ds.open || !find || !hits) return
     const r = await replaceCaptions(ds.open, {
-      find, replace: repl, match_case: caseOn,
+      // Always exact. The Match case box was a second decision on a row that
+      // already asks for two strings, and nobody wanted it off.
+      find, replace: repl, match_case: true,
       images: visible.map((i) => i.name),
     })
     if (failed(r)) return ds.setEditError(r.error)
@@ -926,11 +926,6 @@ function FindReplace({ ds, visible }: { ds: Ds; visible: DatasetImage[] }) {
                value={repl} onChange={(e) => setRepl(e.target.value)}
                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void run() } }} />
       </div>
-      <label className="row" style={{ gap: 7, margin: 0, color: '#ddd', fontSize: 13 }}>
-        <input type="checkbox" id="fr-case" style={{ width: 'auto' }}
-               checked={caseOn} onChange={(e) => setCaseOn(e.target.checked)} />
-        Match case
-      </label>
       <span className="actions">
         {note && <span className="muted" id="fr-note" style={{ fontSize: 12 }}>{note}</span>}
         <button className="s" id="fr-run" type="button" disabled={!hits}
