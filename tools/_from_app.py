@@ -26,6 +26,7 @@ import ast
 import base64
 import hashlib
 import json
+import os
 import math
 import re
 import shutil
@@ -66,7 +67,7 @@ def pull(names: set[str]) -> dict:
     ns: dict = {"Any": typing.Any, "Path": Path, "json": json,
                 "hashlib": hashlib, "math": math, "re": re, "time": time,
                 "base64": base64, "struct": struct, "subprocess": subprocess,
-                "shutil": shutil}
+                "shutil": shutil, "os": os}
     exec(compile(ast.Module(body=body, type_ignores=[]), str(APP), "exec"), ns)
     return ns
 
@@ -158,6 +159,13 @@ DUPES = {
     "_upright", "_dataset_images", "_caption_of",
     "_dhash", "_phash", "_sharpness", "_crop_variants",
     "_embedder", "_embed", "_emb_vec",
+    # SPOOL rides along because `_set_cache` names it: the derived files a scan
+    # writes go under the spool rather than beside the pictures, and the spool
+    # root is env-driven so a local run can put it somewhere that is not tmpfs.
+    # This is the failure this module's docstring warns about, arriving for
+    # real — a subset that names an unpulled constant raises NameError from
+    # inside app.py, several frames from anything that mentions the subset.
+    "SPOOL",
     "_fingerprint", "_fingerprints", "_set_cache", "_link", "_components",
     "_keep_rank", "_keep_reason", "_duplicate_groups",
 }
