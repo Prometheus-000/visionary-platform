@@ -281,6 +281,82 @@ def check_paths_follow_env(app, root) -> list[str]:
     return bad
 
 
+def check_tier_resolution(app, root) -> list[str]:
+    """
+    `_slot_name` picks by card, with every candidate actually on disk.
+
+    The branch this covers cannot run on Modal at all — `GPU_VRAM_GB` is 0
+    there, so the early return hands back the catalogue's own row and the
+    arithmetic below it is dead. That makes it exactly the kind of code that
+    ships broken: the only machine that exercises it is a stranger's, and the
+    first symptom is a 26 GB bf16 checkpoint chosen for a 12 GB card.
+
+    The dests are pointed at empty temp files, because `here` filters on
+    `is_file()` and a laptop has none of these weights. What is under test is
+    the decision, not the download.
+    """
+    import copy                                    # noqa: PLC0415
+    bad = []
+    saved_vram = app.GPU_VRAM_GB
+    saved_rows = copy.deepcopy({k: dict(v) for k, v in app.MODEL_CATALOGUE.items()})
+    saved_cfg = app.config.get("weight_tiers")
+    tmp = root / "tiers"
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        for base, alts in app.SLOT_TIERS.items():
+            for key in (base, *alts):
+                f = tmp / app.MODEL_CATALOGUE[key]["dest"].name
+                f.write_bytes(b"")
+                app.MODEL_CATALOGUE[key]["dest"] = f
+
+        for base in app.SLOT_TIERS:
+            base_name = saved_rows[base]["dest"].name
+            app.config.pop("weight_tiers", None)
+
+            # Unstated is every Modal deployment, and must not move.
+            app.GPU_VRAM_GB = 0
+            if app._slot_name(base) != base_name:
+                bad.append(f"{base}: an unstated card no longer resolves to "
+                           f"{base_name} — the deployed path has changed")
+
+            # A card that comfortably holds the full row keeps it.
+            app.GPU_VRAM_GB = 80.0
+            if app._slot_name(base) != base_name:
+                bad.append(f"{base}: an 80 GB card resolved to "
+                           f"{app._slot_name(base)}, not the full row")
+
+            # A card below the full row's declared fit must come down a tier,
+            # and must never be handed a file larger than the one it refused.
+            app.GPU_VRAM_GB = 12.0
+            got = app._slot_name(base)
+            if got == base_name:
+                bad.append(f"{base}: a 12 GB card was handed {base_name}, "
+                           f"which declares {saved_rows[base].get('fits_vram_gb')} GB")
+            elif got not in {saved_rows[k]["dest"].name for k in app.SLOT_TIERS[base]}:
+                bad.append(f"{base}: a 12 GB card resolved to {got}, "
+                           "which is not one of its tiers")
+
+        # The override is honoured whatever the card, and a stale one falls back.
+        slot = next(iter(app.SLOT_TIERS))
+        alt = app.SLOT_TIERS[slot][-1]
+        app.GPU_VRAM_GB = 80.0
+        app.config["weight_tiers"] = {slot: alt}
+        if app._slot_name(slot) != saved_rows[alt]["dest"].name:
+            bad.append(f"{slot}: the gear override was not honoured on a big card")
+        app.config["weight_tiers"] = {slot: "a_key_that_does_not_exist"}
+        if app._slot_name(slot) != saved_rows[slot]["dest"].name:
+            bad.append(f"{slot}: a stale override did not fall back to the base row")
+    finally:
+        app.GPU_VRAM_GB = saved_vram
+        for k, v in saved_rows.items():
+            app.MODEL_CATALOGUE[k]["dest"] = v["dest"]
+        if saved_cfg is None:
+            app.config.pop("weight_tiers", None)
+        else:
+            app.config["weight_tiers"] = saved_cfg
+    return bad
+
+
 CHECKS = (
     ("imports offline, in local mode", check_imports_offline, True),
     ("the four names are rebound, the mounts are not", check_rebound, True),
@@ -290,6 +366,7 @@ CHECKS = (
     ("web() builds every route", check_web_builds, False),
     ("dispatch, publish, queue, stop", check_job_contract, False),
     ("paths follow the workspace", check_paths_follow_env, True),
+    ("tiers resolve by card", check_tier_resolution, True),
 )
 
 

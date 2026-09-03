@@ -120,7 +120,18 @@ def render_on_tier(gpu: str = "L4", keep: bool = True) -> dict:
     app.models_volume.commit()
 
     # ---- which file the resolver picks -----------------------------------
-    os.environ["VISIONARY_GPU_VRAM_GB"] = str(out["vram_gb"])
+    # Assigned on the module, not through the environment, and that is the
+    # difference between this probe and a real local run rather than a
+    # shortcut. `GPU_VRAM_GB` is read once at import (app.py:336), and
+    # `tools/run_local.py` sets the variable *before* it imports app — which a
+    # probe cannot do, because Modal needs `app` at module scope to build the
+    # decorators. Setting the environment here instead is what the first
+    # version did, and it did nothing: the constant was already 0, the
+    # `if not GPU_VRAM_GB` early return fired, and the resolver handed back the
+    # bf16 base while the GGUF sat beside it on the volume. The guard below
+    # caught it, which is the only reason this is a comment and not a passing
+    # test of the wrong file.
+    app.GPU_VRAM_GB = out["vram_gb"]
     chosen = app._slot_name("turbo")
     note(f"_slot_name('turbo') resolved to {chosen}")
     out["resolved"] = chosen
