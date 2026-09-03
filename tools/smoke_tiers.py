@@ -272,5 +272,5 @@ def main(gpu: str = "L4", keep: bool = True):
             print(f"    {line}")
         raise SystemExit(1)
     print("\n  A quantised Krea 2 rendered on a consumer architecture, through")
-    print("  the forked loader, with our four nodes bound. That is the claim")
-    print("  the catalogue row was making.")
+    print(f"  the forked loader, with all {len(app.IMAGE_NODES)} nodes in")
+    print("  IMAGE_NODES bound. That is the claim the catalogue row was making.")
