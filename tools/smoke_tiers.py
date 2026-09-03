@@ -165,12 +165,16 @@ def render_on_tier(gpu: str = "L4", keep: bool = True) -> dict:
         out[cap] = any(cap in line for line in comfy._log)
         note(f"  kernel {cap}: {out[cap]}")
 
-    # The node that only the pinned fork provides, plus our own four.
+    # `IMAGE_NODES`, not a list written here. This probe carried its own copy
+    # for exactly one day and it named `VisionaryStepCache`, which main removed
+    # with TeaCache — so the run failed on a node that no longer exists and said
+    # nothing about the tier it was sent to test. A probe that writes its own
+    # list is a probe of the list it wrote, which is the same rule
+    # `tools/preview_ui.py` is held to.
     try:
-        comfy.require_nodes(app.GGUF_UNET_NODE, "VisionaryStepCache",
-                            "VisionaryBoxes", "VisionaryFreeRegional",
-                            "VisionaryEditArity")
-        note("every required node imported, including the GGUF loader")
+        comfy.require_nodes(*app.IMAGE_NODES)
+        note(f"every node in IMAGE_NODES imported ({len(app.IMAGE_NODES)}), "
+             f"including {app.GGUF_UNET_NODE}")
         out["nodes_ok"] = True
     except Exception as exc:  # noqa: BLE001
         out["nodes_ok"] = False

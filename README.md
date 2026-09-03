@@ -341,9 +341,16 @@ it. So it asserts those surfaces closed, on a laptop, in ten seconds.
 what a card does with weights. Rent one whenever a pin, an image build step or
 ComfyUI's argv changes, and run: a cold start; a Krea 2 render at bf16 and at
 GGUF; an H3 take at 544p draft; a rank-32 train with `--fp8_base
---blocks_to_swap`; `Comfy-Kitchen … {'cuda': True}` in the log; and the four
-`Visionary*` nodes still binding on a GGUF-loaded model — `VisionaryStepCache`
-above all, because a silent miss there costs half the render speed with no error.
+--blocks_to_swap`; `Comfy-Kitchen … {'cuda': True}` in the log; and every node in
+`IMAGE_NODES` still binding on a GGUF-loaded model, since a GGUF is wrapped in
+dequant-on-access layers and those hooks were only ever exercised against
+`UNETLoader` output.
+
+Read that list out of `IMAGE_NODES` rather than from here. This paragraph named
+`VisionaryStepCache` for a day after TeaCache was removed, and
+`tools/smoke_tiers.py` carried the same stale copy — which cost a probe run that
+failed on a node that no longer exists and said nothing about the tier it was
+sent to measure.
 
 ### What has been run end to end
 
