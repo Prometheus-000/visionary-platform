@@ -747,6 +747,34 @@ comfy_image = (
     .pip_install("wheel", "setuptools", "packaging", "ninja")
     .run_commands(
         "git clone --depth 1 https://github.com/thu-ml/SageAttention /tmp/sage",
+        # Upstream's setup.py turns TORCH_CUDA_ARCH_LIST into one -gencode list
+        # and hands it to every extension. With Ada on the list that assembles
+        # the Hopper-only `_qattn_sm90` kernel for sm_89 as well, and ptxas
+        # refuses it — "Feature 'cp.async.bulk.tensor' requires .target sm_90
+        # or higher" — which is how adding L40S broke the image. The Ada and
+        # Ampere kernels compile for sm_90a fine, so only the sm90 extension's
+        # list is narrowed to its own card; runtime dispatch is already by
+        # `get_device_capability`, so nothing else has to know. It asserts on
+        # its anchors rather than no-op'ing, so if upstream reshapes the file
+        # the build stops here naming this patch instead of three thousand
+        # ptxas lines later with the error above.
+        "cd /tmp/sage && python -c '"
+        r's = open("setup.py").read(); '
+        r'old = "\"nvcc\": NVCC_FLAGS}"; '
+        r'i = s.find("name=\"sageattention._qattn_sm90\""); '
+        r'k = s.find(old, i); '
+        r'j = s.find("extra_link_args", i); '
+        r'a = "    if HAS_SM90:\n"; '
+        r'assert 0 <= i < k < j and s.count(a) == 1, '
+        r'"SageAttention setup.py changed shape: the sm90 -gencode narrowing in '
+        r'app.py no longer finds its anchors, so re-read setup.py and re-fit it"; '
+        r's = s[:k] + "\"nvcc\": NVCC_FLAGS_SM90}" + s[k + len(old):]; '
+        r'd = "    NVCC_FLAGS_SM90 = [f for f in NVCC_FLAGS if f != \"-gencode\" '
+        r'and not f.startswith(\"arch=\")] + [\"-gencode\", '
+        r'\"arch=compute_90a,code=sm_90a\"]\n"; '
+        r's = s.replace(a, d + a); '
+        r'open("setup.py", "w").write(s)'
+        "'",
         "cd /tmp/sage && pip install . --no-build-isolation",
         "rm -rf /tmp/sage",
     )
