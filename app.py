@@ -1171,8 +1171,8 @@ TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
 # friend's shoulder, and the friend became a red bench.
 #
 # So this is attribute bleed, one level up: not "which garment is the red one"
-# but "what is the thing she is touching", and it is the same failure the
-# General preset's adjective-binding clause exists to fight. A model that loses
+# but "what is the thing she is touching", and it is the same failure a
+# caption's adjective-to-noun binding has to hold against. A model that loses
 # a binding does not signal it — it writes a confident sentence about furniture
 # that is not there, and that sentence becomes a training target. No rewording
 # of the instruction moved it, which is the tell that the instruction was never
@@ -1181,12 +1181,14 @@ TE_PATH = MODEL_CATALOGUE["text_encoder"]["dest"]
 # JoyCaption is trained *for this job*, on this instruction surface, and its
 # default prompt beats our best-tuned one.
 #
-# So the instruction bodies below are JoyCaption's own, lifted from its Space
-# rather than written here. That is the whole lesson: a prompt for a model
-# fine-tuned on a fixed set of instructions is not a place to be creative. The
-# trained phrasing is the API, and our leave-out clauses are appended as extra
-# sentences in its grammar — which is exactly how the Space composes its own
-# option checkboxes.
+# So the presets were JoyCaption's own sentences for a while, lifted from its
+# Space rather than written here, on the argument that a prompt for a model
+# fine-tuned on a fixed set of instructions is not a place to be creative. Then
+# a form-shaped instruction of the owner's — one labelled field per line, the
+# reply parsed back into exactly those fields — read better than any of them,
+# and it is now the only preset (see `CHARACTER_INSTRUCTION`). The lesson that
+# survives is narrower than "use the trained phrasing": the captions decide,
+# and no reading of an instruction does.
 #
 # **What is not taken from it: the tag modes.** The Space offers Danbooru, e621,
 # Rule34 and Booru-like tag lists. Prose, not tags, still holds and holds for a
@@ -1315,160 +1317,53 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_CAPTION_CHARS = 2048
 THUMB_PX = 320
 
-# The Space's own sentences, verbatim, because they are trained surface.
+# One preset, and it is the owner's own text, verbatim.
 #
-# These read like ordinary instructions and are not: they are strings JoyCaption
-# was tuned against, and the exact wording is the reason they land. Rewriting one
-# to sound better here is the same mistake as rewriting a function signature to
-# sound better. Composed into the presets below the way the Space composes its
-# Extra Options checkboxes — appended to the base template as whole sentences.
+# It used to be five, each composed out of JoyCaption's trained sentences with a
+# leave-out clause of ours appended in the Space's grammar. Retired 2026-09-02
+# for this one form-shaped instruction (the others live in git, to come back
+# one at a time as they are re-earned): a field per line, the subject named by
+# `{NAME}`, and every immutable — face, skin, eyes, age, body, ethnicity, hair
+# colour and length — kept out of every field so the trigger word is the only
+# place identity can live. The fields are the model's scratchpad; the last
+# paragraph has it write the caption *from* them, and `_caption_extract` keeps
+# only what follows that final CAPTION:, so the scratchpad never reaches a
+# sidecar.
 #
-# `NO_META` is load-bearing for more than taste. `_caption_images` strips stock
-# preambles by prefix afterwards, and that list only ever grows; a preamble the
-# model was never told to drop is one the parser has to learn.
-NO_META = (
-    " Your response will be used by a text-to-image model, so avoid useless "
-    "meta phrases like \u201cThis image shows\u2026\u201d, \"You are looking at...\", etc."
-)
-# The Character preset's whole thesis, in JoyCaption's words rather than ours.
-NO_IMMUTABLE = (
-    " Do NOT include information about people/characters that cannot be changed "
-    "(like ethnicity, gender, etc), but do still include changeable attributes "
-    "(like hair style)."
-)
-SHOT_TYPE = (
-    " Mention whether the image depicts an extreme close-up, close-up, medium "
-    "close-up, medium shot, cowboy shot, medium wide shot, wide shot, or extreme "
-    "wide shot."
-)
-LIGHTING = " Include information about lighting."
-WATERMARK = " If there is a watermark, you must mention it."
-NO_ARTIST = (
-    " If it is a work of art, do not include the artist\u2019s name or the title "
-    "of the work."
-)
+# Not reworded here, and not to be. The text is the product: it was tuned by
+# reading what came back, and "improving" a sentence of it without re-reading
+# the captions is the same mistake as rewriting a function signature to sound
+# better. What composes around it on the server is exactly `{NAME}` and the
+# CAPTION: cut, and the line under the box says so (see `_caption_instruction`).
+CHARACTER_INSTRUCTION = """\
+Describe this image for a text-to-image training caption. The subject is {NAME}. Output only the fields below, one per line, no extra text.
 
-# The two base templates, also verbatim, with the Space's `{length}` slot left
-# in. Its third row — the one that takes a descriptor rather than a word count —
-# because a descriptor is what the page's Short/Medium/Long control has always
-# sent. The tag-list rows are not here; see the CAPTION_MODELS comment.
-JOY_DESCRIPTIVE = "Write a {length} detailed description for this image."
-JOY_CASUAL = (
-    "Write a {length} descriptive caption for this image in a casual tone."
-)
-JOY_STRAIGHT = (
-    "Write a {length} straightforward caption for this image. Begin with the "
-    "main subject and medium. Mention pivotal elements\u2014people, objects, "
-    "scenery\u2014using confident, definite language. Focus on concrete details "
-    "like color, shape, texture, and spatial relationships. Show how elements "
-    "interact. Omit mood and speculative wording. If text is present, quote it "
-    "exactly. Note any watermarks, signatures, or compression artifacts. Never "
-    "mention what\u2019s absent, resolution, or unobservable details. Vary your "
-    "sentence structure and keep the description concise, without starting with "
-    "\u201cThis image is\u2026\u201d or similar phrasing."
-)
+SHOT: one of extreme close-up / close-up / medium close-up / medium shot / cowboy shot / medium wide shot / wide shot / extreme wide shot
+POSE: body position and what {NAME} is doing, in one sentence
+EXPRESSION: facial expression and gaze direction, in a few words
+HAIR ARRANGEMENT: only how the hair is worn (loose, tied back, braided, under a hat, wet, windblown). Never state color, length, or texture.
+CLOTHING: every visible garment and accessory, with colors and materials
+SETTING: location and background objects, with spatial relationships
+LIGHTING: source, direction, quality, color temperature
+CAMERA: angle, lens feel, depth of field
+FLAWS: none (unless the image clearly contains a watermark, text overlay, visible motion blur, on-camera flash, or obvious compression artifacts — then name only what is clearly present)
 
-# The instruction is the product, not the model.
-#
-# A preset is a training intent, and the intent decides the one thing that
-# matters: *what to leave out*. A caption teaches the model that whatever it
-# names is free to vary, and whatever it never names belongs to the trigger
-# word — so a character set that describes the jaw and the eye colour has spent
-# its trigger on a face the captions already supply, and a style set that says
-# "oil painting, thick impasto" has handed the model a phrase to hang the look
-# on instead of the token you are training. Same rule, inverted per preset.
-#
+Rules: Do not describe {NAME}'s face, skin, eyes, age, body type, ethnicity, or hair color/length anywhere in any field. Do not invent details you cannot see. Attach every adjective to the noun it belongs to, so it is unambiguous which garment or object each color and material describes.
+
+Then, using only what you wrote above, write CAPTION: one or two natural sentences describing the image. Start with "{NAME}" and the shot type. Do not add anything not in the fields."""
+
 # They are here rather than in the page for the reason `SHOT_VOCAB` is: the page
 # should send `character`, not four hundred words of instruction it could edit
 # into something the run cannot reproduce. What the page shows is the label and
-# the note.
+# the note; the text prefills the box and the first keystroke makes it the run's.
 CAPTION_PRESETS: dict[str, dict[str, str]] = {
-    "general": {
-        "label": "General",
-        "note": "Everything in frame, each adjective bound to its noun.",
-        "instruction": (
-            JOY_DESCRIPTIVE + NO_META
-            + " Attach every adjective to the noun it belongs to, so it is "
-            "unambiguous which garment or object each colour and material "
-            "describes."
-        ),
-    },
     "character": {
         "label": "Character",
-        "note": "Describes everything except the face. Identity is the trigger's job.",
-        # NO_IMMUTABLE is the preset, and it is the Space's sentence rather than
-        # the four we used to spend on it. Ours enumerated what not to describe —
-        # face shape, eye colour, jaw, skin tone — and enumerating a thing is a
-        # way of putting it in the context window. The trained phrasing names the
-        # *category* and the model already knows what is in it.
-        "instruction": (
-            JOY_STRAIGHT + NO_IMMUTABLE
-            + " Refer to the subject with a plain class noun \u2014 the woman, the "
-            "man, the person \u2014 and never invent a name."
-            + SHOT_TYPE + LIGHTING + WATERMARK
-            + " Also name anything else you would want to prompt away later, such "
-            "as a text overlay, motion blur, harsh on-camera flash, or a cluttered "
-            "background. Anything named can be prompted away; anything unnamed is "
-            "baked into the character."
-            + NO_META
-        ),
-    },
-    "style": {
-        "label": "Style",
-        "note": "Describes the content, never the look. The look is the trigger.",
-        # Descriptive rather than Straightforward, and that is not a preference:
-        # Straightforward opens "Begin with the main subject and medium", which
-        # is the one instruction this preset exists to countermand. Two sentences
-        # pulling opposite ways is a prompt that resolves at random.
-        "instruction": (
-            JOY_DESCRIPTIVE
-            + " Describe only what the image is *of*: the subject, what it is "
-            "doing, the composition and framing, where things sit relative to each "
-            "other, and the setting. Say nothing about how it is rendered \u2014 do "
-            "not name the medium, the brushwork, line quality, palette, grain, "
-            "colour grade, era, or any word for the look itself such as cinematic, "
-            "painterly, anime or retro. Those are the style you are training, and "
-            "a caption that names them gives the model a phrase to hang the look "
-            "on instead of the trigger word."
-            + NO_ARTIST + WATERMARK + NO_META
-        ),
-    },
-    "concept": {
-        "label": "Concept",
-        "note": "For an object, garment or pose \u2014 describes the context around it.",
-        "instruction": (
-            JOY_STRAIGHT
-            + " Refer to the recurring object, garment, pose or effect itself with "
-            "the shortest plain noun that fits, and say nothing about what makes it "
-            "distinctive \u2014 its shape, markings, colour scheme, materials or "
-            "construction. Those are constant across the set and belong to the "
-            "trigger word. Describe everything around it instead: the scene, who is "
-            "holding or wearing it, the angle it is seen from, its scale in the "
-            "frame, what else is present, the lighting and the background."
-            + WATERMARK + NO_META
-        ),
-    },
-    "casual": {
-        "label": "Casual",
-        "note": "Conversational prose, none of the dataset rules applied.",
-        # Bare on purpose. "None of the dataset rules applied" is the note, so
-        # bolting NO_META onto it would make the note a lie for the sake of a
-        # preamble the stripper already handles.
-        "instruction": JOY_CASUAL,
+        "note": "One field per line, nothing about the face. Identity is the trigger's job.",
+        "instruction": CHARACTER_INSTRUCTION,
     },
 }
-DEFAULT_CAPTION_PRESET = "general"
-
-# The Space's own descriptors, substituted into `{length}` rather than appended
-# as a sentence of ours. The keys are unchanged — short/medium/long is what the
-# page sends and what every existing job record says — so only the value each
-# one compiles to moved. "medium-length" rather than "medium" because that is
-# the string in the Space's dropdown, and the dropdown is the trained vocabulary.
-CAPTION_LENGTHS = {
-    "short": "short",
-    "medium": "medium-length",
-    "long": "long",
-}
+DEFAULT_CAPTION_PRESET = "character"
 
 # Anchored at the start, like `prepend_trigger`'s `startswith` and for the same
 # reason: "I cannot" halfway through a caption is a sentence about the picture
@@ -1516,26 +1411,25 @@ def _strip_leading_trigger(text: str, trigger_word: str) -> str:
 
 
 def _caption_instruction(
-    preset: str, length: str, trigger_word: str, instruction: str = "",
+    preset: str, trigger_word: str, instruction: str = "",
 ) -> str:
     """
-    One prompt out of the preset, the length and the trigger word.
+    The prompt, and nothing the page does not show.
 
     `instruction` overrides the preset's body when the page sends one — the
-    preset is a starting point the textarea prefills, not a lock. Only the
-    trigger clause still composes around it: the trigger is a fact about *this
-    run* rather than a preference (the token is prepended in Python once the
-    caption comes back, so the model has to be told both that the subject has a
-    name and that writing it would double it).
+    preset is a starting point the textarea prefills, and the first keystroke
+    forks it into the user's own. The one thing done to it is `{NAME}` → the
+    trigger word ("the subject" without one).
 
-    Nothing else is appended any more. The bodies are JoyCaption's trained
-    instruction surface now, and the sixty-word rulebook that used to ride along
-    behind every one of them — no lists, no markdown, no editorialising, do not
-    speculate — was our wording stacked on top of a model that had already been
-    taught those rules in different words. Two instructions that mean the same
-    thing are not twice as strong; they are one prompt arguing with itself, and
-    the presets that needed a clause of ours now carry it as a sentence in the
-    Space's own grammar.
+    **Nothing is appended.** Two things used to be, and both were invisible
+    from the page. A sixty-word rulebook rode behind every preset until
+    2026-08-29 — no lists, no markdown, no editorialising — and then a trigger
+    clause ("prefixed automatically, so never write it yourself") until
+    2026-09-02. The owner learned of the rulebook after it was gone, and the
+    rule that came out of that is the one in CLAUDE.md: what the model sees is
+    shown. A preset that wants either sentence carries it in its own text,
+    where it can be read. The house prompt's reply is cut to its final
+    CAPTION: by `_caption_extract`, and the one line under the box says so.
 
     `replace` rather than `format`, because this string is editable in the page.
     `.format()` on user-typed text raises on a stray brace, and the cost of that
@@ -1544,13 +1438,37 @@ def _caption_instruction(
     presets = _caption_presets()
     spec = presets.get(preset) or presets[DEFAULT_CAPTION_PRESET]
     out = instruction.strip() or spec["instruction"]
-    out = out.replace("{length}", CAPTION_LENGTHS.get(length, CAPTION_LENGTHS["medium"]))
-    if trigger_word:
-        out += (
-            f" Every caption in this set is prefixed with the trigger word "
-            f"'{trigger_word}' automatically, so never write '{trigger_word}' yourself."
-        )
-    return out
+    return out.replace("{NAME}", trigger_word or "the subject")
+
+
+# The last thing the house prompt asks for, and the only thing kept.
+CAPTION_MARK_RE = re.compile(r"CAPTION\s*:", re.I)
+
+
+def _caption_extract(reply: str) -> str:
+    """
+    What follows the final `CAPTION:` in a reply, or the whole reply.
+
+    The house prompt makes the model fill nine labelled fields and then write
+    the caption from them. The fields are the scratchpad — they are what make
+    the caption good, and they are not the caption — so the sidecar is the
+    text after the last CAPTION: mark. The *last*, because a model that drafts
+    twice writes the mark twice, and the final one is the one it meant.
+
+    Written here rather than asked for in the prompt: "output only the
+    caption" would cost the scratchpad, which is the whole method, and a rule
+    stacked on a probabilistic writer is a coin flip anyway. This was the
+    owner's original one-liner, `reply.split("CAPTION:")[-1]`, made
+    case-blind and bounded.
+
+    A reply with no mark comes back whole and is logged rather than emptied:
+    whatever it is, the raw text says more about it than a blank sidecar.
+    """
+    marks = list(CAPTION_MARK_RE.finditer(reply))
+    if not marks:
+        print(f"[caption] no CAPTION: in reply, kept whole: {reply[:120]!r}")
+        return reply.strip()
+    return reply[marks[-1].end():].strip().strip("*").strip()
 
 
 # --------------------------------------------------------------------------
@@ -3413,7 +3331,7 @@ CAPTION_COMMIT_S = 20
 
 def _caption_images(
     image_dir: Path, trigger_word: str, job_id: str,
-    preset: str, length: str, write_mode: str, model_key: str,
+    preset: str, write_mode: str, model_key: str,
     instruction: str = "", max_tokens: int = 320,
     temperature: float = 0.6, top_p: float = 0.9,
 ) -> tuple[int, int]:
@@ -3441,7 +3359,16 @@ def _caption_images(
 
     cache_dir = str(HF_CACHE)
     processor = _caption_processor(repo, cache_dir)
-    instruction = _caption_instruction(preset, length, trigger_word, instruction)
+    # Extraction is for the house prompt only. A user's own instruction — a
+    # draft, or a saved preset, which the page sends as an override — is kept
+    # as the model writes it, even if it happens to say CAPTION: somewhere:
+    # the owner's rule is that editing is binary when code depends on the
+    # text, and a prompt whose output is chopped by rules it cannot see is the
+    # half that drives people nuts.
+    house = not instruction.strip() and preset in CAPTION_PRESETS
+    instruction = _caption_instruction(preset, trigger_word, instruction)
+    if house:
+        print("[caption] house prompt · keeping what follows the final CAPTION:")
     # Ahead of the weights rather than after them, which is the whole payoff of
     # settling this once: a captioner whose template refuses the image is not
     # going to caption anything, and finding that out here costs a processor
@@ -3516,6 +3443,11 @@ def _caption_images(
                 # is where "chgl, chgl, …" came from — and each recaption run
                 # stacked one more. Stripped here, once, so every branch below
                 # composes from a caption that is known not to carry it.
+                if house:
+                    caption = _caption_extract(caption)
+                # After the extraction, not before: the caption is told to
+                # open with the trigger, and this is what keeps that from
+                # doubling when the prepend below puts it there as well.
                 caption = _strip_leading_trigger(caption, trigger_word)
                 txt = img_path.with_suffix(".txt")
                 existing = txt.read_text().strip() if txt.exists() else ""
@@ -3566,7 +3498,7 @@ def _caption_images(
 )
 def caption_job(
     job_id: str, dataset: str, trigger_word: str = "",
-    preset: str = DEFAULT_CAPTION_PRESET, length: str = "medium",
+    preset: str = DEFAULT_CAPTION_PRESET,
     write_mode: str = "skip", model: str = DEFAULT_CAPTION_MODEL,
     instruction: str = "", max_tokens: int = 320,
     temperature: float = 0.6, top_p: float = 0.9,
@@ -3586,7 +3518,7 @@ def caption_job(
 
     started = time.time()
     written, refused = _caption_images(
-        src, trigger_word.strip(), job_id, preset, length, write_mode, model,
+        src, trigger_word.strip(), job_id, preset, write_mode, model,
         instruction=instruction, max_tokens=max_tokens,
         temperature=temperature, top_p=top_p)
     res = {
@@ -3598,9 +3530,13 @@ def caption_job(
         # not violate "keep the polled thing small", which is about results
         # that grow with output.
         "instruction": _caption_instruction(
-            preset, length, trigger_word.strip(), instruction),
+            preset, trigger_word.strip(), instruction),
         "write_mode": write_mode,
         "duration_s": round(time.time() - started, 1),
+        # A stopped run completes — the captions it wrote are real and the
+        # loop unwound cleanly — but the page should not call it finished. The
+        # flag is what lets "Stopping…" resolve into a readout that says so.
+        "stopped": _stop_requested(job_id),
     }
     _publish(job_id, **res)
     return res
@@ -13848,7 +13784,6 @@ def web():
         caption_job.spawn(
             job_id=job_id, dataset=name, trigger_word=trigger,
             preset=preset, model=model,
-            length=str(payload.get("length") or "medium"),
             write_mode=write_mode,
             instruction=str(payload.get("instruction") or "")[:4000],
             max_tokens=int(_clamp("max_tokens", 320, 16, 1024)),

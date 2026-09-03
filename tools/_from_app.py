@@ -104,17 +104,12 @@ SHOT = {
 # The captioner's two menus, for the same reason the vocabulary is here: the
 # labels and the notes are what the preview draws, and a hand-written copy of
 # them is a picker whose options `/api/caption` would reject by name.
-# The nine string constants come too, and this is the rule two blocks down
-# stated once more: `CAPTION_PRESETS` is now composed *from* JoyCaption's
-# trained sentences rather than written out longhand, so pulling the table
-# without them is the NameError this file exists to have already learned.
+# `CHARACTER_INSTRUCTION` comes too, and this is the rule two blocks down stated
+# once more: `CAPTION_PRESETS` names it rather than spelling it out, so pulling
+# the table without it is the NameError this file exists to have already learned.
 CAPTION = {
-    "CAPTION_MODELS", "CAPTION_PRESETS",
+    "CAPTION_MODELS", "CAPTION_PRESETS", "CHARACTER_INSTRUCTION",
     "DEFAULT_CAPTION_MODEL", "DEFAULT_CAPTION_PRESET",
-    "CAPTION_LENGTHS",
-    "JOY_DESCRIPTIVE", "JOY_CASUAL", "JOY_STRAIGHT",
-    "NO_META", "NO_IMMUTABLE", "SHOT_TYPE", "LIGHTING", "WATERMARK",
-    "NO_ARTIST",
 }
 
 # What each video model can be asked for. Pulled rather than transcribed for

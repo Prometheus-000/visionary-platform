@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { everyMs, failed } from '../api/client'
 import {
   caption, captionDataset, clipUrl, deleteCaptionPreset, getState, imageUrl, prependTrigger,
-  removeImage, replaceCaptions, saveCaptionPreset, status, thumbUrl,
+  removeImage, replaceCaptions, saveCaptionPreset, status, stop, thumbUrl,
 } from '../api/routes'
 import { fmtFileSize } from '../format'
 import { IconSliders, IconTag, IconUpload } from '../icons'
@@ -531,16 +531,26 @@ function CaptionBox({ image, onSave }: { image: DatasetImage; onSave: (v: string
 function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.getState>['state'] }) {
   const [preset, setPreset] = useState('')
   const [model, setModel] = useState('')
-  const [length, setLength] = useState('medium')
   const [mode, setMode] = useState('skip')
   // null means "follow the preset": the textarea shows the preset's own text
   // until the first keystroke, and switching presets snaps back to following.
   const [instr, setInstr] = useState<string | null>(null)
+  // A blank preset being written. Binary on purpose: the house prompt runs
+  // whole and its reply is cut up by code, so a copy of it that is "mostly
+  // editable" is a trap — rename a label and the extraction quietly changes.
+  // Either the house prompt exactly, or your own from nothing.
+  const [draft, setDraft] = useState(false)
   const [adv, setAdv] = useState(false)
   const [maxTokens, setMaxTokens] = useState(320)
   const [temperature, setTemperature] = useState(0.6)
   const [topP, setTopP] = useState(0.9)
   const [prog, setProg] = useState<{ pct: number; note: string } | null>(null)
+  // The running job, so Cancel has something to name. A stop is cooperative —
+  // the loop reads the flag between images — so the readout says "Stopping…"
+  // until the record comes back, rather than pretending the button was
+  // instant.
+  const [capJob, setCapJob] = useState<string | null>(null)
+  const [stopping, setStopping] = useState(false)
   // `runBusy`, because `run` here is already the captioning run — which has `prog` for
   // its readout and is a poll rather than a round trip, so it keeps it.
   const { busy, run: runBusy } = useBusy()
@@ -550,13 +560,21 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
   const curPreset = preset || state?.caption_defaults.preset || presets[0]?.key || ''
   const curModel = model || state?.caption_defaults.model || models[0]?.key || ''
   const presetSpec = presets.find((p) => p.key === curPreset)
-  const shownInstr = instr ?? presetSpec?.instruction ?? ''
-  const edited = instr !== null && instr.trim() !== (presetSpec?.instruction ?? '').trim()
-  // What the two words cannot say: which half of the picture a preset throws away, and
-  // that the second captioner is a download. Both come from the server, so the note and
-  // the instruction behind it can never disagree.
-  const note = [presetSpec?.note,
-                models.find((m) => m.key === curModel)?.note].filter(Boolean).join(' · ')
+  // A built-in is the house prompt and is read-only; a saved preset of your
+  // own is editable in place; a draft is yours from blank.
+  const house = !draft && !presetSpec?.custom
+  const shownInstr = draft ? (instr ?? '') : (instr ?? presetSpec?.instruction ?? '')
+  const edited = !draft && !!presetSpec?.custom && instr !== null
+    && instr.trim() !== (presetSpec?.instruction ?? '').trim()
+  // Clicking into the house prompt does not edit it — it opens a blank of your
+  // own, with the menu saying so before the first keystroke.
+  const startDraft = () => { setDraft(true); setInstr('') }
+  const endDraft = () => { setDraft(false); setInstr(null) }
+  // Only the captioner's note survives. The preset's used to summarise an
+  // instruction the page did not show; the whole text is in the box now, and
+  // a summary of a thing beside the thing is noise. What the captioner menu
+  // still cannot say for itself is that the first run is a 17 GB pull.
+  const modelNote = models.find((m) => m.key === curModel)?.note ?? ''
 
   // The store's state is the served vocabulary, so saving or deleting a preset
   // re-asks the server rather than patching a local copy that could drift.
@@ -566,13 +584,13 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
   }
 
   const savePreset = async () => {
-    const name = window.prompt('Name this preset', presetSpec?.custom ? presetSpec.label : '')
+    const name = window.prompt('Name this preset', presetSpec?.custom && !draft ? presetSpec.label : '')
     if (!name?.trim()) return
     const r = await saveCaptionPreset(name.trim(), shownInstr)
     if (failed(r)) return ds.setEditError(r.error)
     await reloadState()
     if (r.key) setPreset(r.key)
-    setInstr(null)
+    endDraft()
   }
 
   const removePreset = async () => {
@@ -591,33 +609,42 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
     ds.setEditError(null)
     const r = await caption({
       dataset: ds.open, trigger_word: ds.trigger.trim(),
-      preset: curPreset, model: curModel, length, write_mode: mode,
-      // Sent only when it differs from the preset, so an untouched box runs
-      // exactly what picking the preset always ran.
-      instruction: edited ? shownInstr : '',
+      preset: curPreset, model: curModel, write_mode: mode,
+      // Sent only when the text is yours — a draft or an edited preset — so
+      // an untouched box runs exactly what picking the preset always ran, and
+      // the server can tell the house prompt (extracted) from your own (kept
+      // as written) by whether this is empty.
+      instruction: draft || edited ? shownInstr : '',
       max_tokens: maxTokens, temperature, top_p: topP,
     })
     if (failed(r)) {
       setProg(null)
       return ds.setEditError(r.error)
     }
+    setCapJob(r.job_id)
+    setStopping(false)
+    let stopPressed = false
     const t = everyMs(async () => {
       const st = await status(r.job_id)
       if (failed(st)) return
+      stopPressed = stopPressed || !!st.stop
       setProg({
         pct: Number(st.percent ?? 0),
         // Named while it loads. The first minute of a run against a captioner that is not
         // in the cache yet is a 17 GB pull, and a bare "Loading captioner…" for twenty
         // minutes is indistinguishable from a hang.
-        note: st.step
-          ? `Captioning ${st.step}/${String(st.total_steps ?? '?')}`
-          : `Loading ${String(st.model_label ?? 'captioner')}…`,
+        note: stopPressed
+          ? `Stopping after ${st.step ?? 0}…`
+          : st.step
+            ? `Captioning ${st.step}/${String(st.total_steps ?? '?')}`
+            : `Loading ${String(st.model_label ?? 'captioner')}…`,
       })
       // Refresh mid-run so captions land visibly rather than all at the end.
       if (st.step && Number(st.step) % 5 === 0) void ds.loadTiles(ds.open!)
       if (st.status === 'completed') {
         clearInterval(t)
         setProg(null)
+        setCapJob(null)
         await ds.loadTiles(ds.open!)
         const refused = Number(st.refused ?? 0)
         if (refused) {
@@ -629,20 +656,35 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
       } else if (st.status === 'failed') {
         clearInterval(t)
         setProg(null)
+        setCapJob(null)
         // Two dead ends in one line: the job's own error was the headline, so a run that
         // died on an OOM shouted a CUDA traceback, and when the job carried no error at
         // all it said "Captioning failed" and stopped there. The captions already
         // written are still on the volume, and the two knobs that get a stuck run
-        // through are the length and the model — so the sentence says both, and the
-        // traceback rides underneath for whoever wants it.
+        // through are the token cap under Advanced and the model — so the sentence
+        // says both, and the traceback rides underneath for whoever wants it.
         ds.setEditError({
           error: 'The captioning run stopped before it finished. Whatever it had already'
-            + ' written is kept — run it again, and if it keeps stopping try a shorter'
-            + ' length or a different captioner.',
+            + ' written is kept — run it again, and if it keeps stopping try a lower'
+            + ' max tokens or a different captioner.',
           detail: st.error ? String(st.error) : undefined,
         })
       }
     }, 2500)
+  }
+
+  // Cooperative: the flag is set here, the loop reads it before the next
+  // image, and the run completes with what it wrote. Nothing is discarded, so
+  // no confirm.
+  const cancel = async () => {
+    if (!capJob || stopping) return
+    setStopping(true)
+    setProg((p) => p && { ...p, note: 'Stopping…' })
+    const r = await stop(capJob)
+    if (failed(r)) {
+      setStopping(false)
+      ds.setEditError(r.error)
+    }
   }
 
   return (
@@ -672,12 +714,15 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
                 })}>
           {busy === 'prepend' ? 'Fixing…' : 'Fix'}
         </button>
-        {/* Three menus, no labels: "Character", "Medium" and "Qwen3-VL 8B" each name
-            themselves, and none could be mistaken for another. */}
+        {/* Two menus, no labels: "Character" and "JoyCaption Beta One" each name
+            themselves, and neither could be mistaken for the other. A third —
+            Short/Medium/Long — sat between them until 2026-09-02 and changed
+            nothing in the captions it was supposed to size. */}
         <div className="opt">
-          <select id="cap-preset" value={curPreset}
-                  onChange={(e) => { setPreset(e.target.value); setInstr(null) }}>
+          <select id="cap-preset" value={draft ? '__draft__' : curPreset}
+                  onChange={(e) => { setPreset(e.target.value); endDraft() }}>
             {presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            {draft && <option value="__draft__">New preset</option>}
           </select>
         </div>
         {presetSpec?.custom && (
@@ -685,17 +730,16 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
                   title="Delete this preset" onClick={() => void removePreset()}>✕</button>
         )}
         <div className="opt">
-          <select id="cap-len" value={length} onChange={(e) => setLength(e.target.value)}>
-            <option value="short">Short</option>
-            <option value="medium">Medium</option>
-            <option value="long">Long</option>
-          </select>
-        </div>
-        <div className="opt">
           <select id="cap-model" value={curModel} onChange={(e) => setModel(e.target.value)}>
             {models.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
         </div>
+        {/* Beside the menu it describes. It used to close the whole row, and
+            once the "What the model sees" fold opened above it, it read as the
+            last paragraph of what the model sees. */}
+        {modelNote && (
+          <span className="muted" id="cap-note" style={{ alignSelf: 'center' }}>{modelNote}</span>
+        )}
         {/* The four honest answers to "this image already has a caption", replacing
             a checkbox that could only say two of them. Skip leads because it is the
             only one that cannot lose work. */}
@@ -714,20 +758,59 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
                   onClick={() => setAdv((v) => !v)}>
             Advanced
           </button>
-          <button className="s" id="do-caption" type="button" disabled={!!prog || !!busy}
+          <button className="s" id="do-caption" type="button"
+                  disabled={!!prog || !!busy || (draft && !shownInstr.trim())}
                   onClick={() => void run()}>
             Caption
           </button>
         </span>
       </div>
-      {/* The instruction itself, unhidden. The preset prefills it; the first
-          keystroke makes it this run's, and Save keeps it as a preset of your
-          own. What still composes around it on the server — the trigger clause,
-          the length, the formatting rules the refusal parser depends on — is
-          not shown, because it is not editable. */}
-      <textarea id="cap-instr" value={shownInstr} spellCheck={false} rows={3}
-                style={{ width: '100%', marginTop: 8, resize: 'vertical' }}
-                onChange={(e) => setInstr(e.target.value)} />
+      {/* The instruction itself, always shown. The house prompt is read-only,
+          and a click into it opens a blank of your own instead. A saved preset
+          of yours edits in place, and Save keeps it. Nothing composes around
+          any of it on the server: `{NAME}` becomes the trigger word, and the
+          house prompt's reply is cut to what follows its final CAPTION:; yours
+          is saved as written. This comment used to say the opposite, and the sixty-word
+          rulebook it was covering for went unnoticed for a month. */}
+      {/* Sized to the text, capped: the preset is a form of a dozen lines, and a
+          three-row box showed one sentence of it — a field you cannot see is a
+          field you cannot edit. */}
+      <textarea id="cap-instr" value={shownInstr} spellCheck={false} readOnly={house}
+                placeholder={draft ? 'Write your own instruction.' : undefined}
+                rows={Math.min(18, Math.max(4, shownInstr.split('\n').length))}
+                style={{ width: '100%', marginTop: 8, resize: 'vertical',
+                         opacity: house ? 0.7 : 1 }}
+                onMouseDown={house ? startDraft : undefined}
+                onFocus={house ? startDraft : undefined}
+                onChange={(e) => { if (!house) setInstr(e.target.value) }} />
+      {/* One line under the box, and it is the owner's sentence for the
+          house prompt. The other states say how the reply is handled, because
+          that is the one fact the writer of a preset cannot see anywhere. */}
+      {house && (
+        <p className="muted" id="cap-parse-note" style={{ margin: '6px 2px 0' }}>
+          Editing is disabled, output is extracted in code.
+        </p>
+      )}
+      {draft && (
+        <div className="row" style={{ gap: 8, marginTop: 6 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Your own — the reply is saved as the model writes it.
+          </span>
+          <button className="s" id="cap-save-preset" type="button"
+                  disabled={!shownInstr.trim()} onClick={() => void savePreset()}>
+            Save as preset
+          </button>
+          <button className="s" id="cap-instr-reset" type="button"
+                  title="Back to the house prompt" onClick={endDraft}>
+            Discard
+          </button>
+        </div>
+      )}
+      {!house && !draft && !edited && (
+        <p className="muted" id="cap-parse-note" style={{ margin: '6px 2px 0' }}>
+          Your preset — the reply is saved as the model writes it.
+        </p>
+      )}
       {edited && (
         <div className="row" style={{ gap: 8, marginTop: 6 }}>
           <span className="muted" style={{ fontSize: 12 }}>
@@ -735,10 +818,10 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
           </span>
           <button className="s" id="cap-save-preset" type="button"
                   onClick={() => void savePreset()}>
-            Save as preset
+            Save
           </button>
           <button className="s" id="cap-instr-reset" type="button"
-                  title="Back to the preset's own instruction"
+                  title="Back to the preset as saved"
                   onClick={() => setInstr(null)}>
             Reset
           </button>
@@ -768,11 +851,17 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
           </div>
         </div>
       )}
-      <p className="muted" id="cap-note" style={{ margin: '8px 2px 0' }}>{note}</p>
       {prog && (
         <div id="cap-prog" style={{ marginTop: 9 }}>
           <div className="bar"><i style={{ width: `${prog.pct}%` }} /></div>
-          <p className="muted" style={{ marginTop: 6 }}>{prog.note}</p>
+          <div className="row" style={{ gap: 8, marginTop: 6, alignItems: 'center' }}>
+            <p className="muted" style={{ margin: 0 }}>{prog.note}</p>
+            <button className="s" id="cap-cancel" type="button" disabled={stopping}
+                    title="Stop after the image it is on; captions already written are kept"
+                    onClick={() => void cancel()}>
+              {stopping ? 'Stopping…' : 'Cancel'}
+            </button>
+          </div>
         </div>
       )}
     </>

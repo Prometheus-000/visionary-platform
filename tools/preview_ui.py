@@ -1374,6 +1374,16 @@ class Handler(BaseHTTPRequestHandler):
         # it is the route a script has, and a stub that answered `{"ok": true}`
         # with no job id is what taught the last front end to poll
         # /api/status/undefined and paint Done for a run nobody queued.
+        # A caption run that can be watched and cancelled. Eight images, one
+        # per poll; a stop lands on the next poll with what was written, and
+        # the record says `stopped` the way the real job does — the readout
+        # has a word for that state and this is the only server it can be
+        # developed against.
+        if path == "/api/caption":
+            job = "cap%03d" % (len(RUNS) + 1)
+            RUNS[job] = {"polls": 0, "stopped": False}
+            return self.reply({"ok": True, "job_id": job})
+
         if path == "/api/train":
             seed_sessions()
             try:
@@ -1902,6 +1912,23 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"/api/status/(train\d+)$", path)
         if m:
             return self.reply(train_status(m.group(1)))
+
+        m = re.match(r"/api/status/(cap\d+)$", path)
+        if m:
+            job = RUNS.setdefault(m.group(1), {"polls": 0, "stopped": False})
+            job["polls"] += 1
+            n, total = job["polls"], 8
+            if n == 1:
+                return self.reply({"status": "running", "phase": "caption",
+                                   "model_label": "JoyCaption Beta One"})
+            done = min(total, n - 1)
+            if job["stopped"] or done >= total:
+                return self.reply({"status": "completed", "captioned": done,
+                                   "refused": 0, "percent": done * 100 // total,
+                                   "stopped": bool(job["stopped"])})
+            return self.reply({"status": "running", "phase": "caption", "step": done,
+                               "total_steps": total, "percent": done * 100 // total,
+                               "stop": False})
 
         # Three files, sequentially, with the queue position in the phase — the
         # thing a per-family button exists to show. Stopping mid-queue reports

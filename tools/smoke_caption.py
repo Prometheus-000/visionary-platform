@@ -21,7 +21,6 @@ import modal
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import (  # noqa: E402
-    CAPTION_LENGTHS,
     _caption_processor,
     _caption_shape,
     _vlm_inputs,
@@ -80,8 +79,7 @@ def check() -> dict:
         # substituted into and appended to before anything sees it, and the one
         # bug this file cannot catch by listing keys is a prompt that reads
         # wrong — which is the bug that cost a whole captioner.
-        "instruction": _caption_instruction(DEFAULT_CAPTION_PRESET, "long", "chgl"),
-        "lengths": sorted(CAPTION_LENGTHS),
+        "instruction": _caption_instruction(DEFAULT_CAPTION_PRESET, "chgl"),
     }
 
 
@@ -135,7 +133,7 @@ def caption_one(dataset: str = "", model: str = DEFAULT_CAPTION_MODEL,
     # whose chat template wanted a flat string broke the app while this test
     # stayed green. Anything that composes a prompt or an input tensor is now
     # imported from app.py.
-    instruction = _caption_instruction(preset, "medium", trigger)
+    instruction = _caption_instruction(preset, trigger)
     image = Image.open(img_path).convert("RGB")
     shape = _caption_shape(processor, instruction, repo, system)
     inputs = _vlm_inputs(processor, image, instruction, shape, system).to("cuda:0")
