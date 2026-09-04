@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 
 import { failed } from './api/client'
-import { fileUrl, getState, warm } from './api/routes'
+import { fileUrl, getState } from './api/routes'
 import { Canvas } from './canvas/Canvas'
 import { useGenerate } from './canvas/useGenerate'
 import { Console } from './console/Console'
@@ -149,12 +149,17 @@ export function App() {
         if (!alive || hasDit() || useStore.getState().stateError) return
       }
     })()
-    // Once, beside the state fetch rather than in an effect of its own: they are
-    // the same event — the page opened — and a second effect would be a second
-    // thing to keep in step with it. The kind rides along because it decides
-    // *which* container is warmed, and the page opens on stills.
-    void warm(useStore.getState().kind, useStore.getState().container)
-    // The sets listing too, and for the same reason the sessions door gets its
+    // **No warm knock here, and that is the decision, not an omission.**
+    // Opening the app used to POST /api/warm, which spawned the image
+    // generator — a real GPU with a ten-minute scaledown window — so reading
+    // the page rented a card, and reading it and closing it rented one for
+    // ten minutes to do nothing at all. The owner asked for the GPU back on
+    // Generate and nowhere else, which is also what the rule about never
+    // renting a GPU to do CPU work says once you notice that *no* work is
+    // the limit case of CPU work. What it costs is ~25s of ComfyUI start on
+    // the first press of a session, in front of a status line that already
+    // says what it is doing — the wait this project is willing to spend.
+    // The sets listing, and for the same reason the sessions door gets its
     // rows at app level: Sets is a front-door destination now, and the click
     // that opens it should find the rows already waiting rather than start the
     // volume walk it then blanks on.

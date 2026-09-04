@@ -241,21 +241,6 @@ export const compile = (body: {
   scene?: unknown
 }) => post<CompileResult>('/api/compile', body)
 
-/**
- * Start the container this session will use, while the page is still being read.
- *
- * It warmed the interpreter's L4 for a long time after nothing routed there,
- * which cost a cold start on every page load to warm a card no request would
- * reach. It warms the *generator* now, so this window is spent getting ComfyUI
- * up and the checkpoint resident — which is the whole of what the first
- * Generate waits for, since that container loads one model again.
- *
- * Fire and forget: nothing on screen depends on it, and a slow first press is
- * the only cost of it failing.
- */
-export const warm = (kind: 'image' | 'video' = 'image', container: 'two' | 'one' = 'two') =>
-  post<{ ok: boolean }>('/api/warm', { kind, container })
-
 /* ---- outputs and the gallery ----------------------------------------- */
 
 /** The Arsenal's characters. The listing is names and notes for the picker;

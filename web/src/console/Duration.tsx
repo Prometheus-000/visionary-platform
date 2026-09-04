@@ -1,4 +1,3 @@
-import { warm } from '../api/routes'
 import { sceneSeconds } from '../scene/model'
 import { Menu } from '../ui/Menu'
 import { usePopover } from '../ui/Popover'
@@ -137,7 +136,6 @@ export function Duration() {
                       s.patchShot(s.scene.shots[0].id, { beats: n })
                     }
                     s.setKind('video')
-                    void warm('video', s.container)
                   },
                 }))),
               ]} />

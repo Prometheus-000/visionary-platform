@@ -11865,8 +11865,20 @@ class _Generator(_ImageSide, _VideoSide):
 
     @modal.method()
     def warm(self) -> dict[str, Any]:
-        """A knock, so the page can start this container on load. `enter` is
-        what does the work; arriving here at all means it has run."""
+        """
+        A landing pad, and nothing calls it. `/api/warm` and the three knocks
+        that used to POST it are gone — a GPU starts on Generate now, and the
+        route's headstone above says why.
+
+        This stays because deleting it was not free: a `.spawn()` from the
+        draining old container outlived the deploy that removed the method,
+        and Modal answered the orphaned input by starting an H100, running
+        ComfyUI on it, and dying on `KeyError: 'warm'` — then doing it again,
+        five times in ninety seconds, with no caller anywhere. A method is
+        four lines; an unresolvable input is a GPU in a retry loop. Anything
+        removed from a `@app.cls` has a queue that may still be holding a
+        reference to it, and this is the cheapest possible way to say yes.
+        """
         return {"ok": True}
 
     @modal.method()
@@ -12853,39 +12865,22 @@ def web():
             config["hf_token"] = str(payload.get("hf_token") or "").strip()
         return {"ok": True, "hf_token_set": bool(_hf_token())}
 
-    @api.post("/api/warm")
-    def warm_generator(payload: dict) -> dict[str, Any]:
-        """
-        Start the container this session will actually use, on page load.
-
-        **It used to start the interpreter's L4, and that was worse than
-        useless.** Nothing on any user-facing path answered there — yet every
-        page load rented a card and paid a vLLM cold start for it. A warm-up
-        that warms something no request will reach is not a no-op; it competes
-        for the same quota as the container that *is* about to be asked for
-        something.
-
-        What it buys is exactly what `enter` does and nothing more: ComfyUI
-        started and its custom nodes checked, about 25 seconds. **It does not
-        leave the checkpoint resident** — this docstring claimed it did until
-        2026-08-25, when a cold start spent 400 seconds loading weights that a
-        page-load knock was supposed to have made resident. Weights load when
-        the first graph asks for them, and that is deliberate: `setup` above
-        carries the reason, which is that a model loaded at `enter` is loaded
-        as a ComfyUI graph and holds the single queue for as long as it takes,
-        at the exact moment a cold container is about to be asked for a render.
-
-        `spawn`, so the page never waits, and errors are swallowed: a warm-up
-        that fails is a slower first press, not something to put on screen.
-        """
-        kind = "video" if str(payload.get("kind") or "") == "video" else "image"
-        try:
-            # The base class, never a with_options variant: a knock on a card
-            # nobody has picked would start a container nobody will use.
-            _host(kind, {"container": payload.get("container")})().warm.spawn()
-        except Exception as exc:
-            print(f"[warm] {kind} warm-up failed: {exc}", flush=True)
-        return {"ok": True}
+    # **There is no /api/warm, and that is the decision.** A knock existed here
+    # for months: the page POSTed it on load, on a model pick and on the switch
+    # to video, and each one spawned a generator — a real GPU with a ten-minute
+    # scaledown window. So reading the app rented a card, and reading it and
+    # closing the tab rented one for ten minutes to do nothing at all. It was
+    # never buying what it claimed either: the docstring said the checkpoint
+    # was resident afterwards until 2026-08-25, when a cold start spent 400
+    # seconds loading weights the knock was supposed to have loaded. All it
+    # ever bought was `enter` — ComfyUI up, custom nodes checked, ~25 seconds.
+    #
+    # A GPU now starts when somebody presses Generate and at no other time.
+    # The 25 seconds land in front of a status line that says what it is doing,
+    # which is the wait this project is willing to spend; a card spun by a
+    # dropdown is not. If you are about to add this back, the thing to weigh
+    # is not the 25 seconds — it is who is paying for the tabs that never
+    # press anything.
 
     @api.post("/api/download")
     def download(payload: dict) -> dict[str, Any]:

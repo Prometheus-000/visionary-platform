@@ -1310,14 +1310,6 @@ class Handler(BaseHTTPRequestHandler):
             GDRIVE["polls"] = 0
             return self.reply({"ok": True, "job_id": "dl_gdrive"})
 
-        # Answered, not stubbed away: the page pings this on load and a 404 in
-        # the console during every preview session is noise that trains you to
-        # ignore the console. There is no interpreter here and there is nothing
-        # to warm, which is exactly what `{"ok": true}` means to the caller —
-        # nothing on screen depends on it having happened.
-        if path == "/api/warm":
-            return self.reply({"ok": True})
-
         # Not stubbed: this route is pure and cheap, and what it answers is the
         # only question the preview server cannot fake usefully. A hand-written
         # reply here would let the rail look right while compiling to something

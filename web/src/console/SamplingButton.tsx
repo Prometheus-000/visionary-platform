@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { failed } from '../api/client'
-import { listWorkflows, warm } from '../api/routes'
+import { listWorkflows } from '../api/routes'
 import type { WorkflowExpose, WorkflowRow as Workflow } from '../api/types'
 import { Popover, usePopover } from '../ui/Popover'
 import { NumInput } from '../ui/NumInput'
@@ -113,9 +113,6 @@ function EngineRow({ current, onCross }: { current: string; onCross: () => void 
           // just made is one that will not take yes for an answer.
           onCross()
         }
-        // The earliest honest signal of which container this session is about
-        // to want — the same reason `Duration` warms on its own switch.
-        void warm(hit.kind, useStore.getState().container)
       }}>
         {list.map((x) => (
           <option key={`${x.kind}:${x.key}`} value={`${x.kind}:${x.key}`} disabled={!x.ready}>
