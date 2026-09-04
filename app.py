@@ -1947,6 +1947,33 @@ _RELOAD_LOCK = threading.Lock()
 _RELOAD_SEQ = 0
 _RELOAD_OK = True
 
+
+def _mount_settled() -> None:
+    """
+    Wait out a reload in flight, without starting one.
+
+    `volume.reload()` swaps the mount whole: for as long as it runs, *every*
+    path under /workspace is missing as far as every other request on this
+    container is concerned, and `is_dir()` cannot tell that apart from a set
+    that was never saved. The heartbeat reloads on every beat, so on a page
+    with a window open that hole opens every few seconds.
+
+    Most read routes never saw it because the idiom they use — miss, then
+    `_reload_volume()`, then look again — waits on this same lock on its way
+    to a reload it does not need. The two routes that skipped the reload for
+    latency, the Sets listing and `_dataset_dir`, skipped the accidental
+    protection with it, and answered "0 sets" and "No dataset named 'set_1'"
+    about a library that was on the volume the whole time.
+
+    So this is that idiom with the reload taken out: absence is not believable
+    until the mount is settled, and freshness was never what was wanted here.
+    Uncontended it is a lock acquire; contended it is the tail of somebody
+    else's reload, a quarter of a second, and the right thing to spend.
+    """
+    with _RELOAD_LOCK:
+        pass
+
+
 # How long an insisting reload waits out an open-files refusal, in seconds
 # between attempts. Three tries, half a second of waiting at the very worst.
 # Sized against what actually holds the descriptor: a still off a warm volume is
@@ -4922,10 +4949,23 @@ def _dataset_dir(name: str) -> Path:
     """
     _check_name(name)
     saved = DATASETS / name
+    # A set that is not under datasets/ *right now* may only be mid-reload:
+    # falling through to drafts/ on that answer is how a saved set became "No
+    # dataset named 'set_1'" on every request that raced the heartbeat's
+    # reload — and on a write route it aims the write at a draft folder that
+    # does not exist. Settle first, then believe it.
+    if not saved.is_dir():
+        _mount_settled()
     return saved if saved.is_dir() else DRAFTS / name
 
 
 def _name_taken(name: str) -> bool:
+    # Same reason as `_dataset_dir`, and this one gates a create: a reload in
+    # flight makes every name look free, and the second set to claim one is
+    # the collision both roots exist to prevent.
+    if (DATASETS / name).exists() or (DRAFTS / name).exists():
+        return True
+    _mount_settled()
     return (DATASETS / name).exists() or (DRAFTS / name).exists()
 
 
@@ -12591,75 +12631,85 @@ def web():
         # directory layout". A file that a run can load is a file the picker
         # has to offer.
         loras = []
-        if LORAS.is_dir():
-            for d in sorted(LORAS.iterdir()):
-                if d.is_dir():
-                    final = d / f"{d.name}.safetensors"
-                    ckpts = sorted(
-                        (p for p in d.glob("*.safetensors") if p != final),
-                        key=lambda p: p.stat().st_mtime, reverse=True,
-                    )
-                    files = ([final] if final.exists() else []) + ckpts
-                    if not files:
-                        continue
-                    trigger = ""
-                    meta = d / "visionary.json"
-                    if meta.exists():
-                        try:
-                            trigger = json.loads(meta.read_text()).get("trigger_word", "")
-                        except Exception:
-                            pass
-                    spec = CATALOGUE_LORA_ROOTS.get(str(d))
-                    loras.append({
-                        "name": d.name, "trigger_word": trigger,
-                        "strength": None,
-                        "path": str(files[0]),
-                        # The sidecar is the tell: this platform's trainer wrote
-                        # it, and the trainer trains Krea 2 RAW — so the folder's
-                        # weights are Krea 2's. A folder with neither sidecar nor
-                        # catalogue entry arrived by hand and claims nothing, so
-                        # both pickers keep offering it.
-                        "arch": (spec or {}).get(
-                            "arch", "krea2" if meta.exists() else ""),
-                        "internal": bool((spec or {}).get("internal")),
-                        # `root` is served rather than left for the page to
-                        # rebuild from a file path, for the same reason the LoRA
-                        # index derives `rel` by splitting on `/loras/` instead
-                        # of joining two labels: the layout allows any nesting
-                        # under a folder, so `dirname(files[0])` is the folder
-                        # for a flat training output and one level too deep for
-                        # anything else. It is what Delete addresses, and a
-                        # delete that addresses the wrong directory is the one
-                        # kind of bug this file cannot take back.
-                        "root": str(d),
-                        "bytes": _tree_bytes(d),
-                        "catalogue": (spec or {}).get("family", ""),
-                        "files": [{"name": f.name, "path": str(f)} for f in files],
-                    })
-                elif d.suffix == ".safetensors":
-                    # No sidecar to read a trigger word out of, and no epochs to
-                    # choose between — one file, one entry, named for itself. The
-                    # catalogue may still know its phrase: the Krea style LoRAs
-                    # land exactly here, and each is near-invisible until its
-                    # trigger is in the prompt — so serving "" for them told the
-                    # picker nothing about the one fact that decides whether the
-                    # weight does anything on a first try.
-                    spec = CATALOGUE_LORA_ROOTS.get(str(d))
-                    loras.append({
-                        "name": d.stem,
-                        "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
-                        "strength": (KREA_STYLE_STRENGTH
-                                     if d.stem in KREA_STYLE_LORAS else None),
-                        "path": str(d),
-                        "root": str(d),
-                        "bytes": _tree_bytes(d),
-                        "catalogue": (spec or {}).get("family", ""),
-                        # A loose file claims no architecture unless the
-                        # catalogue put it there — see the folder branch above.
-                        "arch": (spec or {}).get("arch", ""),
-                        "internal": bool((spec or {}).get("internal")),
-                        "files": [{"name": d.name, "path": str(d)}],
-                    })
+        # Both walks under the reload lock. The reload above has released
+        # it by the time either starts, and `volume.reload()` swaps the
+        # whole mount — so a reload from any of the twenty requests beside
+        # this one empties LORAS and MODELS mid-walk, and the answer is a
+        # picker with no LoRAs and a sheet saying nothing is downloaded.
+        # `_model_status()` is in here because /models is reloaded by the
+        # same call; the Dict read below is not, because it is a network
+        # call and this lock is what reloads are queued behind.
+        with _RELOAD_LOCK:
+            models = _model_status()
+            if LORAS.is_dir():
+                for d in sorted(LORAS.iterdir()):
+                    if d.is_dir():
+                        final = d / f"{d.name}.safetensors"
+                        ckpts = sorted(
+                            (p for p in d.glob("*.safetensors") if p != final),
+                            key=lambda p: p.stat().st_mtime, reverse=True,
+                        )
+                        files = ([final] if final.exists() else []) + ckpts
+                        if not files:
+                            continue
+                        trigger = ""
+                        meta = d / "visionary.json"
+                        if meta.exists():
+                            try:
+                                trigger = json.loads(meta.read_text()).get("trigger_word", "")
+                            except Exception:
+                                pass
+                        spec = CATALOGUE_LORA_ROOTS.get(str(d))
+                        loras.append({
+                            "name": d.name, "trigger_word": trigger,
+                            "strength": None,
+                            "path": str(files[0]),
+                            # The sidecar is the tell: this platform's trainer wrote
+                            # it, and the trainer trains Krea 2 RAW — so the folder's
+                            # weights are Krea 2's. A folder with neither sidecar nor
+                            # catalogue entry arrived by hand and claims nothing, so
+                            # both pickers keep offering it.
+                            "arch": (spec or {}).get(
+                                "arch", "krea2" if meta.exists() else ""),
+                            "internal": bool((spec or {}).get("internal")),
+                            # `root` is served rather than left for the page to
+                            # rebuild from a file path, for the same reason the LoRA
+                            # index derives `rel` by splitting on `/loras/` instead
+                            # of joining two labels: the layout allows any nesting
+                            # under a folder, so `dirname(files[0])` is the folder
+                            # for a flat training output and one level too deep for
+                            # anything else. It is what Delete addresses, and a
+                            # delete that addresses the wrong directory is the one
+                            # kind of bug this file cannot take back.
+                            "root": str(d),
+                            "bytes": _tree_bytes(d),
+                            "catalogue": (spec or {}).get("family", ""),
+                            "files": [{"name": f.name, "path": str(f)} for f in files],
+                        })
+                    elif d.suffix == ".safetensors":
+                        # No sidecar to read a trigger word out of, and no epochs to
+                        # choose between — one file, one entry, named for itself. The
+                        # catalogue may still know its phrase: the Krea style LoRAs
+                        # land exactly here, and each is near-invisible until its
+                        # trigger is in the prompt — so serving "" for them told the
+                        # picker nothing about the one fact that decides whether the
+                        # weight does anything on a first try.
+                        spec = CATALOGUE_LORA_ROOTS.get(str(d))
+                        loras.append({
+                            "name": d.stem,
+                            "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
+                            "strength": (KREA_STYLE_STRENGTH
+                                         if d.stem in KREA_STYLE_LORAS else None),
+                            "path": str(d),
+                            "root": str(d),
+                            "bytes": _tree_bytes(d),
+                            "catalogue": (spec or {}).get("family", ""),
+                            # A loose file claims no architecture unless the
+                            # catalogue put it there — see the folder branch above.
+                            "arch": (spec or {}).get("arch", ""),
+                            "internal": bool((spec or {}).get("internal")),
+                            "files": [{"name": d.name, "path": str(d)}],
+                        })
         loras.sort(key=lambda l: l["name"].lower())
         # The menu is what the ✕ removes. Customs are deleted outright; a
         # built-in is baked into the image, so its ✕ hides it here instead —
@@ -12672,7 +12722,7 @@ def web():
         cap_models = {k: m for k, m in _caption_models().items()
                       if k not in hidden_caps}
         return {
-            "models": _model_status(),
+            "models": models,
             "loras": loras,
             "hf_token_set": bool(_hf_token()),
             "samplers": SAMPLERS,
@@ -13177,35 +13227,48 @@ def web():
         somebody actually picks.
         """
         _reload_volume()
-        CHARACTERS.mkdir(parents=True, exist_ok=True)
+        # No mkdir here either, and for the reason list_datasets carries in
+        # full: it is the write route that creates the folder, and a directory
+        # this route made but nobody committed is the one thing a concurrent
+        # reload erases underneath it. Its own reload is no protection against
+        # the next one — that lock is released before this loop starts — so
+        # the walk runs under it, or the cast reads empty for the same reason
+        # the library did.
         out = []
-        for d in sorted(CHARACTERS.iterdir()):
-            if not d.is_dir() or d.name.startswith("."):
-                continue
-            meta = {}
-            try:
-                meta = json.loads((d / "character.json").read_text())
-            except (OSError, json.JSONDecodeError):
-                # A folder somebody made by hand is still a character — the
-                # layout is the contract, and the receipt is optional the same
-                # way a sidecar-less output still lists in the gallery.
-                pass
-            files = sorted(f.name for f in d.iterdir()
-                           if f.is_file() and f.name != "character.json"
-                           and not f.name.startswith(".")
-                           and f.suffix.lower() != ".txt")
-            row = {"handle": d.name,
-                   "note": str(meta.get("note") or ""),
-                   "retention": str(meta.get("retention") or ""),
-                   "refs": meta.get("refs") or
-                   [{"file": f} for f in files],
-                   "files": files}
-            # Only when there is one. The key is absent rather than null for a
-            # character with no weight behind it, so the picker's rows do not
-            # all carry a field three quarters of them cannot fill.
-            if isinstance(meta.get("lora"), dict):
-                row["lora"] = meta["lora"]
-            out.append(row)
+        # The whole walk, not just the first `iterdir()`: a reload landing
+        # mid-loop takes character.json with it — read as a note-less
+        # character by the `except` below, which is a lie a hand-made folder
+        # is entitled to and this is not — and takes the second `iterdir()`
+        # with it as an uncaught FileNotFoundError.
+        with _RELOAD_LOCK:
+            for d in (sorted(CHARACTERS.iterdir()) if CHARACTERS.is_dir() else []):
+                if not d.is_dir() or d.name.startswith("."):
+                    continue
+                meta = {}
+                try:
+                    meta = json.loads((d / "character.json").read_text())
+                except (OSError, json.JSONDecodeError):
+                    # A folder somebody made by hand is still a character — the
+                    # layout is the contract, and the receipt is optional the
+                    # same way a sidecar-less output still lists in the gallery.
+                    pass
+                files = sorted(f.name for f in d.iterdir()
+                               if f.is_file() and f.name != "character.json"
+                               and not f.name.startswith(".")
+                               and f.suffix.lower() != ".txt")
+                row = {"handle": d.name,
+                       "note": str(meta.get("note") or ""),
+                       "retention": str(meta.get("retention") or ""),
+                       "refs": meta.get("refs") or
+                       [{"file": f} for f in files],
+                       "files": files}
+                # Only when there is one. The key is absent rather than null
+                # for a character with no weight behind it, so the picker's
+                # rows do not all carry a field three quarters of them cannot
+                # fill.
+                if isinstance(meta.get("lora"), dict):
+                    row["lora"] = meta["lora"]
+                out.append(row)
         return {"characters": out}
 
     @api.post("/api/characters/{handle}")
@@ -13318,7 +13381,16 @@ def web():
         heartbeat already sweeps, fires on page load and then periodically, and
         nobody is watching its latency; housekeeping lives there.
         """
-        DATASETS.mkdir(parents=True, exist_ok=True)
+        # Drafts only. /tmp is this container's own disk, so the folder cannot
+        # be taken away again — but datasets/ is on the volume, and a *mkdir
+        # nothing has committed yet* does not survive a `volume.reload()`, which
+        # any of the twenty concurrent requests on this container can run at any
+        # moment. On a fresh volume that mkdir was the only thing holding the
+        # directory up, so `iterdir()` raised FileNotFoundError the moment a
+        # reload landed under it — a 500 on the first screen of a new
+        # deployment. A read path had no business creating it in the first
+        # place; the docstring above says read-only and this line was the
+        # exception.
         DRAFTS.mkdir(parents=True, exist_ok=True)
         # No reload, and stats carry the committed sidecar listing — one
         # recursive RPC for the whole library, never one per set: the per-set
@@ -13326,12 +13398,24 @@ def web():
         # waits on with a blank screen. Drafts are this container's own disk
         # and have nothing committed to overlay.
         trees = {DATASETS: _committed_sidecar_tree(DATASETS), DRAFTS: {}}
-        out = [
-            _dataset_stats(d, trees[root].get(d.name))
-            for root in (DATASETS, DRAFTS)
-            for d in sorted(root.iterdir())
-            if d.is_dir() and not d.name.startswith(".")
-        ]
+        # **Under the reload lock, and this is the half that guarding the
+        # `is_dir()` on its own got wrong.** Reading an absent folder as an
+        # empty library is only honest when the folder is absent; during a
+        # reload every folder is, and every page load fires this route beside
+        # one that reloads. So the 500 came back as `0 sets` over 37 saved
+        # images — the quieter of the two failures and much the worse one,
+        # because a 500 at least says look at me. The RPC stays outside the
+        # lock: it reads committed state and owes the mount nothing, and
+        # holding a lock across a network call would stall the very reloads
+        # this is waiting on.
+        with _RELOAD_LOCK:
+            out = [
+                _dataset_stats(d, trees[root].get(d.name))
+                for root in (DATASETS, DRAFTS)
+                if root.is_dir()
+                for d in sorted(root.iterdir())
+                if d.is_dir() and not d.name.startswith(".")
+            ]
         out.sort(key=lambda r: -r["modified"])
         _warm_set_thumbs([DATASETS / r["name"] for r in out if r["saved"]])
         return {"datasets": out}
@@ -15204,22 +15288,27 @@ def web():
     def list_workflows() -> dict[str, Any]:
         _reload_volume()
         rows = []
-        if WORKFLOWS.is_dir():
-            for f in sorted(WORKFLOWS.glob("*.json")):
-                if f.name.endswith(".meta.json"):
-                    continue
-                meta = {}
-                mp = f.with_name(f.stem + ".meta.json")
-                if mp.is_file():
-                    try:
-                        meta = json.loads(mp.read_text())
-                    except ValueError:
-                        meta = {}
-                rows.append({"name": f.stem,
-                             "created": meta.get("created"),
-                             "seed_of": meta.get("seed_of"),
-                             "exposes": meta.get("exposes") or [],
-                             "mtime": f.stat().st_mtime})
+        # Under the lock for the same reason the Sets listing is: this route's
+        # own reload has released it by the time the walk starts, and the next
+        # reload from any of the twenty requests beside it takes the shelf out
+        # from under the glob — an empty Playground over saved graphs.
+        with _RELOAD_LOCK:
+            if WORKFLOWS.is_dir():
+                for f in sorted(WORKFLOWS.glob("*.json")):
+                    if f.name.endswith(".meta.json"):
+                        continue
+                    meta = {}
+                    mp = f.with_name(f.stem + ".meta.json")
+                    if mp.is_file():
+                        try:
+                            meta = json.loads(mp.read_text())
+                        except ValueError:
+                            meta = {}
+                    rows.append({"name": f.stem,
+                                 "created": meta.get("created"),
+                                 "seed_of": meta.get("seed_of"),
+                                 "exposes": meta.get("exposes") or [],
+                                 "mtime": f.stat().st_mtime})
         return {"workflows": rows}
 
     @api.get("/api/workflows/{name}")
@@ -15303,20 +15392,25 @@ def web():
         if not STORYBOARD.is_dir():
             _reload_volume()
         rows: list[dict[str, Any]] = []
-        for d in (sorted(STORYBOARD.iterdir()) if STORYBOARD.is_dir() else []):
-            if not d.is_dir() or not STORYBOARD_NAME_RE.fullmatch(d.name):
-                continue
-            raw = _read_board(d / "board.json")
-            if raw is None:
-                continue
-            panels = raw.get("panels") or []
-            # The first picture is the board's face in the list — the same
-            # pointer the panel holds, resolved by the page.
-            cover = next((p.get("picture") for p in panels
-                          if isinstance(p, dict) and p.get("picture")), None)
-            rows.append({"name": d.name, "title": str(raw.get("title") or ""),
-                         "panels": len(panels), "updated": raw.get("updated"),
-                         "cover": cover})
+        # And under the lock for the walk, which is the part the reload above
+        # does not cover: it has released the lock by now, and a board.json
+        # that disappears mid-loop is read as a board with no panels — the
+        # same silent empty the Sets listing was giving.
+        with _RELOAD_LOCK:
+            for d in (sorted(STORYBOARD.iterdir()) if STORYBOARD.is_dir() else []):
+                if not d.is_dir() or not STORYBOARD_NAME_RE.fullmatch(d.name):
+                    continue
+                raw = _read_board(d / "board.json")
+                if raw is None:
+                    continue
+                panels = raw.get("panels") or []
+                # The first picture is the board's face in the list — the same
+                # pointer the panel holds, resolved by the page.
+                cover = next((p.get("picture") for p in panels
+                              if isinstance(p, dict) and p.get("picture")), None)
+                rows.append({"name": d.name, "title": str(raw.get("title") or ""),
+                             "panels": len(panels), "updated": raw.get("updated"),
+                             "cover": cover})
         rows.sort(key=lambda r: -float(r["updated"] or 0))
         return {"boards": rows}
 
