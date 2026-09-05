@@ -12,24 +12,29 @@ ComfyUI, driven over its API rather than ported, and pinned by commit. They are
 deliberately separate images: ComfyUI wants newer transformers than musubi
 pins, and coupling them would mean every ComfyUI bump re-litigates training.
 
-Storage is ours, not borrowed. The volume is created on first deploy and the
+Storage is ours, not borrowed. The volumes are created on first deploy and the
 layout is flat and self-describing — nothing here mirrors a checkout of another
 project, so there is no directory that only makes sense to somebody who has
-read a backend's source.
+read a backend's source. The data volume holds what you pressed Save on, the
+models volume holds weights, and nothing derived lives on either.
 
     $VISIONARY_VOLUME (default "visionary")  ->  /workspace
-      models/krea2-raw.safetensors        Krea 2 RAW DiT   (training)
-      models/krea2-turbo.safetensors      Krea 2 Turbo DiT (inference)
-      models/qwen-image-vae.safetensors
-      models/qwen3vl-4b-bf16.safetensors
       loras/{folder}/{name}.safetensors   trained output, any nesting
-      outputs/{job}/                      generated images
-      datasets/{name}/                    sets you saved
-      drafts/{name}/                      sets you have not saved yet
+      datasets/{name}/                    sets you saved: images + .txt sidecars
+      outputs/{job}_{NN}.png, {job}.mp4   renders, flat, the record inside the file
+      characters/{handle}/                a saved cast member and their files
+      storyboard/{name}/board.json        a board, beside its dropped pictures
+      workflows/{name}.json               Playground graphs, ComfyUI API format
+      playground_nodes/                   node packs installed from git
+
+    $VISIONARY_MODELS_VOLUME (default "visionary-models")  ->  /models
+      krea2-raw.safetensors               Krea 2 RAW DiT   (training)
+      krea2-turbo.safetensors             Krea 2 Turbo DiT (inference)
+      minimax_h3_*.safetensors            the H3 stack
       .cache/                             HF staging, never read directly
 
-Set VISIONARY_VOLUME to run a second copy (staging, a different account) against
-its own storage.
+Set VISIONARY_VOLUME and VISIONARY_MODELS_VOLUME to run a second copy (staging,
+a different account) against its own storage.
 
 Nothing downloads on its own — pick what you want under the gear.
 """

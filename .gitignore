@@ -83,6 +83,16 @@ web/dist-ds/
 # The facts taken out of them live in CLAUDE.md and tools/vendor/.
 MiniMax-H3/
 ai-toolkit/
+# ComfyUI at head, for reading the partner nodes and templates ahead of a
+# COMFY_SHA bump. The build clones its own copy at the pin; this one is never
+# built against. 142MB with its own .git, so it stays out for the same reason.
+ComfyUI/
+
+# The demo captures: three stories walked through the live app on 2026-09-05,
+# as stills, clips and the renders they produced — half a gigabyte, and the
+# canonical copy lives in the portfolio. The stills the readme shows were
+# copied out of it into docs/, which is the part a clone needs.
+Visionary Demo/
 
 # Papers. 63MB of other people's PDFs, ignored for the reason the styling
 # screenshots are — the synthesis beside them is the part that informed
