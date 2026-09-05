@@ -1699,6 +1699,30 @@ def _clear_stop(job_id: str) -> None:
         pass
 
 
+def _arm_spawn(job_id: str, phase: str = "Starting…") -> None:
+    """
+    What a route does for a fixed-id job in the moment before `.spawn()`.
+
+    Two stale things wait for the next run of a job whose id never changes,
+    and both were found on the first real push. The stop key outlives the
+    job that set it, so one Cancel — pressed on a push that looked stuck
+    while the repo was being created — made every push after it stop at its
+    first check, publish "stopped", and upload nothing: the page said
+    Cancelled for a button nobody had cancelled. And the last run's terminal
+    record is what the first poll reads if it lands before the container's
+    first publish, which on a cold CPU start it does — so a Drive pull could
+    say "Downloaded." three seconds in, about the pull before.
+
+    Cleared and seeded *here*, synchronously, rather than at the top of the
+    job: `.spawn()` returns before the container starts, and a Cancel pressed
+    in that gap has to land after the clear, not before it. The job then
+    merges with `_publish` instead of assigning, so the request survives.
+    """
+    _clear_stop(job_id)
+    jobs[job_id] = {"status": "running", "phase": phase, "percent": 0,
+                    "stop": False, "beat": time.time()}
+
+
 def _stop_requested(job_id: str) -> bool:
     try:
         if jobs.get(_stop_key(job_id)):
@@ -3100,8 +3124,10 @@ def gdrive_job(url: str, folder: str, refetch: bool = False) -> dict[str, Any]:
     import gdown
 
     job_id = GDRIVE_JOB
-    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
-                    "stop": False, "beat": time.time()}
+    # Merged, not assigned: the route seeded this record and cleared the stop
+    # key before spawning, and a Cancel pressed during the cold start has
+    # already been written into it. See `_arm_spawn`.
+    _publish(job_id, status="running", phase="Starting…", percent=0)
 
     if folder and not NAME_RE.match(folder):
         err = f"Folder name must be 1-64 chars of [A-Za-z0-9_-]: {folder!r}"
@@ -3322,8 +3348,10 @@ def hf_lora_job(repo: str, filename: str, folder: str, refetch: bool = False) ->
     )
 
     job_id = HF_LORA_JOB
-    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
-                    "stop": False, "beat": time.time()}
+    # Merged, not assigned: the route seeded this record and cleared the stop
+    # key before spawning, and a Cancel pressed during the cold start has
+    # already been written into it. See `_arm_spawn`.
+    _publish(job_id, status="running", phase="Starting…", percent=0)
 
     def fail(err: str) -> dict[str, Any]:
         _publish(job_id, status="failed", error=err)
@@ -3481,8 +3509,10 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
     from huggingface_hub.utils import HfHubHTTPError
 
     job_id = HF_PUSH_JOB
-    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
-                    "stop": False, "beat": time.time()}
+    # Merged, not assigned: the route seeded this record and cleared the stop
+    # key before spawning, and a Cancel pressed during the cold start has
+    # already been written into it. See `_arm_spawn`.
+    _publish(job_id, status="running", phase="Starting…", percent=0)
 
     def fail(err: str) -> dict[str, Any]:
         _publish(job_id, status="failed", error=err)
@@ -13377,6 +13407,7 @@ def web():
             return {"error": "Paste a Google Drive link or file id."}
         if folder and not NAME_RE.match(folder):
             return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
+        _arm_spawn(GDRIVE_JOB)
         gdrive_job.spawn(url, folder, bool(payload.get("refetch")))
         return {"ok": True, "job_id": GDRIVE_JOB}
 
@@ -13402,6 +13433,7 @@ def web():
         folder = str(payload.get("folder") or "").strip()
         if folder and not NAME_RE.match(folder):
             return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
+        _arm_spawn(HF_LORA_JOB)
         hf_lora_job.spawn(repo, filename, folder, bool(payload.get("refetch")))
         return {"ok": True, "job_id": HF_LORA_JOB}
 
@@ -13428,6 +13460,7 @@ def web():
             return {"error": "No HuggingFace token saved. Paste one under HuggingFace "
                              "token — a push writes to your account, so it needs a "
                              "token with write access."}
+        _arm_spawn(HF_PUSH_JOB)
         hf_push_job.spawn(str(root), repo)
         return {"ok": True, "job_id": HF_PUSH_JOB}
 
