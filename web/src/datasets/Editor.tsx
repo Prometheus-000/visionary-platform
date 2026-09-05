@@ -575,6 +575,11 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
   // a summary of a thing beside the thing is noise. What the captioner menu
   // still cannot say for itself is that the first run is a 17 GB pull.
   const modelNote = models.find((m) => m.key === curModel)?.note ?? ''
+  // A captioner that reasons first has its reasoning cut at </think> before
+  // anything reads the reply, and it runs until it is done — so the token cap
+  // does not apply to it, and the line under the box says both, because the
+  // cut is the one thing about the reply the writer of a preset cannot see.
+  const thinks = !!models.find((m) => m.key === curModel)?.thinking
 
   // The store's state is the served vocabulary, so saving or deleting a preset
   // re-asks the server rather than patching a local copy that could drift.
@@ -665,8 +670,8 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
         // says both, and the traceback rides underneath for whoever wants it.
         ds.setEditError({
           error: 'The captioning run stopped before it finished. Whatever it had already'
-            + ' written is kept — run it again, and if it keeps stopping try a lower'
-            + ' max tokens or a different captioner.',
+            + ' written is kept — run it again, and if it keeps stopping try a'
+            + (thinks ? ' different captioner.' : ' lower max tokens or a different captioner.'),
           detail: st.error ? String(st.error) : undefined,
         })
       }
@@ -792,12 +797,15 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
       {house && (
         <p className="muted" id="cap-parse-note" style={{ margin: '6px 2px 0' }}>
           Editing is disabled, output is extracted in code.
+          {thinks && ' Reasoning before </think> is dropped.'}
         </p>
       )}
       {draft && (
         <div className="row" style={{ gap: 8, marginTop: 6 }}>
           <span className="muted" style={{ fontSize: 12 }}>
-            Your own — the reply is saved as the model writes it.
+            {thinks
+              ? 'Your own — what follows </think> is saved as the model writes it.'
+              : 'Your own — the reply is saved as the model writes it.'}
           </span>
           <button className="s" id="cap-save-preset" type="button"
                   disabled={!shownInstr.trim()} onClick={() => void savePreset()}>
@@ -807,7 +815,9 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
       )}
       {!house && !draft && !edited && (
         <p className="muted" id="cap-parse-note" style={{ margin: '6px 2px 0' }}>
-          Your preset — the reply is saved as the model writes it.
+          {thinks
+            ? 'Your preset — what follows </think> is saved as the model writes it.'
+            : 'Your preset — the reply is saved as the model writes it.'}
         </p>
       )}
       {edited && (
@@ -832,9 +842,11 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
               plausibility, and a bare number is not a value. */}
           <div className="opt" data-lb="Max tokens">
             <span className="lead">Max tokens</span>
-            <input autoComplete="off" type="number" id="cap-max-tokens" min={16} max={1024} step={16}
-                   style={{ width: 64 }} value={maxTokens}
-                   onChange={(e) => setMaxTokens(Number(e.target.value) || 320)} />
+            {thinks
+              ? <span className="muted" id="cap-max-tokens-note">none — runs until it is done</span>
+              : <input autoComplete="off" type="number" id="cap-max-tokens" min={16} max={1024} step={16}
+                       style={{ width: 64 }} value={maxTokens}
+                       onChange={(e) => setMaxTokens(Number(e.target.value) || 320)} />}
           </div>
           <div className="opt" data-lb="Temperature">
             <span className="lead">Temperature</span>

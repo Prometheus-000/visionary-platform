@@ -187,7 +187,7 @@ export type AppState = {
    *  run stays reproducible after the preset changes. `custom` marks presets
    *  saved from the row, which are the deletable ones. */
   caption_presets: { key: string; label: string; note: string; instruction: string; custom?: boolean }[]
-  caption_models: { key: string; label: string; note: string; repo?: string; custom?: boolean }[]
+  caption_models: { key: string; label: string; note: string; repo?: string; custom?: boolean; thinking?: boolean }[]
   caption_defaults: { preset: string; model: string }
   train_optimizers: TrainChoice[]
   lr_schedulers: TrainChoice[]

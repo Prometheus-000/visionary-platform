@@ -1272,6 +1272,23 @@ CAPTION_MODELS: dict[str, dict[str, str]] = {
         "label": "Qwen3-VL 8B uncensored",
         "note": "Same weights, refusal removed. First run pulls ~17 GB.",
     },
+    # The house prompt's method is a scratchpad the model fills before it
+    # writes; the Thinking checkpoint has that natively, and this is the open
+    # abliteration of it (only the text side was edited, the vision tower is
+    # stock). Qwen3-VL ships Instruct and Thinking as two checkpoints — the
+    # Instruct template has no switch, the Thinking template opens `<think>`
+    # in the generation prompt itself, so it reasons on every image whether
+    # asked or not. `thinking` is what the loop reads to drop the block and
+    # to ignore the token cap: the model decides how long it thinks, a prompt
+    # cannot reach that, and a cap that counts the reasoning truncates the
+    # answer no matter how the instruction is worded.
+    "qwen3vl-thinking": {
+        "repo": "huihui-ai/Huihui-Qwen3-VL-8B-Thinking-abliterated",
+        "label": "Qwen3-VL 8B thinking",
+        "note": "Reasons before it writes, and runs until it is done. "
+                "First run pulls ~17 GB.",
+        "thinking": True,
+    },
 }
 DEFAULT_CAPTION_MODEL = "joycaption"
 
@@ -3437,6 +3454,16 @@ def _caption_images(
     shape = _caption_shape(processor, instruction, repo, system)
     if shape != "parts":
         print(f"[caption] {repo} takes flat message content")
+    # A thinking captioner runs to its own end-of-sequence. The cap counts the
+    # reasoning before the answer starts, so under it a long think truncated
+    # the caption and the truncated reply had no CAPTION: mark — the whole
+    # scratchpad went into the sidecar. The ceiling is the model's context
+    # window, which is "no cap" in the model's own terms; the one reply that
+    # ever reaches it is a think block that never closes, handled below.
+    thinking = bool(spec.get("thinking"))
+    if thinking:
+        print(f"[caption] {repo} reasons first · token cap {max_tokens} ignored"
+              " · what follows </think> is kept")
     # The Auto class rather than Qwen3VLForConditionalGeneration, because the
     # menu is no longer two known repos: a captioner added under the gear can be
     # any vision LM transformers maps — Qwen-VL, LLaVA, InternVL, Idefics. The
@@ -3446,6 +3473,9 @@ def _caption_images(
         repo, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
     )
     model.eval()
+    if thinking:
+        text_cfg = getattr(model.config, "text_config", model.config)
+        context = int(getattr(text_cfg, "max_position_embeddings", 0) or 32768)
     # Persist the downloaded weights now, on their own volume, so the next cold
     # start reuses them and the dataset commit below stays small.
     try:
@@ -3471,16 +3501,39 @@ def _caption_images(
             if "pixel_values" in inputs and inputs["pixel_values"].is_floating_point():
                 inputs["pixel_values"] = inputs["pixel_values"].to(model.dtype)
 
+            prompt_len = int(inputs["input_ids"].shape[1])
             with torch.no_grad():
                 # temperature 0 means greedy, and transformers refuses
                 # temperature=0.0 with do_sample=True rather than inferring it.
                 out = model.generate(
-                    **inputs, max_new_tokens=max_tokens,
+                    **inputs,
+                    max_new_tokens=(max(context - prompt_len, 16) if thinking
+                                    else max_tokens),
                     do_sample=temperature > 0,
                     **({"temperature": temperature, "top_p": top_p}
                        if temperature > 0 else {}),
                 )[0][inputs["input_ids"].shape[1]:]
             caption = processor.decode(out, skip_special_tokens=True).strip()
+
+            # The reasoning is the model's scratchpad, not the caption, and it
+            # is cut here before anything reads the text: the refusal check
+            # matches at the start of the reply, and a reply that starts with
+            # reasoning never matches. `</think>` survives the decode because
+            # Qwen marks the think tokens as ordinary vocabulary, which is why
+            # the cut is on the string. The last one, in case the reasoning
+            # quotes the tag. Unconditional, because an Instruct model never
+            # writes it and the cut then costs nothing.
+            reasoning, closed, caption = caption.rpartition("</think>")
+            caption = caption.strip()
+            if thinking and not closed:
+                # The only reply the context ceiling ever catches. Raised into
+                # the failure branch below rather than skipped, so the step
+                # still publishes; nothing is written, so the image stays in
+                # the Uncaptioned filter, and the head of the reasoning says
+                # what it was doing.
+                raise RuntimeError(
+                    f"never closed its think block after {len(out)} tokens: "
+                    f"{reasoning[:120]!r}")
 
             # Strip stock preambles so the trigger word stays at the very front,
             # which is where it does its work.
@@ -12796,7 +12849,8 @@ def web():
             # The repo is shown in the gear's Caption models section.
             "caption_models": [
                 {"key": k, "label": m["label"], "note": m.get("note", ""),
-                 "repo": m["repo"], "custom": bool(m.get("custom"))}
+                 "repo": m["repo"], "custom": bool(m.get("custom")),
+                 "thinking": bool(m.get("thinking"))}
                 for k, m in cap_models.items()
             ],
             # A hidden default would be a key the page's own menu does not
@@ -13973,11 +14027,38 @@ def web():
                              f"(model_type {cfg.get('model_type')!r}, no vision "
                              "config). A captioner has to read images."}
 
+        # Whether it reasons is read off the chat template, the model's own
+        # declaration, because the loop ignores the token cap for one that
+        # does and a repo added here has no other way to say so. Three
+        # filenames, because transformers has moved the template twice; the
+        # first that holds one wins. Only the template field of the JSON
+        # ones, not the file: the Instruct tokenizer config lists `<think>`
+        # in its token table too, and reading the whole file called it a
+        # thinker. A repo with no template is treated as one that does not
+        # think, which costs nothing worse than a cap it might hit.
+        thinking = False
+        for name in ("chat_template.jinja", "chat_template.json",
+                     "tokenizer_config.json"):
+            try:
+                raw = Path(hf_hub_download(
+                    repo, name, token=_hf_token(),
+                    cache_dir=tempfile.mkdtemp(prefix="capcfg-"))).read_text()
+                tpl = raw if name.endswith(".jinja") else str(
+                    json.loads(raw).get("chat_template") or "")
+            except Exception:
+                continue
+            if tpl:
+                thinking = "<think>" in tpl
+                break
+
         key = _custom_key("vlm", repo)
         stored = dict(config.get("custom_caption_models") or {})
         stored[key] = {
             "repo": repo, "label": label or repo.split("/")[-1],
-            "note": "Added by you. First run pulls the weights.",
+            "note": ("Added by you. Reasons before it writes, and runs until "
+                     "it is done. First run pulls the weights." if thinking
+                     else "Added by you. First run pulls the weights."),
+            "thinking": thinking,
         }
         config["custom_caption_models"] = stored
         return {"ok": True, "key": key}
