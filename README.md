@@ -159,19 +159,32 @@ licence with the same account that issued it:
 Paste the token under the gear. If the licence has not been accepted, the error
 says so and links the page rather than failing as a generic 403.
 
-### LoRAs from Google Drive
+### LoRAs from Google Drive, HuggingFace, or your disk
 
-Most LoRAs worth having were never published to HuggingFace — they are a link
-someone sent you. Paste one under the gear and it lands in `loras/`, ready to
-pick as a chip.
+Most LoRAs worth having were never published anywhere — they are a link
+someone sent you. The LoRAs section of Settings has three ways in, each folded
+to one row until you press it, and every LoRA lands in `loras/`, ready to pick
+as a chip.
 
-- A file link, a bare id, or a folder link all work, and a folder is listed
-  before it is pulled so a repaste costs only the difference.
-- Only `.safetensors` is kept; a folder's preview grid and readme are skipped.
-- Leave **folder** blank and files drop in loose, each its own entry. Give one
-  and they are grouped as versions of a single LoRA under `loras/{folder}/`.
-- The link must be shared with anyone who has it. An unshared file is named as
+- **Google Drive.** A file link, a bare id, or a folder link all work, and a
+  folder is listed before it is pulled so a repaste costs only the difference.
+  The link must be shared with anyone who has it; an unshared file is named as
   that case explicitly, rather than surfacing a parse error.
+- **HuggingFace.** `owner/repo`, or a link to a file in one. The repo is
+  listed first, so a repaste fetches only what is new; a private repo needs
+  the token saved. A repo holding more than twenty weights is refused with
+  the count — name the file you want.
+- **This computer.** Choose `.safetensors` files and press Import. The upload
+  reports its bytes as it goes.
+
+Only `.safetensors` is kept; a folder's preview grid and readme are skipped.
+Leave **folder** blank and files drop in loose, each its own entry. Give one
+and they are grouped as versions of a single LoRA under `loras/{folder}/`.
+
+Every LoRA row has the way back out: download a file to your disk, or push the
+whole LoRA to a **private** repo under your HuggingFace account — created if it
+does not exist, with the saved token, which needs write access. Nothing here
+browses or recommends anyone else's weights; you paste what you were sent.
 
 ---
 

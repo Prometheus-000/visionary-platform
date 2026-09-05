@@ -1,14 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { failed, type ApiError } from '../api/client'
 import {
-  addCaptionModel, deleteCaptionModel, deleteLora, downloadFamily, setToken,
-  startDownload, startGdrive,
+  addCaptionModel, deleteCaptionModel, deleteLora, downloadFamily, loraFileUrl, pushLora,
+  setToken, startDownload, startGdrive, startHfLora, uploadLoras,
 } from '../api/routes'
 import type { AppState, GpuChoice, LoraEntry, ModelEntry } from '../api/types'
 import { useStore } from '../store'
 import { fmtBytes } from '../format'
-import { IconClose, IconDownload } from '../icons'
+import { IconClose, IconDownload, IconUpload } from '../icons'
 import { ErrorNote } from '../ui/ErrorNote'
 import { useBusy } from '../ui/useBusy'
 import { useDownload } from './useDownload'
@@ -16,10 +16,22 @@ import { useDownload } from './useDownload'
 /**
  * Everything decided once, behind the gear.
  *
- * Nothing downloads on its own — weights are chosen explicitly, here. The GPU
- * pickers live here for the same reason: a card is set per session and confirms
- * a cold start when it changes, so it was 71px of composer for a decision no
- * take varies by.
+ * Two groups, and the groups are headings rather than folds. **Runtime** is
+ * the GPU: a card is set per session and confirms a cold start when it
+ * changes, so it was 71px of composer for a decision no take varies by.
+ * **Models** is the weights — LoRAs, caption models, checkpoints — each a
+ * fold, because this is the one screen that has to be scrolled to be used and
+ * a catalogue you are not shopping in is twenty rows between you and the LoRA
+ * you came to delete. LoRAs open by default (the list you come here for);
+ * Checkpoints open while anything is missing and fold once the volume is
+ * complete; Caption models fold, because the menu is read on the caption
+ * row and edited here about once.
+ *
+ * Nothing downloads on its own — weights are chosen explicitly, here. The
+ * ways a LoRA arrives (Drive, HuggingFace, this computer) are rows that fold
+ * to their name until pressed, so the card reads as three sources rather
+ * than nine inputs. The fold is session state, not stored: `It never
+ * remembers unless told`.
  */
 export function Settings({
   state, open, onClose, onReload,
@@ -39,6 +51,15 @@ export function Settings({
      the same folder link again to pick up the epochs uploaded since. On is for
      the one case a name cannot see — a file overwritten in place on Drive. */
   const [driveRefetch, setDriveRefetch] = useState(false)
+  const [hfRepo, setHfRepo] = useState('')
+  const [hfFile, setHfFile] = useState('')
+  const [hfFolder, setHfFolder] = useState('')
+  const [hfRefetch, setHfRefetch] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [importFiles, setImportFiles] = useState<File[]>([])
+  const [importFolder, setImportFolder] = useState('')
+  const [importSent, setImportSent] = useState<[number, number] | null>(null)
+  const [importNote, setImportNote] = useState<string | ApiError | null>(null)
   // The whole ApiError, not `r.error`: the sentence is what the box shows, but a delete
   // that failed on a path guard answers with the route's own report behind it, and
   // widening the state is all it costs to keep that reachable.
@@ -47,12 +68,21 @@ export function Settings({
      complete". A complete family is a list of green ticks — true, and not
      worth twenty rows of the one screen that has to be scrolled to be used.
      The head still says `complete`, so nothing is hidden that a glance was
-     answering; the rows are one click away, and the fold is session state
-     rather than stored, because `It never remembers unless told`. */
+     answering; the rows are one click away. */
   const [openFams, setOpenFams] = useState<Record<string, boolean>>({})
+  /* Sections and source rows, same rule, keyed by name; unset means the
+     default the section argues for above. One map for both depths because
+     they are one gesture. */
+  const [folds, setFolds] = useState<Record<string, boolean>>({})
+  const isOpen = (k: string, dflt: boolean) => folds[k] ?? dflt
+  const toggle = (k: string, dflt: boolean) =>
+    setFolds((o) => ({ ...o, [k]: !(o[k] ?? dflt) }))
+  /* Which multi-file rows have their file list showing. A browser cannot save
+     a folder, so export on a LoRA with epochs opens onto its files. */
+  const [openFiles, setOpenFiles] = useState<Record<string, boolean>>({})
   const dl = useDownload()
   // Save and every row's ✕ on one keyed flag. `dl.busy` is the uplink, which is a
-  // different thing and already had its own; this is the two mutations on this sheet
+  // different thing and already had its own; this is the mutations on this sheet
   // that write and then reload, and the key is which of them is in flight.
   const { busy, run } = useBusy()
 
@@ -104,306 +134,580 @@ export function Settings({
     })
   }
 
+  const pushRow = (l: LoraEntry) => {
+    // Checked here as well as on the route: the route's refusal is the same
+    // sentence, but a container is not the place to discover a form error.
+    if (!state?.hf_token_set) {
+      setLoraError('No HuggingFace token saved — a push writes to your account. '
+        + 'Paste one under HuggingFace token above, with write access.')
+      return
+    }
+    const n = l.files.length
+    // A prompt rather than a field per row: the repo name is asked for once,
+    // at the moment it is needed, and the default is the LoRA's own name — a
+    // bare name lands under the token's account.
+    const repo = prompt(
+      `Push “${l.name}” to HuggingFace?\n\n`
+      + `${n} file${n === 1 ? '' : 's'} (${fmtBytes(l.bytes)}) go to a private repo under `
+      + 'your account — created if it does not exist, files replaced by name if it does. '
+      + 'Repo name, or owner/name:',
+      l.name.replace(/[^A-Za-z0-9_.-]+/g, '-'),
+    )
+    if (repo == null || !repo.trim()) return
+    setLoraError(null)
+    void dl.begin(`push:${l.root}`, 'hf_push', 'Pushed.',
+      () => pushLora(l.root, repo.trim()), onReload)
+  }
+
+  const doImport = () => run('import', async () => {
+    setImportNote(null)
+    setImportSent([0, importFiles.reduce((a, f) => a + f.size, 0)])
+    const r = await uploadLoras(importFiles, importFolder.trim() || undefined,
+      (sent, total) => setImportSent([sent, total]))
+    setImportSent(null)
+    if (failed(r)) return setImportNote(r)
+    const where = importFolder.trim() ? `loras/${importFolder.trim()}/` : 'loras/'
+    const got = r.files?.length ?? 0
+    setImportNote(`${got} file${got === 1 ? '' : 's'} (${fmtBytes(r.bytes ?? 0)}) landed in ${where}`
+      + (r.skipped?.length ? ` · skipped ${r.skipped.join(', ')}` : ''))
+    setImportFiles([])
+    if (fileRef.current) fileRef.current.value = ''
+    onReload()
+  })
+
   const loras = state?.loras ?? []
   const loraBytes = loras.reduce((a, l) => a + (Number(l.bytes) || 0), 0)
+  const captioners = state?.caption_models ?? []
+  const missing = families.flatMap((f) => f.items.filter((m) => !m.present))
+  const missingGb = missing.reduce((a, m) => a + m.approx_gb, 0)
+  const drive = dl.progressOf('gdrive')
+  const hf = dl.progressOf('hf')
+  const tokenState = tokenNote ?? (state?.hf_token_set ? 'Token saved.' : 'No token saved.')
 
   return (
     <div id="settings" className="scrim">
       <div className="sheet">
         <div className="sheet-head">
-          <h1 className="grow">Models</h1>
+          <h1 className="grow">Settings</h1>
           <button className="ico" id="settings-x" type="button" onClick={onClose}>
             <IconClose />
           </button>
         </div>
 
-        <div className="card">
-          <label>GPU</label>
-          {container === 'one' ? (
-            <div className="row" style={{ gap: 10 }}>
-              <GpuSelect id="b-gpu" label="Both" side="both" spec={state?.gpus.both} />
-            </div>
-          ) : (
-            <div className="row" style={{ gap: 10 }}>
-              <GpuSelect id="g-gpu" label="Image" side="image" spec={state?.gpus.image} />
-              <GpuSelect id="v-gpu" label="Video" side="video" spec={state?.gpus.video} />
-            </div>
-          )}
-          {/* The trade is stated before it is made, in the confirm, and again
-              under the control once it is — the second so the reason a picture
-              is waiting is on screen when it waits. */}
-          <label className="row" style={{ gap: 7, margin: '9px 0 0', color: '#ddd', fontSize: 13 }}>
-            <input type="checkbox" id="one-container" style={{ width: 'auto' }}
-                   checked={container === 'one'}
-                   onChange={(e) => {
-                     const next = e.target.checked ? 'one' : 'two'
-                     if (confirm(next === 'one'
-                       ? 'One container for both?\n\nOne card holds both models, so one '
-                         + 'container stays warm instead of two — and a picture waits behind '
-                         + 'a clip in progress. The shared container is cold, so the next run '
-                         + 'pays a cold start while it loads.'
-                       : 'Back to a container per family?\n\nThe next run lands on that '
-                         + "family's own container, which may be cold.")) {
-                       setContainer(next)
-                     }
-                   }} />
-            One container for both
-          </label>
-          <p className="muted" style={{ margin: '9px 2px 0' }}>
-            {container === 'one'
-              ? 'On H200 both models stay loaded. On H100 or L40S they take turns through '
-                + 'memory, so switching between a picture and a clip costs a reload. '
-                + 'A picture queues behind a clip in progress.'
-              : 'Changing a card costs one cold start while the model loads. Runs after it are warm.'}
-          </p>
+        <div className="sec-group" id="runtime">
+          <h2>Runtime</h2>
+          <div className="card">
+            <label>GPU</label>
+            {container === 'one' ? (
+              <div className="row" style={{ gap: 10 }}>
+                <GpuSelect id="b-gpu" label="Both" side="both" spec={state?.gpus.both} />
+              </div>
+            ) : (
+              <div className="row" style={{ gap: 10 }}>
+                <GpuSelect id="g-gpu" label="Image" side="image" spec={state?.gpus.image} />
+                <GpuSelect id="v-gpu" label="Video" side="video" spec={state?.gpus.video} />
+              </div>
+            )}
+            {/* The trade is stated before it is made, in the confirm, and again
+                under the control once it is — the second so the reason a picture
+                is waiting is on screen when it waits. */}
+            <label className="row" style={{ gap: 7, margin: '9px 0 0', color: '#ddd', fontSize: 13 }}>
+              <input type="checkbox" id="one-container" style={{ width: 'auto' }}
+                     checked={container === 'one'}
+                     onChange={(e) => {
+                       const next = e.target.checked ? 'one' : 'two'
+                       if (confirm(next === 'one'
+                         ? 'One container for both?\n\nOne card holds both models, so one '
+                           + 'container stays warm instead of two — and a picture waits behind '
+                           + 'a clip in progress. The shared container is cold, so the next run '
+                           + 'pays a cold start while it loads.'
+                         : 'Back to a container per family?\n\nThe next run lands on that '
+                           + "family's own container, which may be cold.")) {
+                         setContainer(next)
+                       }
+                     }} />
+              One container for both
+            </label>
+            <p className="muted" style={{ margin: '9px 2px 0' }}>
+              {container === 'one'
+                ? 'On H200 both models stay loaded. On H100 or L40S they take turns through '
+                  + 'memory, so switching between a picture and a clip costs a reload. '
+                  + 'A picture queues behind a clip in progress.'
+                : 'Changing a card costs one cold start while the model loads. Runs after it are warm.'}
+            </p>
+          </div>
         </div>
 
-        {/* The token, and only the token. "Download missing" used to sit in
-            this row, which put the one button that pulls the entire catalogue
-            next to a password field it has nothing to do with. */}
-        <div className="card">
-          <label>HuggingFace token</label>
-          <div className="row">
-            <input id="tok" type="password" className="grow" placeholder="hf_…"
-                   autoComplete="off" value={token}
-                   onChange={(e) => setTokenValue(e.target.value)} />
-            {/* The note under the field is written *by* the reply, so until the reply
-                landed there was nothing on screen at all — and the only honest read of a
-                save that shows nothing is that Save did not work, which is why it got
-                pressed again. The label carries the state; the guard is `run`'s, because
-                `disabled` is a paint and a queued second click gets past a paint. */}
-            <button className="s" type="button" disabled={!!busy}
-                    onClick={() => void saveToken()}>
-              {busy === 'token' ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-          <p className="muted" style={{ marginTop: 8 }}>
-            Needed for Krea 2 RAW and Turbo, which are gated. Accept the licence at
-            huggingface.co/krea/Krea-2-Raw with the same account.{' '}
-            <span id="tok-state">
-              {tokenNote ? <span className="ok">{tokenNote}</span>
-                : state?.hf_token_set ? <span className="ok">Token saved.</span>
-                : <span className="warn">No token saved.</span>}
-            </span>
-          </p>
-        </div>
+        <div className="sec-group" id="model-group">
+          <h2>Models</h2>
 
-        {/* The other way weights arrive. Most LoRAs worth having were never
-            published to HuggingFace — they are a link someone sent you. Same
-            card shape as the token, deliberately: another place weights come
-            from, not another kind of thing. */}
-        <div className="card">
-          <label>Google Drive</label>
-          <div className="row">
-            <input id="gd-url" className="grow" placeholder="Drive link or file id"
-                   autoComplete="off" spellCheck={false} value={driveUrl}
-                   onChange={(e) => setDriveUrl(e.target.value)} />
-            {/* 158px is what it wants, not what it insists on. This was
-                `width:158;flex:none`, and a `.row` whose items all refuse to shrink can
-                only overflow — the link field, this one and Download ran off the right
-                edge of the sheet on a phone, and Settings has no media query of its own
-                to catch it. `minWidth` has to be spelled out too: a flex item's automatic
-                minimum is its intrinsic width, and for an `<input>` that is the default
-                ~20-character box, which is most of the overflow on its own. */}
-            <input id="gd-folder" placeholder="folder (optional)" autoComplete="off"
-                   spellCheck={false} style={{ flex: '1 1 158px', minWidth: 96 }}
-                   title="Group the files under loras/{name}/ — for a matched pair that belongs together. Leave blank to drop them in loose."
-                   value={driveFolder} onChange={(e) => setDriveFolder(e.target.value)} />
-            {/* `.s`, matching Save in the token row above it. This was the only
-                white primary button on the screen, which inverted the hierarchy of
-                the whole thing: pulling one file somebody sent you was drawn louder
-                than the model catalogue below, which is what this screen is *for*
-                and which pulls 17 GB. The hand-written padding went with it — it
-                made this the one `.b` in the product at 13px. */}
-            <button className="s" type="button" disabled={dl.busy}
-                    onClick={() => {
-                      if (!driveUrl.trim()) return
-                      void dl.begin('gdrive', 'dl_gdrive', 'Downloaded.',
-                        () => startGdrive(driveUrl.trim(), driveFolder.trim() || undefined,
-                                          driveRefetch),
-                        onReload)
-                    }}>
-              Download
-            </button>
-          </div>
-          {/* Under the row rather than in it: it is a property of the pull, not a
-              third field of the link, and a folder is the only shape it changes. */}
-          <label className="row" style={{ gap: 7, margin: '9px 0 0', color: '#ddd', fontSize: 13 }}>
-            <input type="checkbox" id="gd-refetch" style={{ width: 'auto' }}
-                   checked={driveRefetch}
-                   onChange={(e) => setDriveRefetch(e.target.checked)} />
-            Re-download files already here
-          </label>
-          <p className="muted" style={{ marginTop: 8 }}>
-            Lands in <code>loras/</code>, ready to name in a prompt. Only{' '}
-            <code>.safetensors</code> is kept — a folder's preview images and readme are
-            never fetched. A folder is listed before it is pulled, so a name already in{' '}
-            <code>loras/</code> costs nothing and pasting the same link again fetches only
-            what is new. Drive gives no size or checksum, so a file replaced under the name
-            it had needs the box. The link has to be shared with anyone who has it.
-          </p>
-          {/* No progress bar, unlike the cards below. Drive does not say how big
-              a file is before it sends it, so a bar here could only sit at zero
-              for the length of the transfer — which is what "stuck" looks like.
-              The byte count and the rate move, and moving is the whole job. */}
-          <Line p={dl.progressOf('gdrive')}
-                onCancel={() => void dl.cancel('gdrive', 'dl_gdrive')} />
-        </div>
-
-        <div className="card">
-          <div className="row" style={{ alignItems: 'baseline', marginBottom: 4 }}>
-            <label className="grow" style={{ margin: 0 }}>LoRAs</label>
-            <span className="muted" id="lora-total">
-              {loras.length ? `${loras.length} · ${fmtBytes(loraBytes)}` : ''}
-            </span>
-          </div>
-          <ErrorNote err={loraError} style={{ marginTop: 10 }} />
-          <div id="lora-list">
-            {loras.length ? loras.map((l) => (
-              <div className="lora-row" key={l.root}>
-                <div className="grow" style={{ minWidth: 0 }}>
-                  <b>{l.name}</b>
-                  {l.trigger_word ? <> <code>{l.trigger_word}</code></> : null}
-                  <div className="muted">
-                    {l.files.length} file{l.files.length === 1 ? '' : 's'} · {fmtBytes(l.bytes)}
-                    {l.catalogue ? ` · ${l.catalogue}` : ''}
-                  </div>
-                </div>
-                {/* Unlinking the files and reloading the sheet leaves the row sitting
-                    there, still with a ✕ on it, for as long as both take — which reads
-                    as a delete that did not take, and the second press opens the confirm
-                    again for a LoRA already on its way out. The glyph carries it because
-                    `.lora-x` is a fixed square: there is no room in it for a word. */}
-                <button className="lora-x" type="button" disabled={!!busy}
-                        title={busy === `lora:${l.root}` ? 'Deleting…' : 'Delete'}
-                        onClick={() => void removeLora(l)}>
-                  {busy === `lora:${l.root}` ? '…' : <IconClose />}
+          {/* The token, and only the token, folded to its state. It serves
+              all three sections — gated checkpoints, private HuggingFace
+              pulls, every push — so it sits above them rather than inside
+              one. "Download missing" used to sit in this row, which put the
+              one button that pulls the entire catalogue next to a password
+              field it has nothing to do with. */}
+          <div className="card" style={{ padding: '6px 16px' }}>
+            <FoldRow id="tok-row" label="HuggingFace token" open={isOpen('token', false)}
+                     onToggle={() => toggle('token', false)}
+                     state={<span id="tok-state" className={tokenNote || state?.hf_token_set ? 'ok' : 'warn'}>
+                       {tokenState}
+                     </span>}>
+              <div className="row">
+                <input id="tok" type="password" className="grow" placeholder="hf_…"
+                       autoComplete="off" value={token}
+                       onChange={(e) => setTokenValue(e.target.value)} />
+                {/* The note beside the row is written *by* the reply, so until the
+                    reply landed there was nothing on screen at all — and the only
+                    honest read of a save that shows nothing is that Save did not
+                    work, which is why it got pressed again. The label carries the
+                    state; the guard is `run`'s, because `disabled` is a paint and a
+                    queued second click gets past a paint. */}
+                <button className="s" type="button" disabled={!!busy}
+                        onClick={() => void saveToken()}>
+                  {busy === 'token' ? 'Saving…' : 'Save'}
                 </button>
               </div>
-            )) : (
-              // Both ways in are directly above this card, so the empty state
-              // points at them rather than saying "nothing here".
-              <p className="muted" style={{ margin: '2px 0 0' }}>
-                Nothing in <code>loras/</code> yet — train one, or paste a Drive link above.
+              <p className="muted" style={{ marginTop: 8 }}>
+                Needed for Krea 2 RAW and Turbo, which are gated — accept the licence at
+                huggingface.co/krea/Krea-2-Raw with the same account — and for pulling
+                private repos and pushing LoRAs to your own, which wants write access.
               </p>
-            )}
+            </FoldRow>
           </div>
-        </div>
 
-        {/* Captioners are menu rows, not catalogue entries: the weights pull
-            into the HF cache on first use rather than downloading here, so the
-            card offers add-by-repo instead of a Download button. */}
-        <CaptionModels state={state} onReload={onReload} />
-
-        <div id="models">
-          {families.map((f) => {
-            const left = f.items.filter((m) => !m.present)
-            const size = left.reduce((a, m) => a + m.approx_gb, 0)
-            const id = `fam:${f.name}`
-            const open = openFams[f.name] ?? left.length > 0
-            return (
-              <div className="fam" key={f.name}>
-                <div className="fam-head">
-                  {/* The name is the toggle; the caret is what says so. A
-                      separate disclosure control beside the name would be two
-                      marks for one act. `.fam-dl` keeps its own button because
-                      a toggle and a 17 GB download must not share a target. */}
-                  <button className="t fam-toggle" type="button" aria-expanded={open}
-                          onClick={() => setOpenFams((o) => ({ ...o, [f.name]: !open }))}>
-                    <span className={`caret${open ? ' open' : ''}`} aria-hidden="true" />
-                    <b>{f.name}</b>
+          <Section id="sec-loras" name="LoRAs" open={isOpen('loras', true)}
+                   onToggle={() => toggle('loras', true)}
+                   summary={<span id="lora-total">
+                     {loras.length ? `${loras.length} · ${fmtBytes(loraBytes)}` : 'none yet'}
+                   </span>}>
+            {/* Where LoRAs come from: three rows, one card, each folded to its
+                name and its last word — a transfer's rate while it runs, its
+                result once it has. The same card shape for all three,
+                deliberately: three places weights come from, not three kinds
+                of thing. */}
+            <div className="card" id="lora-sources" style={{ padding: '6px 16px' }}>
+              <FoldRow id="src-drive" label="Google Drive" open={isOpen('drive', false)}
+                       onToggle={() => toggle('drive', false)} state={drive.message}>
+                <div className="row">
+                  <input id="gd-url" className="grow" placeholder="Drive link or file id"
+                         autoComplete="off" spellCheck={false} value={driveUrl}
+                         onChange={(e) => setDriveUrl(e.target.value)} />
+                  {/* 158px is what it wants, not what it insists on. This was
+                      `width:158;flex:none`, and a `.row` whose items all refuse to shrink can
+                      only overflow — the link field, this one and Download ran off the right
+                      edge of the sheet on a phone, and Settings has no media query of its own
+                      to catch it. `minWidth` has to be spelled out too: a flex item's automatic
+                      minimum is its intrinsic width, and for an `<input>` that is the default
+                      ~20-character box, which is most of the overflow on its own. */}
+                  <input id="gd-folder" placeholder="folder (optional)" autoComplete="off"
+                         spellCheck={false} style={{ flex: '1 1 158px', minWidth: 96 }}
+                         title="Group the files under loras/{name}/ — for a matched pair that belongs together. Leave blank to drop them in loose."
+                         value={driveFolder} onChange={(e) => setDriveFolder(e.target.value)} />
+                  {/* `.s`, matching Save in the token row. This was the only white
+                      primary button on the screen, which inverted the hierarchy of
+                      the whole thing: pulling one file somebody sent you was drawn
+                      louder than the catalogue, which pulls 17 GB. */}
+                  <button className="s" type="button" disabled={dl.busy}
+                          onClick={() => {
+                            if (!driveUrl.trim()) return
+                            void dl.begin('gdrive', 'dl_gdrive', 'Downloaded.',
+                              () => startGdrive(driveUrl.trim(), driveFolder.trim() || undefined,
+                                                driveRefetch),
+                              onReload)
+                          }}>
+                    Download
                   </button>
-                  <span className="muted">
-                    {left.length ? `${left.length} missing · ${size.toFixed(1)} GB` : 'complete'}
-                  </span>
-                  {/* One short shows no button at all, because that is what its
-                      own Download already is. */}
-                  {/* A family is the unit you decide in — you want the stack or
-                      you do not — so this is the press that matters, and the
-                      per-file buttons below are the escape hatch. A quiet pill
-                      now rather than the screen's one `.b`: the mockup's call,
-                      and the white fill was drawing a purchase decision louder
-                      than the canvas draws Generate. */}
-                  {left.length > 1 && (
-                    <button className="s fam-dl" type="button" disabled={dl.busy}
-                            onClick={() => void dl.begin(id, id, `${f.name} downloaded.`,
-                              () => downloadFamily(f.name, token), onReload)}>
-                      Download all {left.length}
-                    </button>
-                  )}
                 </div>
-                <Line p={dl.progressOf(id)} bar onCancel={() => void dl.cancel(id, id)} />
+                {/* Under the row rather than in it: it is a property of the pull, not a
+                    third field of the link, and a folder is the only shape it changes. */}
+                <label className="row" style={{ gap: 7, margin: '9px 0 0', color: '#ddd', fontSize: 13 }}>
+                  <input type="checkbox" id="gd-refetch" style={{ width: 'auto' }}
+                         checked={driveRefetch}
+                         onChange={(e) => setDriveRefetch(e.target.checked)} />
+                  Re-download files already here
+                </label>
+                <p className="muted" style={{ marginTop: 8 }}>
+                  Lands in <code>loras/</code>, ready to name in a prompt. Only{' '}
+                  <code>.safetensors</code> is kept — a folder's preview images and readme are
+                  never fetched. A folder is listed before it is pulled, so a name already in{' '}
+                  <code>loras/</code> costs nothing and pasting the same link again fetches only
+                  what is new. Drive gives no size or checksum, so a file replaced under the name
+                  it had needs the box. The link has to be shared with anyone who has it.
+                </p>
+                {/* No progress bar, unlike the catalogue. Drive does not say how big
+                    a file is before it sends it, so a bar here could only sit at zero
+                    for the length of the transfer — which is what "stuck" looks like.
+                    The byte count and the rate move, and moving is the whole job. */}
+                <Line p={drive} onCancel={() => void dl.cancel('gdrive', 'dl_gdrive')} />
+              </FoldRow>
 
-                {/* One card per family, rows inside — the LoRA list's own
-                    shape, and the caption menu's. Twenty sibling cards made
-                    the catalogue a wall of frames where the reading unit is
-                    the family; a hairline per row is the same information at
-                    a third of the chrome. */}
-                {open && (
-                  <div className="card">
-                    {f.items.map((m) => {
-                      const p = dl.progressOf(m.key)
-                      return (
-                        <div className="mrow" key={m.key}>
-                          <div className="grow" style={{ minWidth: 0 }}>
-                            <b>{m.label}</b> <span className="muted">{m.note}</span>
-                            {m.gated && <span className="warn" style={{ fontSize: 12 }}> · gated</span>}
-                            <div className="muted" style={{ marginTop: 3 }}><code>{m.repo_id}</code></div>
-                          </div>
-                          <div style={{ textAlign: 'right' }}>
-                            {m.present ? (
-                              <span className="ok">✓ {m.size_gb} GB</span>
-                            ) : (
-                              <span className="row" style={{ gap: 12, justifyContent: 'flex-end' }}>
-                                <span className="muted" style={{ whiteSpace: 'nowrap' }}>
-                                  {m.approx_gb} GB
-                                </span>
-                                {/* The size is the label, so the button can be a
-                                    mark — a control whose value is beside it, in
-                                    the row you are already reading. Cancel takes
-                                    the slot while the pull runs: two controls in
-                                    one place would be an invitation to press the
-                                    dead one. */}
-                                {p.running ? (
-                                  <button className="s" type="button"
-                                          onClick={() => void dl.cancel(m.key, `dl_${m.key}`)}>
-                                    Cancel
-                                  </button>
-                                ) : (
-                                  <button className="icx" type="button" disabled={dl.busy}
-                                          title={`Download ${m.approx_gb} GB`}
-                                          onClick={() => void dl.begin(m.key, `dl_${m.key}`, 'Done',
-                                            () => startDownload(m.key), onReload)}>
-                                    <IconDownload />
-                                  </button>
-                                )}
-                              </span>
-                            )}
-                            {p.tone === 'err' ? (
-                              // Left-aligned and capped by hand: this column is
-                              // `text-align:right` and sized by its own content, so an
-                              // err-box dropped into it would right-align a traceback and
-                              // stretch the card until the label beside it wrapped a word
-                              // per line.
-                              <ErrorNote err={{ error: p.message, detail: p.detail }}
-                                         style={{ textAlign: 'left', maxWidth: 280, margin: '8px 0 0' }} />
-                            ) : (
-                              <div className={`muted dl-state${p.tone === 'ok' ? ' ok' : ''}`}>
-                                {p.message}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
+              <FoldRow id="src-hf" label="HuggingFace" open={isOpen('hf', false)}
+                       onToggle={() => toggle('hf', false)} state={hf.message}>
+                <div className="row">
+                  {/* Twice the folder's share: the repo is the field, and at the
+                      Drive row's split its placeholder was cut mid-word on a laptop. */}
+                  <input id="hf-repo" placeholder="owner/repo, or a link to a file in one"
+                         style={{ flex: '2 1 200px', minWidth: 140 }}
+                         autoComplete="off" spellCheck={false} value={hfRepo}
+                         onChange={(e) => setHfRepo(e.target.value)} />
+                  <input id="hf-folder" placeholder="folder (optional)" autoComplete="off"
+                         spellCheck={false} style={{ flex: '1 1 158px', minWidth: 96 }}
+                         title="Group the files under loras/{name}/ — for a matched pair that belongs together. Leave blank to drop them in loose."
+                         value={hfFolder} onChange={(e) => setHfFolder(e.target.value)} />
+                  <button className="s" type="button" disabled={dl.busy}
+                          onClick={() => {
+                            if (!hfRepo.trim()) return
+                            void dl.begin('hf', 'dl_hf', 'Downloaded.',
+                              () => startHfLora(hfRepo.trim(), hfFile.trim() || undefined,
+                                                hfFolder.trim() || undefined, hfRefetch),
+                              onReload)
+                          }}>
+                    Download
+                  </button>
+                </div>
+                <div className="row" style={{ marginTop: 8 }}>
+                  {/* Its own field rather than parsed only off the link, because a
+                      repo with twenty epochs is the normal case and the file you want
+                      is a name you can type. Blank pulls every .safetensors the repo
+                      has, up to the job's cap. */}
+                  <input id="hf-file" className="grow" placeholder="file (optional) — blank takes every .safetensors in the repo"
+                         autoComplete="off" spellCheck={false} value={hfFile}
+                         onChange={(e) => setHfFile(e.target.value)} />
+                </div>
+                <label className="row" style={{ gap: 7, margin: '9px 0 0', color: '#ddd', fontSize: 13 }}>
+                  <input type="checkbox" id="hf-refetch" style={{ width: 'auto' }}
+                         checked={hfRefetch}
+                         onChange={(e) => setHfRefetch(e.target.checked)} />
+                  Re-download files already here
+                </label>
+                <p className="muted" style={{ marginTop: 8 }}>
+                  The repo is listed first, so a name already in <code>loras/</code> costs
+                  nothing and a repaste fetches only what is new. A private repo — including
+                  one you pushed from here — needs the token saved above. A repo holding more
+                  than twenty weights is refused with the count: name the file you want.
+                </p>
+                <Line p={hf} onCancel={() => void dl.cancel('hf', 'dl_hf')} />
+              </FoldRow>
+
+              <FoldRow id="src-local" label="This computer" open={isOpen('local', false)}
+                       onToggle={() => toggle('local', false)}
+                       state={importSent
+                         ? `${fmtBytes(importSent[0])} of ${fmtBytes(importSent[1])}`
+                         : typeof importNote === 'string' ? importNote : ''}>
+                {/* The native picker is behind a pill: an unstyled file input is
+                    the one control on this sheet that cannot lose its chrome. */}
+                <input ref={fileRef} type="file" accept=".safetensors" multiple hidden
+                       id="lora-files"
+                       onChange={(e) => {
+                         setImportNote(null)
+                         setImportFiles(Array.from(e.target.files ?? []))
+                       }} />
+                <div className="row">
+                  <button className="s" type="button" disabled={!!busy}
+                          onClick={() => fileRef.current?.click()}>
+                    Choose files…
+                  </button>
+                  <span className="grow muted" style={{ minWidth: 0, overflow: 'hidden',
+                                                        textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {importFiles.length
+                      ? `${importFiles.length} file${importFiles.length === 1 ? '' : 's'} · `
+                        + `${fmtBytes(importFiles.reduce((a, f) => a + f.size, 0))} · `
+                        + importFiles.map((f) => f.name).join(', ')
+                      : 'nothing chosen'}
+                  </span>
+                  <input id="local-folder" placeholder="folder (optional)" autoComplete="off"
+                         spellCheck={false} style={{ flex: '1 1 158px', minWidth: 96 }}
+                         title="Group the files under loras/{name}/ — for a matched pair that belongs together. Leave blank to drop them in loose."
+                         value={importFolder} onChange={(e) => setImportFolder(e.target.value)} />
+                  <button className="s" type="button" disabled={!!busy || !importFiles.length}
+                          onClick={() => void doImport()}>
+                    {busy === 'import' ? 'Importing…' : 'Import'}
+                  </button>
+                </div>
+                {importSent && (
+                  <div className="fam-prog" style={{ marginTop: 10 }}>
+                    <div className="bar" style={{ marginTop: 0 }}>
+                      <i style={{ width: `${importSent[1] ? importSent[0] / importSent[1] * 100 : 0}%` }} />
+                    </div>
+                    <p className="muted" style={{ margin: '7px 0 0' }}>
+                      Uploading · {fmtBytes(importSent[0])} of {fmtBytes(importSent[1])}
+                    </p>
                   </div>
                 )}
+                {typeof importNote === 'string'
+                  ? <p className="ok" style={{ marginTop: 8 }}>{importNote}</p>
+                  : <ErrorNote err={importNote} style={{ marginTop: 10 }} />}
+                <p className="muted" style={{ marginTop: 8 }}>
+                  Only <code>.safetensors</code>. A file with a name already in{' '}
+                  <code>loras/</code> replaces it.
+                </p>
+              </FoldRow>
+            </div>
+
+            <div className="card">
+              <ErrorNote err={loraError} style={{ marginBottom: 10 }} />
+              <div id="lora-list">
+                {loras.length ? loras.map((l) => {
+                  const first = l.files[0]
+                  const one = l.files.length === 1 && !!first
+                  const pushing = dl.progressOf(`push:${l.root}`)
+                  return (
+                    <div key={l.root}>
+                      <div className="lora-row">
+                        <div className="grow" style={{ minWidth: 0 }}>
+                          <b>{l.name}</b>
+                          {l.trigger_word ? <> <code>{l.trigger_word}</code></> : null}
+                          <div className="muted">
+                            {l.files.length} file{one ? '' : 's'} · {fmtBytes(l.bytes)}
+                            {l.catalogue ? ` · ${l.catalogue}` : ''}
+                          </div>
+                        </div>
+                        {/* Export: a plain link when there is one file, because a
+                            download is what a link already is; a fold onto the files
+                            when there are epochs, because a browser cannot save a
+                            folder and picking one is a choice worth seeing. */}
+                        {one ? (
+                          <a className="lora-act lora-export" href={loraFileUrl(first.path ?? '')}
+                             download={first.name} title="Download to this computer">
+                            <IconDownload />
+                          </a>
+                        ) : (
+                          <button className="lora-act lora-export" type="button"
+                                  aria-expanded={!!openFiles[l.root]}
+                                  title={`Download to this computer — ${l.files.length} files`}
+                                  onClick={() => setOpenFiles((o) => ({ ...o, [l.root]: !o[l.root] }))}>
+                            <IconDownload />
+                          </button>
+                        )}
+                        <button className="lora-act lora-push" type="button" disabled={dl.busy}
+                                title="Push to HuggingFace (private)"
+                                onClick={() => pushRow(l)}>
+                          <IconUpload />
+                        </button>
+                        {/* Unlinking the files and reloading the sheet leaves the row
+                            sitting there, still with a ✕ on it, for as long as both take
+                            — which reads as a delete that did not take, and the second
+                            press opens the confirm again for a LoRA already on its way
+                            out. The glyph carries it because `.lora-x` is a fixed
+                            square: there is no room in it for a word. */}
+                        <button className="lora-x" type="button" disabled={!!busy}
+                                title={busy === `lora:${l.root}` ? 'Deleting…' : 'Delete'}
+                                onClick={() => void removeLora(l)}>
+                          {busy === `lora:${l.root}` ? '…' : <IconClose />}
+                        </button>
+                      </div>
+                      {!one && openFiles[l.root] && (
+                        <div className="lora-files">
+                          {l.files.map((f) => (
+                            <div key={f.path ?? f.name}>
+                              <code className="grow">{f.name}</code>
+                              <a className="lora-act" href={loraFileUrl(f.path ?? '')}
+                                 download={f.name} title={`Download ${f.name}`}>
+                                <IconDownload />
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <Line p={pushing}
+                            onCancel={() => void dl.cancel(`push:${l.root}`, 'hf_push')} />
+                    </div>
+                  )
+                }) : (
+                  // The three ways in are the card above this one, so the empty
+                  // state points at them rather than saying "nothing here".
+                  <p className="muted" style={{ margin: '2px 0 0' }}>
+                    Nothing in <code>loras/</code> yet — train one, or bring one in above.
+                  </p>
+                )}
               </div>
-            )
-          })}
+            </div>
+          </Section>
+
+          {/* Captioners are menu rows, not catalogue entries: the weights pull
+              into the HF cache on first use rather than downloading here, so the
+              card offers add-by-repo instead of a Download button. */}
+          <Section id="sec-captions" name="Caption models" open={isOpen('captions', false)}
+                   onToggle={() => toggle('captions', false)}
+                   summary={`${captioners.length} in the menu`}>
+            <CaptionModels state={state} onReload={onReload} />
+          </Section>
+
+          <Section id="sec-checkpoints" name="Checkpoints"
+                   open={isOpen('checkpoints', missing.length > 0)}
+                   onToggle={() => toggle('checkpoints', missing.length > 0)}
+                   summary={missing.length
+                     ? `${missing.length} missing · ${missingGb.toFixed(1)} GB`
+                     : 'complete'}>
+            <div id="models">
+              {families.map((f) => {
+                const left = f.items.filter((m) => !m.present)
+                const size = left.reduce((a, m) => a + m.approx_gb, 0)
+                const id = `fam:${f.name}`
+                const open = openFams[f.name] ?? left.length > 0
+                return (
+                  <div className="fam" key={f.name}>
+                    <div className="fam-head">
+                      {/* The name is the toggle; the caret is what says so. A
+                          separate disclosure control beside the name would be two
+                          marks for one act. `.fam-dl` keeps its own button because
+                          a toggle and a 17 GB download must not share a target. */}
+                      <button className="t fam-toggle" type="button" aria-expanded={open}
+                              onClick={() => setOpenFams((o) => ({ ...o, [f.name]: !open }))}>
+                        <span className={`caret${open ? ' open' : ''}`} aria-hidden="true" />
+                        <b>{f.name}</b>
+                      </button>
+                      <span className="muted">
+                        {left.length ? `${left.length} missing · ${size.toFixed(1)} GB` : 'complete'}
+                      </span>
+                      {/* One short shows no button at all, because that is what its
+                          own Download already is. */}
+                      {/* A family is the unit you decide in — you want the stack or
+                          you do not — so this is the press that matters, and the
+                          per-file buttons below are the escape hatch. A quiet pill
+                          now rather than the screen's one `.b`: the mockup's call,
+                          and the white fill was drawing a purchase decision louder
+                          than the canvas draws Generate. */}
+                      {left.length > 1 && (
+                        <button className="s fam-dl" type="button" disabled={dl.busy}
+                                onClick={() => void dl.begin(id, id, `${f.name} downloaded.`,
+                                  () => downloadFamily(f.name, token), onReload)}>
+                          Download all {left.length}
+                        </button>
+                      )}
+                    </div>
+                    <Line p={dl.progressOf(id)} bar onCancel={() => void dl.cancel(id, id)} />
+
+                    {/* One card per family, rows inside — the LoRA list's own
+                        shape, and the caption menu's. Twenty sibling cards made
+                        the catalogue a wall of frames where the reading unit is
+                        the family; a hairline per row is the same information at
+                        a third of the chrome. */}
+                    {open && (
+                      <div className="card">
+                        {f.items.map((m) => {
+                          const p = dl.progressOf(m.key)
+                          return (
+                            <div className="mrow" key={m.key}>
+                              <div className="grow" style={{ minWidth: 0 }}>
+                                <b>{m.label}</b> <span className="muted">{m.note}</span>
+                                {m.gated && <span className="warn" style={{ fontSize: 12 }}> · gated</span>}
+                                <div className="muted" style={{ marginTop: 3 }}><code>{m.repo_id}</code></div>
+                              </div>
+                              <div style={{ textAlign: 'right' }}>
+                                {m.present ? (
+                                  <span className="ok">✓ {m.size_gb} GB</span>
+                                ) : (
+                                  <span className="row" style={{ gap: 12, justifyContent: 'flex-end' }}>
+                                    <span className="muted" style={{ whiteSpace: 'nowrap' }}>
+                                      {m.approx_gb} GB
+                                    </span>
+                                    {/* The size is the label, so the button can be a
+                                        mark — a control whose value is beside it, in
+                                        the row you are already reading. Cancel takes
+                                        the slot while the pull runs: two controls in
+                                        one place would be an invitation to press the
+                                        dead one. */}
+                                    {p.running ? (
+                                      <button className="s" type="button"
+                                              onClick={() => void dl.cancel(m.key, `dl_${m.key}`)}>
+                                        Cancel
+                                      </button>
+                                    ) : (
+                                      <button className="icx" type="button" disabled={dl.busy}
+                                              title={`Download ${m.approx_gb} GB`}
+                                              onClick={() => void dl.begin(m.key, `dl_${m.key}`, 'Done',
+                                                () => startDownload(m.key), onReload)}>
+                                        <IconDownload />
+                                      </button>
+                                    )}
+                                  </span>
+                                )}
+                                {p.tone === 'err' ? (
+                                  // Left-aligned and capped by hand: this column is
+                                  // `text-align:right` and sized by its own content, so an
+                                  // err-box dropped into it would right-align a traceback and
+                                  // stretch the card until the label beside it wrapped a word
+                                  // per line.
+                                  <ErrorNote err={{ error: p.message, detail: p.detail }}
+                                             style={{ textAlign: 'left', maxWidth: 280, margin: '8px 0 0' }} />
+                                ) : (
+                                  <div className={`muted dl-state${p.tone === 'ok' ? ' ok' : ''}`}>
+                                    {p.message}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </Section>
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * A section of the sheet: a name that folds, and a summary that stays.
+ *
+ * The summary is the part that must survive the fold — the LoRA total, the
+ * missing gigabytes, the size of the caption menu — so nothing a glance was
+ * answering goes behind the click. Same handle as a family's, because a
+ * section head and a family head are the same gesture at two depths.
+ */
+function Section({ id, name, summary, open, onToggle, children }: {
+  id: string
+  name: string
+  summary: ReactNode
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className={`sec${open ? '' : ' shut'}`} id={id}>
+      <div className="sec-head">
+        <button className="t fam-toggle" type="button" aria-expanded={open} onClick={onToggle}>
+          <span className={`caret${open ? ' open' : ''}`} aria-hidden="true" />
+          <b>{name}</b>
+        </button>
+        <span className="muted">{summary}</span>
+      </div>
+      {open && children}
+    </div>
+  )
+}
+
+/**
+ * A row inside a card that is a form once pressed.
+ *
+ * `state` is its last word while folded — a transfer's rate, a result, the
+ * token's saved-or-not — because a source that is quietly moving 2 GB must
+ * not look idle just because its form is closed.
+ */
+function FoldRow({ id, label, state, open, onToggle, children }: {
+  id: string
+  label: string
+  state?: ReactNode
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <>
+      <button className="fold-row" id={id} type="button" aria-expanded={open} onClick={onToggle}>
+        <span className={`caret${open ? ' open' : ''}`} aria-hidden="true" />
+        {label}
+        <span className="muted">{state}</span>
+      </button>
+      {open && <div className="fold-body">{children}</div>}
+    </>
   )
 }
 
@@ -460,7 +764,6 @@ function CaptionModels({ state, onReload }: {
 
   return (
     <div className="card" id="caption-models">
-      <label>Caption models</label>
       {models.map((m) => (
         <div className="lora-row" key={m.key}>
           <div className="grow" style={{ minWidth: 0 }}>

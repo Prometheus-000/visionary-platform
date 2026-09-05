@@ -730,11 +730,12 @@ export function App() {
             <IconPanel />
           </button>
         )}
-        {/* "Models", not "Settings": the sheet holds weights — checkpoints,
-            LoRAs, caption models — plus the GPU and token that serve them.
-            There is no setting in it. The id stays `t-settings` because
+        {/* "Settings" again, as of the Runtime group: the sheet is the GPU
+            and the container choice under one heading and the weights —
+            LoRAs, caption models, checkpoints — under another, and "Models"
+            was naming half of it. The id was always `t-settings`;
             check_settings.py reaches the sheet through it. */}
-        <button className="ico" id="t-settings" title="Models" type="button"
+        <button className="ico" id="t-settings" title="Settings" type="button"
                 onClick={() => { setSettingsOpen(true); void reloadState() }}>
           <IconCube />
         </button>

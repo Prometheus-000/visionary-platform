@@ -493,6 +493,11 @@ for _m in STATE["video_models"]:
 # DATASETS above and for the same reason: this flow is judged by what the card
 # does over several polls, and a fixed reply cannot show a transfer moving.
 GDRIVE = {"mode": "ok", "folder": "", "polls": 0}
+# The HuggingFace pull and the push, same three modes as Drive and driven the
+# same way — a word in the repo field picks the state, so the folded row's
+# summary, the bar-less progress line and the failure box are all reachable.
+HFPULL = {"mode": "ok", "folder": "", "polls": 0, "file": ""}
+HFPUSH = {"polls": 0, "repo": "", "n": 1}
 _COLD = {"n": 0}
 # What the config Dict holds in production: presets saved from the captioner
 # row and captioners added under the gear. In memory so the preview can
@@ -1289,6 +1294,84 @@ class Handler(BaseHTTPRequestHandler):
         #   ...error   -> the job fails
         #   ...slow    -> stays running, so the progress line can be watched
         #   anything else -> completes with two files and one skipped
+        if path == "/api/loras/hf":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            repo = str(p.get("repo") or "")
+            folder = str(p.get("folder") or "")
+            if not repo:
+                return self.reply({"error": "Paste a HuggingFace repo — `owner/repo` — or "
+                                            "a link to a file in one."})
+            if folder and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", folder):
+                return self.reply({
+                    "error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."})
+            HFPULL.update(mode=("error" if "error" in repo else "slow" if "slow" in repo
+                                else "ok"), folder=folder, polls=0,
+                          file=str(p.get("filename") or ""))
+            return self.reply({"ok": True, "job_id": "dl_hf"})
+
+        if path == "/api/loras/push":
+            try:
+                p = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                p = {}
+            root = str(p.get("path") or "")
+            row = next((l for l in STATE["loras"] if l["root"] == root), None)
+            if not row:
+                return self.reply({"error": f"Not a LoRA: {root!r}"})
+            repo = str(p.get("repo") or "")
+            if not repo:
+                return self.reply({"error": "Repo id must be `name` or `owner/name`."})
+            if not STATE.get("hf_token_set"):
+                return self.reply({"error": "No HuggingFace token saved."})
+            HFPUSH.update(polls=0, n=len(row["files"]),
+                          repo=repo if "/" in repo else f"you/{repo}")
+            return self.reply({"ok": True, "job_id": "hf_push"})
+
+        # Multipart, like /api/upload: the boundary is parsed only far enough to
+        # count the .safetensors parts and read the folder, and a row per file
+        # joins STATE so the list redraws with what was imported.
+        if path == "/api/loras/upload":
+            ctype = self.headers.get("Content-Type") or ""
+            m_b = re.search(r"boundary=([^;]+)", ctype)
+            names, folder = [], ""
+            if m_b:
+                for part in body.split(b"--" + m_b.group(1).strip().encode()):
+                    head, _, rest = part.partition(b"\r\n\r\n")
+                    h = head.decode("latin-1")
+                    fn = re.search(r'filename="([^"]*)"', h)
+                    if fn:
+                        names.append(fn.group(1).rsplit("/", 1)[-1])
+                    elif 'name="folder"' in h:
+                        folder = rest.rstrip(b"\r\n-").decode().strip()
+            weights = [n for n in names if n.lower().endswith(".safetensors")]
+            skipped = [n for n in names if n not in weights]
+            if not weights:
+                return self.reply({"error": "No .safetensors in the upload"
+                                   + (f" — got {', '.join(skipped[:6])}." if skipped else ".")},
+                                  code=400)
+            where = f"/workspace/loras/{folder}" if folder else "/workspace/loras"
+            if folder:
+                STATE["loras"].append({
+                    "name": folder, "trigger_word": "", "strength": None,
+                    "path": f"{where}/{weights[0]}", "root": where,
+                    "bytes": 300_000_000 * len(weights), "catalogue": "", "arch": "",
+                    "files": [{"path": f"{where}/{n}", "name": n} for n in weights]})
+            else:
+                for n in weights:
+                    stem = n.rsplit(".", 1)[0]
+                    STATE["loras"] = [l for l in STATE["loras"] if l["root"] != f"{where}/{n}"]
+                    STATE["loras"].append({
+                        "name": stem, "trigger_word": "", "strength": None,
+                        "path": f"{where}/{n}", "root": f"{where}/{n}",
+                        "bytes": 300_000_000, "catalogue": "", "arch": "",
+                        "files": [{"path": f"{where}/{n}", "name": n}]})
+            STATE["loras"].sort(key=lambda l: l["name"].lower())
+            return self.reply({"ok": True, "files": weights, "skipped": skipped,
+                               "folder": folder, "bytes": 300_000_000 * len(weights)})
+
         if path == "/api/gdrive":
             try:
                 body_json = json.loads(body or b"{}")
@@ -1800,6 +1883,40 @@ class Handler(BaseHTTPRequestHandler):
                 "files": ["export_scene.mp4"], "takes": EXPORT["takes"],
                 "bytes": 18_400_000, "reencoded": False})
 
+        if path == "/api/status/dl_hf":
+            HFPULL["polls"] += 1
+            if HFPULL["mode"] == "error":
+                return self.reply({"status": "failed", "error":
+                    "Repo someone/error-lora not found — a private repo needs the "
+                    "HuggingFace token saved."})
+            if HFPULL["mode"] == "slow" or HFPULL["polls"] < 2:
+                gb = HFPULL["polls"] * 0.3
+                return self.reply({"status": "running", "mb_s": 212.6,
+                                   "phase": f"HuggingFace · 1 of 2 · lora.safetensors · {gb:.1f} GB",
+                                   "downloaded_gb": gb})
+            files = [HFPULL["file"] or "lora.safetensors"]
+            return self.reply({
+                "status": "completed", "percent": 100, "size_gb": 0.31,
+                "files": files, "already": [] if HFPULL["file"] else ["lora-000010.safetensors"],
+                "skipped": ["README.md"], "folder": HFPULL["folder"],
+                "note": "" if HFPULL["file"] else "1 new · 1 already in loras/",
+            })
+
+        if path == "/api/status/hf_push":
+            HFPUSH["polls"] += 1
+            n = HFPUSH["n"]
+            if HFPUSH["polls"] <= n:
+                i = HFPUSH["polls"]
+                el = i * 3
+                return self.reply({"status": "running", "percent": round((i - 1) / n * 100),
+                                   "phase": f"Uploading {i} of {n} · epoch.safetensors · "
+                                            f"0.61 GB · 0m{el:02d}s"})
+            return self.reply({
+                "status": "completed", "percent": 100, "repo": HFPUSH["repo"],
+                "url": f"https://huggingface.co/{HFPUSH['repo']}",
+                "note": f"Pushed {n} file{'' if n == 1 else 's'} to {HFPUSH['repo']} (private).",
+            })
+
         if path == "/api/status/dl_gdrive":
             GDRIVE["polls"] += 1
             if GDRIVE["mode"] == "error":
@@ -2048,6 +2165,21 @@ class Handler(BaseHTTPRequestHandler):
                             note="Installed. Restart the engine to load it "
                                  "into a warm generator.")
             return self.reply(done)
+
+        # Export. A handful of bytes under the real headers, so the row's ⤓ is a
+        # download in the preview too rather than a 404 that looks like a bug.
+        if path.startswith("/api/loras/file/"):
+            name = path.rsplit("/", 1)[-1]
+            if not name.lower().endswith(".safetensors"):
+                return self.reply({"error": "Not a LoRA file."}, code=400)
+            body_bytes = b"\x08\x00\x00\x00\x00\x00\x00\x00{}" + b"\0" * 64
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+            return
 
         if path.startswith("/api/status/"):
             return self.reply({

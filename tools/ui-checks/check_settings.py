@@ -27,6 +27,14 @@ worth pinning are the ones whose failure costs bandwidth or a file:
     request lands on would be the exact silent sharing the backend rule bans.
   * The LoRA total, because it is the one number that says what the volume is
     actually holding.
+  * **The three ways in fold to one row each at rest**, and every LoRA row
+    carries the way back out — export and push beside delete. A source that
+    unfolds itself is nine inputs where the card promised three names, and a
+    row missing a mark is a LoRA that can only leave by being deleted.
+  * **Checkpoints fold once complete and stand open while anything is
+    missing**, because a fresh install has to see the catalogue without being
+    told it exists. The stub is missing weights, so the check opens it only if
+    the page folded it — which is the fault, not the fixture.
 """
 import re
 import sys
@@ -58,6 +66,21 @@ READ = """
     families: fams,
     loraRows: document.querySelectorAll('#lora-list .lora-row').length,
     loraTotal: document.querySelector('#lora-total')?.textContent?.trim(),
+    // Every row: one export, one push, one delete.
+    loraMarks: [...document.querySelectorAll('#lora-list .lora-row')].map(r => [
+      r.querySelectorAll('.lora-export').length,
+      r.querySelectorAll('.lora-push').length,
+      r.querySelectorAll('.lora-x').length].join('')),
+    // The source rows, and whether any of them opened on its own.
+    sources: [...document.querySelectorAll('#lora-sources .fold-row')].map(b => ({
+      label: b.textContent.replace(b.querySelector('.muted')?.textContent || '', '').trim(),
+      open: b.getAttribute('aria-expanded') === 'true',
+    })),
+    tokenFolded: document.querySelector('#tok') === null
+      && !!document.querySelector('#tok-row'),
+    title: document.querySelector('#settings h1')?.textContent?.trim(),
+    checkpointsOpen: document.querySelector('#sec-checkpoints .fam-toggle')
+      ?.getAttribute('aria-expanded') === 'true',
     gpuImage: [...document.querySelectorAll('#g-gpu option')].map(o => o.textContent.trim()),
     gpuVideo: [...document.querySelectorAll('#v-gpu option')].map(o => o.textContent.trim()),
     gpuBoth: [...document.querySelectorAll('#b-gpu option')].map(o => o.textContent.trim()),
@@ -89,9 +112,18 @@ with sync_playwright() as pw:
 
     print(f"\n=== {URL} ===")
     pg.evaluate("() => document.querySelector('#t-settings').click()")
-    pg.wait_for_selector("#models .fam", timeout=15_000)
+    pg.wait_for_selector("#sec-checkpoints", timeout=15_000)
     pg.wait_for_timeout(400)
     d = pg.evaluate(READ)
+
+    check("the sheet is Settings", d["title"] == "Settings", str(d["title"]))
+    # The stub is missing weights, so a folded catalogue is the page getting
+    # the default wrong. Opened anyway so the family checks below still run.
+    check("checkpoints stand open while weights are missing", d["checkpointsOpen"])
+    if not d["checkpointsOpen"]:
+        pg.evaluate("() => document.querySelector('#sec-checkpoints .fam-toggle').click()")
+        pg.wait_for_timeout(200)
+        d = pg.evaluate(READ)
 
     check("families are grouped", len(d["families"]) > 0, f"{len(d['families'])} families")
     for f in d["families"]:
@@ -162,6 +194,23 @@ with sync_playwright() as pw:
           f"{d['loraRows']} rows · {total}")
     check("sizes are decimal GB to two places (or whole MB)",
           bool(re.fullmatch(r"\d+\.\d{2} GB|\d+ MB", size)), repr(size))
+
+    # Three sources, all folded, and the token with them.
+    labels = [x["label"] for x in d["sources"]]
+    check("three ways in", labels == ["Google Drive", "HuggingFace", "This computer"],
+          str(labels))
+    check("sources fold to one row each at rest", not any(x["open"] for x in d["sources"]),
+          str(d["sources"]))
+    check("the token folds to its state", d["tokenFolded"])
+    check("every LoRA row has export, push and delete",
+          d["loraRows"] > 0 and all(m == "111" for m in d["loraMarks"]), str(d["loraMarks"]))
+    # Pressing a source opens its form and nothing else's.
+    pg.evaluate("() => document.querySelector('#src-hf').click()")
+    pg.wait_for_timeout(150)
+    d4 = pg.evaluate(READ)
+    check("HuggingFace opens on its own",
+          [x["open"] for x in d4["sources"]] == [False, True, False]
+          and pg.is_visible("#hf-repo"), str(d4["sources"]))
 
     if errors:
         check("no page errors", False, str(errors[:2]))

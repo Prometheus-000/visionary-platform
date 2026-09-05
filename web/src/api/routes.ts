@@ -87,6 +87,55 @@ export const startGdrive = (url: string, folder?: string, refetch?: boolean) =>
  * run depending on path depth is the thing that guard exists to prevent.
  */
 export const deleteLora = (path: string) => post<{ ok?: boolean }>('/api/loras/delete', { path })
+/** A LoRA off HuggingFace: `owner/repo`, or a link to the repo or to one
+ *  file in it. The job lists the repo before it fetches, so a repaste after
+ *  two more epochs were pushed costs the two epochs. `filename` narrows a repo
+ *  to one file; without it every .safetensors comes, up to the job's cap. */
+export const startHfLora = (repo: string, filename?: string, folder?: string,
+                            refetch?: boolean) =>
+  post<DownloadStart>('/api/loras/hf', { repo, filename, folder, refetch })
+/** Push one LoRA — the same unit `deleteLora` takes — to a private repo under
+ *  the saved token's account. A bare `name` lands as `{you}/name`. */
+export const pushLora = (path: string, repo: string) =>
+  post<DownloadStart>('/api/loras/push', { path, repo })
+/** From this computer. Multipart, like `upload`, but over XHR rather than
+ *  fetch, because fetch has no upload progress and a LoRA is 300 MB to 2 GB:
+ *  a still "Importing…" for the length of that is the wait this project does
+ *  not ship. `onProgress` gets bytes sent and total. `folder` groups the files
+ *  under `loras/{folder}/` as versions of one LoRA; blank drops them in loose,
+ *  the Drive rule. */
+export type LoraUpload = { ok?: boolean; files?: string[]; skipped?: string[]; bytes?: number }
+export const uploadLoras = (files: File[], folder: string | undefined,
+                            onProgress: (sent: number, total: number) => void) =>
+  new Promise<Res<LoraUpload>>((resolve) => {
+    const form = new FormData()
+    for (const f of files) form.append('files', f)
+    if (folder) form.append('folder', folder)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/loras/upload')
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total) }
+    xhr.onload = () => {
+      try {
+        resolve(JSON.parse(xhr.responseText) as LoraUpload)
+      } catch {
+        resolve({ error: `Import failed (${xhr.status}) — the server did not answer with JSON.`,
+                  detail: xhr.responseText.trim() || undefined })
+      }
+    }
+    // The same sentence `api()` gives a fetch that never connected, for the same
+    // three causes it cannot tell apart.
+    xhr.onerror = () => resolve({
+      error: 'Could not reach the server — check that it is running, then try again.' })
+    xhr.send(form)
+  })
+/** Where one LoRA file downloads from. The route takes the path under
+ *  `loras/`, which is derived here by splitting on `/loras/` rather than
+ *  joined from labels — the layout allows any nesting under a folder, and the
+ *  server's own LoRA index derives `rel` the same way. */
+export const loraFileUrl = (path: string) => {
+  const rel = path.split('/loras/').slice(1).join('/loras/')
+  return `/api/loras/file/${rel.split('/').map(seg).join('/')}`
+}
 
 /* ---- session --------------------------------------------------------- */
 

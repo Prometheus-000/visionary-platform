@@ -3261,6 +3261,322 @@ def gdrive_job(url: str, folder: str, refetch: bool = False) -> dict[str, Any]:
     return res
 
 
+HF_LORA_JOB = "dl_hf"
+HF_PUSH_JOB = "hf_push"
+# HuggingFace's own rule for a repo id, with the owner optional because a bare
+# name is pushed under the token's account. Dots are allowed mid-name and
+# refused at either end, which is where `.git` and `..` would sit.
+HF_REPO_RE = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,95}/)?"
+                        r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,94}[A-Za-z0-9])?$")
+# More than this many .safetensors in a repo with no file named is not a LoRA,
+# it is somebody's whole collection — and pulling it lands forty files in the
+# picker for the one that was wanted. Capped rather than fetched, with the
+# count in the sentence, so the fix is one paste of the file's own link.
+HF_LORA_MAX_FILES = 20
+
+
+def _hf_ref(raw: str) -> tuple[str, str]:
+    """
+    `(owner/repo, filename)` out of whatever was pasted.
+
+    A repo id, a link to the repo, or a link to one file inside it — the
+    `blob/` and `resolve/` forms both — because the thing somebody sends you
+    is the URL in their browser bar, and asking them to take it apart into
+    two fields is the machine asking the human to do its parsing.
+    """
+    from urllib.parse import unquote
+
+    s = raw.strip()
+    # Scheme optional: a link copied out of a chat often arrives without one.
+    s = re.sub(r"^(?:https?://)?(?:www\.)?(?:huggingface\.co|hf\.co)/", "", s)
+    s = s.strip("/")
+    m = re.match(r"^([^/\s]+/[^/\s]+?)(?:/(?:blob|resolve)/[^/]+/(.+))?$", s)
+    if not s or not m:
+        raise ValueError("Paste a HuggingFace repo — `owner/repo` — or a link to a "
+                         "file in one.")
+    repo, filename = m.group(1), unquote(m.group(2) or "")
+    if not HF_REPO_RE.match(repo):
+        raise ValueError(f"Not a HuggingFace repo id: {repo!r}")
+    return repo, filename
+
+
+@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+def hf_lora_job(repo: str, filename: str, folder: str, refetch: bool = False) -> dict[str, Any]:
+    """
+    Pull one file or a repo's weights off HuggingFace into loras/.
+
+    The Drive job with the listing swapped: `list_repo_files` is a metadata
+    call that answers with every path in the repo, so the plan — what is
+    already here, what has to cross the wire, what is not a weight — is known
+    before a byte moves, and a repaste after two more epochs were pushed costs
+    the two epochs. Staged then landed for the reason `gdrive_job` gives.
+
+    The token rides along when there is one, which is what makes a private
+    repo — including the one `hf_push_job` writes — pullable from here.
+    """
+    import threading
+
+    from huggingface_hub import HfApi, hf_hub_download
+    from huggingface_hub.utils import (
+        EntryNotFoundError, GatedRepoError, RepositoryNotFoundError,
+    )
+
+    job_id = HF_LORA_JOB
+    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
+                    "stop": False, "beat": time.time()}
+
+    def fail(err: str) -> dict[str, Any]:
+        _publish(job_id, status="failed", error=err)
+        return {"status": "failed", "error": err}
+
+    if folder and not NAME_RE.match(folder):
+        return fail(f"Folder name must be 1-64 chars of [A-Za-z0-9_-]: {folder!r}")
+
+    token = _hf_token()
+    _reload_volume()
+    dest_dir = (LORAS / folder) if folder else LORAS
+    present = ({p.name for p in dest_dir.iterdir()
+                if p.is_file() and p.suffix.lower() == ".safetensors"}
+               if dest_dir.exists() else set())
+
+    # The three answers a repo gives that are not weather, named the way
+    # `_download_weight` names them — and the fourth, the wrong filename,
+    # which there is a whole listing to check against here.
+    def fatal(exc: Exception) -> str:
+        if isinstance(exc, GatedRepoError):
+            return (f"Access to {repo} was refused. Accept its licence at "
+                    f"https://huggingface.co/{repo} with the account that issued the "
+                    "saved token" + ("" if token else " — and there is no token saved."))
+        if isinstance(exc, RepositoryNotFoundError):
+            return (f"Repo {repo} not found" + (", or the token cannot see it."
+                    if token else " — a private repo needs the HuggingFace token saved."))
+        if isinstance(exc, EntryNotFoundError):
+            return f"{filename} is missing from {repo}."
+        return f"{type(exc).__name__}: {exc}"
+
+    _publish(job_id, phase=f"Listing {repo}")
+    try:
+        listing = HfApi(token=token).list_repo_files(repo)
+    except Exception as exc:
+        return fail(fatal(exc))
+    weights = sorted(p for p in listing if p.lower().endswith(".safetensors"))
+    if filename:
+        if filename not in listing:
+            near = [p for p in weights if Path(p).name == Path(filename).name]
+            return fail(f"{filename} is not in {repo}."
+                        + (f" Did you mean {near[0]}?" if near else
+                           f" It holds {len(weights)} .safetensors file"
+                           f"{'' if len(weights) == 1 else 's'}."))
+        weights = [filename]
+    elif not weights:
+        return fail(f"{repo} has no .safetensors in it"
+                    + (f" — it holds {', '.join(Path(p).name for p in listing[:6])}."
+                       if listing else "."))
+    elif len(weights) > HF_LORA_MAX_FILES:
+        return fail(f"{repo} holds {len(weights)} .safetensors files, which is a "
+                    "collection rather than a LoRA. Paste the link to the one you want, "
+                    "or name it in the file field.")
+
+    todo = [p for p in weights if refetch or Path(p).name not in present]
+    already = [] if refetch else [Path(p).name for p in weights if Path(p).name in present]
+    skipped = [Path(p).name for p in listing if p not in weights]
+    where = f"loras/{folder}/" if folder else "loras/"
+    if not todo:
+        res = {"status": "completed", "percent": 100, "files": [], "already": already,
+               "skipped": skipped, "folder": folder,
+               "note": f"Nothing new — {len(already)} already in {where}"}
+        _publish(job_id, **res)
+        return res
+
+    stage = WORK / f"hf-{int(time.time())}"
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    print(f"[hf] {repo} -> {where} · {len(todo)} to fetch"
+          + (f", {len(already)} already there" if already else ""))
+
+    result: dict[str, Any] = {}
+    done = threading.Event()
+    live: dict[str, Any] = {"note": "", "got": []}
+
+    def pull() -> None:
+        try:
+            for i, p in enumerate(todo, 1):
+                # Between files, like the Drive queue — the only point where a
+                # stop costs nothing already paid for.
+                if _stop_requested(job_id):
+                    break
+                live["note"] = f"{i} of {len(todo)} · {Path(p).name}"
+                got = hf_hub_download(repo_id=repo, filename=p, local_dir=str(stage),
+                                      token=token)
+                live["got"].append(Path(got))
+        except Exception as exc:
+            result["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=pull, daemon=True).start()
+    state = _watch_download(stage, "HuggingFace", job_id, done,
+                            note=lambda: str(live["note"]))
+
+    if state.get("stopped") or _stop_requested(job_id):
+        landed = _land_weights(live["got"], dest_dir)
+        shutil.rmtree(stage, ignore_errors=True)
+        if landed:
+            volume.commit()
+        rest = [Path(p).name for p in todo]
+        res = {"status": "stopped", "downloaded": landed,
+               "remaining": [n for n in rest if n not in set(landed)]}
+        _publish(job_id, **res)
+        return res
+
+    if state["stalled"]:
+        shutil.rmtree(stage, ignore_errors=True)
+        return fail(f"Stalled at {state['bytes'] / 1e9:.2f} GB with no new bytes for "
+                    f"{DOWNLOAD_STALL_S}s — press Download again; a file already landed "
+                    "is not fetched twice.")
+
+    if result.get("error") is not None:
+        landed = _land_weights(live["got"], dest_dir)
+        shutil.rmtree(stage, ignore_errors=True)
+        if landed:
+            volume.commit()
+        return fail(fatal(result["error"])
+                    + (f" {len(landed)} file{'' if len(landed) == 1 else 's'} before it "
+                       f"landed in {where}." if landed else ""))
+
+    landed = _land_weights(live["got"], dest_dir)
+    shutil.rmtree(stage, ignore_errors=True)
+    volume.commit()
+    res: dict[str, Any] = {
+        "status": "completed", "percent": 100,
+        "files": landed, "already": already, "skipped": skipped, "folder": folder,
+        "size_gb": round(sum((dest_dir / n).stat().st_size for n in landed) / 1e9, 2),
+        "duration_s": round(time.time() - started, 1),
+    }
+    if already:
+        res["note"] = f"{len(landed)} new · {len(already)} already in {where}"
+    _publish(job_id, **res)
+    print(f"[hf] {len(landed)} file(s), {res['size_gb']} GB in {res['duration_s']}s")
+    return res
+
+
+@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+def hf_push_job(root: str, repo: str) -> dict[str, Any]:
+    """
+    Push one LoRA to a private HuggingFace repo, creating it if it is new.
+
+    A file per commit rather than one `upload_folder`, because a commit
+    boundary is a stop point and a progress line — twenty epochs as one
+    opaque upload is the still button this project does not ship. Private
+    always: this is your own instrument going to your own shelf, and a repo
+    made public is a decision to take on huggingface.co, not a default here.
+
+    No byte-level progress, because the hub client offers none: what moves is
+    the file count and the clock, and both are on the line.
+    """
+    import threading
+
+    from huggingface_hub import HfApi
+    from huggingface_hub.utils import HfHubHTTPError
+
+    job_id = HF_PUSH_JOB
+    jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
+                    "stop": False, "beat": time.time()}
+
+    def fail(err: str) -> dict[str, Any]:
+        _publish(job_id, status="failed", error=err)
+        return {"status": "failed", "error": err}
+
+    token = _hf_token()
+    if not token:
+        return fail("No HuggingFace token saved — a push needs one with write access.")
+    _reload_volume()
+    path = Path(root).resolve()
+    if path.parent != LORAS.resolve():
+        return fail(f"Not a LoRA: {root!r}")
+    if path.is_dir():
+        files = sorted(p for p in path.rglob("*") if p.is_file()
+                       and p.suffix.lower() == ".safetensors")
+    elif path.is_file():
+        files = [path]
+    else:
+        return fail(f"No LoRA named {path.name!r} on the volume — reopen Settings to "
+                    "refresh the list.")
+    if not files:
+        return fail(f"{path.name} holds no .safetensors to push.")
+
+    api = HfApi(token=token)
+    try:
+        if "/" not in repo:
+            repo = f"{api.whoami()['name']}/{repo}"
+        _publish(job_id, phase=f"Creating {repo} (private)")
+        api.create_repo(repo, private=True, exist_ok=True)
+    except HfHubHTTPError as exc:
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        if code in (401, 403):
+            return fail(f"HuggingFace refused the token for {repo} ({code}) — a push "
+                        "needs a token with write access, made at "
+                        "huggingface.co/settings/tokens.")
+        return fail(f"Could not create {repo}: {exc}")
+    except Exception as exc:
+        return fail(f"{type(exc).__name__}: {exc}")
+
+    total = sum(f.stat().st_size for f in files)
+    started = time.time()
+    pushed: list[str] = []
+    print(f"[hf push] {path.name} -> {repo} · {len(files)} file(s), {total / 1e9:.2f} GB")
+    for i, f in enumerate(files, 1):
+        if _stop_requested(job_id):
+            res = {"status": "stopped", "downloaded": pushed,
+                   "remaining": [x.name for x in files if x.name not in pushed],
+                   "repo": repo}
+            _publish(job_id, **res)
+            return res
+        in_repo = f.relative_to(path).as_posix() if path.is_dir() else f.name
+        size_gb = f.stat().st_size / 1e9
+        # The upload in a worker and the clock on this thread, the download
+        # pattern: `upload_file` blocks with no callback, and a line that does
+        # not change for the length of a 1 GB transfer reads as stuck.
+        result: dict[str, Any] = {}
+        done = threading.Event()
+
+        def push(sink: dict[str, Any], flag: "threading.Event", src: Path, dst: str) -> None:
+            try:
+                api.upload_file(path_or_fileobj=str(src), path_in_repo=dst, repo_id=repo,
+                                commit_message=f"Add {dst}")
+            except Exception as exc:
+                sink["error"] = exc
+            finally:
+                flag.set()
+
+        threading.Thread(target=push, args=(result, done, f, in_repo), daemon=True).start()
+        t0 = time.time()
+        while not done.wait(5):
+            el = int(time.time() - t0)
+            _publish(job_id, percent=round((i - 1) / len(files) * 100),
+                     phase=f"Uploading {i} of {len(files)} · {f.name} · "
+                           f"{size_gb:.2f} GB · {el // 60}m{el % 60:02d}s")
+        if result.get("error") is not None:
+            exc = result["error"]
+            return fail(f"{type(exc).__name__}: {exc}"
+                        + (f" — {len(pushed)} of {len(files)} pushed to {repo} before it;"
+                           " press Push again and the hub skips the bytes it already has."
+                           if pushed else ""))
+        pushed.append(f.name)
+
+    res = {
+        "status": "completed", "percent": 100, "files": pushed, "repo": repo,
+        "url": f"https://huggingface.co/{repo}",
+        "size_gb": round(total / 1e9, 2), "duration_s": round(time.time() - started, 1),
+        "note": f"Pushed {len(pushed)} file{'' if len(pushed) == 1 else 's'} to "
+                f"{repo} (private).",
+    }
+    _publish(job_id, **res)
+    print(f"[hf push] done in {res['duration_s']}s")
+    return res
+
+
 # --------------------------------------------------------------------------
 # Captioning
 # --------------------------------------------------------------------------
@@ -13063,6 +13379,133 @@ def web():
             return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
         gdrive_job.spawn(url, folder, bool(payload.get("refetch")))
         return {"ok": True, "job_id": GDRIVE_JOB}
+
+    @api.post("/api/loras/hf")
+    def hf_lora(payload: dict) -> dict[str, Any]:
+        """
+        Queue a HuggingFace pull into loras/.
+
+        The same route shape as Drive, for the same reason the card has the
+        same shape: another place weights come from, not another kind of
+        thing. What is rejected here is what a form can know — an empty box,
+        a reference that is not a repo, a malformed folder name. Whether the
+        repo exists, is gated, or holds forty files is the job's to find out,
+        and it names each of those separately.
+        """
+        try:
+            repo, filename = _hf_ref(str(payload.get("repo") or ""))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        # A filename typed into its own field beats one parsed off the link,
+        # because the field is the one the user can see.
+        filename = str(payload.get("filename") or "").strip() or filename
+        folder = str(payload.get("folder") or "").strip()
+        if folder and not NAME_RE.match(folder):
+            return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
+        hf_lora_job.spawn(repo, filename, folder, bool(payload.get("refetch")))
+        return {"ok": True, "job_id": HF_LORA_JOB}
+
+    @api.post("/api/loras/push")
+    def push_lora(payload: dict) -> dict[str, Any]:
+        """
+        Push one LoRA — the row `state()` lists — to a private HuggingFace repo.
+
+        Guarded like delete: the unit is a folder or a loose file directly
+        under loras/, never an epoch inside a folder. The token is checked
+        here because it is the one precondition a form can see, and a
+        container started to discover there is no token is a container
+        started for nothing.
+        """
+        raw = str(payload.get("path") or "")
+        root = Path(raw).resolve()
+        if not raw or root.parent != LORAS.resolve():
+            return {"error": f"Not a LoRA: {raw!r}"}
+        repo = str(payload.get("repo") or "").strip()
+        if not HF_REPO_RE.match(repo):
+            return {"error": "Repo id must be `name` or `owner/name` — letters, digits, "
+                             "`-`, `_` and `.`."}
+        if not _hf_token():
+            return {"error": "No HuggingFace token saved. Paste one under HuggingFace "
+                             "token — a push writes to your account, so it needs a "
+                             "token with write access."}
+        hf_push_job.spawn(str(root), repo)
+        return {"ok": True, "job_id": HF_PUSH_JOB}
+
+    @api.post("/api/loras/upload")
+    async def upload_lora(request: Request) -> JSONResponse:
+        """
+        A LoRA from this computer, into loras/.
+
+        Staged then moved, the Drive rule: the picker globs loras/ live, so a
+        file written straight there is offered while it is half a file.
+        `async`, like `/api/upload`, because it awaits the multipart stream —
+        and `.aio()` on the commit for the reason that handler gives.
+        """
+        try:
+            form = await request.form()
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, 400)
+        folder = str(form.get("folder") or "").strip()
+        if folder and not NAME_RE.match(folder):
+            return JSONResponse(
+                {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}, 400)
+        dest_dir = (LORAS / folder) if folder else LORAS
+        stage = WORK / f"lora-upload-{int(time.time() * 1000):x}"
+        stage.mkdir(parents=True, exist_ok=True)
+        staged: list[Path] = []
+        skipped: list[str] = []
+        try:
+            for up in form.getlist("files"):
+                filename = getattr(up, "filename", None)
+                if not filename:
+                    continue
+                name = Path(filename).name
+                if Path(name).suffix.lower() != ".safetensors":
+                    skipped.append(name)
+                    continue
+                target = stage / name
+                with open(target, "wb") as out:
+                    while chunk := await up.read(1024 * 1024):
+                        out.write(chunk)
+                staged.append(target)
+            if not staged:
+                return JSONResponse({"error": "No .safetensors in the upload"
+                                     + (f" — got {', '.join(skipped[:6])}." if skipped
+                                        else ".")}, 400)
+            landed = _land_weights(staged, dest_dir)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+        await volume.commit.aio()
+        size = sum((dest_dir / n).stat().st_size for n in landed)
+        return JSONResponse({"ok": True, "files": landed, "skipped": skipped,
+                             "folder": folder, "bytes": size})
+
+    @api.get("/api/loras/file/{rel:path}")
+    def lora_file(rel: str):
+        """
+        One LoRA file, as a download.
+
+        Off the spool, like `/api/file`, and for the same reason: committed
+        state by RPC is the one read no open descriptor can refuse. The path
+        is confined the way `_lora_path` confines it, by resolving under
+        loras/ and refusing anything that lands outside — `..` included.
+        """
+        target = (LORAS / rel).resolve()
+        if (LORAS.resolve() not in target.parents
+                or target.suffix.lower() != ".safetensors"):
+            return JSONResponse({"error": "Not a LoRA file."}, status_code=400)
+        rel = target.relative_to(LORAS.resolve()).as_posix()
+        path = _spooled(f"loras/{rel}")
+        if path is None:
+            if not target.is_file():
+                _reload_volume()
+                if not _sizes_on_disk([target])[target]:
+                    return JSONResponse({"error": "Not found."}, status_code=404)
+            path = target
+        return FileResponse(
+            str(path), media_type="application/octet-stream", filename=target.name,
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     @api.post("/api/download-missing")
     def download_missing(payload: dict) -> dict[str, Any]:
