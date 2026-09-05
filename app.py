@@ -1279,17 +1279,25 @@ CAPTION_MODELS: dict[str, dict[str, str]] = {
     # Instruct template has no switch, the Thinking template opens `<think>`
     # in the generation prompt itself, so it reasons on every image whether
     # asked or not. `thinking` is what the loop reads to drop the block and
-    # to ignore the token cap: the model decides how long it thinks, a prompt
-    # cannot reach that, and a cap that counts the reasoning truncates the
-    # answer no matter how the instruction is worded.
+    # to budget the two halves apart: the model decides how long it thinks,
+    # a prompt cannot reach that, and one cap that counts the reasoning
+    # truncates the answer no matter how the instruction is worded.
     "qwen3vl-thinking": {
         "repo": "huihui-ai/Huihui-Qwen3-VL-8B-Thinking-abliterated",
         "label": "Qwen3-VL 8B thinking",
-        "note": "Reasons before it writes, and runs until it is done. "
+        "note": "Reasons before it writes; the token cap is for the answer. "
                 "First run pulls ~17 GB.",
         "thinking": True,
     },
 }
+
+# How long a thinking captioner may reason on one image before the run gives
+# up on it. Its own number, apart from the page's cap, because the cap is the
+# answer's and the model decides the other half. First set to the context
+# window — "runs until it is done" — and the owner priced that the same day:
+# a think loop that never closes would spend two hours of A100 on one image.
+# 4096 covers the 500–3000 this checkpoint spends on a photograph.
+CAPTION_THINK_TOKENS = 4096
 DEFAULT_CAPTION_MODEL = "joycaption"
 
 
@@ -3400,6 +3408,43 @@ def _caption_shape(processor: Any, instruction: str, repo: str,
     )
 
 
+def _think_budget(think_end: int, prompt_len: int, think_tokens: int,
+                  answer_tokens: int) -> Any:
+    """
+    The two-halves budget for a thinking captioner, as a stopping rule.
+
+    `max_new_tokens` alone cannot say "this much reasoning, then that much
+    answer": it counts from the first generated token and does not know where
+    the think block ends. This watches for the closing token and stops on
+    whichever half overruns — the reasoning at `think_tokens` with no close
+    seen, or the answer at `answer_tokens` counted from the token after the
+    close. The shape is ai-toolkit's captioner; the numbers are ours.
+
+    Batch of one, because the loop is. A bool tensor rather than a Python
+    bool, which is what transformers 5 folds into its own done-mask.
+    """
+    import torch
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    class _Budget(StoppingCriteria):
+        answer_start: int | None = None
+
+        def __call__(self, input_ids: Any, scores: Any, **kw: Any) -> Any:
+            produced = int(input_ids.shape[1]) - prompt_len
+            if self.answer_start is None:
+                if int(input_ids[0, -1]) == think_end:
+                    self.answer_start = int(input_ids.shape[1])
+                    done = False
+                else:
+                    done = produced >= think_tokens
+            else:
+                done = int(input_ids.shape[1]) - self.answer_start >= answer_tokens
+            return torch.full((input_ids.shape[0],), done, dtype=torch.bool,
+                              device=input_ids.device)
+
+    return StoppingCriteriaList([_Budget()])
+
+
 # How long a caption run goes between commits. Small enough that the page's
 # mid-run tile refresh shows real progress, large enough that the commit's
 # pause is noise against the per-image inference it interrupts.
@@ -3454,16 +3499,23 @@ def _caption_images(
     shape = _caption_shape(processor, instruction, repo, system)
     if shape != "parts":
         print(f"[caption] {repo} takes flat message content")
-    # A thinking captioner runs to its own end-of-sequence. The cap counts the
-    # reasoning before the answer starts, so under it a long think truncated
-    # the caption and the truncated reply had no CAPTION: mark — the whole
-    # scratchpad went into the sidecar. The ceiling is the model's context
-    # window, which is "no cap" in the model's own terms; the one reply that
-    # ever reaches it is a think block that never closes, handled below.
+    # A thinking captioner is budgeted in two halves. One cap counted the
+    # reasoning before the answer started, so a long think truncated the
+    # caption, and the truncated reply had no CAPTION: mark — the whole
+    # scratchpad went into the sidecar. Now the reasoning has its own ceiling
+    # and the page's cap starts counting at the token after `</think>`, so the
+    # answer gets what the page said whatever the think cost.
     thinking = bool(spec.get("thinking"))
+    think_end: int | None = None
     if thinking:
-        print(f"[caption] {repo} reasons first · token cap {max_tokens} ignored"
-              " · what follows </think> is kept")
+        think_end = processor.tokenizer.convert_tokens_to_ids("</think>")
+        if not isinstance(think_end, int) or think_end < 0:
+            # A thinker with no closing token gets one flat cap of both
+            # halves; the string cut below still finds the tag if it writes one.
+            think_end = None
+        print(f"[caption] {repo} reasons first · up to {CAPTION_THINK_TOKENS} "
+              f"tokens of it, then {max_tokens} for the answer · what follows "
+              "</think> is kept")
     # The Auto class rather than Qwen3VLForConditionalGeneration, because the
     # menu is no longer two known repos: a captioner added under the gear can be
     # any vision LM transformers maps — Qwen-VL, LLaVA, InternVL, Idefics. The
@@ -3473,9 +3525,6 @@ def _caption_images(
         repo, dtype=torch.bfloat16, device_map="cuda:0", cache_dir=cache_dir,
     )
     model.eval()
-    if thinking:
-        text_cfg = getattr(model.config, "text_config", model.config)
-        context = int(getattr(text_cfg, "max_position_embeddings", 0) or 32768)
     # Persist the downloaded weights now, on their own volume, so the next cold
     # start reuses them and the dataset commit below stays small.
     try:
@@ -3502,13 +3551,17 @@ def _caption_images(
                 inputs["pixel_values"] = inputs["pixel_values"].to(model.dtype)
 
             prompt_len = int(inputs["input_ids"].shape[1])
+            gen: dict[str, Any] = {"max_new_tokens": max_tokens}
+            if thinking:
+                gen["max_new_tokens"] = CAPTION_THINK_TOKENS + max_tokens
+                if think_end is not None:
+                    gen["stopping_criteria"] = _think_budget(
+                        think_end, prompt_len, CAPTION_THINK_TOKENS, max_tokens)
             with torch.no_grad():
                 # temperature 0 means greedy, and transformers refuses
                 # temperature=0.0 with do_sample=True rather than inferring it.
                 out = model.generate(
-                    **inputs,
-                    max_new_tokens=(max(context - prompt_len, 16) if thinking
-                                    else max_tokens),
+                    **inputs, **gen,
                     do_sample=temperature > 0,
                     **({"temperature": temperature, "top_p": top_p}
                        if temperature > 0 else {}),
@@ -3526,11 +3579,11 @@ def _caption_images(
             reasoning, closed, caption = caption.rpartition("</think>")
             caption = caption.strip()
             if thinking and not closed:
-                # The only reply the context ceiling ever catches. Raised into
-                # the failure branch below rather than skipped, so the step
-                # still publishes; nothing is written, so the image stays in
-                # the Uncaptioned filter, and the head of the reasoning says
-                # what it was doing.
+                # The think ceiling's one catch. Raised into the failure
+                # branch below rather than skipped, so the step still
+                # publishes; nothing is written, so the image stays in the
+                # Uncaptioned filter, and the head of the reasoning says what
+                # it was doing.
                 raise RuntimeError(
                     f"never closed its think block after {len(out)} tokens: "
                     f"{reasoning[:120]!r}")
@@ -14055,8 +14108,8 @@ def web():
         stored = dict(config.get("custom_caption_models") or {})
         stored[key] = {
             "repo": repo, "label": label or repo.split("/")[-1],
-            "note": ("Added by you. Reasons before it writes, and runs until "
-                     "it is done. First run pulls the weights." if thinking
+            "note": ("Added by you. Reasons before it writes; the token cap "
+                     "is for the answer. First run pulls the weights." if thinking
                      else "Added by you. First run pulls the weights."),
             "thinking": thinking,
         }

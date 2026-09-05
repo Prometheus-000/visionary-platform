@@ -189,7 +189,7 @@ arrives.
 them — exactly what the trainer reads. JoyCaption Beta One is the default
 captioner; Qwen3-VL 8B stays in the menu because old runs name it, and its
 Thinking checkpoint reasons before it writes, with the reasoning cut at
-`</think>` and no token cap.
+`</think>` and the token cap counted from there.
 
 **Generate stills.** Krea 2 inference through a driven ComfyUI: LoRA stacking,
 regional multi-character LoRA through a pinned node pack, the identity-edit

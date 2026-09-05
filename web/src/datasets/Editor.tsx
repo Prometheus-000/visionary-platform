@@ -576,9 +576,10 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
   // still cannot say for itself is that the first run is a 17 GB pull.
   const modelNote = models.find((m) => m.key === curModel)?.note ?? ''
   // A captioner that reasons first has its reasoning cut at </think> before
-  // anything reads the reply, and it runs until it is done — so the token cap
-  // does not apply to it, and the line under the box says both, because the
-  // cut is the one thing about the reply the writer of a preset cannot see.
+  // anything reads the reply, and the token cap counts from there — the
+  // reasoning has its own ceiling on the server. The line under the box says
+  // the cut, because it is the one thing about the reply the writer of a
+  // preset cannot see; the cap's label says which half it is for.
   const thinks = !!models.find((m) => m.key === curModel)?.thinking
 
   // The store's state is the served vocabulary, so saving or deleting a preset
@@ -670,8 +671,8 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
         // says both, and the traceback rides underneath for whoever wants it.
         ds.setEditError({
           error: 'The captioning run stopped before it finished. Whatever it had already'
-            + ' written is kept — run it again, and if it keeps stopping try a'
-            + (thinks ? ' different captioner.' : ' lower max tokens or a different captioner.'),
+            + ' written is kept — run it again, and if it keeps stopping try a lower'
+            + ' max tokens or a different captioner.',
           detail: st.error ? String(st.error) : undefined,
         })
       }
@@ -841,12 +842,10 @@ function Captioner({ ds, state }: { ds: Ds; state: ReturnType<typeof useStore.ge
           {/* Named, every one — "320" is a token cap, a seed or a size with equal
               plausibility, and a bare number is not a value. */}
           <div className="opt" data-lb="Max tokens">
-            <span className="lead">Max tokens</span>
-            {thinks
-              ? <span className="muted" id="cap-max-tokens-note">none — runs until it is done</span>
-              : <input autoComplete="off" type="number" id="cap-max-tokens" min={16} max={1024} step={16}
-                       style={{ width: 64 }} value={maxTokens}
-                       onChange={(e) => setMaxTokens(Number(e.target.value) || 320)} />}
+            <span className="lead">{thinks ? 'Max tokens, after thinking' : 'Max tokens'}</span>
+            <input autoComplete="off" type="number" id="cap-max-tokens" min={16} max={1024} step={16}
+                   style={{ width: 64 }} value={maxTokens}
+                   onChange={(e) => setMaxTokens(Number(e.target.value) || 320)} />
           </div>
           <div className="opt" data-lb="Temperature">
             <span className="lead">Temperature</span>
