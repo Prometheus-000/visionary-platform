@@ -1757,6 +1757,50 @@ def _hf_token() -> str | None:
     return _pasted_key("hf_token")
 
 
+def _hf_push_refusal(token: str) -> str:
+    """
+    The sentence that stops a push before a container starts, or "".
+
+    A read-only token gets past `create_repo` on a repo that already exists
+    and fails only at the upload — which is where the first real push sat,
+    with the repo created a week earlier, the phase saying Uploading and
+    nothing arriving, until Cancel. The hub says what a token may do in the
+    same call that names its owner, so the answer is one metadata round trip
+    at the route rather than a container that dies quietly.
+
+    Unknown shapes pass: a role the hub did not name is the job's 403 to
+    report, not a reason to refuse here.
+    """
+    from huggingface_hub import HfApi
+    from huggingface_hub.utils import HfHubHTTPError
+
+    try:
+        who = HfApi(token=token).whoami()
+    except HfHubHTTPError as exc:
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        if code == 401:
+            return ("HuggingFace rejected the saved token (401) — it may have been "
+                    "revoked. Paste a current one under HuggingFace token.")
+        return ""
+    except Exception:
+        return ""
+    tok = ((who or {}).get("auth") or {}).get("accessToken") or {}
+    role = str(tok.get("role") or "")
+    fix = ("A push writes to your account, so it needs a token with write access — "
+           "make one at huggingface.co/settings/tokens and paste it under "
+           "HuggingFace token.")
+    if role == "read":
+        return f"The saved token is read-only. {fix}"
+    if role == "fineGrained":
+        fg = tok.get("fineGrained") or {}
+        perms = set(fg.get("global") or [])
+        for scope in fg.get("scoped") or []:
+            perms.update(scope.get("permissions") or [])
+        if perms and "repo.write" not in perms:
+            return f"The saved fine-grained token cannot write to repos. {fix}"
+    return ""
+
+
 def _pasted_key(name: str) -> str | None:
     """
     A credential typed into the gear and kept in a Modal Dict.
@@ -3515,6 +3559,9 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
     _publish(job_id, status="running", phase="Starting…", percent=0)
 
     def fail(err: str) -> dict[str, Any]:
+        # Printed as well as published: a push that failed used to leave no line
+        # in the container log at all, so the log said it started and nothing else.
+        print(f"[hf push] failed: {err}", flush=True)
         _publish(job_id, status="failed", error=err)
         return {"status": "failed", "error": err}
 
@@ -3589,8 +3636,15 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
                            f"{size_gb:.2f} GB · {el // 60}m{el % 60:02d}s")
         if result.get("error") is not None:
             exc = result["error"]
-            return fail(f"{type(exc).__name__}: {exc}"
-                        + (f" — {len(pushed)} of {len(files)} pushed to {repo} before it;"
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            # The route asks the hub about the token first, so this is the token
+            # whose access changed since — or a repo owned by someone else.
+            head = (f"HuggingFace refused the upload to {repo} ({code}) — the saved "
+                    "token cannot write there. A push needs write access to a repo "
+                    "under your own account or org."
+                    if code in (401, 403) else f"{type(exc).__name__}: {exc}")
+            return fail(head
+                        + (f" {len(pushed)} of {len(files)} pushed before it;"
                            " press Push again and the hub skips the bytes it already has."
                            if pushed else ""))
         pushed.append(f.name)
@@ -13456,10 +13510,14 @@ def web():
         if not HF_REPO_RE.match(repo):
             return {"error": "Repo id must be `name` or `owner/name` — letters, digits, "
                              "`-`, `_` and `.`."}
-        if not _hf_token():
+        token = _hf_token()
+        if not token:
             return {"error": "No HuggingFace token saved. Paste one under HuggingFace "
                              "token — a push writes to your account, so it needs a "
                              "token with write access."}
+        refusal = _hf_push_refusal(token)
+        if refusal:
+            return {"error": refusal}
         _arm_spawn(HF_PUSH_JOB)
         hf_push_job.spawn(str(root), repo)
         return {"ok": True, "job_id": HF_PUSH_JOB}
