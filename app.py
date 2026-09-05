@@ -14489,10 +14489,6 @@ def web():
         # at the controls. The job checks again at render time because the
         # volume can change between the two.
         continue_from = str(payload.get("continue_from") or "").strip() or None
-        if still and continue_from:
-            return {"error": "A still is one frame, so there is no motion to "
-                             "continue — clear the Motion tile, or ask for a "
-                             "take."}
         if continue_from:
             if not re.fullmatch(r"vid[0-9a-z]+", continue_from):
                 return {"error": f"Not a video job id: {continue_from!r}"}
@@ -14575,6 +14571,14 @@ def web():
         still = seconds == 0
         if still and 0 not in (spec["lengths"] or []):
             return {"error": f"{spec['label']} does not make stills."}
+        # Read here rather than beside the other continuation checks above,
+        # because `still` does not exist until the duration has been read: the
+        # check sat up there for four days and every take answered with an
+        # UnboundLocalError before a single one of these forms was reached.
+        if still and continue_from:
+            return {"error": "A still is one frame, so there is no motion to "
+                             "continue — clear the Motion tile, or ask for a "
+                             "take."}
         if still:
             # The compiler still needs a shot to describe, because a still is a
             # frame *out of* one — `[Shot 1]` and its timings are what the
