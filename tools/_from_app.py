@@ -57,7 +57,7 @@ def pull(names: set[str]) -> dict:
     # it did not before. PIL is deliberately absent — the pulled code imports it
     # inside the functions that need it, so a caller with no Pillow can still
     # pull them and only pays when it calls one.
-    ns: dict = {"Any": typing.Any, "Path": Path, "json": json,
+    ns: dict = {"Any": typing.Any, "Callable": typing.Callable, "Path": Path, "json": json,
                 "hashlib": hashlib, "math": math, "re": re, "time": time,
                 "base64": base64, "struct": struct, "subprocess": subprocess,
                 "shutil": shutil}

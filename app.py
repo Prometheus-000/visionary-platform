@@ -1752,6 +1752,56 @@ def _stop_gate(job_id: str, where: str) -> None:
         raise StopRequested(where)
 
 
+# A long poll waits this long at most before answering unchanged. Under
+# Modal's 150 s web request cap with room to spare, and long enough that a
+# client waiting on an eight-step render makes a handful of requests rather
+# than hundreds. The tick is how often the record is re-read while waiting:
+# one Dict round trip, which is the same cost the 400 ms page poll paid.
+JOB_WAIT_MAX_S = 30.0
+JOB_WAIT_TICK_S = 0.25
+
+
+def _job_token(rec: dict[str, Any]) -> str:
+    """A short fingerprint of one record, so a client can say "I have this
+    one" without sending it back. `default=str` because `_publish` stores
+    whatever a job wrote — a Path or a float is a record, not an error."""
+    canon = json.dumps(rec, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha1(canon.encode()).hexdigest()[:16]
+
+
+def _await_change(read: Callable[[], dict[str, Any] | None], since: str,
+                  wait_s: float, *, tick_s: float = JOB_WAIT_TICK_S,
+                  clock: Callable[[], float] = time.monotonic,
+                  sleep: Callable[[float], None] = time.sleep,
+                  ) -> tuple[dict[str, Any], str]:
+    """
+    The record and its token, as soon as the record differs from `since` or
+    once `wait_s` has passed — whichever is first.
+
+    A poll should wait for its own reply rather than fire on a clock: the page
+    approximated that with `everyMs`, skipping a tick while the last one was
+    out, and still paid a round trip every 400 ms for the length of a render to
+    learn mostly that nothing had changed. Holding the request open until
+    something *has* changed is the same idea with the waiting moved to where
+    it costs nothing — a thread in the web container — and the client learns of
+    a change within one tick of it landing rather than at the next scheduled ask.
+
+    The reader, the clock and the sleep are arguments so `tools/smoke_longpoll.py`
+    can drive this against a fake Dict at a fake time. A record that does not
+    exist yet reads as `{"status": "unknown"}`, the same sentence `/api/status`
+    has always given, so a client asking about a job before its first publish
+    gets an answer rather than an exception.
+    """
+    deadline = clock() + max(0.0, wait_s)
+    while True:
+        rec = read() or {"status": "unknown"}
+        token = _job_token(rec)
+        now = clock()
+        if token != since or now >= deadline:
+            return rec, token
+        sleep(min(tick_s, max(0.0, deadline - now)))
+
+
 def _hf_token() -> str | None:
     """The token pasted into the UI, stored in a Modal Dict. No Secrets needed."""
     return _pasted_key("hf_token")
@@ -16318,3 +16368,93 @@ def web():
         return {"ok": True}
 
     return api
+
+
+# --------------------------------------------------------------------------
+# Job API — a client's seam, behind proxy auth
+#
+# Phase 7 keeps three things on Modal: training, inference and the stored
+# weights. This is how a client that is not a browser reaches them: submit a
+# still, wait for the job record to change, stop, fetch a file, list the
+# weights. No HTML, no static files. The same helpers the page's routes call,
+# the same `jobs` Dict, the same generator classes — a second caller of the
+# one job/status/stop contract, not a second contract.
+#
+# A second ASGI function rather than routes on `web()`, because proxy auth is
+# a property of a Modal function: turned on for `web()` it would lock the page
+# out of its own routes, since a browser cannot send `Modal-Key`. The key pair
+# is minted in the Modal dashboard and pasted into the app once, the gesture
+# the HF token already uses — so there is still no Secret and no CLI setup on
+# the client side, and the URL Modal prints at deploy is the one to paste.
+# --------------------------------------------------------------------------
+
+
+@app.function(
+    image=web_image, cpu=1.0, timeout=900,
+    volumes={"/workspace": volume, "/models": models_volume},
+    max_containers=1,
+    # The web container's window, for the same reason: the spool stays warm
+    # across a session, and a long poll's container is the one that answers
+    # the file fetch a moment later.
+    scaledown_window=20 * 60,
+)
+@modal.concurrent(max_inputs=20)
+@modal.asgi_app(requires_proxy_auth=True)
+def api():
+    from fastapi import FastAPI
+
+    routes = FastAPI()
+
+    @routes.get("/weights")
+    def weights() -> dict[str, Any]:
+        """The checkpoints present and the LoRAs a run can load, plus the
+        defaults a client needs to build its menus. Also the first-launch
+        check: a 401 here is a bad key pair, a connection failure is a bad
+        address, a 404 is nothing deployed at it."""
+        return {
+            **_weights(),
+            "image_defaults": IMAGE_DEFAULTS,
+            "krea2_defaults": KREA2_DEFAULTS,
+            "samplers": SAMPLERS,
+            "schedulers": SCHEDULERS,
+            "max_loras": MAX_LORAS,
+            "gpus": {
+                "image": {"options": list(IMAGE_GPUS), "default": GPU},
+                "video": {"options": list(VIDEO_GPUS), "default": VIDEO_GPU},
+                "both": {"options": list(BOTH_GPUS), "default": BOTH_GPU},
+            },
+        }
+
+    @routes.post("/jobs/still")
+    def still(payload: dict) -> dict[str, Any]:
+        return _submit_still(payload)
+
+    @routes.get("/jobs/{job_id}")
+    def job(job_id: str, since: str = "", wait: float = 0.0) -> dict[str, Any]:
+        """
+        The job record, as soon as it differs from `since` or after `wait`
+        seconds — see `_await_change`. `token` rides the reply and is what the
+        client sends back as `since` on its next ask.
+
+        `wait` is clamped rather than trusted: Modal answers a web request for
+        150 s at most, and a client asking for more would get a 303 it does not
+        expect instead of the record it does.
+        """
+        def read() -> dict[str, Any] | None:
+            try:
+                return jobs.get(job_id)
+            except Exception as exc:  # the Dict, not the job — say so
+                return {"status": "unknown", "error": str(exc)}
+        rec, token = _await_change(read, since, min(max(wait, 0.0), JOB_WAIT_MAX_S))
+        return {**rec, "token": token}
+
+    @routes.post("/jobs/{job_id}/stop")
+    def stop(job_id: str) -> dict[str, Any]:
+        _request_stop(job_id)
+        return {"ok": True}
+
+    @routes.get("/files/{name}")
+    def file(name: str):
+        return _output_response(name)
+
+    return routes
