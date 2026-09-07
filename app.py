@@ -13403,6 +13403,211 @@ def _submit_still(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "job_id": job_id}
 
 
+# One file inside a set: a single segment, a media or sidecar extension, and
+# the characters a phone or a Finder rename produces — a space and parentheses
+# included, because "IMG_0123 (2).jpg" is what a re-export is called.
+DATASET_FILE_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9 ._()\-]{0,119}"
+    r"\.(png|jpg|jpeg|webp|bmp|avif|txt|json|mp4|mov|webm|mkv|m4v)$", re.I)
+
+
+def _saved_dataset(name: str) -> tuple[Path | None, dict[str, Any] | None]:
+    """A set under datasets/ — the only kind another container can read —
+    or the sentence saying why not."""
+    try:
+        _check_name(name)
+    except ValueError as exc:
+        return None, {"error": str(exc)}
+    _reload_volume()
+    d = DATASETS / name
+    if not d.is_dir():
+        return None, {"error": f"No dataset named {name!r} on the volume."}
+    return d, None
+
+
+def _caption_menus() -> dict[str, Any]:
+    """
+    The captioner row's menus — presets, captioners, and which of each opens
+    selected — for every client that builds one. The page's `/api/state` and
+    the job API's `/weights` both spread this, so a preset added on one side
+    cannot be missing from the other.
+    """
+    # The menu is what the ✕ removes. Customs are deleted outright; a
+    # built-in is baked into the image, so its ✕ hides it here instead —
+    # while `_caption_models()` stays whole, because old job records and
+    # the DEFAULT_CAPTION_MODEL fallback still resolve through it.
+    try:
+        hidden_caps = set(config.get("hidden_caption_models") or [])
+    except Exception:
+        hidden_caps = set()  # an unreachable Dict hides nothing, never empties the menu
+    cap_models = {k: m for k, m in _caption_models().items()
+                  if k not in hidden_caps}
+    return {
+    # The instruction rides along now — the page shows it in a textarea
+    # the preset prefills, so hiding it would be hiding the one thing
+    # the control edits. Reproducibility moved with it: the job record
+    # carries the exact text that ran, not just the key, so a run is
+    # still replayable from its record after the preset changes.
+    "caption_presets": [
+        {"key": k, "label": p["label"], "note": p["note"],
+         "instruction": p["instruction"], "custom": bool(p.get("custom"))}
+        for k, p in _caption_presets().items()
+    ],
+    # The repo is shown in the gear's Caption models section.
+    "caption_models": [
+        {"key": k, "label": m["label"], "note": m.get("note", ""),
+         "repo": m["repo"], "custom": bool(m.get("custom")),
+         "thinking": bool(m.get("thinking"))}
+        for k, m in cap_models.items()
+    ],
+    # A hidden default would be a key the page's own menu does not
+    # offer — the captioner select would sit blank on it — so the
+    # default follows the menu.
+    "caption_defaults": {
+        "preset": DEFAULT_CAPTION_PRESET,
+        "model": (DEFAULT_CAPTION_MODEL
+                  if DEFAULT_CAPTION_MODEL in cap_models
+                  else next(iter(cap_models), DEFAULT_CAPTION_MODEL)),
+    },
+    }
+
+
+def _train_menus() -> dict[str, Any]:
+    """The trainer's vocabulary and defaults, for the same two callers: a
+    hardcoded list in a client is a run that cold-starts a GPU to die on
+    argparse."""
+    return {
+        "train_optimizers": [dict(v, key=k) for k, v in TRAIN_OPTIMIZERS.items()],
+        "lr_schedulers": [dict(v, key=k) for k, v in LR_SCHEDULERS.items()],
+        "timestep_samplings": [dict(v, key=k) for k, v in TIMESTEP_SAMPLINGS.items()],
+        "train_defaults": TRAIN_DEFAULTS,
+    }
+
+
+def _submit_caption(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Caption one saved set on a GPU container — the body of `/api/caption`,
+    and of the job API's `/jobs/caption`.
+
+    Named rather than defaulted throughout: a preset or captioner key that is
+    not in the tables is the two sides having drifted, and the cost of
+    guessing is a cold container that captions eighty images with the wrong
+    instruction. A draft is refused by name, because the captioner is another
+    machine and a draft is on this one.
+    """
+    name = str(payload.get("dataset") or "")
+    try:
+        d = _dataset_dir(name)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if not d.is_dir():
+        return {"error": f"No dataset named {name!r}."}
+    if d.parent == DRAFTS:
+        # The captioner is another machine, and a draft is on this one.
+        return {"error": f"Save {name!r} first — captioning runs on a GPU "
+                         f"container, and only a saved set is on the volume "
+                         f"it reads."}
+    trigger = str(payload.get("trigger_word") or "")
+    if trigger:
+        _write_dataset_meta(d, trigger_word=trigger)
+        volume.commit()
+
+    # Named rather than defaulted. The page builds both menus out of the
+    # tables `/api/state` serves, so a key that is not in them is the two
+    # sides having drifted — and the cost of guessing is a cold GPU
+    # container that captions eighty images with the wrong instruction, or
+    # downloads 17 GB of the wrong checkpoint. Same argument as
+    # `_validate_loras()`: this is a form error in milliseconds.
+    presets, models = _caption_presets(), _caption_models()
+    preset = str(payload.get("preset") or DEFAULT_CAPTION_PRESET)
+    if preset not in presets:
+        return {"error": f"No caption preset {preset!r}. "
+                         f"One of: {', '.join(presets)}"}
+    model = str(payload.get("model") or DEFAULT_CAPTION_MODEL)
+    if model not in models:
+        return {"error": f"No captioner {model!r}. "
+                         f"One of: {', '.join(models)}"}
+    write_mode = str(payload.get("write_mode") or "skip")
+    if write_mode not in ("skip", "append", "prepend", "replace"):
+        return {"error": f"No write mode {write_mode!r}. "
+                         "One of: skip, append, prepend, replace"}
+
+    # Clamped rather than refused: these arrive from spinner-less number
+    # fields, and a typo of 3200 tokens should cost the typo, not the run.
+    def _clamp(key: str, default: float, lo: float, hi: float) -> float:
+        try:
+            return min(hi, max(lo, float(payload.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    job_id = f"cap{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    # Seeded before the spawn, as a still is: the captioner's first minute
+    # is a cold start that may also be a 17 GB pull, and a poll that reads
+    # nothing during it is a press that looks like it did nothing.
+    jobs[job_id] = {"status": "queued", "phase": "waiting for a GPU container",
+                    "beat": time.time()}
+    caption_job.spawn(
+        job_id=job_id, dataset=name, trigger_word=trigger,
+        preset=preset, model=model,
+        write_mode=write_mode,
+        instruction=str(payload.get("instruction") or "")[:4000],
+        max_tokens=int(_clamp("max_tokens", 320, 16, 1024)),
+        temperature=_clamp("temperature", 0.6, 0.0, 1.5),
+        top_p=_clamp("top_p", 0.9, 0.05, 1.0),
+    )
+    return {"ok": True, "job_id": job_id}
+
+
+def _start_training(*, dataset: str, lora_name: str, trigger_word: str,
+                    params: dict[str, Any], session: str = "") -> dict[str, Any]:
+    """
+    Validate and spawn one training run — what a session card's Start does,
+    and what the job API's `/jobs/train` does without a card.
+
+    Everything rejectable is rejected here, on CPU: a draft (the trainer is
+    another machine), an empty set, a LoRA name the trainer would refuse, a
+    missing trigger word, a dial outside its table. The `queued` record is
+    written before the spawn because a trainer cold start is minutes, and a
+    record that does not exist yet is a press that looks like it did nothing —
+    which is how you get two runs.
+    """
+    _reload_volume()
+    if not dataset:
+        return {"error": "Pick a set to train on."}
+    try:
+        d = _dataset_dir(dataset)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if not d.is_dir():
+        return {"error": f"No dataset named {dataset!r}."}
+    if d.parent == DRAFTS:
+        return {"error": f"Save {dataset!r} first — the trainer runs on a "
+                         f"GPU container, and only a saved set is on the "
+                         f"volume it reads."}
+    if not _dataset_images(d):
+        return {"error": f"{dataset!r} has no images."}
+    lora_name = lora_name.strip()
+    if not NAME_RE.match(lora_name):
+        return {"error": "LoRA name: letters, digits, - and _ only."}
+    trigger = trigger_word.strip()
+    if not trigger:
+        return {"error": "A trigger word is required."}
+    try:
+        dials = _train_params(params or {})
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    job_id = f"tr{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    jobs[job_id] = {"status": "queued", "phase": "queued", "stop": False,
+                    "percent": 0, "session": session,
+                    "started": time.time(), "beat": time.time()}
+    train_job.spawn(
+        job_id=job_id, dataset=dataset, lora_name=lora_name,
+        trigger_word=trigger, session=session, **dials,
+    )
+    return {"ok": True, "job_id": job_id}
+
+
 # --------------------------------------------------------------------------
 # Web app — UI + API on a single URL
 #
@@ -13531,16 +13736,6 @@ def web():
     def state() -> dict[str, Any]:
         w = _weights()
         models, loras = w["models"], w["loras"]
-        # The menu is what the ✕ removes. Customs are deleted outright; a
-        # built-in is baked into the image, so its ✕ hides it here instead —
-        # while `_caption_models()` stays whole, because old job records and
-        # the DEFAULT_CAPTION_MODEL fallback still resolve through it.
-        try:
-            hidden_caps = set(config.get("hidden_caption_models") or [])
-        except Exception:
-            hidden_caps = set()  # an unreachable Dict hides nothing, never empties the menu
-        cap_models = {k: m for k, m in _caption_models().items()
-                      if k not in hidden_caps}
         return {
             "models": models,
             "loras": loras,
@@ -13586,40 +13781,12 @@ def web():
             "shot_vocab": SHOT_VOCAB,
             "shot_langs": H3_LANGUAGES,
             "shot_roles": [dict(spec, key=k) for k, spec in SHOT_REF_ROLES.items()],
-            # The instruction rides along now — the page shows it in a textarea
-            # the preset prefills, so hiding it would be hiding the one thing
-            # the control edits. Reproducibility moved with it: the job record
-            # carries the exact text that ran, not just the key, so a run is
-            # still replayable from its record after the preset changes.
-            "caption_presets": [
-                {"key": k, "label": p["label"], "note": p["note"],
-                 "instruction": p["instruction"], "custom": bool(p.get("custom"))}
-                for k, p in _caption_presets().items()
-            ],
-            # The repo is shown in the gear's Caption models section.
-            "caption_models": [
-                {"key": k, "label": m["label"], "note": m.get("note", ""),
-                 "repo": m["repo"], "custom": bool(m.get("custom")),
-                 "thinking": bool(m.get("thinking"))}
-                for k, m in cap_models.items()
-            ],
-            # A hidden default would be a key the page's own menu does not
-            # offer — the captioner select would sit blank on it — so the
-            # default follows the menu.
-            "caption_defaults": {
-                "preset": DEFAULT_CAPTION_PRESET,
-                "model": (DEFAULT_CAPTION_MODEL
-                          if DEFAULT_CAPTION_MODEL in cap_models
-                          else next(iter(cap_models), DEFAULT_CAPTION_MODEL)),
-            },
+            **_caption_menus(),
             # The trainer's vocabulary, served for the reason every other table
             # here is: the form builds its menus out of this, so a value it can
             # send is a value the job will accept. A hardcoded list in the page
             # is a run that cold-starts a GPU to die on argparse.
-            "train_optimizers": [dict(v, key=k) for k, v in TRAIN_OPTIMIZERS.items()],
-            "lr_schedulers": [dict(v, key=k) for k, v in LR_SCHEDULERS.items()],
-            "timestep_samplings": [dict(v, key=k) for k, v in TIMESTEP_SAMPLINGS.items()],
-            "train_defaults": TRAIN_DEFAULTS,
+            **_train_menus(),
         }
 
     @api.post("/api/loras/delete")
@@ -14788,59 +14955,7 @@ def web():
 
     @api.post("/api/caption")
     def caption(payload: dict) -> dict[str, Any]:
-        name = str(payload.get("dataset") or "")
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        if d.parent == DRAFTS:
-            # The captioner is another machine, and a draft is on this one.
-            return {"error": f"Save {name!r} first — captioning runs on a GPU "
-                             f"container, and only a saved set is on the volume "
-                             f"it reads."}
-        trigger = str(payload.get("trigger_word") or "")
-        if trigger:
-            _write_dataset_meta(d, trigger_word=trigger)
-            volume.commit()
-
-        # Named rather than defaulted. The page builds both menus out of the
-        # tables `/api/state` serves, so a key that is not in them is the two
-        # sides having drifted — and the cost of guessing is a cold GPU
-        # container that captions eighty images with the wrong instruction, or
-        # downloads 17 GB of the wrong checkpoint. Same argument as
-        # `_validate_loras()`: this is a form error in milliseconds.
-        presets, models = _caption_presets(), _caption_models()
-        preset = str(payload.get("preset") or DEFAULT_CAPTION_PRESET)
-        if preset not in presets:
-            return {"error": f"No caption preset {preset!r}. "
-                             f"One of: {', '.join(presets)}"}
-        model = str(payload.get("model") or DEFAULT_CAPTION_MODEL)
-        if model not in models:
-            return {"error": f"No captioner {model!r}. "
-                             f"One of: {', '.join(models)}"}
-        write_mode = str(payload.get("write_mode") or "skip")
-        if write_mode not in ("skip", "append", "prepend", "replace"):
-            return {"error": f"No write mode {write_mode!r}. "
-                             "One of: skip, append, prepend, replace"}
-
-        # Clamped rather than refused: these arrive from spinner-less number
-        # fields, and a typo of 3200 tokens should cost the typo, not the run.
-        def _clamp(key: str, default: float, lo: float, hi: float) -> float:
-            try:
-                return min(hi, max(lo, float(payload.get(key, default))))
-            except (TypeError, ValueError):
-                return default
-
-        job_id = f"cap{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        caption_job.spawn(
-            job_id=job_id, dataset=name, trigger_word=trigger,
-            preset=preset, model=model,
-            write_mode=write_mode,
-            instruction=str(payload.get("instruction") or "")[:4000],
-            max_tokens=int(_clamp("max_tokens", 320, 16, 1024)),
-            temperature=_clamp("temperature", 0.6, 0.0, 1.5),
-            top_p=_clamp("top_p", 0.9, 0.05, 1.0),
-        )
-        return {"ok": True, "job_id": job_id}
+        return _submit_caption(payload)
 
     # ---- caption presets and models ---------------------------------------
     #
@@ -15111,44 +15226,17 @@ def web():
             return {"ok": True, "job_id": rec.get("job_id"), "already": True,
                     "session": view}
 
-        _reload_volume()
-        dataset = str(rec.get("dataset") or "")
-        d, err = _dataset_or_error(dataset) if dataset else (None, {
-            "error": "Pick a set to train on."})
-        if err:
-            return err
-        if d.parent == DRAFTS:
-            return {"error": f"Save {dataset!r} first — the trainer runs on a "
-                             f"GPU container, and only a saved set is on the "
-                             f"volume it reads."}
-        if not _dataset_images(d):
-            return {"error": f"{dataset!r} has no images."}
-        lora_name = str(rec.get("lora_name") or "").strip()
-        if not NAME_RE.match(lora_name):
-            return {"error": "LoRA name: letters, digits, - and _ only."}
-        trigger = str(rec.get("trigger_word") or "").strip()
-        if not trigger:
-            return {"error": "A trigger word is required."}
-        try:
-            params = _train_params(rec.get("params") or {})
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        job_id = f"tr{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        # Written before the spawn, not by the container. A trainer image cold
-        # start is minutes, and a card whose job record does not exist yet is a
-        # card that cannot say anything at all — which reads as a press that did
-        # nothing, which is how you get two runs.
-        jobs[job_id] = {"status": "queued", "phase": "queued", "stop": False,
-                        "percent": 0, "session": sid,
-                        "started": time.time(), "beat": time.time()}
-        train_job.spawn(
-            job_id=job_id, dataset=dataset, lora_name=lora_name,
-            trigger_word=trigger, session=sid, **params,
+        started = _start_training(
+            dataset=str(rec.get("dataset") or ""),
+            lora_name=str(rec.get("lora_name") or ""),
+            trigger_word=str(rec.get("trigger_word") or ""),
+            params=rec.get("params") or {}, session=sid,
         )
-        rec = _session_put({**rec, "job_id": job_id,
+        if started.get("error"):
+            return started
+        rec = _session_put({**rec, "job_id": started["job_id"],
                             "runs": int(rec.get("runs") or 0) + 1})
-        return {"ok": True, "job_id": job_id, "session": _session_view(rec)}
+        return {"ok": True, "job_id": started["job_id"], "session": _session_view(rec)}
 
     @api.post("/api/sessions/{sid}/stop")
     def stop_session(sid: str) -> dict[str, Any]:
@@ -16401,7 +16489,8 @@ def web():
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app(requires_proxy_auth=True)
 def api():
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse, Response
 
     routes = FastAPI()
 
@@ -16413,6 +16502,8 @@ def api():
         address, a 404 is nothing deployed at it."""
         return {
             **_weights(),
+            **_caption_menus(),
+            **_train_menus(),
             "image_defaults": IMAGE_DEFAULTS,
             "krea2_defaults": KREA2_DEFAULTS,
             "samplers": SAMPLERS,
@@ -16456,5 +16547,142 @@ def api():
     @routes.get("/files/{name}")
     def file(name: str):
         return _output_response(name)
+
+    # ---- datasets: the volume as a mirror of the studio folder -------------
+    #
+    # The studio folder is the record and the volume's copy is what the
+    # trainer and the captioner read, so the app mirrors a set up file by
+    # file: a manifest to diff against, a PUT per file, a DELETE per file the
+    # folder no longer has, then one commit. Per file rather than one archive
+    # because a background upload session resumes per request, and a set is
+    # forty photographs that each deserve their own retry.
+
+    @routes.get("/datasets")
+    def datasets() -> dict[str, Any]:
+        _reload_volume()
+        rows = []
+        if DATASETS.is_dir():
+            with _RELOAD_LOCK:
+                rows = [_dataset_stats(d) for d in sorted(DATASETS.iterdir())
+                        if d.is_dir() and not d.name.startswith(".")]
+        rows.sort(key=lambda r: -r["modified"])
+        return {"datasets": rows}
+
+    @routes.get("/datasets/{name}/manifest")
+    def manifest(name: str) -> dict[str, Any]:
+        """What the volume holds for one set: name, size and mtime per file,
+        which is what the app diffs its folder against before uploading."""
+        d, err = _saved_dataset(name)
+        if err:
+            return err
+        files = []
+        with os.scandir(d) as it:
+            for e in it:
+                if e.is_file() and not e.name.startswith("."):
+                    st = e.stat()
+                    files.append({"name": e.name, "bytes": st.st_size, "mtime": st.st_mtime})
+        return {"name": name, "files": files}
+
+    @routes.put("/datasets/{name}/files/{file}")
+    async def put_dataset_file(name: str, file: str, request: Request) -> JSONResponse:
+        """
+        One file into datasets/{name}/, streamed to a temp name and renamed,
+        so a reader that arrives mid-upload sees nothing rather than half a
+        file. Images are uprighted on arrival — the same `_upright_inplace`
+        the page's upload runs, because the trainer opens with PIL and PIL
+        does not rotate, whatever the client did or did not do first.
+        Uncommitted until `/commit`: the trainer reads committed state.
+        """
+        try:
+            _check_name(name)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if not DATASET_FILE_RE.match(file):
+            return JSONResponse({"error": f"{file!r} is not a file a set can hold — one "
+                                          "segment, an image, clip, .txt or .json."},
+                                status_code=400)
+        d = DATASETS / name
+        d.mkdir(parents=True, exist_ok=True)
+        target = d / file
+        tmp = d / f".{file}.{os.getpid()}.part"
+        n = 0
+        try:
+            with open(tmp, "wb") as out:
+                async for chunk in request.stream():
+                    out.write(chunk)
+                    n += len(chunk)
+            tmp.replace(target)
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        rotated = _upright_inplace(target) if target.suffix.lower() in IMAGE_EXTS else False
+        return JSONResponse({"ok": True, "bytes": n, "rotated": rotated})
+
+    @routes.delete("/datasets/{name}/files/{file}")
+    def delete_dataset_file(name: str, file: str) -> dict[str, Any]:
+        try:
+            _check_name(name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not DATASET_FILE_RE.match(file):
+            return {"error": f"{file!r} is not a file a set can hold."}
+        (DATASETS / name / file).unlink(missing_ok=True)
+        return {"ok": True}
+
+    @routes.post("/datasets/{name}/commit")
+    def commit_dataset(name: str) -> dict[str, Any]:
+        """Make the mirror visible to other containers. One commit per sync,
+        not per file: a commit is a snapshot of the whole volume."""
+        try:
+            _check_name(name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        d = DATASETS / name
+        if not d.is_dir():
+            return {"error": f"No dataset named {name!r} on the volume."}
+        volume.commit()
+        return {"ok": True, **_dataset_stats(d)}
+
+    @routes.get("/datasets/{name}/files/{file}")
+    def get_dataset_file(name: str, file: str):
+        """
+        One file back down — the sidecars a caption run wrote, mostly.
+        Committed bytes by RPC and never the spool: the spool assumes a
+        finished file never changes, and a sidecar is exactly the file that
+        does.
+        """
+        try:
+            _check_name(name)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if not DATASET_FILE_RE.match(file):
+            return JSONResponse({"error": f"{file!r} is not a file a set can hold."}, status_code=400)
+        data = _volume_bytes(f"datasets/{name}/{file}")
+        if data is None:
+            mounted = DATASETS / name / file
+            if not mounted.is_file():
+                _reload_volume()
+            if not mounted.is_file():
+                return JSONResponse({"error": "Not found."}, status_code=404)
+            data = mounted.read_bytes()
+        suffix = Path(file).suffix.lower()
+        media = ("text/plain; charset=utf-8" if suffix == ".txt"
+                 else "application/json" if suffix == ".json"
+                 else MEDIA_TYPES.get(suffix, "application/octet-stream"))
+        return Response(content=data, media_type=media,
+                        headers={"Cache-Control": "no-store"})
+
+    @routes.post("/jobs/caption")
+    def caption(payload: dict) -> dict[str, Any]:
+        return _submit_caption(payload)
+
+    @routes.post("/jobs/train")
+    def train(payload: dict) -> dict[str, Any]:
+        return _start_training(
+            dataset=str(payload.get("dataset") or ""),
+            lora_name=str(payload.get("lora_name") or ""),
+            trigger_word=str(payload.get("trigger_word") or ""),
+            params=payload.get("params") or payload,
+        )
 
     return routes
