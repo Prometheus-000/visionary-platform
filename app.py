@@ -8849,6 +8849,13 @@ class _ImageSide:
             "model": model, "output_dir": str(OUTPUTS),
             "duration_s": round(time.time() - started, 1),
             **report,
+            # The record itself, once, on the terminal publish. A client that
+            # writes the file into its own library embeds
+            # this rather than re-deriving it from the fields above, so what
+            # it writes is byte-for-byte what this container would have; the
+            # fields above stay for the page that already reads them. Small
+            # (no bytes, by construction) and published exactly once.
+            "record": record,
         }
         _publish(job_id, **res)
         return res
@@ -12159,7 +12166,9 @@ class _VideoSide:
             volume.commit()
             res = {"status": "completed", "job_id": job_id, "files": names,
                    "output_dir": str(OUTPUTS), "model": model,
-                   "duration_s": round(time.time() - started, 1), **info}
+                   "duration_s": round(time.time() - started, 1), **info,
+                   # Same field the image side publishes — see its note.
+                   "record": record}
             _publish(job_id, **res)
             return res
 
@@ -12192,6 +12201,8 @@ class _VideoSide:
             "status": "completed", "job_id": job_id, "files": [name],
             "output_dir": str(OUTPUTS), "model": model,
             "duration_s": round(time.time() - started, 1), **info,
+            # Same field the image side publishes — see its note.
+            "record": record,
         }
         _publish(job_id, **res)
         return res
@@ -12826,7 +12837,9 @@ def _playground_run(comfy: _Comfy, job_id: str,
 
         res = {"status": "completed", "job_id": job_id, "files": names,
                "output_dir": str(OUTPUTS), "model": "playground",
-               "duration_s": round(time.time() - started, 1)}
+               "duration_s": round(time.time() - started, 1),
+               # Same field the image side publishes — see its note.
+               "record": record}
         _publish(job_id, **res)
         return res
     except StopRequested:
@@ -13016,6 +13029,331 @@ def playground_catalogue_job(job_id: str, url: str | None = None,
 
 
 # --------------------------------------------------------------------------
+# Route bodies two callers share
+#
+# The page's routes below and the job API further down are two
+# callers of one contract. Each body here used to live inside one route, and
+# the day a second caller needed it the choice was to copy it or to move it.
+# Copied, the two drift — a validation added to one is a cold H100 wasted by
+# the other — so they moved. Module level rather than nested, because both
+# ASGI functions are separate containers and share nothing but this file.
+# --------------------------------------------------------------------------
+
+
+def _weights() -> dict[str, Any]:
+    """
+    What is on the volume that a run can load: the checkpoint catalogue with
+    `present` per entry, and every LoRA the picker may offer.
+
+    The reload and both walks are here rather than in `/api/state` because the
+    second caller asks the same question of a different URL, and a listing that
+    the two answered differently would be a picker offering a file the run
+    cannot find.
+    """
+    _reload_volume()
+    # Two shapes, because the volume really holds two.
+    #
+    # Training writes loras/{name}/, so a folder is a LoRA and its epoch
+    # checkpoints are that LoRA's versions. But anything that arrives some
+    # other way — migrated off an older volume, uploaded by hand, pulled
+    # down as a speed LoRA — is a bare file at the top level, and the
+    # folders-only walk skipped it silently. Four real LoRAs sat on the
+    # volume being invisible to the picker, which reads as "training never
+    # produced anything" rather than "this listing has an opinion about
+    # directory layout". A file that a run can load is a file the picker
+    # has to offer.
+    loras = []
+    # Both walks under the reload lock. The reload above has released
+    # it by the time either starts, and `volume.reload()` swaps the
+    # whole mount — so a reload from any of the twenty requests beside
+    # this one empties LORAS and MODELS mid-walk, and the answer is a
+    # picker with no LoRAs and a sheet saying nothing is downloaded.
+    # `_model_status()` is in here because /models is reloaded by the
+    # same call; the Dict read below is not, because it is a network
+    # call and this lock is what reloads are queued behind.
+    with _RELOAD_LOCK:
+        models = _model_status()
+        if LORAS.is_dir():
+            for d in sorted(LORAS.iterdir()):
+                if d.is_dir():
+                    final = d / f"{d.name}.safetensors"
+                    ckpts = sorted(
+                        (p for p in d.glob("*.safetensors") if p != final),
+                        key=lambda p: p.stat().st_mtime, reverse=True,
+                    )
+                    files = ([final] if final.exists() else []) + ckpts
+                    if not files:
+                        continue
+                    trigger = ""
+                    meta = d / "visionary.json"
+                    if meta.exists():
+                        try:
+                            trigger = json.loads(meta.read_text()).get("trigger_word", "")
+                        except Exception:
+                            pass
+                    spec = CATALOGUE_LORA_ROOTS.get(str(d))
+                    loras.append({
+                        "name": d.name, "trigger_word": trigger,
+                        "strength": None,
+                        "path": str(files[0]),
+                        # The sidecar is the tell: this platform's trainer wrote
+                        # it, and the trainer trains Krea 2 RAW — so the folder's
+                        # weights are Krea 2's. A folder with neither sidecar nor
+                        # catalogue entry arrived by hand and claims nothing, so
+                        # both pickers keep offering it.
+                        "arch": (spec or {}).get(
+                            "arch", "krea2" if meta.exists() else ""),
+                        "internal": bool((spec or {}).get("internal")),
+                        # `root` is served rather than left for the page to
+                        # rebuild from a file path, for the same reason the LoRA
+                        # index derives `rel` by splitting on `/loras/` instead
+                        # of joining two labels: the layout allows any nesting
+                        # under a folder, so `dirname(files[0])` is the folder
+                        # for a flat training output and one level too deep for
+                        # anything else. It is what Delete addresses, and a
+                        # delete that addresses the wrong directory is the one
+                        # kind of bug this file cannot take back.
+                        "root": str(d),
+                        "bytes": _tree_bytes(d),
+                        "catalogue": (spec or {}).get("family", ""),
+                        "files": [{"name": f.name, "path": str(f)} for f in files],
+                    })
+                elif d.suffix == ".safetensors":
+                    # No sidecar to read a trigger word out of, and no epochs to
+                    # choose between — one file, one entry, named for itself. The
+                    # catalogue may still know its phrase: the Krea style LoRAs
+                    # land exactly here, and each is near-invisible until its
+                    # trigger is in the prompt — so serving "" for them told the
+                    # picker nothing about the one fact that decides whether the
+                    # weight does anything on a first try.
+                    spec = CATALOGUE_LORA_ROOTS.get(str(d))
+                    loras.append({
+                        "name": d.stem,
+                        "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
+                        "strength": (KREA_STYLE_STRENGTH
+                                     if d.stem in KREA_STYLE_LORAS else None),
+                        "path": str(d),
+                        "root": str(d),
+                        "bytes": _tree_bytes(d),
+                        "catalogue": (spec or {}).get("family", ""),
+                        # A loose file claims no architecture unless the
+                        # catalogue put it there — see the folder branch above.
+                        "arch": (spec or {}).get("arch", ""),
+                        "internal": bool((spec or {}).get("internal")),
+                        "files": [{"name": d.name, "path": str(d)}],
+                    })
+    loras.sort(key=lambda l: l["name"].lower())
+    return {"models": models, "loras": loras}
+
+
+def _output_response(name: str):
+    """
+    Stream one result off the volume, image or video — the body of
+    `/api/file/{name}`, and of the job API's `/files/{name}`.
+
+    Matching the whole filename, not its stem: `Path("../../x").stem` is "x",
+    which passes NAME_RE while the joined path still escapes outputs/. One
+    segment: outputs/ is flat and the name carries its run.
+
+    **Served off the spool, never the mount.** The mount needs a reload to see
+    a fresh run, reload is refusable — by this route's own descriptors most of
+    all — and every "broken picture on a run that is sitting on the volume"
+    traced back to that loop. The spool pulls committed bytes by RPC, which no
+    open file can refuse, so a render that has finished is a render this can
+    serve, first ask included.
+    """
+    from fastapi.responses import FileResponse, JSONResponse
+
+    if not OUTPUT_FILE_RE.match(name):
+        return JSONResponse({"error": "Invalid name."}, status_code=400)
+
+    path = _spooled(f"outputs/{name}")
+    if path is None:
+        # The mount, for the one thing the spool cannot answer: bytes
+        # written on THIS container that were never committed, and any
+        # RPC failure. `_sizes_on_disk` rather than `is_file()` because
+        # a first miss cached a negative entry the reload does not clear.
+        mounted = OUTPUTS / name
+        if not mounted.is_file():
+            _reload_volume()
+            if not _sizes_on_disk([mounted])[mounted]:
+                return JSONResponse({"error": "Not found."}, status_code=404)
+        path = mounted
+    return FileResponse(
+        str(path),
+        media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+def _submit_still(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Queue one still — the body of `/api/generate`, and of the job API's
+    `/jobs/still`.
+
+    Everything rejectable is rejected here, on CPU: a bad LoRA path, an
+    unknown pill, a plate with nothing to compose around. Discovering any of
+    them inside the job would cost a cold H100 before the form error arrives.
+    The reply is `{"ok": True, "job_id"}` or `{"error": sentence}`; the job's
+    progress is then the record under that id.
+    """
+    t_route = time.time()
+    prompt = str(payload.get("prompt") or "").strip()
+    regions = payload.get("regions") or []
+    # A document is prose too, so it satisfies this the way a box does. The
+    # guard is about having *something* to render, and "the prompt box is
+    # empty but the model read a sentence out of it" is not a state this can
+    # reach — but a client that sends only a document is not malformed, and
+    # refusing it here would be the route disagreeing with the compiler
+    # about what counts as a prompt.
+    if not prompt and not regions:
+        return {"error": "A prompt is required."}
+
+    def num(k, d, cast):
+        try:
+            v = payload.get(k)
+            return cast(v) if v not in (None, "") else d
+        except (TypeError, ValueError):
+            return d
+
+    # `lora_path`/`lora_multiplier` are the pre-stack shape of this request;
+    # accepted so an older client keeps working against the new backend.
+    stack = payload.get("loras")
+    if not stack and payload.get("lora_path"):
+        stack = [{"path": payload["lora_path"], "unet": num("lora_multiplier", 1.0, float)}]
+
+    # Reject here rather than in the job: a bad path is a form error, and
+    # spawning would cost a cold H100 before discovering it. Regions are
+    # validated on the same trip and for the same reason — a region naming
+    # a LoRA deleted since the page loaded is the failure a stale tab
+    # actually hits.
+    _reload_volume()
+    try:
+        stack = _validate_loras(stack)
+        # Blocking, projected. **The same arrangement the video side turns
+        # into prose, seen through the camera instead of described by it**
+        # — a mark becomes the normalised 0..1 rectangle a region already
+        # is, so this reaches Krea 2 as a projection rather than as a
+        # second feature.
+        #
+        # Only when nothing was drawn. A hand-drawn box is somebody looking
+        # at the frame and deciding, and an arrangement does not get to
+        # overrule that any more than it overrules a chosen pill.
+        stage = _validate_stage(payload.get("stage"), cast_ids=None)
+        if stage and not regions:
+            regions = [
+                {k: v for k, v in b.items()
+                 if k != "castId" and v is not None}
+                for b in _stage_boxes(stage)
+            ]
+        regions = _validate_regions(regions)
+        objects = _validate_objects(payload.get("objects"))
+        style_refs = _validate_style_refs(payload.get("style_refs"))
+        shot = _validate_shot(payload.get("shot"))
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    # The job refuses this too; here it is a form error while both
+    # attachments are on screen.
+    if style_refs and regions:
+        return {"error": "Style references and region boxes are two "
+                         "engines — remove one. Style applies to the "
+                         "whole frame."}
+
+    # A plate still needs an identity to compose around, but a box is only
+    # one way to hold it: with no boxes drawn, the job conjures a
+    # full-canvas region out of the run's first LoRA chip — the commonest
+    # render is one character with no boxes, and demanding a full-frame
+    # box there was a gesture that added no information. Caught here when
+    # neither exists, because the answer names two fixes and both are on
+    # screen. Objects are plates too — same sockets, same engine.
+    plated = [slot for slot in ("scene", "outfit") if payload.get(slot)]
+    plated += ["object"] * len(objects)
+    for slot in plated:
+        if not regions:
+            if not stack:
+                return {"error": f"A {slot} reference needs an identity "
+                                 "to compose around — put a LoRA on the "
+                                 "run, or draw a region holding a LoRA "
+                                 "or a photo."}
+            break
+        # Same fact the job checks, caught while the plate is on screen:
+        # the edit path only arms boxes holding a LoRA or a photo, and a
+        # plate over described-only boxes is a dead job after a cold load
+        # ("V12 unified attention was not armed").
+        if not _armed_regions(regions):
+            return {"error": f"A {slot} reference needs a box holding an "
+                             "identity — a LoRA or a photo. Boxes with "
+                             "only a description cannot anchor the "
+                             "compose."}
+
+    # The Playground toggle, resolved here on CPU so a stale menu is a
+    # form error rather than a cold H100.
+    try:
+        wf = _load_workflow_for_run(payload)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    # Seeded here, synchronously, before the spawn — `_arm_spawn` makes the
+    # same move for fixed-id jobs. Until the container's first publish the
+    # record did not exist, so a poll during the cold start read
+    # {"status": "unknown"} and the page said "Working…" for the whole of
+    # it — the state somebody kills the app out of. A cold start is the one
+    # unbounded wait on this path, so the record says what it is. The job
+    # then merges into this with `_publish` rather than assigning over it.
+    jobs[job_id] = {"status": "queued", "phase": "waiting for a GPU container",
+                    "beat": time.time()}
+    _host("image", payload)().generate_image.spawn(job_id=job_id, params={
+        **({"workflow": wf[0], "workflow_graph": wf[1],
+            "workflow_extras": payload.get("workflow_extras") or {}}
+           if wf else {}),
+        # See the video side: the container subtracts this on arrival, and
+        # the difference is a delivery that waited.
+        "queued_at": time.time(),
+        # Prose, not a document: Krea 2 has no fields to fill in, so the
+        # same pills append their clauses to the sentence in the same order.
+        # The rail is shared with the video side and the vocabulary decides
+        # what crosses — camera, action, foley and score never reach here.
+        "prompt": _compile_image_prompt(prompt, shot),
+        "prompt_typed": prompt,
+        "prompt_original": str(payload.get("prompt_original") or ""),
+        "shot": shot,
+        "negative_prompt": str(payload.get("negative_prompt") or ""),
+        "model": str(payload.get("model") or "turbo"),
+        "loras": stack,
+        "regions": regions,
+        "region_weight": num("region_weight", 1.0, float),
+        # Base64, the same shape /api/video already takes its keyframes in.
+        "scene": payload.get("scene"),
+        "outfit": payload.get("outfit"),
+        "objects": objects,
+        "style_refs": style_refs,
+        "style_strength": num("style_strength", 1.0, float),
+        # None, not a default: the job derives compose_seed from the main
+        # seed when unset, and edit_strength's default lives beside its
+        # clamp so the two cannot drift.
+        "edit_strength": num("edit_strength", None, float),
+        "compose_seed": num("compose_seed", None, int),
+        "width": num("width", 1024, int),
+        "height": num("height", 1024, int),
+        "num_images": max(1, min(4, num("num_images", 1, int))),
+        "steps": num("steps", None, int),
+        "cfg_scale": num("cfg_scale", None, float),
+        "seed": num("seed", None, int),
+        "sampler": str(payload.get("sampler")
+                       or (STYLE_DEFAULTS if style_refs
+                           else IMAGE_DEFAULTS)["sampler"]),
+        "scheduler": str(payload.get("scheduler")
+                         or (STYLE_DEFAULTS if style_refs
+                             else IMAGE_DEFAULTS)["scheduler"]),
+        "shift": num("shift", 1.15, float),
+    })
+    _log_spawn("image", job_id, payload, t_route)
+    return {"ok": True, "job_id": job_id}
+
+
+# --------------------------------------------------------------------------
 # Web app — UI + API on a single URL
 #
 # The routes below are `def`, not `async def`, and that is deliberate: FastAPI
@@ -13141,99 +13479,8 @@ def web():
 
     @api.get("/api/state")
     def state() -> dict[str, Any]:
-        _reload_volume()
-        # Two shapes, because the volume really holds two.
-        #
-        # Training writes loras/{name}/, so a folder is a LoRA and its epoch
-        # checkpoints are that LoRA's versions. But anything that arrives some
-        # other way — migrated off an older volume, uploaded by hand, pulled
-        # down as a speed LoRA — is a bare file at the top level, and the
-        # folders-only walk skipped it silently. Four real LoRAs sat on the
-        # volume being invisible to the picker, which reads as "training never
-        # produced anything" rather than "this listing has an opinion about
-        # directory layout". A file that a run can load is a file the picker
-        # has to offer.
-        loras = []
-        # Both walks under the reload lock. The reload above has released
-        # it by the time either starts, and `volume.reload()` swaps the
-        # whole mount — so a reload from any of the twenty requests beside
-        # this one empties LORAS and MODELS mid-walk, and the answer is a
-        # picker with no LoRAs and a sheet saying nothing is downloaded.
-        # `_model_status()` is in here because /models is reloaded by the
-        # same call; the Dict read below is not, because it is a network
-        # call and this lock is what reloads are queued behind.
-        with _RELOAD_LOCK:
-            models = _model_status()
-            if LORAS.is_dir():
-                for d in sorted(LORAS.iterdir()):
-                    if d.is_dir():
-                        final = d / f"{d.name}.safetensors"
-                        ckpts = sorted(
-                            (p for p in d.glob("*.safetensors") if p != final),
-                            key=lambda p: p.stat().st_mtime, reverse=True,
-                        )
-                        files = ([final] if final.exists() else []) + ckpts
-                        if not files:
-                            continue
-                        trigger = ""
-                        meta = d / "visionary.json"
-                        if meta.exists():
-                            try:
-                                trigger = json.loads(meta.read_text()).get("trigger_word", "")
-                            except Exception:
-                                pass
-                        spec = CATALOGUE_LORA_ROOTS.get(str(d))
-                        loras.append({
-                            "name": d.name, "trigger_word": trigger,
-                            "strength": None,
-                            "path": str(files[0]),
-                            # The sidecar is the tell: this platform's trainer wrote
-                            # it, and the trainer trains Krea 2 RAW — so the folder's
-                            # weights are Krea 2's. A folder with neither sidecar nor
-                            # catalogue entry arrived by hand and claims nothing, so
-                            # both pickers keep offering it.
-                            "arch": (spec or {}).get(
-                                "arch", "krea2" if meta.exists() else ""),
-                            "internal": bool((spec or {}).get("internal")),
-                            # `root` is served rather than left for the page to
-                            # rebuild from a file path, for the same reason the LoRA
-                            # index derives `rel` by splitting on `/loras/` instead
-                            # of joining two labels: the layout allows any nesting
-                            # under a folder, so `dirname(files[0])` is the folder
-                            # for a flat training output and one level too deep for
-                            # anything else. It is what Delete addresses, and a
-                            # delete that addresses the wrong directory is the one
-                            # kind of bug this file cannot take back.
-                            "root": str(d),
-                            "bytes": _tree_bytes(d),
-                            "catalogue": (spec or {}).get("family", ""),
-                            "files": [{"name": f.name, "path": str(f)} for f in files],
-                        })
-                    elif d.suffix == ".safetensors":
-                        # No sidecar to read a trigger word out of, and no epochs to
-                        # choose between — one file, one entry, named for itself. The
-                        # catalogue may still know its phrase: the Krea style LoRAs
-                        # land exactly here, and each is near-invisible until its
-                        # trigger is in the prompt — so serving "" for them told the
-                        # picker nothing about the one fact that decides whether the
-                        # weight does anything on a first try.
-                        spec = CATALOGUE_LORA_ROOTS.get(str(d))
-                        loras.append({
-                            "name": d.stem,
-                            "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
-                            "strength": (KREA_STYLE_STRENGTH
-                                         if d.stem in KREA_STYLE_LORAS else None),
-                            "path": str(d),
-                            "root": str(d),
-                            "bytes": _tree_bytes(d),
-                            "catalogue": (spec or {}).get("family", ""),
-                            # A loose file claims no architecture unless the
-                            # catalogue put it there — see the folder branch above.
-                            "arch": (spec or {}).get("arch", ""),
-                            "internal": bool((spec or {}).get("internal")),
-                            "files": [{"name": d.name, "path": str(d)}],
-                        })
-        loras.sort(key=lambda l: l["name"].lower())
+        w = _weights()
+        models, loras = w["models"], w["loras"]
         # The menu is what the ✕ removes. Customs are deleted outright; a
         # built-in is baked into the image, so its ✕ hides it here instead —
         # while `_caption_models()` stays whole, because old job records and
@@ -14969,151 +15216,7 @@ def web():
 
     @api.post("/api/generate")
     def generate(payload: dict) -> dict[str, Any]:
-        t_route = time.time()
-        prompt = str(payload.get("prompt") or "").strip()
-        regions = payload.get("regions") or []
-        # A document is prose too, so it satisfies this the way a box does. The
-        # guard is about having *something* to render, and "the prompt box is
-        # empty but the model read a sentence out of it" is not a state this can
-        # reach — but a client that sends only a document is not malformed, and
-        # refusing it here would be the route disagreeing with the compiler
-        # about what counts as a prompt.
-        if not prompt and not regions:
-            return {"error": "A prompt is required."}
-
-        def num(k, d, cast):
-            try:
-                v = payload.get(k)
-                return cast(v) if v not in (None, "") else d
-            except (TypeError, ValueError):
-                return d
-
-        # `lora_path`/`lora_multiplier` are the pre-stack shape of this request;
-        # accepted so an older client keeps working against the new backend.
-        stack = payload.get("loras")
-        if not stack and payload.get("lora_path"):
-            stack = [{"path": payload["lora_path"], "unet": num("lora_multiplier", 1.0, float)}]
-
-        # Reject here rather than in the job: a bad path is a form error, and
-        # spawning would cost a cold H100 before discovering it. Regions are
-        # validated on the same trip and for the same reason — a region naming
-        # a LoRA deleted since the page loaded is the failure a stale tab
-        # actually hits.
-        _reload_volume()
-        try:
-            stack = _validate_loras(stack)
-            # Blocking, projected. **The same arrangement the video side turns
-            # into prose, seen through the camera instead of described by it**
-            # — a mark becomes the normalised 0..1 rectangle a region already
-            # is, so this reaches Krea 2 as a projection rather than as a
-            # second feature.
-            #
-            # Only when nothing was drawn. A hand-drawn box is somebody looking
-            # at the frame and deciding, and an arrangement does not get to
-            # overrule that any more than it overrules a chosen pill.
-            stage = _validate_stage(payload.get("stage"), cast_ids=None)
-            if stage and not regions:
-                regions = [
-                    {k: v for k, v in b.items()
-                     if k != "castId" and v is not None}
-                    for b in _stage_boxes(stage)
-                ]
-            regions = _validate_regions(regions)
-            objects = _validate_objects(payload.get("objects"))
-            style_refs = _validate_style_refs(payload.get("style_refs"))
-            shot = _validate_shot(payload.get("shot"))
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        # The job refuses this too; here it is a form error while both
-        # attachments are on screen.
-        if style_refs and regions:
-            return {"error": "Style references and region boxes are two "
-                             "engines — remove one. Style applies to the "
-                             "whole frame."}
-
-        # A plate still needs an identity to compose around, but a box is only
-        # one way to hold it: with no boxes drawn, the job conjures a
-        # full-canvas region out of the run's first LoRA chip — the commonest
-        # render is one character with no boxes, and demanding a full-frame
-        # box there was a gesture that added no information. Caught here when
-        # neither exists, because the answer names two fixes and both are on
-        # screen. Objects are plates too — same sockets, same engine.
-        plated = [slot for slot in ("scene", "outfit") if payload.get(slot)]
-        plated += ["object"] * len(objects)
-        for slot in plated:
-            if not regions:
-                if not stack:
-                    return {"error": f"A {slot} reference needs an identity "
-                                     "to compose around — put a LoRA on the "
-                                     "run, or draw a region holding a LoRA "
-                                     "or a photo."}
-                break
-            # Same fact the job checks, caught while the plate is on screen:
-            # the edit path only arms boxes holding a LoRA or a photo, and a
-            # plate over described-only boxes is a dead job after a cold load
-            # ("V12 unified attention was not armed").
-            if not _armed_regions(regions):
-                return {"error": f"A {slot} reference needs a box holding an "
-                                 "identity — a LoRA or a photo. Boxes with "
-                                 "only a description cannot anchor the "
-                                 "compose."}
-
-        # The Playground toggle, resolved here on CPU so a stale menu is a
-        # form error rather than a cold H100.
-        try:
-            wf = _load_workflow_for_run(payload)
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        job_id = f"gen{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host("image", payload)().generate_image.spawn(job_id=job_id, params={
-            **({"workflow": wf[0], "workflow_graph": wf[1],
-                "workflow_extras": payload.get("workflow_extras") or {}}
-               if wf else {}),
-            # See the video side: the container subtracts this on arrival, and
-            # the difference is a delivery that waited.
-            "queued_at": time.time(),
-            # Prose, not a document: Krea 2 has no fields to fill in, so the
-            # same pills append their clauses to the sentence in the same order.
-            # The rail is shared with the video side and the vocabulary decides
-            # what crosses — camera, action, foley and score never reach here.
-            "prompt": _compile_image_prompt(prompt, shot),
-            "prompt_typed": prompt,
-            "prompt_original": str(payload.get("prompt_original") or ""),
-            "shot": shot,
-            "negative_prompt": str(payload.get("negative_prompt") or ""),
-            "model": str(payload.get("model") or "turbo"),
-            "loras": stack,
-            "regions": regions,
-            "region_weight": num("region_weight", 1.0, float),
-            # Base64, the same shape /api/video already takes its keyframes in.
-            "scene": payload.get("scene"),
-            "outfit": payload.get("outfit"),
-            "objects": objects,
-            "style_refs": style_refs,
-            "style_strength": num("style_strength", 1.0, float),
-            # None, not a default: the job derives compose_seed from the main
-            # seed when unset, and edit_strength's default lives beside its
-            # clamp so the two cannot drift.
-            "edit_strength": num("edit_strength", None, float),
-            "compose_seed": num("compose_seed", None, int),
-            "width": num("width", 1024, int),
-            "height": num("height", 1024, int),
-            "num_images": max(1, min(4, num("num_images", 1, int))),
-            "steps": num("steps", None, int),
-            "cfg_scale": num("cfg_scale", None, float),
-            "seed": num("seed", None, int),
-            "sampler": str(payload.get("sampler")
-                           or (STYLE_DEFAULTS if style_refs
-                               else IMAGE_DEFAULTS)["sampler"]),
-            "scheduler": str(payload.get("scheduler")
-                             or (STYLE_DEFAULTS if style_refs
-                                 else IMAGE_DEFAULTS)["scheduler"]),
-            "shift": num("shift", 1.15, float),
-        })
-        _log_spawn("image", job_id, payload, t_route)
-        return {"ok": True, "job_id": job_id}
+        return _submit_still(payload)
 
     @api.post("/api/video")
     def video(payload: dict) -> dict[str, Any]:
@@ -15443,26 +15546,7 @@ def web():
         clip's range requests on local disk: the browser re-asking for byte
         ranges used to be a descriptor on /workspace per ask.
         """
-        if not OUTPUT_FILE_RE.match(name):
-            return JSONResponse({"error": "Invalid name."}, status_code=400)
-
-        path = _spooled(f"outputs/{name}")
-        if path is None:
-            # The mount, for the one thing the spool cannot answer: bytes
-            # written on THIS container that were never committed, and any
-            # RPC failure. `_sizes_on_disk` rather than `is_file()` because
-            # a first miss cached a negative entry the reload does not clear.
-            mounted = OUTPUTS / name
-            if not mounted.is_file():
-                _reload_volume()
-                if not _sizes_on_disk([mounted])[mounted]:
-                    return JSONResponse({"error": "Not found."}, status_code=404)
-            path = mounted
-        return FileResponse(
-            str(path),
-            media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
+        return _output_response(name)
 
     @api.get("/api/cover/{name}")
     def output_cover(name: str):
