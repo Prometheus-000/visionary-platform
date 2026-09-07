@@ -144,6 +144,33 @@ and two domains, and the page follows the domains.
   which; never quiet the probe or squeeze the field to make the number stop
   complaining, which is the sweep that broke the field the first time.
 
+- **The interface is monochrome by default, because it is the ground the work is
+  made on. The colour on this screen belongs to the render.** A frame of molten
+  chrome and crimson velvet lit by neon pink and electric blue is the only
+  saturated thing on the page, and it is saturated *against* something: near
+  black, white ink, and greys in between. Put a house hue anywhere in that
+  chrome and the render stops being the brightest thing on screen — it is
+  competing with a button, and the eye splits between them.
+
+  This is canvas dominance in chroma rather than in area, and it is the half no
+  budget can measure: a console can be small and still shout. What the eye lands
+  on first is decided by colour before it is decided by size, which is why the
+  console can afford to be as large as it is.
+
+  What the chrome does with colour follows from that. Hue in the interface is
+  the exception and it never carries the meaning alone — the thirty-odd uses of
+  `--crit`, `--warn` and `--ok` are danger, failure and live, each one already
+  named by the word or the shape it sits on, so removing the colour costs
+  emphasis and never the reading. And the theming engine's default is that rule
+  in code rather than a taste: `MIDNIGHT` is `chroma: 0`, which writes no
+  overrides at all, so the house theme *is* `ui.css` — see the header of
+  `theme/theme.ts`, where a chosen hue is bounded, opt-in, and reaches the
+  accent only, never the neutrals. Monochrome is the floor the tinting is
+  allowed to leave, not a preset beside the others.
+
+  (Every other use of "palette" in this file is the shot palette, which is a
+  door full of tiles and has no colours in it.)
+
 - **The note line under the strip is reserved, and Generate does not move under
   your finger.** The warnings (`#console-notes`) used to mount on demand, which
   read as the obvious economy — a line that says nothing should cost nothing —

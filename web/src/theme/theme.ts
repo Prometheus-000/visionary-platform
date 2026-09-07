@@ -1,6 +1,12 @@
 /**
  * Colour, on the Strata model: monochrome by default, neon by choice.
  *
+ * The default is bare rather than tasteful because the interface is the ground
+ * the work is made on: the colour on the screen belongs to the render, and a
+ * house hue in the chrome makes the render compete with a button. That argument
+ * is the record — `web/CLAUDE.md`, in § The page beside canvas dominance — and
+ * this file is only its mechanism.
+ *
  * The rule this file exists to hold is Strata's, and the first implementation
  * broke it: **an arbitrary hue never touches the neutrals.** Surfaces and inks
  * are tinted only by `warmth`, on a bounded paper↔slate axis at chroma under
