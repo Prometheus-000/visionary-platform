@@ -13403,6 +13403,277 @@ def _submit_still(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "job_id": job_id}
 
 
+
+def _submit_video(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Queue one clip, on whichever video model was asked for — the body of
+    `/api/video`, and of the job API's `/jobs/video`.
+
+    Which *task* runs is never asked for — text-to-video, image-to-video and
+    first/last are read off what was attached, the same way the image side
+    never asks whether you meant a batch. What the client picks is the
+    model, because that is the thing it cannot infer.
+
+    Everything rejectable is rejected here, on CPU: a bad aspect, a LoRA
+    outside loras/, a missing weight. Discovering any of them inside the job
+    costs a cold H100 and tens of gigabytes of loading first, and surfaces
+    as a dead job rather than a form error.
+    """
+    t_route = time.time()
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "A prompt is required."}
+
+    model = str(payload.get("model") or "h3")
+    spec = VIDEO_MODELS.get(model)
+    if spec is None:
+        return {"error": f"Unknown video model {model!r}. "
+                         f"One of: {', '.join(VIDEO_MODELS)}"}
+    supports = spec["supports"]
+
+    def num(k, d, cast):
+        try:
+            v = payload.get(k)
+            return cast(v) if v not in (None, "") else d
+        except (TypeError, ValueError):
+            return d
+
+    first = payload.get("first_frame") or None
+    last = payload.get("last_frame") or None
+    if last and not supports["last_frame"]:
+        return {"error": f"{spec['label']} takes a first frame only."}
+
+    # Motion continuation — the previous take's sampler latent, sliced in as
+    # pinned context so motion and audio continue across the join instead of
+    # restarting from a still. Checked here, on CPU, before a GPU is rented:
+    # a missing latent is a form error, and the fix — clear the Motion tile,
+    # fall back to the frame — is a thing to say while the person is still
+    # at the controls. The job checks again at render time because the
+    # volume can change between the two.
+    continue_from = str(payload.get("continue_from") or "").strip() or None
+    if continue_from:
+        if not re.fullmatch(r"vid[0-9a-z]+", continue_from):
+            return {"error": f"Not a video job id: {continue_from!r}"}
+        if not (OUTPUTS / f"{continue_from}{H3MC_SUFFIX}").exists():
+            _reload_volume()
+        if not (OUTPUTS / f"{continue_from}{H3MC_SUFFIX}").exists():
+            return {"error":
+                    f"That take's motion context is no longer on the "
+                    f"volume ({continue_from}) — it was rendered before "
+                    f"chaining existed, or its generation was deleted. "
+                    f"Clear the Motion tile to continue from its last "
+                    f"frame instead."}
+        # A pinned context anchors the opening the way a first frame would,
+        # and the two are different transformers' jobs — sending both would
+        # be two answers to "where does this take open". The page never
+        # sends both; a stale tab might, and silence here would be the model
+        # ignoring one of them with nothing saying which.
+        if first:
+            return {"error": "A motion continuation already opens where "
+                             "the last take ended — clear the first frame, "
+                             "or clear the Motion tile, but not both ways "
+                             "at once."}
+
+    refs = [r for r in (payload.get("references") or []) if r][:MAX_H3_REFS]
+    vids = [v for v in (payload.get("ref_videos") or []) if v][:MAX_H3_REF_VIDEOS]
+    auds = [a for a in (payload.get("ref_audios") or []) if a][:MAX_H3_REF_AUDIOS]
+    if (refs or vids or auds) and not supports["references"]:
+        return {"error": f"{spec['label']} does not take references."}
+    # Audio counts toward the same twelve. It was left out of this sum when
+    # the audio channel landed, so 9 images + 3 videos + 3 audio passed a
+    # check whose message says the limit is 12 — and the refusal would then
+    # come from the node, mid-run, on a warm H100.
+    if len(refs) + len(vids) + len(auds) > MAX_H3_REF_TOTAL:
+        return {"error": f"{MAX_H3_REF_TOTAL} references in total is the "
+                         f"model's limit ({len(refs)} images + "
+                         f"{len(vids)} videos + {len(auds)} audio)."}
+
+    # The pill rail, checked before anything is rented. A pill the backend
+    # does not know is a stale tab, and the answer to it is a form error
+    # naming the key — not a clause quietly missing from the document, which
+    # is indistinguishable from the model having ignored the word.
+    try:
+        shot = _validate_shot(payload.get("shot"))
+        roles = _validate_ref_roles(payload.get("ref_roles"), len(refs))
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    _reload_volume()
+    try:
+        stack = _validate_video_loras(payload.get("loras")) if supports["loras"] else []
+    except ValueError as exc:
+        return {"error": str(exc)}
+    aspect = str(payload.get("aspect") or "16:9")
+    tier = str(payload.get("tier") or spec["defaults"]["tier"])
+    try:
+        task = "ref2va" if (refs or vids or auds) else "fl2va"
+        _h3_canvas(aspect, tier)  # raises with the valid set named
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    # Named per task, so "download 57 GB" is never the answer to a run that
+    # needs 28.6 of it.
+    sizes = _sizes_on_disk(MODEL_CATALOGUE[k]["dest"]
+                           for k in spec["requires"][task])
+    missing = [MODEL_CATALOGUE[k]["label"] for k in spec["requires"][task]
+               if not sizes[MODEL_CATALOGUE[k]["dest"]]]
+    if missing:
+        return {"error": f"Not downloaded: {', '.join(missing)}. "
+                         "Get them under Settings."}
+
+    ref_size = str(payload.get("ref_size") or "match")
+    if ref_size not in H3_REF_SIZES:
+        return {"error": f"ref_size must be one of: {', '.join(H3_REF_SIZES)}"}
+
+    d = spec["defaults"]
+    seconds = num("seconds", float(d["seconds"]), float)
+    # **Read off the duration, not asked for**, the same way the task is
+    # read off what was attached. Zero seconds is the one length whose
+    # answer is a picture.
+    still = seconds == 0
+    if still and 0 not in (spec["lengths"] or []):
+        return {"error": f"{spec['label']} does not make stills."}
+    # Read here rather than beside the other continuation checks above,
+    # because `still` does not exist until the duration has been read: the
+    # check sat up there for four days and every take answered with an
+    # UnboundLocalError before a single one of these forms was reached.
+    if still and continue_from:
+        return {"error": "A still is one frame, so there is no motion to "
+                         "continue — clear the Motion tile, or ask for a "
+                         "take."}
+    if still:
+        # The compiler still needs a shot to describe, because a still is a
+        # frame *out of* one — `[Shot 1]` and its timings are what the
+        # document is made of, and a one-moment grammar beside it would be
+        # a second way to say what that field already says. So the document
+        # is compiled at the model's own default length and the sampler
+        # renders the opening of it.
+        seconds = float(d["seconds"])
+
+    # The composer's timeline. Note that `scene` means something else one
+    # route up: on `/api/generate` it is a base64 *plate* — a picture of a
+    # place, frame-scope, beside `outfit`. Here it is the cast and the
+    # shots. Two routes, two schemas, and the collision is written down
+    # rather than renamed away because "scene" is the accurate word in both
+    # and a reader who meets the second one cold should be told.
+    try:
+        scene = _validate_scene(payload.get("scene"), n_refs=len(refs),
+                                n_vids=len(vids), n_auds=len(auds),
+                                seconds=seconds)
+    except (TypeError, ValueError) as exc:
+        return {"error": str(exc)}
+
+    # Compiled here rather than in the client, so there is one
+    # implementation of the format, an unknown pill is a form error, and the
+    # sidecar records exactly what the encoder was given.
+    #
+    # The task read here is finer than the one above. That one is right for
+    # which checkpoint loads — first-only, last-only and both are the same
+    # weights — and too coarse for the alignment instruction, where they are
+    # three different sentences about where a picture sits in time.
+    compiled = _compile_h3_prompt(
+        typed=prompt, pills=shot, seconds=seconds, roles=roles,
+        scene=scene, task=_h3_task(first, last, refs, vids, auds),
+    )
+
+    # **A document taken over by hand, and the one field that outranks the
+    # compiler.** The page can open what would run as editable text — view
+    # source rather than a disclosure — and an edit there has to be what
+    # runs, or the surface is a lie about its own contents.
+    #
+    # It is a *separate* key from `prompt` on purpose, because the two halves
+    # of a run mean different things and this is exactly the case that
+    # separates them: `prompt_typed` stays the prose somebody wrote, and only
+    # the receipt is overridden. Folding it into `prompt` would put a
+    # six-field document into the sidecar's intent field, and Reuse would
+    # then load a schema into the first shot's row and compile *that* on the
+    # next run.
+    # Stripped, never collapsed. `_oneline` exists because a newline inside a
+    # *field* ends it early — and this is the document itself, where one field
+    # per line is the format. Running it through that would fold six fields
+    # into one.
+    override = str(payload.get("prompt_compiled") or "").strip()
+    if override:
+        if len(override) > MAX_H3_PROMPT and model == "h3":
+            return {"error": f"The document is {len(override)} characters and "
+                             f"H3's prompt field holds {MAX_H3_PROMPT}."}
+        compiled = override
+
+    # The Playground toggle — same CPU-side read as the image route.
+    try:
+        wf = _load_workflow_for_run(payload)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    # Seeded before the spawn, as `_submit_still` seeds its own: a poll during
+    # the cold start read {"status": "unknown"} until the container's first
+    # publish, and a clip's cold start is minutes of 42 GB loading with nothing
+    # to say for it. The record now says what the wait is from the first ask.
+    jobs[job_id] = {"status": "queued", "phase": "waiting for a GPU container",
+                    "beat": time.time()}
+    _host("video", payload)().generate_video.spawn(job_id=job_id, params={
+        **({"workflow": wf[0], "workflow_graph": wf[1],
+            "workflow_extras": payload.get("workflow_extras") or {}}
+           if wf else {}),
+        # When it was handed to Modal. The container subtracts this on
+        # arrival, which is the only way to see a delivery that waited —
+        # see `_note_queue_wait`.
+        "queued_at": time.time(),
+        "model": model,
+        # Both travel. `prompt` is what runs and is the only one the graph
+        # sees; the other two are what you chose, and they exist so a
+        # gallery card can show a sentence instead of a six-field document
+        # and so Reuse puts the pills back rather than the output of them.
+        "prompt": compiled,
+        "prompt_typed": prompt,
+        "prompt_original": str(payload.get("prompt_original") or ""),
+        "shot": shot,
+        "scene": scene,
+        "continue_from": continue_from,
+        "ref_roles": roles,
+        # No negative prompt on this path at all. H3 is guidance-distilled,
+        # so one would not be applied — and a sidecar that records an input
+        # the model never read is a sidecar that lies about how the clip was
+        # made. It was a per-model question while there were two families.
+        "aspect": aspect,
+        "tier": tier,
+        # Both travel on a still. `seconds` is what the *document* was
+        # compiled against — the shot the frame is taken out of — and
+        # dropping it here would make the sidecar disagree with the prompt
+        # it sits beside.
+        "still": still,
+        "seconds": seconds,
+        "steps": max(1, min(60, num("steps", d["steps"], int))),
+        "seed": num("seed", None, int),
+        # H3's flow shifts. `None` means "the model's default", which is the
+        # honest empty value — the node at rest is a no-op, and it stops
+        # being one under a distilled LoRA, which is the only reason it is
+        # in the graph. There was a shared `shift` key here for as long as
+        # there were two families, and it defaulted to Wan's 8.0; reading it
+        # on an H3 take put 8.0 against the model's own 12.0, which is the
+        # trap that made these two keys separate in the first place.
+        "shift_video": num("shift_video", None, float),
+        "shift_audio": num("shift_audio", None, float),
+        "sampler": str(payload.get("sampler") or d["sampler"]),
+        "scheduler": str(payload.get("scheduler") or d["scheduler"]),
+        "loras": stack,
+        # References and keyframes are alternatives, not a stack: on H3 they
+        # load different transformers. The job takes both fields and the
+        # generator ignores the keyframes when references are present, so a
+        # client that sends both gets the reference run it asked for rather
+        # than a validation error about a combination it cannot express.
+        "references": refs,
+        "ref_videos": vids,
+        "ref_audios": auds,
+        "ref_size": ref_size,
+        "first_frame": first,
+        "last_frame": last,
+    })
+    _log_spawn("video", job_id, payload, t_route)
+    return {"ok": True, "job_id": job_id, "model": model, "mode": task}
+
+
 # One file inside a set: a single segment, a media or sidecar extension, and
 # the characters a phone or a Finder rename produces — a space and parentheses
 # included, because "IMG_0123 (2).jpg" is what a re-export is called.
@@ -15358,266 +15629,7 @@ def web():
 
     @api.post("/api/video")
     def video(payload: dict) -> dict[str, Any]:
-        """
-        Queue one clip, on whichever video model was asked for.
-
-        Which *task* runs is never asked for — text-to-video, image-to-video and
-        first/last are read off what was attached, the same way the image side
-        never asks whether you meant a batch. What the client picks is the
-        model, because that is the thing it cannot infer.
-
-        Everything rejectable is rejected here, on CPU: a bad aspect, a LoRA
-        outside loras/, a missing weight. Discovering any of them inside the job
-        costs a cold H100 and tens of gigabytes of loading first, and surfaces
-        as a dead job rather than a form error.
-        """
-        t_route = time.time()
-        prompt = str(payload.get("prompt") or "").strip()
-        if not prompt:
-            return {"error": "A prompt is required."}
-
-        model = str(payload.get("model") or "h3")
-        spec = VIDEO_MODELS.get(model)
-        if spec is None:
-            return {"error": f"Unknown video model {model!r}. "
-                             f"One of: {', '.join(VIDEO_MODELS)}"}
-        supports = spec["supports"]
-
-        def num(k, d, cast):
-            try:
-                v = payload.get(k)
-                return cast(v) if v not in (None, "") else d
-            except (TypeError, ValueError):
-                return d
-
-        first = payload.get("first_frame") or None
-        last = payload.get("last_frame") or None
-        if last and not supports["last_frame"]:
-            return {"error": f"{spec['label']} takes a first frame only."}
-
-        # Motion continuation — the previous take's sampler latent, sliced in as
-        # pinned context so motion and audio continue across the join instead of
-        # restarting from a still. Checked here, on CPU, before a GPU is rented:
-        # a missing latent is a form error, and the fix — clear the Motion tile,
-        # fall back to the frame — is a thing to say while the person is still
-        # at the controls. The job checks again at render time because the
-        # volume can change between the two.
-        continue_from = str(payload.get("continue_from") or "").strip() or None
-        if continue_from:
-            if not re.fullmatch(r"vid[0-9a-z]+", continue_from):
-                return {"error": f"Not a video job id: {continue_from!r}"}
-            if not (OUTPUTS / f"{continue_from}{H3MC_SUFFIX}").exists():
-                _reload_volume()
-            if not (OUTPUTS / f"{continue_from}{H3MC_SUFFIX}").exists():
-                return {"error":
-                        f"That take's motion context is no longer on the "
-                        f"volume ({continue_from}) — it was rendered before "
-                        f"chaining existed, or its generation was deleted. "
-                        f"Clear the Motion tile to continue from its last "
-                        f"frame instead."}
-            # A pinned context anchors the opening the way a first frame would,
-            # and the two are different transformers' jobs — sending both would
-            # be two answers to "where does this take open". The page never
-            # sends both; a stale tab might, and silence here would be the model
-            # ignoring one of them with nothing saying which.
-            if first:
-                return {"error": "A motion continuation already opens where "
-                                 "the last take ended — clear the first frame, "
-                                 "or clear the Motion tile, but not both ways "
-                                 "at once."}
-
-        refs = [r for r in (payload.get("references") or []) if r][:MAX_H3_REFS]
-        vids = [v for v in (payload.get("ref_videos") or []) if v][:MAX_H3_REF_VIDEOS]
-        auds = [a for a in (payload.get("ref_audios") or []) if a][:MAX_H3_REF_AUDIOS]
-        if (refs or vids or auds) and not supports["references"]:
-            return {"error": f"{spec['label']} does not take references."}
-        # Audio counts toward the same twelve. It was left out of this sum when
-        # the audio channel landed, so 9 images + 3 videos + 3 audio passed a
-        # check whose message says the limit is 12 — and the refusal would then
-        # come from the node, mid-run, on a warm H100.
-        if len(refs) + len(vids) + len(auds) > MAX_H3_REF_TOTAL:
-            return {"error": f"{MAX_H3_REF_TOTAL} references in total is the "
-                             f"model's limit ({len(refs)} images + "
-                             f"{len(vids)} videos + {len(auds)} audio)."}
-
-        # The pill rail, checked before anything is rented. A pill the backend
-        # does not know is a stale tab, and the answer to it is a form error
-        # naming the key — not a clause quietly missing from the document, which
-        # is indistinguishable from the model having ignored the word.
-        try:
-            shot = _validate_shot(payload.get("shot"))
-            roles = _validate_ref_roles(payload.get("ref_roles"), len(refs))
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        _reload_volume()
-        try:
-            stack = _validate_video_loras(payload.get("loras")) if supports["loras"] else []
-        except ValueError as exc:
-            return {"error": str(exc)}
-        aspect = str(payload.get("aspect") or "16:9")
-        tier = str(payload.get("tier") or spec["defaults"]["tier"])
-        try:
-            task = "ref2va" if (refs or vids or auds) else "fl2va"
-            _h3_canvas(aspect, tier)  # raises with the valid set named
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        # Named per task, so "download 57 GB" is never the answer to a run that
-        # needs 28.6 of it.
-        sizes = _sizes_on_disk(MODEL_CATALOGUE[k]["dest"]
-                               for k in spec["requires"][task])
-        missing = [MODEL_CATALOGUE[k]["label"] for k in spec["requires"][task]
-                   if not sizes[MODEL_CATALOGUE[k]["dest"]]]
-        if missing:
-            return {"error": f"Not downloaded: {', '.join(missing)}. "
-                             "Get them under Settings."}
-
-        ref_size = str(payload.get("ref_size") or "match")
-        if ref_size not in H3_REF_SIZES:
-            return {"error": f"ref_size must be one of: {', '.join(H3_REF_SIZES)}"}
-
-        d = spec["defaults"]
-        seconds = num("seconds", float(d["seconds"]), float)
-        # **Read off the duration, not asked for**, the same way the task is
-        # read off what was attached. Zero seconds is the one length whose
-        # answer is a picture.
-        still = seconds == 0
-        if still and 0 not in (spec["lengths"] or []):
-            return {"error": f"{spec['label']} does not make stills."}
-        # Read here rather than beside the other continuation checks above,
-        # because `still` does not exist until the duration has been read: the
-        # check sat up there for four days and every take answered with an
-        # UnboundLocalError before a single one of these forms was reached.
-        if still and continue_from:
-            return {"error": "A still is one frame, so there is no motion to "
-                             "continue — clear the Motion tile, or ask for a "
-                             "take."}
-        if still:
-            # The compiler still needs a shot to describe, because a still is a
-            # frame *out of* one — `[Shot 1]` and its timings are what the
-            # document is made of, and a one-moment grammar beside it would be
-            # a second way to say what that field already says. So the document
-            # is compiled at the model's own default length and the sampler
-            # renders the opening of it.
-            seconds = float(d["seconds"])
-
-        # The composer's timeline. Note that `scene` means something else one
-        # route up: on `/api/generate` it is a base64 *plate* — a picture of a
-        # place, frame-scope, beside `outfit`. Here it is the cast and the
-        # shots. Two routes, two schemas, and the collision is written down
-        # rather than renamed away because "scene" is the accurate word in both
-        # and a reader who meets the second one cold should be told.
-        try:
-            scene = _validate_scene(payload.get("scene"), n_refs=len(refs),
-                                    n_vids=len(vids), n_auds=len(auds),
-                                    seconds=seconds)
-        except (TypeError, ValueError) as exc:
-            return {"error": str(exc)}
-
-        # Compiled here rather than in the client, so there is one
-        # implementation of the format, an unknown pill is a form error, and the
-        # sidecar records exactly what the encoder was given.
-        #
-        # The task read here is finer than the one above. That one is right for
-        # which checkpoint loads — first-only, last-only and both are the same
-        # weights — and too coarse for the alignment instruction, where they are
-        # three different sentences about where a picture sits in time.
-        compiled = _compile_h3_prompt(
-            typed=prompt, pills=shot, seconds=seconds, roles=roles,
-            scene=scene, task=_h3_task(first, last, refs, vids, auds),
-        )
-
-        # **A document taken over by hand, and the one field that outranks the
-        # compiler.** The page can open what would run as editable text — view
-        # source rather than a disclosure — and an edit there has to be what
-        # runs, or the surface is a lie about its own contents.
-        #
-        # It is a *separate* key from `prompt` on purpose, because the two halves
-        # of a run mean different things and this is exactly the case that
-        # separates them: `prompt_typed` stays the prose somebody wrote, and only
-        # the receipt is overridden. Folding it into `prompt` would put a
-        # six-field document into the sidecar's intent field, and Reuse would
-        # then load a schema into the first shot's row and compile *that* on the
-        # next run.
-        # Stripped, never collapsed. `_oneline` exists because a newline inside a
-        # *field* ends it early — and this is the document itself, where one field
-        # per line is the format. Running it through that would fold six fields
-        # into one.
-        override = str(payload.get("prompt_compiled") or "").strip()
-        if override:
-            if len(override) > MAX_H3_PROMPT and model == "h3":
-                return {"error": f"The document is {len(override)} characters and "
-                                 f"H3's prompt field holds {MAX_H3_PROMPT}."}
-            compiled = override
-
-        # The Playground toggle — same CPU-side read as the image route.
-        try:
-            wf = _load_workflow_for_run(payload)
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        job_id = f"vid{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host("video", payload)().generate_video.spawn(job_id=job_id, params={
-            **({"workflow": wf[0], "workflow_graph": wf[1],
-                "workflow_extras": payload.get("workflow_extras") or {}}
-               if wf else {}),
-            # When it was handed to Modal. The container subtracts this on
-            # arrival, which is the only way to see a delivery that waited —
-            # see `_note_queue_wait`.
-            "queued_at": time.time(),
-            "model": model,
-            # Both travel. `prompt` is what runs and is the only one the graph
-            # sees; the other two are what you chose, and they exist so a
-            # gallery card can show a sentence instead of a six-field document
-            # and so Reuse puts the pills back rather than the output of them.
-            "prompt": compiled,
-            "prompt_typed": prompt,
-            "prompt_original": str(payload.get("prompt_original") or ""),
-            "shot": shot,
-            "scene": scene,
-            "continue_from": continue_from,
-            "ref_roles": roles,
-            # No negative prompt on this path at all. H3 is guidance-distilled,
-            # so one would not be applied — and a sidecar that records an input
-            # the model never read is a sidecar that lies about how the clip was
-            # made. It was a per-model question while there were two families.
-            "aspect": aspect,
-            "tier": tier,
-            # Both travel on a still. `seconds` is what the *document* was
-            # compiled against — the shot the frame is taken out of — and
-            # dropping it here would make the sidecar disagree with the prompt
-            # it sits beside.
-            "still": still,
-            "seconds": seconds,
-            "steps": max(1, min(60, num("steps", d["steps"], int))),
-            "seed": num("seed", None, int),
-            # H3's flow shifts. `None` means "the model's default", which is the
-            # honest empty value — the node at rest is a no-op, and it stops
-            # being one under a distilled LoRA, which is the only reason it is
-            # in the graph. There was a shared `shift` key here for as long as
-            # there were two families, and it defaulted to Wan's 8.0; reading it
-            # on an H3 take put 8.0 against the model's own 12.0, which is the
-            # trap that made these two keys separate in the first place.
-            "shift_video": num("shift_video", None, float),
-            "shift_audio": num("shift_audio", None, float),
-            "sampler": str(payload.get("sampler") or d["sampler"]),
-            "scheduler": str(payload.get("scheduler") or d["scheduler"]),
-            "loras": stack,
-            # References and keyframes are alternatives, not a stack: on H3 they
-            # load different transformers. The job takes both fields and the
-            # generator ignores the keyframes when references are present, so a
-            # client that sends both gets the reference run it asked for rather
-            # than a validation error about a combination it cannot express.
-            "references": refs,
-            "ref_videos": vids,
-            "ref_audios": auds,
-            "ref_size": ref_size,
-            "first_frame": first,
-            "last_frame": last,
-        })
-        _log_spawn("video", job_id, payload, t_route)
-        return {"ok": True, "job_id": job_id, "model": model, "mode": task}
+        return _submit_video(payload)
 
     @api.get("/api/gallery")
     def gallery(before: float = 0.0, limit: int = 200) -> dict[str, Any]:
@@ -16514,11 +16526,33 @@ def api():
                 "video": {"options": list(VIDEO_GPUS), "default": VIDEO_GPU},
                 "both": {"options": list(BOTH_GPUS), "default": BOTH_GPU},
             },
+            # The composer builds itself from these, as the page's does from
+            # `/api/state`: which controls each video model reads and what is
+            # on the volume for each of its tasks are properties of the
+            # deployment, and the reference caps are the model's — a copy in
+            # the client would drift the first time one moved.
+            "video_models": _video_model_status(),
+            "max_refs": MAX_H3_REFS,
+            "max_ref_videos": MAX_H3_REF_VIDEOS,
+            "max_ref_audios": MAX_H3_REF_AUDIOS,
+            # The vocabulary the app ports rather than reads, served so a
+            # client can check its table against the server's at connect
+            # time — the fixtures catch drift at build time, this catches a
+            # deploy that got ahead of the app.
+            "shot_vocab": SHOT_VOCAB,
+            "shot_langs": H3_LANGUAGES,
+            "shot_roles": [dict(spec, key=k) for k, spec in SHOT_REF_ROLES.items()],
         }
 
     @routes.post("/jobs/still")
     def still(payload: dict) -> dict[str, Any]:
         return _submit_still(payload)
+
+    @routes.post("/jobs/video")
+    def video(payload: dict) -> dict[str, Any]:
+        """Same body `/api/video` takes — keyframes and references as base64,
+        the pill rail, an optional scene — and the same refusals, on CPU."""
+        return _submit_video(payload)
 
     @routes.get("/jobs/{job_id}")
     def job(job_id: str, since: str = "", wait: float = 0.0) -> dict[str, Any]:
