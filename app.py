@@ -14062,6 +14062,361 @@ def _delete_workflow(name: str) -> dict[str, Any]:
     return {"ok": True}
 
 
+
+# ── the gear: bodies two callers share ──────────────────────────────────────
+#
+# Everything decided once behind the gear — the HF token, a weight download,
+# a LoRA moved in or out or deleted, a caption model or preset — moved out of
+# the web app so the job API calls the same functions. The web
+# routes above delegate; nothing here changed meaning by moving.
+
+def _delete_lora(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Delete one LoRA — the folder with its epochs in it, or the loose file.
+
+    The unit is the row `state()` lists, which is the unit the storage layout
+    already says a LoRA is: a folder is one, and so is a bare file. An epoch
+    inside a folder is deliberately not addressable here. It is a real thing
+    to want — twenty checkpoints of one run is most of what fills this volume
+    — but it is a second verb with a second confirmation, and offering it
+    through the same route as "delete this LoRA" would mean one request whose
+    blast radius is a file or a training run depending on how deep the path
+    goes. That is the argument for the guard below.
+
+    `parent != LORAS` is stricter than `_lora_path`'s confinement and is
+    strict on purpose. It rejects every `../` escape, and it also rejects
+    `loras/{name}/{epoch}.safetensors` — a real file, under loras/, that this
+    route must not take on its own.
+    """
+    _reload_volume()
+    raw = str(payload.get("path") or "")
+    root = Path(raw).resolve()
+    if not raw or root.parent != LORAS.resolve():
+        return {"error": f"Not a LoRA: {raw!r}"}
+
+    if root.is_dir():
+        shutil.rmtree(root, ignore_errors=True)
+    elif root.suffix == ".safetensors" and root.is_file():
+        root.unlink()
+    else:
+        # The stale-tab case, and the one worth naming: a second window
+        # deleted it, or a training run was renamed out from under this list.
+        return {"error": f"No LoRA named {root.name!r} on the volume — "
+                         "reopen Settings to refresh the list."}
+
+    # The same discard the two output deletes do, for the same reason:
+    # `_listed` keeps positives forever, so a LoRA proven present stays
+    # proven present after it is gone unless the route that removed it says
+    # so. Without this the next render validates a name ComfyUI will then
+    # refuse as "Value not in list" — the failure a form error exists to
+    # get in front of.
+    _forget_listed(root.name, LORAS)
+    _drop_legacy_trash(LORAS)
+    volume.commit()
+    return {"ok": True}
+
+
+def _set_token(payload: dict[str, Any]) -> dict[str, Any]:
+    if "hf_token" in payload:
+        config["hf_token"] = str(payload.get("hf_token") or "").strip()
+    return {"ok": True, "hf_token_set": bool(_hf_token())}
+
+# **There is no /api/warm, and that is the decision.** A knock existed here
+# for months: the page POSTed it on load, on a model pick and on the switch
+# to video, and each one spawned a generator — a real GPU with a ten-minute
+# scaledown window. So reading the app rented a card, and reading it and
+# closing the tab rented one for ten minutes to do nothing at all. It was
+# never buying what it claimed either: the docstring said the checkpoint
+# was resident afterwards until 2026-08-25, when a cold start spent 400
+# seconds loading weights the knock was supposed to have loaded. All it
+# ever bought was `enter` — ComfyUI up, custom nodes checked, ~25 seconds.
+#
+# A GPU now starts when somebody presses Generate and at no other time.
+# The 25 seconds land in front of a status line that says what it is doing,
+# which is the wait this project is willing to spend; a card spun by a
+# dropdown is not. If you are about to add this back, the thing to weigh
+# is not the 25 seconds — it is who is paying for the tabs that never
+# press anything.
+
+
+def _start_download(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Start one weight downloading, or report the one already going.
+
+    Idempotent, and never an error for being busy. Pressing Download twice
+    is not a mistake to be corrected — it is what anyone does when the first
+    press appears to do nothing — so the second press returns the job the
+    first one started rather than a red message the page has to find room
+    for. `started` is the only difference between the two, and it exists so
+    the caller can tell "this is yours, it is running" from "something else
+    holds the line".
+
+    Downloads stay one-at-a-time: they share an uplink, and two at once is
+    not two downloads, it is the same bandwidth cut in half plus a second
+    container to pay for.
+    """
+    key = str(payload.get("key") or "")
+    if key not in MODEL_CATALOGUE:
+        return {"error": f"Unknown model: {key}"}
+
+    job_id = f"dl_{key}"
+    busy = _active_download()
+    if busy:
+        rec = jobs.get(busy) or {}
+        return {
+            "ok": True, "started": False, "job_id": busy,
+            "mine": busy == job_id,
+            "busy_with": rec.get("phase") or busy,
+        }
+
+    # Seeded here, synchronously, rather than on the container's first line:
+    # `.spawn()` returns before the container starts, and a second press
+    # landing in that gap would read `_active_download()` as empty and start
+    # a competitor — the gap being precisely when a second press happens.
+    jobs[job_id] = {
+        "status": "running",
+        "phase": f"Downloading {MODEL_CATALOGUE[key]['label']}",
+        "percent": 0,
+        "stop": False,
+        # The clock starts at the spawn, not at the container's first
+        # publish, so the gap a cold start opens is covered by the same
+        # liveness rule as everything after it.
+        "beat": time.time(),
+    }
+    jobs[DL_ACTIVE] = {"job_id": job_id}
+    download_job.spawn(key)
+    return {"ok": True, "started": True, "job_id": job_id, "mine": True}
+
+
+def _start_gdrive(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Queue a Google Drive pull into loras/.
+
+    Rejected here rather than in the job for the same reason a bad LoRA path
+    is: an empty box and a malformed folder name are form errors, and
+    discovering either inside the job costs a container start before saying
+    so. What this route cannot check is whether the link is shared — only
+    Drive knows that, and it answers with an HTML sign-in page rather than
+    an error, which is why the job names that case explicitly.
+    """
+    url = str(payload.get("url") or "").strip()
+    folder = str(payload.get("folder") or "").strip()
+    if not url:
+        return {"error": "Paste a Google Drive link or file id."}
+    if folder and not NAME_RE.match(folder):
+        return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
+    _arm_spawn(GDRIVE_JOB)
+    gdrive_job.spawn(url, folder, bool(payload.get("refetch")))
+    return {"ok": True, "job_id": GDRIVE_JOB}
+
+
+def _start_hf_lora(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Queue a HuggingFace pull into loras/.
+
+    The same route shape as Drive, for the same reason the card has the
+    same shape: another place weights come from, not another kind of
+    thing. What is rejected here is what a form can know — an empty box,
+    a reference that is not a repo, a malformed folder name. Whether the
+    repo exists, is gated, or holds forty files is the job's to find out,
+    and it names each of those separately.
+    """
+    try:
+        repo, filename = _hf_ref(str(payload.get("repo") or ""))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    # A filename typed into its own field beats one parsed off the link,
+    # because the field is the one the user can see.
+    filename = str(payload.get("filename") or "").strip() or filename
+    folder = str(payload.get("folder") or "").strip()
+    if folder and not NAME_RE.match(folder):
+        return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
+    _arm_spawn(HF_LORA_JOB)
+    hf_lora_job.spawn(repo, filename, folder, bool(payload.get("refetch")))
+    return {"ok": True, "job_id": HF_LORA_JOB}
+
+
+def _push_lora(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Push one LoRA — the row `state()` lists — to a private HuggingFace repo.
+
+    Guarded like delete: the unit is a folder or a loose file directly
+    under loras/, never an epoch inside a folder. The token is checked
+    here because it is the one precondition a form can see, and a
+    container started to discover there is no token is a container
+    started for nothing.
+    """
+    raw = str(payload.get("path") or "")
+    root = Path(raw).resolve()
+    if not raw or root.parent != LORAS.resolve():
+        return {"error": f"Not a LoRA: {raw!r}"}
+    repo = str(payload.get("repo") or "").strip()
+    if not HF_REPO_RE.match(repo):
+        return {"error": "Repo id must be `name` or `owner/name` — letters, digits, "
+                         "`-`, `_` and `.`."}
+    token = _hf_token()
+    if not token:
+        return {"error": "No HuggingFace token saved. Paste one under HuggingFace "
+                         "token — a push writes to your account, so it needs a "
+                         "token with write access."}
+    refusal = _hf_push_refusal(token)
+    if refusal:
+        return {"error": refusal}
+    _arm_spawn(HF_PUSH_JOB)
+    hf_push_job.spawn(str(root), repo)
+    return {"ok": True, "job_id": HF_PUSH_JOB}
+
+
+def _lora_file_response(rel: str):
+    """
+    One LoRA file, as a download.
+
+    Off the spool, like `/api/file`, and for the same reason: committed
+    state by RPC is the one read no open descriptor can refuse. The path
+    is confined the way `_lora_path` confines it, by resolving under
+    loras/ and refusing anything that lands outside — `..` included.
+    """
+    from fastapi.responses import FileResponse, JSONResponse
+
+    target = (LORAS / rel).resolve()
+    if (LORAS.resolve() not in target.parents
+            or target.suffix.lower() != ".safetensors"):
+        return JSONResponse({"error": "Not a LoRA file."}, status_code=400)
+    rel = target.relative_to(LORAS.resolve()).as_posix()
+    path = _spooled(f"loras/{rel}")
+    if path is None:
+        if not target.is_file():
+            _reload_volume()
+            if not _sizes_on_disk([target])[target]:
+                return JSONResponse({"error": "Not found."}, status_code=404)
+        path = target
+    return FileResponse(
+        str(path), media_type="application/octet-stream", filename=target.name,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+def _save_caption_preset(payload: dict[str, Any]) -> dict[str, Any]:
+    label = str(payload.get("label") or "").strip()
+    instruction = str(payload.get("instruction") or "").strip()
+    if not label:
+        return {"error": "A preset needs a name."}
+    if not instruction:
+        return {"error": "A preset needs an instruction."}
+    key = _custom_key("preset", label)
+    stored = dict(config.get("custom_caption_presets") or {})
+    stored[key] = {
+        "label": label, "instruction": instruction[:4000],
+        # What the note line can say about a preset the server did not
+        # write: whose it is.
+        "note": "Your preset.",
+    }
+    config["custom_caption_presets"] = stored
+    return {"ok": True, "key": key}
+
+
+def _delete_caption_preset(payload: dict[str, Any]) -> dict[str, Any]:
+    key = str(payload.get("key") or "")
+    stored = dict(config.get("custom_caption_presets") or {})
+    if key not in stored:
+        # Built-ins are not deletable — they are baked into the image, so a
+        # delete could only hide one until the next deploy un-hid it.
+        return {"error": f"No custom preset {key!r}."}
+    del stored[key]
+    config["custom_caption_presets"] = stored
+    return {"ok": True}
+
+
+def _add_caption_model(payload: dict[str, Any]) -> dict[str, Any]:
+    repo = str(payload.get("repo") or "").strip().strip("/")
+    label = str(payload.get("label") or "").strip()
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        return {"error": f"{repo or '(empty)'!s} is not a HuggingFace repo id. "
+                         "The shape is owner/name, like Qwen/Qwen3-VL-8B-Instruct."}
+
+    # Validated here, on the CPU container, because the alternative is a
+    # cold GPU start and a 17 GB pull before a typo surfaces. config.json
+    # answers both questions that matter in milliseconds: does the repo
+    # resolve (typos, gated-without-token), and is it a vision LM at all.
+    # The GPU load stays the final authority — transformers may still lack
+    # a mapping for an exotic architecture — but that failure names the
+    # repo and the architecture when it happens.
+    from huggingface_hub import hf_hub_download
+    try:
+        cfg_path = hf_hub_download(
+            repo, "config.json", token=_hf_token(),
+            cache_dir=tempfile.mkdtemp(prefix="capcfg-"))
+        cfg = json.loads(Path(cfg_path).read_text())
+    except Exception as exc:
+        hint = (" The repo is gated — paste an HF token above and accept "
+                "its licence." if "gated" in str(exc).lower() else "")
+        return {"error": f"Could not read {repo}/config.json: {exc}.{hint}"}
+    if not any("vision" in k for k in cfg):
+        return {"error": f"{repo} does not look like a vision-language model "
+                         f"(model_type {cfg.get('model_type')!r}, no vision "
+                         "config). A captioner has to read images."}
+
+    # Whether it reasons is read off the chat template, the model's own
+    # declaration, because the loop ignores the token cap for one that
+    # does and a repo added here has no other way to say so. Three
+    # filenames, because transformers has moved the template twice; the
+    # first that holds one wins. Only the template field of the JSON
+    # ones, not the file: the Instruct tokenizer config lists `<think>`
+    # in its token table too, and reading the whole file called it a
+    # thinker. A repo with no template is treated as one that does not
+    # think, which costs nothing worse than a cap it might hit.
+    thinking = False
+    for name in ("chat_template.jinja", "chat_template.json",
+                 "tokenizer_config.json"):
+        try:
+            raw = Path(hf_hub_download(
+                repo, name, token=_hf_token(),
+                cache_dir=tempfile.mkdtemp(prefix="capcfg-"))).read_text()
+            tpl = raw if name.endswith(".jinja") else str(
+                json.loads(raw).get("chat_template") or "")
+        except Exception:
+            continue
+        if tpl:
+            thinking = "<think>" in tpl
+            break
+
+    key = _custom_key("vlm", repo)
+    stored = dict(config.get("custom_caption_models") or {})
+    stored[key] = {
+        "repo": repo, "label": label or repo.split("/")[-1],
+        "note": ("Added by you. Reasons before it writes; the token cap "
+                 "is for the answer. First run pulls the weights." if thinking
+                 else "Added by you. First run pulls the weights."),
+        "thinking": thinking,
+    }
+    config["custom_caption_models"] = stored
+    return {"ok": True, "key": key}
+
+
+def _delete_caption_model(payload: dict[str, Any]) -> dict[str, Any]:
+    key = str(payload.get("key") or "")
+    stored = dict(config.get("custom_caption_models") or {})
+    if key in stored:
+        del stored[key]
+        config["custom_caption_models"] = stored
+        return {"ok": True}
+    # A built-in cannot be deleted — it is baked into the image — so its ✕
+    # hides it instead, and the hide lives in the config Dict so a redeploy
+    # does not resurrect it. `state()` filters the menu; `_caption_models()`
+    # stays whole so old job records and the default fallback still resolve.
+    if key in CAPTION_MODELS:
+        hidden = set(config.get("hidden_caption_models") or [])
+        hidden.add(key)
+        if not any(k not in hidden for k in _caption_models()):
+            return {"error": "That is the last captioner on the menu, and "
+                             "every captioning run needs one. Add another "
+                             "model before removing it."}
+        config["hidden_caption_models"] = sorted(hidden)
+        return {"ok": True}
+    return {"error": f"No captioner {key!r} — reopen Settings to refresh "
+                     "the list."}
+
+
 # One file inside a set: a single segment, a media or sidecar extension, and
 # the characters a phone or a Finder rename produces — a space and parentheses
 # included, because "IMG_0123 (2).jpg" is what a re-export is called.
@@ -14450,200 +14805,27 @@ def web():
 
     @api.post("/api/loras/delete")
     def delete_lora(payload: dict) -> dict[str, Any]:
-        """
-        Delete one LoRA — the folder with its epochs in it, or the loose file.
-
-        The unit is the row `state()` lists, which is the unit the storage layout
-        already says a LoRA is: a folder is one, and so is a bare file. An epoch
-        inside a folder is deliberately not addressable here. It is a real thing
-        to want — twenty checkpoints of one run is most of what fills this volume
-        — but it is a second verb with a second confirmation, and offering it
-        through the same route as "delete this LoRA" would mean one request whose
-        blast radius is a file or a training run depending on how deep the path
-        goes. That is the argument for the guard below.
-
-        `parent != LORAS` is stricter than `_lora_path`'s confinement and is
-        strict on purpose. It rejects every `../` escape, and it also rejects
-        `loras/{name}/{epoch}.safetensors` — a real file, under loras/, that this
-        route must not take on its own.
-        """
-        _reload_volume()
-        raw = str(payload.get("path") or "")
-        root = Path(raw).resolve()
-        if not raw or root.parent != LORAS.resolve():
-            return {"error": f"Not a LoRA: {raw!r}"}
-
-        if root.is_dir():
-            shutil.rmtree(root, ignore_errors=True)
-        elif root.suffix == ".safetensors" and root.is_file():
-            root.unlink()
-        else:
-            # The stale-tab case, and the one worth naming: a second window
-            # deleted it, or a training run was renamed out from under this list.
-            return {"error": f"No LoRA named {root.name!r} on the volume — "
-                             "reopen Settings to refresh the list."}
-
-        # The same discard the two output deletes do, for the same reason:
-        # `_listed` keeps positives forever, so a LoRA proven present stays
-        # proven present after it is gone unless the route that removed it says
-        # so. Without this the next render validates a name ComfyUI will then
-        # refuse as "Value not in list" — the failure a form error exists to
-        # get in front of.
-        _forget_listed(root.name, LORAS)
-        _drop_legacy_trash(LORAS)
-        volume.commit()
-        return {"ok": True}
+        return _delete_lora(payload)
 
     @api.post("/api/token")
     def set_token(payload: dict) -> dict[str, Any]:
-        if "hf_token" in payload:
-            config["hf_token"] = str(payload.get("hf_token") or "").strip()
-        return {"ok": True, "hf_token_set": bool(_hf_token())}
-
-    # **There is no /api/warm, and that is the decision.** A knock existed here
-    # for months: the page POSTed it on load, on a model pick and on the switch
-    # to video, and each one spawned a generator — a real GPU with a ten-minute
-    # scaledown window. So reading the app rented a card, and reading it and
-    # closing the tab rented one for ten minutes to do nothing at all. It was
-    # never buying what it claimed either: the docstring said the checkpoint
-    # was resident afterwards until 2026-08-25, when a cold start spent 400
-    # seconds loading weights the knock was supposed to have loaded. All it
-    # ever bought was `enter` — ComfyUI up, custom nodes checked, ~25 seconds.
-    #
-    # A GPU now starts when somebody presses Generate and at no other time.
-    # The 25 seconds land in front of a status line that says what it is doing,
-    # which is the wait this project is willing to spend; a card spun by a
-    # dropdown is not. If you are about to add this back, the thing to weigh
-    # is not the 25 seconds — it is who is paying for the tabs that never
-    # press anything.
+        return _set_token(payload)
 
     @api.post("/api/download")
     def download(payload: dict) -> dict[str, Any]:
-        """
-        Start one weight downloading, or report the one already going.
-
-        Idempotent, and never an error for being busy. Pressing Download twice
-        is not a mistake to be corrected — it is what anyone does when the first
-        press appears to do nothing — so the second press returns the job the
-        first one started rather than a red message the page has to find room
-        for. `started` is the only difference between the two, and it exists so
-        the caller can tell "this is yours, it is running" from "something else
-        holds the line".
-
-        Downloads stay one-at-a-time: they share an uplink, and two at once is
-        not two downloads, it is the same bandwidth cut in half plus a second
-        container to pay for.
-        """
-        key = str(payload.get("key") or "")
-        if key not in MODEL_CATALOGUE:
-            return {"error": f"Unknown model: {key}"}
-
-        job_id = f"dl_{key}"
-        busy = _active_download()
-        if busy:
-            rec = jobs.get(busy) or {}
-            return {
-                "ok": True, "started": False, "job_id": busy,
-                "mine": busy == job_id,
-                "busy_with": rec.get("phase") or busy,
-            }
-
-        # Seeded here, synchronously, rather than on the container's first line:
-        # `.spawn()` returns before the container starts, and a second press
-        # landing in that gap would read `_active_download()` as empty and start
-        # a competitor — the gap being precisely when a second press happens.
-        jobs[job_id] = {
-            "status": "running",
-            "phase": f"Downloading {MODEL_CATALOGUE[key]['label']}",
-            "percent": 0,
-            "stop": False,
-            # The clock starts at the spawn, not at the container's first
-            # publish, so the gap a cold start opens is covered by the same
-            # liveness rule as everything after it.
-            "beat": time.time(),
-        }
-        jobs[DL_ACTIVE] = {"job_id": job_id}
-        download_job.spawn(key)
-        return {"ok": True, "started": True, "job_id": job_id, "mine": True}
+        return _start_download(payload)
 
     @api.post("/api/gdrive")
     def gdrive(payload: dict) -> dict[str, Any]:
-        """
-        Queue a Google Drive pull into loras/.
-
-        Rejected here rather than in the job for the same reason a bad LoRA path
-        is: an empty box and a malformed folder name are form errors, and
-        discovering either inside the job costs a container start before saying
-        so. What this route cannot check is whether the link is shared — only
-        Drive knows that, and it answers with an HTML sign-in page rather than
-        an error, which is why the job names that case explicitly.
-        """
-        url = str(payload.get("url") or "").strip()
-        folder = str(payload.get("folder") or "").strip()
-        if not url:
-            return {"error": "Paste a Google Drive link or file id."}
-        if folder and not NAME_RE.match(folder):
-            return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
-        _arm_spawn(GDRIVE_JOB)
-        gdrive_job.spawn(url, folder, bool(payload.get("refetch")))
-        return {"ok": True, "job_id": GDRIVE_JOB}
+        return _start_gdrive(payload)
 
     @api.post("/api/loras/hf")
     def hf_lora(payload: dict) -> dict[str, Any]:
-        """
-        Queue a HuggingFace pull into loras/.
-
-        The same route shape as Drive, for the same reason the card has the
-        same shape: another place weights come from, not another kind of
-        thing. What is rejected here is what a form can know — an empty box,
-        a reference that is not a repo, a malformed folder name. Whether the
-        repo exists, is gated, or holds forty files is the job's to find out,
-        and it names each of those separately.
-        """
-        try:
-            repo, filename = _hf_ref(str(payload.get("repo") or ""))
-        except ValueError as exc:
-            return {"error": str(exc)}
-        # A filename typed into its own field beats one parsed off the link,
-        # because the field is the one the user can see.
-        filename = str(payload.get("filename") or "").strip() or filename
-        folder = str(payload.get("folder") or "").strip()
-        if folder and not NAME_RE.match(folder):
-            return {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}
-        _arm_spawn(HF_LORA_JOB)
-        hf_lora_job.spawn(repo, filename, folder, bool(payload.get("refetch")))
-        return {"ok": True, "job_id": HF_LORA_JOB}
+        return _start_hf_lora(payload)
 
     @api.post("/api/loras/push")
     def push_lora(payload: dict) -> dict[str, Any]:
-        """
-        Push one LoRA — the row `state()` lists — to a private HuggingFace repo.
-
-        Guarded like delete: the unit is a folder or a loose file directly
-        under loras/, never an epoch inside a folder. The token is checked
-        here because it is the one precondition a form can see, and a
-        container started to discover there is no token is a container
-        started for nothing.
-        """
-        raw = str(payload.get("path") or "")
-        root = Path(raw).resolve()
-        if not raw or root.parent != LORAS.resolve():
-            return {"error": f"Not a LoRA: {raw!r}"}
-        repo = str(payload.get("repo") or "").strip()
-        if not HF_REPO_RE.match(repo):
-            return {"error": "Repo id must be `name` or `owner/name` — letters, digits, "
-                             "`-`, `_` and `.`."}
-        token = _hf_token()
-        if not token:
-            return {"error": "No HuggingFace token saved. Paste one under HuggingFace "
-                             "token — a push writes to your account, so it needs a "
-                             "token with write access."}
-        refusal = _hf_push_refusal(token)
-        if refusal:
-            return {"error": refusal}
-        _arm_spawn(HF_PUSH_JOB)
-        hf_push_job.spawn(str(root), repo)
-        return {"ok": True, "job_id": HF_PUSH_JOB}
+        return _push_lora(payload)
 
     @api.post("/api/loras/upload")
     async def upload_lora(request: Request) -> JSONResponse:
@@ -14696,30 +14878,7 @@ def web():
 
     @api.get("/api/loras/file/{rel:path}")
     def lora_file(rel: str):
-        """
-        One LoRA file, as a download.
-
-        Off the spool, like `/api/file`, and for the same reason: committed
-        state by RPC is the one read no open descriptor can refuse. The path
-        is confined the way `_lora_path` confines it, by resolving under
-        loras/ and refusing anything that lands outside — `..` included.
-        """
-        target = (LORAS / rel).resolve()
-        if (LORAS.resolve() not in target.parents
-                or target.suffix.lower() != ".safetensors"):
-            return JSONResponse({"error": "Not a LoRA file."}, status_code=400)
-        rel = target.relative_to(LORAS.resolve()).as_posix()
-        path = _spooled(f"loras/{rel}")
-        if path is None:
-            if not target.is_file():
-                _reload_volume()
-                if not _sizes_on_disk([target])[target]:
-                    return JSONResponse({"error": "Not found."}, status_code=404)
-            path = target
-        return FileResponse(
-            str(path), media_type="application/octet-stream", filename=target.name,
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
+        return _lora_file_response(rel)
 
     @api.post("/api/download-missing")
     def download_missing(payload: dict) -> dict[str, Any]:
@@ -15626,124 +15785,19 @@ def web():
 
     @api.post("/api/caption/presets")
     def save_caption_preset(payload: dict) -> dict[str, Any]:
-        label = str(payload.get("label") or "").strip()
-        instruction = str(payload.get("instruction") or "").strip()
-        if not label:
-            return {"error": "A preset needs a name."}
-        if not instruction:
-            return {"error": "A preset needs an instruction."}
-        key = _custom_key("preset", label)
-        stored = dict(config.get("custom_caption_presets") or {})
-        stored[key] = {
-            "label": label, "instruction": instruction[:4000],
-            # What the note line can say about a preset the server did not
-            # write: whose it is.
-            "note": "Your preset.",
-        }
-        config["custom_caption_presets"] = stored
-        return {"ok": True, "key": key}
+        return _save_caption_preset(payload)
 
     @api.post("/api/caption/presets/delete")
     def delete_caption_preset(payload: dict) -> dict[str, Any]:
-        key = str(payload.get("key") or "")
-        stored = dict(config.get("custom_caption_presets") or {})
-        if key not in stored:
-            # Built-ins are not deletable — they are baked into the image, so a
-            # delete could only hide one until the next deploy un-hid it.
-            return {"error": f"No custom preset {key!r}."}
-        del stored[key]
-        config["custom_caption_presets"] = stored
-        return {"ok": True}
+        return _delete_caption_preset(payload)
 
     @api.post("/api/caption/models")
     def add_caption_model(payload: dict) -> dict[str, Any]:
-        repo = str(payload.get("repo") or "").strip().strip("/")
-        label = str(payload.get("label") or "").strip()
-        if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-            return {"error": f"{repo or '(empty)'!s} is not a HuggingFace repo id. "
-                             "The shape is owner/name, like Qwen/Qwen3-VL-8B-Instruct."}
-
-        # Validated here, on the CPU container, because the alternative is a
-        # cold GPU start and a 17 GB pull before a typo surfaces. config.json
-        # answers both questions that matter in milliseconds: does the repo
-        # resolve (typos, gated-without-token), and is it a vision LM at all.
-        # The GPU load stays the final authority — transformers may still lack
-        # a mapping for an exotic architecture — but that failure names the
-        # repo and the architecture when it happens.
-        from huggingface_hub import hf_hub_download
-        try:
-            cfg_path = hf_hub_download(
-                repo, "config.json", token=_hf_token(),
-                cache_dir=tempfile.mkdtemp(prefix="capcfg-"))
-            cfg = json.loads(Path(cfg_path).read_text())
-        except Exception as exc:
-            hint = (" The repo is gated — paste an HF token above and accept "
-                    "its licence." if "gated" in str(exc).lower() else "")
-            return {"error": f"Could not read {repo}/config.json: {exc}.{hint}"}
-        if not any("vision" in k for k in cfg):
-            return {"error": f"{repo} does not look like a vision-language model "
-                             f"(model_type {cfg.get('model_type')!r}, no vision "
-                             "config). A captioner has to read images."}
-
-        # Whether it reasons is read off the chat template, the model's own
-        # declaration, because the loop ignores the token cap for one that
-        # does and a repo added here has no other way to say so. Three
-        # filenames, because transformers has moved the template twice; the
-        # first that holds one wins. Only the template field of the JSON
-        # ones, not the file: the Instruct tokenizer config lists `<think>`
-        # in its token table too, and reading the whole file called it a
-        # thinker. A repo with no template is treated as one that does not
-        # think, which costs nothing worse than a cap it might hit.
-        thinking = False
-        for name in ("chat_template.jinja", "chat_template.json",
-                     "tokenizer_config.json"):
-            try:
-                raw = Path(hf_hub_download(
-                    repo, name, token=_hf_token(),
-                    cache_dir=tempfile.mkdtemp(prefix="capcfg-"))).read_text()
-                tpl = raw if name.endswith(".jinja") else str(
-                    json.loads(raw).get("chat_template") or "")
-            except Exception:
-                continue
-            if tpl:
-                thinking = "<think>" in tpl
-                break
-
-        key = _custom_key("vlm", repo)
-        stored = dict(config.get("custom_caption_models") or {})
-        stored[key] = {
-            "repo": repo, "label": label or repo.split("/")[-1],
-            "note": ("Added by you. Reasons before it writes; the token cap "
-                     "is for the answer. First run pulls the weights." if thinking
-                     else "Added by you. First run pulls the weights."),
-            "thinking": thinking,
-        }
-        config["custom_caption_models"] = stored
-        return {"ok": True, "key": key}
+        return _add_caption_model(payload)
 
     @api.post("/api/caption/models/delete")
     def delete_caption_model(payload: dict) -> dict[str, Any]:
-        key = str(payload.get("key") or "")
-        stored = dict(config.get("custom_caption_models") or {})
-        if key in stored:
-            del stored[key]
-            config["custom_caption_models"] = stored
-            return {"ok": True}
-        # A built-in cannot be deleted — it is baked into the image — so its ✕
-        # hides it instead, and the hide lives in the config Dict so a redeploy
-        # does not resurrect it. `state()` filters the menu; `_caption_models()`
-        # stays whole so old job records and the default fallback still resolve.
-        if key in CAPTION_MODELS:
-            hidden = set(config.get("hidden_caption_models") or [])
-            hidden.add(key)
-            if not any(k not in hidden for k in _caption_models()):
-                return {"error": "That is the last captioner on the menu, and "
-                                 "every captioning run needs one. Add another "
-                                 "model before removing it."}
-            config["hidden_caption_models"] = sorted(hidden)
-            return {"ok": True}
-        return {"error": f"No captioner {key!r} — reopen Settings to refresh "
-                         "the list."}
+        return _delete_caption_model(payload)
 
     @api.post("/api/datasets/{name}/replace")
     def replace_in_captions(name: str, payload: dict) -> dict[str, Any]:
@@ -16603,6 +16657,7 @@ def api():
             # deployment, and the reference caps are the model's — a copy in
             # the client would drift the first time one moved.
             "video_models": _video_model_status(),
+            "hf_token_set": bool(_hf_token()),
             "max_refs": MAX_H3_REFS,
             "max_ref_videos": MAX_H3_REF_VIDEOS,
             "max_ref_audios": MAX_H3_REF_AUDIOS,
@@ -16652,6 +16707,87 @@ def api():
     @routes.get("/files/{name}")
     def file(name: str):
         return _output_response(name)
+
+    # ---- the gear: the token, the weights, the LoRAs, the caption menus
+    #
+    # Each is the web gear's own function. A download is a job under
+    # dl_<key>, watched through /jobs/{id} like any other; a LoRA from this
+    # Mac streams up as a PUT the way a dataset file does.
+
+    @routes.post("/token")
+    def token(payload: dict) -> dict[str, Any]:
+        return _set_token(payload)
+
+    @routes.post("/downloads")
+    def start_download(payload: dict) -> dict[str, Any]:
+        return _start_download(payload)
+
+    @routes.post("/loras/delete")
+    def loras_delete(payload: dict) -> dict[str, Any]:
+        return _delete_lora(payload)
+
+    @routes.post("/loras/push")
+    def loras_push(payload: dict) -> dict[str, Any]:
+        return _push_lora(payload)
+
+    @routes.post("/loras/hf")
+    def loras_hf(payload: dict) -> dict[str, Any]:
+        return _start_hf_lora(payload)
+
+    @routes.post("/loras/gdrive")
+    def loras_gdrive(payload: dict) -> dict[str, Any]:
+        return _start_gdrive(payload)
+
+    @routes.get("/loras/file/{rel:path}")
+    def loras_file(rel: str):
+        return _lora_file_response(rel)
+
+    @routes.put("/loras/{folder}/{file}")
+    async def put_lora(folder: str, file: str, request: Request) -> JSONResponse:
+        """
+        A LoRA off the client's disk, into loras/ or loras/{folder}/ — `-` for no
+        folder, since a path segment cannot be empty. Streamed to a stage and
+        moved whole, the Drive rule: the picker globs loras/ live, so a file
+        written straight there is offered while it is half a file.
+        """
+        sub = "" if folder == "-" else folder
+        if sub and not NAME_RE.match(sub):
+            return JSONResponse({"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}, status_code=400)
+        name = Path(file).name
+        if Path(name).suffix.lower() != ".safetensors":
+            return JSONResponse({"error": f"{name!r} is not a .safetensors file."}, status_code=400)
+        stage = WORK / f"lora-put-{int(time.time() * 1000):x}"
+        stage.mkdir(parents=True, exist_ok=True)
+        target = stage / name
+        n = 0
+        try:
+            with open(target, "wb") as out:
+                async for chunk in request.stream():
+                    out.write(chunk)
+                    n += len(chunk)
+            landed = _land_weights([target], (LORAS / sub) if sub else LORAS)
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+        await volume.commit.aio()
+        return JSONResponse({"ok": True, "files": landed, "bytes": n})
+
+    @routes.post("/caption/presets")
+    def caption_preset_save(payload: dict) -> dict[str, Any]:
+        return _save_caption_preset(payload)
+
+    @routes.post("/caption/presets/delete")
+    def caption_preset_delete(payload: dict) -> dict[str, Any]:
+        return _delete_caption_preset(payload)
+
+    @routes.post("/caption/models")
+    def caption_model_add(payload: dict) -> dict[str, Any]:
+        return _add_caption_model(payload)
+
+    @routes.post("/caption/models/delete")
+    def caption_model_delete(payload: dict) -> dict[str, Any]:
+        return _delete_caption_model(payload)
 
     # ---- the Playground: the same engine, the same job contract, a new caller
     #
