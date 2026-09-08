@@ -13674,6 +13674,384 @@ def _submit_video(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "job_id": job_id, "model": model, "mode": task}
 
 
+
+# ── the Playground and the workflows: bodies two callers share ─────────────
+#
+# The room's routes and the workflow shelf, moved out of the web app for the
+# reason the still and clip routes were: the job API calls the
+# same functions, so the two cannot drift. The web routes below delegate.
+
+def _playground_seed(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    The app's own live graph, built from the console's state and returned
+    without running — what the Playground opens on, so nothing is ever
+    blank and every experiment starts from something that works.
+
+    Attachment *bytes* do not cross into a seed: references and keyframes
+    stage on the GPU container at run time, and a placeholder file here on
+    CPU would fail `_fit_reference` on a picture that does not exist. What
+    was attached is named back in `dropped` so the room can say so instead
+    of the seed silently being smaller than the console.
+    """
+    kind = ("video" if str(payload.get("kind") or "image") == "video"
+            else "image")
+    prompt = str(payload.get("prompt") or "")
+
+    def num(k, d, cast):
+        try:
+            v = payload.get(k)
+            return cast(v) if v not in (None, "") else d
+        except (TypeError, ValueError):
+            return d
+
+    _reload_volume()
+    try:
+        shot = _validate_shot(payload.get("shot"))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    seed_v = num("seed", None, int)
+    if seed_v is None:
+        seed_v = int.from_bytes(os.urandom(4), "big")
+    dropped = [k for k in ("references", "ref_videos", "ref_audios",
+                           "first_frame", "last_frame", "scene", "outfit",
+                           "style_refs", "regions", "objects")
+               if payload.get(k)]
+
+    try:
+        if kind == "image":
+            model = ("turbo" if str(payload.get("model") or "turbo")
+                     != "raw" else "raw")
+            graph = _krea2_graph(
+                model=model,
+                prompt=_compile_image_prompt(prompt, shot),
+                negative_prompt=str(payload.get("negative_prompt") or ""),
+                width=num("width", 1024, int),
+                height=num("height", 1024, int),
+                batch_size=max(1, min(4, num("num_images", 1, int))),
+                seed=seed_v,
+                steps=num("steps", KREA2_DEFAULTS[model]["steps"], int),
+                cfg=num("cfg_scale", KREA2_DEFAULTS[model]["cfg"], float),
+                shift=num("shift", 1.15, float),
+                sampler=str(payload.get("sampler")
+                            or IMAGE_DEFAULTS["sampler"]),
+                scheduler=str(payload.get("scheduler")
+                              or IMAGE_DEFAULTS["scheduler"]),
+                loras=_validate_loras(payload.get("loras")),
+                regions=[],
+            )
+        else:
+            d = VIDEO_MODELS["h3"]["defaults"]
+            aspect = str(payload.get("aspect") or "16:9")
+            tier = str(payload.get("tier") or d["tier"])
+            seconds = num("seconds", float(d["seconds"]), float)
+            still = seconds == 0
+            if still:
+                # Same fact as /api/video: the document describes a shot
+                # and a still is a frame out of it, so it compiles at the
+                # model's own default length.
+                seconds = float(d["seconds"])
+            width, height = _h3_canvas(aspect, tier)
+            graph = _h3_graph(
+                prompt=_compile_h3_prompt(
+                    typed=prompt, pills=shot, seconds=seconds, roles=[],
+                    scene=None, task=_h3_task(None, None, [], [], [])),
+                width=width, height=height,
+                frames=(H3_STILL_FRAMES if still
+                        else _h3_frames(seconds)),
+                seed=seed_v,
+                steps=max(1, min(60, num("steps", d["steps"], int))),
+                sampler=str(payload.get("sampler") or d["sampler"]),
+                scheduler=str(payload.get("scheduler") or d["scheduler"]),
+                loras=_validate_video_loras(payload.get("loras")),
+                shift_video=num("shift_video", None, float),
+                shift_audio=num("shift_audio", None, float),
+                still=still,
+            )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    return {"ok": True, "kind": kind, "graph": graph,
+            **({"dropped": dropped} if dropped else {})}
+
+
+def _playground_submit(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Queue one user-authored graph — the Playground's Generate.
+
+    Validation here is structural zeros against the cached catalogue;
+    whether the wiring makes sense is ComfyUI's call on the GPU, where a
+    failure comes back naming the node. Status and Stop are the routes
+    every other job already answers to.
+    """
+    t_route = time.time()
+    known = None
+    raw = _node_catalogue_bytes()
+    if raw:
+        try:
+            known = set(json.loads(raw))
+        except ValueError:
+            known = None
+    try:
+        graph = _validate_playground_graph(payload.get("graph"), known)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    atts = payload.get("attachments") or {}
+    if (not isinstance(atts, dict)
+            or any(not isinstance(v, str) for v in atts.values())):
+        return {"error": "attachments is {filename: base64}."}
+    if len(atts) > 16:
+        return {"error": f"{len(atts)} attachments — the cap is 16 a "
+                         "run, because each one rides the request body."}
+    host = ("video" if str(payload.get("host") or "image") == "video"
+            else "image")
+    job_id = f"pg{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    # Seeded before the spawn, as a still and a clip are — see _submit_still.
+    jobs[job_id] = {"status": "queued", "phase": "waiting for a GPU container",
+                    "beat": time.time()}
+    _host(host, payload)().playground.spawn(job_id=job_id, params={
+        "queued_at": time.time(),
+        "graph": graph,
+        "attachments": atts,
+        "workflow_name": str(payload.get("workflow_name") or ""),
+    })
+    _log_spawn("playground", job_id, payload, t_route)
+    return {"ok": True, "job_id": job_id}
+
+
+def _playground_restart(payload: dict[str, Any]) -> dict[str, Any]:
+    """The engine-restart lever — a job, so the page can watch it land."""
+    host = ("video" if str(payload.get("host") or "image") == "video"
+            else "image")
+    job_id = f"pgrst{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    _host(host, payload)().restart_engine.spawn(job_id=job_id)
+    return {"ok": True, "job_id": job_id}
+
+
+def _playground_nodes():
+    """
+    The node catalogue — /object_info as one cached file.
+
+    Committed state by RPC, never the mount: the writer is a CPU
+    container. Raw bytes out, because the catalogue is megabytes and a
+    decode-and-re-encode here would buy nothing.
+    """
+    from fastapi.responses import Response
+    raw = _node_catalogue_bytes()
+    if raw is None:
+        # Nothing on this container and no result to read: harvest, as a
+        # visible job, and say so — the room polls until it lands.
+        return Response(json.dumps({"missing": True,
+                                    "harvesting": _harvest_if_missing()}),
+                        media_type="application/json")
+    return Response(raw, media_type="application/json")
+
+
+def _spawn_catalogue(job_id: str, **kw: Any) -> None:
+    """Spawn a harvest and remember the call, so its return value — the
+    catalogue itself — can be read back by whichever web container is
+    alive when it lands."""
+    _publish(job_id, status="running", percent=0, phase="Queued", files=[])
+    fc = playground_catalogue_job.spawn(job_id=job_id, **kw)
+    try:
+        config["node_catalogue_call"] = {"job_id": job_id, "call_id": fc.object_id}
+    except Exception as exc:  # noqa: BLE001 — a lost id is a re-harvest later
+        print(f"[catalogue] could not record call {fc.object_id}: {exc}", flush=True)
+
+
+def _node_catalogue_bytes() -> bytes | None:
+    """
+    The catalogue, off this container's disk — or off the last harvest's
+    return value, read once and kept here. None when neither exists.
+
+    Derived data, so it never touches the volume: a cold container reads
+    the last harvest back by its call id, and only when Modal no longer
+    holds that result does a harvest have to run again.
+    """
+    try:
+        if NODE_CATALOGUE.is_file():
+            return NODE_CATALOGUE.read_bytes()
+    except OSError:
+        pass
+    try:
+        call = config.get("node_catalogue_call") or {}
+        cid = str(call.get("call_id") or "")
+        if not cid:
+            return None
+        res = modal.FunctionCall.from_id(cid).get(timeout=0)
+    except Exception:  # noqa: BLE001 — not done, expired, or gone
+        return None
+    info = (res or {}).get("catalogue") if isinstance(res, dict) else None
+    if not info:
+        return None
+    raw = json.dumps(info).encode()
+    try:
+        NODE_CATALOGUE.parent.mkdir(parents=True, exist_ok=True)
+        NODE_CATALOGUE.write_bytes(raw)
+    except OSError:
+        pass
+    return raw
+
+
+def _harvest_if_missing() -> str:
+    """One harvest at a time: the recorded call's job is the lock."""
+    try:
+        call = config.get("node_catalogue_call") or {}
+        cur = jobs.get(str(call.get("job_id") or "")) or {}
+        if cur.get("status") == "running":
+            return str(call["job_id"])
+    except Exception:  # noqa: BLE001
+        pass
+    job_id = f"pgcat{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    _spawn_catalogue(job_id)
+    return job_id
+
+
+def _playground_refresh() -> dict[str, Any]:
+    """Re-harvest the catalogue — a visible job, since it boots ComfyUI."""
+    job_id = f"pgcat{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    _spawn_catalogue(job_id)
+    return {"ok": True, "job_id": job_id}
+
+
+def _playground_packs() -> dict[str, Any]:
+    _reload_volume()
+    rows = []
+    if PLAYGROUND_NODES.is_dir():
+        for d in sorted(PLAYGROUND_NODES.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            pin = {}
+            pf = d / ".visionary-pin"
+            if pf.is_file():
+                try:
+                    pin = json.loads(pf.read_text())
+                except ValueError:
+                    pin = {}
+            rows.append({"name": d.name, "url": pin.get("url"),
+                         "sha": (pin.get("sha") or "")[:12],
+                         "installed": pin.get("installed")})
+    return {"packs": rows}
+
+
+def _playground_pack_install(payload: dict[str, Any]) -> dict[str, Any]:
+    url = str(payload.get("url") or "").strip()
+    # An https git URL and nothing else — a pack install is a clone, and
+    # the clone is the one thing on this surface that reaches out.
+    if not re.fullmatch(r"https://[\w.-]+/[\w./~-]+", url):
+        return {"error": "A pack installs from an https git URL — e.g. "
+                         "https://github.com/owner/repo."}
+    job_id = f"pack{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
+    _spawn_catalogue(job_id, url=url,
+                     ref=str(payload.get("ref") or "").strip() or None)
+    return {"ok": True, "job_id": job_id}
+
+
+def _playground_pack_delete(payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "")
+    if not re.fullmatch(r"[\w.-]+", name) or name.startswith("."):
+        return {"error": f"Not a pack name: {name!r}"}
+    dest = PLAYGROUND_NODES / name
+    if not dest.is_dir():
+        _reload_volume()
+    if not dest.is_dir():
+        return {"error": f"No pack named {name!r} under "
+                         f"{PLAYGROUND_NODES}."}
+    shutil.rmtree(dest)
+    volume.commit()
+    # Same fact as install, stated on the delete: a warm engine keeps
+    # what it already imported until its next restart.
+    return {"ok": True,
+            "note": "Removed from the shelf. A warm engine keeps what "
+                    "it already imported until its next restart."}
+
+
+def _list_workflows() -> dict[str, Any]:
+    _reload_volume()
+    rows = []
+    # Under the lock for the same reason the Sets listing is: this route's
+    # own reload has released it by the time the walk starts, and the next
+    # reload from any of the twenty requests beside it takes the shelf out
+    # from under the glob — an empty Playground over saved graphs.
+    with _RELOAD_LOCK:
+        if WORKFLOWS.is_dir():
+            for f in sorted(WORKFLOWS.glob("*.json")):
+                if f.name.endswith(".meta.json"):
+                    continue
+                meta = {}
+                mp = f.with_name(f.stem + ".meta.json")
+                if mp.is_file():
+                    try:
+                        meta = json.loads(mp.read_text())
+                    except ValueError:
+                        meta = {}
+                rows.append({"name": f.stem,
+                             "created": meta.get("created"),
+                             "seed_of": meta.get("seed_of"),
+                             "exposes": meta.get("exposes") or [],
+                             "mtime": f.stat().st_mtime})
+    return {"workflows": rows}
+
+
+def _get_workflow(name: str) -> dict[str, Any]:
+    try:
+        name = _workflow_name(name)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    path = WORKFLOWS / f"{name}.json"
+    if not path.is_file():
+        _reload_volume()
+    if not path.is_file():
+        return {"error": f"No workflow named {name!r} under "
+                         f"{WORKFLOWS}."}
+    try:
+        graph = json.loads(path.read_text())
+    except ValueError as exc:
+        return {"error": f"{name}.json is not valid JSON: {exc}"}
+    meta = {}
+    mp = WORKFLOWS / f"{name}.meta.json"
+    if mp.is_file():
+        try:
+            meta = json.loads(mp.read_text())
+        except ValueError:
+            meta = {}
+    return {"name": name, "graph": graph, "meta": meta}
+
+
+def _save_workflow(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        name = _workflow_name(name)
+        graph = _validate_playground_graph(payload.get("graph"))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    WORKFLOWS.mkdir(parents=True, exist_ok=True)
+    # The graph file stays pure API format — a stock ComfyUI could run
+    # it — and our fields live beside it, the datasets split.
+    (WORKFLOWS / f"{name}.json").write_text(json.dumps(graph, indent=2))
+    meta = payload.get("meta") or {}
+    (WORKFLOWS / f"{name}.meta.json").write_text(json.dumps(
+        {"created": meta.get("created") or time.time(),
+         "seed_of": meta.get("seed_of"),
+         "exposes": meta.get("exposes") or []}, indent=2))
+    volume.commit()
+    return {"ok": True, "name": name}
+
+
+def _delete_workflow(name: str) -> dict[str, Any]:
+    try:
+        name = _workflow_name(name)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    path = WORKFLOWS / f"{name}.json"
+    if not path.is_file():
+        _reload_volume()
+    if not path.is_file():
+        return {"error": f"No workflow named {name!r}."}
+    path.unlink()
+    (WORKFLOWS / f"{name}.meta.json").unlink(missing_ok=True)
+    volume.commit()
+    return {"ok": True}
+
+
 # One file inside a set: a single segment, a media or sidecar extension, and
 # the characters a phone or a Finder rename produces — a space and parentheses
 # included, because "IMG_0123 (2).jpg" is what a re-export is called.
@@ -15914,368 +16292,51 @@ def web():
 
     @api.post("/api/playground/seed")
     def playground_seed(payload: dict) -> dict[str, Any]:
-        """
-        The app's own live graph, built from the console's state and returned
-        without running — what the Playground opens on, so nothing is ever
-        blank and every experiment starts from something that works.
-
-        Attachment *bytes* do not cross into a seed: references and keyframes
-        stage on the GPU container at run time, and a placeholder file here on
-        CPU would fail `_fit_reference` on a picture that does not exist. What
-        was attached is named back in `dropped` so the room can say so instead
-        of the seed silently being smaller than the console.
-        """
-        kind = ("video" if str(payload.get("kind") or "image") == "video"
-                else "image")
-        prompt = str(payload.get("prompt") or "")
-
-        def num(k, d, cast):
-            try:
-                v = payload.get(k)
-                return cast(v) if v not in (None, "") else d
-            except (TypeError, ValueError):
-                return d
-
-        _reload_volume()
-        try:
-            shot = _validate_shot(payload.get("shot"))
-        except ValueError as exc:
-            return {"error": str(exc)}
-        seed_v = num("seed", None, int)
-        if seed_v is None:
-            seed_v = int.from_bytes(os.urandom(4), "big")
-        dropped = [k for k in ("references", "ref_videos", "ref_audios",
-                               "first_frame", "last_frame", "scene", "outfit",
-                               "style_refs", "regions", "objects")
-                   if payload.get(k)]
-
-        try:
-            if kind == "image":
-                model = ("turbo" if str(payload.get("model") or "turbo")
-                         != "raw" else "raw")
-                graph = _krea2_graph(
-                    model=model,
-                    prompt=_compile_image_prompt(prompt, shot),
-                    negative_prompt=str(payload.get("negative_prompt") or ""),
-                    width=num("width", 1024, int),
-                    height=num("height", 1024, int),
-                    batch_size=max(1, min(4, num("num_images", 1, int))),
-                    seed=seed_v,
-                    steps=num("steps", KREA2_DEFAULTS[model]["steps"], int),
-                    cfg=num("cfg_scale", KREA2_DEFAULTS[model]["cfg"], float),
-                    shift=num("shift", 1.15, float),
-                    sampler=str(payload.get("sampler")
-                                or IMAGE_DEFAULTS["sampler"]),
-                    scheduler=str(payload.get("scheduler")
-                                  or IMAGE_DEFAULTS["scheduler"]),
-                    loras=_validate_loras(payload.get("loras")),
-                    regions=[],
-                )
-            else:
-                d = VIDEO_MODELS["h3"]["defaults"]
-                aspect = str(payload.get("aspect") or "16:9")
-                tier = str(payload.get("tier") or d["tier"])
-                seconds = num("seconds", float(d["seconds"]), float)
-                still = seconds == 0
-                if still:
-                    # Same fact as /api/video: the document describes a shot
-                    # and a still is a frame out of it, so it compiles at the
-                    # model's own default length.
-                    seconds = float(d["seconds"])
-                width, height = _h3_canvas(aspect, tier)
-                graph = _h3_graph(
-                    prompt=_compile_h3_prompt(
-                        typed=prompt, pills=shot, seconds=seconds, roles=[],
-                        scene=None, task=_h3_task(None, None, [], [], [])),
-                    width=width, height=height,
-                    frames=(H3_STILL_FRAMES if still
-                            else _h3_frames(seconds)),
-                    seed=seed_v,
-                    steps=max(1, min(60, num("steps", d["steps"], int))),
-                    sampler=str(payload.get("sampler") or d["sampler"]),
-                    scheduler=str(payload.get("scheduler") or d["scheduler"]),
-                    loras=_validate_video_loras(payload.get("loras")),
-                    shift_video=num("shift_video", None, float),
-                    shift_audio=num("shift_audio", None, float),
-                    still=still,
-                )
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        return {"ok": True, "kind": kind, "graph": graph,
-                **({"dropped": dropped} if dropped else {})}
+        return _playground_seed(payload)
 
     @api.post("/api/playground/run")
     def playground_run(payload: dict) -> dict[str, Any]:
-        """
-        Queue one user-authored graph — the Playground's Generate.
-
-        Validation here is structural zeros against the cached catalogue;
-        whether the wiring makes sense is ComfyUI's call on the GPU, where a
-        failure comes back naming the node. Status and Stop are the routes
-        every other job already answers to.
-        """
-        t_route = time.time()
-        known = None
-        raw = _node_catalogue_bytes()
-        if raw:
-            try:
-                known = set(json.loads(raw))
-            except ValueError:
-                known = None
-        try:
-            graph = _validate_playground_graph(payload.get("graph"), known)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        atts = payload.get("attachments") or {}
-        if (not isinstance(atts, dict)
-                or any(not isinstance(v, str) for v in atts.values())):
-            return {"error": "attachments is {filename: base64}."}
-        if len(atts) > 16:
-            return {"error": f"{len(atts)} attachments — the cap is 16 a "
-                             "run, because each one rides the request body."}
-        host = ("video" if str(payload.get("host") or "image") == "video"
-                else "image")
-        job_id = f"pg{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host(host, payload)().playground.spawn(job_id=job_id, params={
-            "queued_at": time.time(),
-            "graph": graph,
-            "attachments": atts,
-            "workflow_name": str(payload.get("workflow_name") or ""),
-        })
-        _log_spawn("playground", job_id, payload, t_route)
-        return {"ok": True, "job_id": job_id}
+        return _playground_submit(payload)
 
     @api.post("/api/playground/restart")
     def playground_restart(payload: dict) -> dict[str, Any]:
-        """The engine-restart lever — a job, so the page can watch it land."""
-        host = ("video" if str(payload.get("host") or "image") == "video"
-                else "image")
-        job_id = f"pgrst{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _host(host, payload)().restart_engine.spawn(job_id=job_id)
-        return {"ok": True, "job_id": job_id}
+        return _playground_restart(payload)
 
     @api.get("/api/playground/nodes")
     def playground_nodes():
-        """
-        The node catalogue — /object_info as one cached file.
-
-        Committed state by RPC, never the mount: the writer is a CPU
-        container. Raw bytes out, because the catalogue is megabytes and a
-        decode-and-re-encode here would buy nothing.
-        """
-        from fastapi.responses import Response
-        raw = _node_catalogue_bytes()
-        if raw is None:
-            # Nothing on this container and no result to read: harvest, as a
-            # visible job, and say so — the room polls until it lands.
-            return Response(json.dumps({"missing": True,
-                                        "harvesting": _harvest_if_missing()}),
-                            media_type="application/json")
-        return Response(raw, media_type="application/json")
-
-    def _spawn_catalogue(job_id: str, **kw: Any) -> None:
-        """Spawn a harvest and remember the call, so its return value — the
-        catalogue itself — can be read back by whichever web container is
-        alive when it lands."""
-        _publish(job_id, status="running", percent=0, phase="Queued", files=[])
-        fc = playground_catalogue_job.spawn(job_id=job_id, **kw)
-        try:
-            config["node_catalogue_call"] = {"job_id": job_id, "call_id": fc.object_id}
-        except Exception as exc:  # noqa: BLE001 — a lost id is a re-harvest later
-            print(f"[catalogue] could not record call {fc.object_id}: {exc}", flush=True)
-
-    def _node_catalogue_bytes() -> bytes | None:
-        """
-        The catalogue, off this container's disk — or off the last harvest's
-        return value, read once and kept here. None when neither exists.
-
-        Derived data, so it never touches the volume: a cold container reads
-        the last harvest back by its call id, and only when Modal no longer
-        holds that result does a harvest have to run again.
-        """
-        try:
-            if NODE_CATALOGUE.is_file():
-                return NODE_CATALOGUE.read_bytes()
-        except OSError:
-            pass
-        try:
-            call = config.get("node_catalogue_call") or {}
-            cid = str(call.get("call_id") or "")
-            if not cid:
-                return None
-            res = modal.FunctionCall.from_id(cid).get(timeout=0)
-        except Exception:  # noqa: BLE001 — not done, expired, or gone
-            return None
-        info = (res or {}).get("catalogue") if isinstance(res, dict) else None
-        if not info:
-            return None
-        raw = json.dumps(info).encode()
-        try:
-            NODE_CATALOGUE.parent.mkdir(parents=True, exist_ok=True)
-            NODE_CATALOGUE.write_bytes(raw)
-        except OSError:
-            pass
-        return raw
-
-    def _harvest_if_missing() -> str:
-        """One harvest at a time: the recorded call's job is the lock."""
-        try:
-            call = config.get("node_catalogue_call") or {}
-            cur = jobs.get(str(call.get("job_id") or "")) or {}
-            if cur.get("status") == "running":
-                return str(call["job_id"])
-        except Exception:  # noqa: BLE001
-            pass
-        job_id = f"pgcat{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _spawn_catalogue(job_id)
-        return job_id
+        return _playground_nodes()
 
     @api.post("/api/playground/refresh")
     def playground_refresh() -> dict[str, Any]:
-        """Re-harvest the catalogue — a visible job, since it boots ComfyUI."""
-        job_id = f"pgcat{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _spawn_catalogue(job_id)
-        return {"ok": True, "job_id": job_id}
+        return _playground_refresh()
 
     @api.get("/api/playground/packs")
     def playground_packs() -> dict[str, Any]:
-        _reload_volume()
-        rows = []
-        if PLAYGROUND_NODES.is_dir():
-            for d in sorted(PLAYGROUND_NODES.iterdir()):
-                if not d.is_dir() or d.name.startswith("."):
-                    continue
-                pin = {}
-                pf = d / ".visionary-pin"
-                if pf.is_file():
-                    try:
-                        pin = json.loads(pf.read_text())
-                    except ValueError:
-                        pin = {}
-                rows.append({"name": d.name, "url": pin.get("url"),
-                             "sha": (pin.get("sha") or "")[:12],
-                             "installed": pin.get("installed")})
-        return {"packs": rows}
+        return _playground_packs()
 
     @api.post("/api/playground/packs")
     def playground_pack_install(payload: dict) -> dict[str, Any]:
-        url = str(payload.get("url") or "").strip()
-        # An https git URL and nothing else — a pack install is a clone, and
-        # the clone is the one thing on this surface that reaches out.
-        if not re.fullmatch(r"https://[\w.-]+/[\w./~-]+", url):
-            return {"error": "A pack installs from an https git URL — e.g. "
-                             "https://github.com/owner/repo."}
-        job_id = f"pack{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}"
-        _spawn_catalogue(job_id, url=url,
-                         ref=str(payload.get("ref") or "").strip() or None)
-        return {"ok": True, "job_id": job_id}
+        return _playground_pack_install(payload)
 
     @api.post("/api/playground/packs/delete")
     def playground_pack_delete(payload: dict) -> dict[str, Any]:
-        name = str(payload.get("name") or "")
-        if not re.fullmatch(r"[\w.-]+", name) or name.startswith("."):
-            return {"error": f"Not a pack name: {name!r}"}
-        dest = PLAYGROUND_NODES / name
-        if not dest.is_dir():
-            _reload_volume()
-        if not dest.is_dir():
-            return {"error": f"No pack named {name!r} under "
-                             f"{PLAYGROUND_NODES}."}
-        shutil.rmtree(dest)
-        volume.commit()
-        # Same fact as install, stated on the delete: a warm engine keeps
-        # what it already imported until its next restart.
-        return {"ok": True,
-                "note": "Removed from the shelf. A warm engine keeps what "
-                        "it already imported until its next restart."}
+        return _playground_pack_delete(payload)
 
     @api.get("/api/workflows")
     def list_workflows() -> dict[str, Any]:
-        _reload_volume()
-        rows = []
-        # Under the lock for the same reason the Sets listing is: this route's
-        # own reload has released it by the time the walk starts, and the next
-        # reload from any of the twenty requests beside it takes the shelf out
-        # from under the glob — an empty Playground over saved graphs.
-        with _RELOAD_LOCK:
-            if WORKFLOWS.is_dir():
-                for f in sorted(WORKFLOWS.glob("*.json")):
-                    if f.name.endswith(".meta.json"):
-                        continue
-                    meta = {}
-                    mp = f.with_name(f.stem + ".meta.json")
-                    if mp.is_file():
-                        try:
-                            meta = json.loads(mp.read_text())
-                        except ValueError:
-                            meta = {}
-                    rows.append({"name": f.stem,
-                                 "created": meta.get("created"),
-                                 "seed_of": meta.get("seed_of"),
-                                 "exposes": meta.get("exposes") or [],
-                                 "mtime": f.stat().st_mtime})
-        return {"workflows": rows}
+        return _list_workflows()
 
     @api.get("/api/workflows/{name}")
     def get_workflow(name: str) -> dict[str, Any]:
-        try:
-            name = _workflow_name(name)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        path = WORKFLOWS / f"{name}.json"
-        if not path.is_file():
-            _reload_volume()
-        if not path.is_file():
-            return {"error": f"No workflow named {name!r} under "
-                             f"{WORKFLOWS}."}
-        try:
-            graph = json.loads(path.read_text())
-        except ValueError as exc:
-            return {"error": f"{name}.json is not valid JSON: {exc}"}
-        meta = {}
-        mp = WORKFLOWS / f"{name}.meta.json"
-        if mp.is_file():
-            try:
-                meta = json.loads(mp.read_text())
-            except ValueError:
-                meta = {}
-        return {"name": name, "graph": graph, "meta": meta}
+        return _get_workflow(name)
 
     @api.post("/api/workflows/{name}")
     def save_workflow(name: str, payload: dict) -> dict[str, Any]:
-        try:
-            name = _workflow_name(name)
-            graph = _validate_playground_graph(payload.get("graph"))
-        except ValueError as exc:
-            return {"error": str(exc)}
-        WORKFLOWS.mkdir(parents=True, exist_ok=True)
-        # The graph file stays pure API format — a stock ComfyUI could run
-        # it — and our fields live beside it, the datasets split.
-        (WORKFLOWS / f"{name}.json").write_text(json.dumps(graph, indent=2))
-        meta = payload.get("meta") or {}
-        (WORKFLOWS / f"{name}.meta.json").write_text(json.dumps(
-            {"created": meta.get("created") or time.time(),
-             "seed_of": meta.get("seed_of"),
-             "exposes": meta.get("exposes") or []}, indent=2))
-        volume.commit()
-        return {"ok": True, "name": name}
+        return _save_workflow(name, payload)
 
     @api.post("/api/workflows/{name}/delete")
     def delete_workflow(name: str) -> dict[str, Any]:
-        try:
-            name = _workflow_name(name)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        path = WORKFLOWS / f"{name}.json"
-        if not path.is_file():
-            _reload_volume()
-        if not path.is_file():
-            return {"error": f"No workflow named {name!r}."}
-        path.unlink()
-        (WORKFLOWS / f"{name}.meta.json").unlink(missing_ok=True)
-        volume.commit()
-        return {"ok": True}
+        return _delete_workflow(name)
 
     # ── the storyboards ───────────────────────────────────────────────
     # A board travels whole, both ways. There is no per-panel route because
@@ -16581,6 +16642,66 @@ def api():
     @routes.get("/files/{name}")
     def file(name: str):
         return _output_response(name)
+
+    # ---- the Playground: the same engine, the same job contract, a new caller
+    #
+    # The graph the app sends is the wire format itself — the API graph
+    # ComfyUI's /prompt takes — and runs land in outputs/ with the graph
+    # embedded in the file, which is one of the two sanctioned crossings.
+    # Workflows are saved on the volume because the model menu's toggle is
+    # resolved there, on the server, at render time.
+
+    @routes.post("/playground/seed")
+    def playground_seed(payload: dict) -> dict[str, Any]:
+        return _playground_seed(payload)
+
+    @routes.post("/playground/run")
+    def playground_run(payload: dict) -> dict[str, Any]:
+        """Same body /api/playground/run takes: the graph, the host, the
+        attachments as {filename: base64}, and the workflow's name if it has
+        one. The record seeds queued before the spawn, as every job does."""
+        reply = _playground_submit(payload)
+        return reply
+
+    @routes.post("/playground/restart")
+    def playground_restart(payload: dict) -> dict[str, Any]:
+        return _playground_restart(payload)
+
+    @routes.get("/playground/nodes")
+    def playground_nodes():
+        return _playground_nodes()
+
+    @routes.post("/playground/refresh")
+    def playground_refresh() -> dict[str, Any]:
+        return _playground_refresh()
+
+    @routes.get("/playground/packs")
+    def playground_packs() -> dict[str, Any]:
+        return _playground_packs()
+
+    @routes.post("/playground/packs")
+    def playground_pack_install(payload: dict) -> dict[str, Any]:
+        return _playground_pack_install(payload)
+
+    @routes.post("/playground/packs/delete")
+    def playground_pack_delete(payload: dict) -> dict[str, Any]:
+        return _playground_pack_delete(payload)
+
+    @routes.get("/workflows")
+    def list_workflows() -> dict[str, Any]:
+        return _list_workflows()
+
+    @routes.get("/workflows/{name}")
+    def get_workflow(name: str) -> dict[str, Any]:
+        return _get_workflow(name)
+
+    @routes.put("/workflows/{name}")
+    def put_workflow(name: str, payload: dict) -> dict[str, Any]:
+        return _save_workflow(name, payload)
+
+    @routes.delete("/workflows/{name}")
+    def drop_workflow(name: str) -> dict[str, Any]:
+        return _delete_workflow(name)
 
     # ---- datasets: the volume as a mirror of the studio folder -------------
     #
