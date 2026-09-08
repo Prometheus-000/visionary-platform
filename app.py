@@ -12237,14 +12237,24 @@ class _VideoSide:
         # frame, which is the degrade the page already handles, and failing a
         # finished three-minute render over its sidecar would be the wrong
         # trade twice.
-        ctx = COMFY / "output" / "h3_context" / f"{job_id}_00000.safetensors"
-        if ctx.exists():
+        # By glob, not by name: the save node numbers its file with ComfyUI's
+        # own counter — `{job}_00001_.safetensors` on the first take from the
+        # job API — while this looked for `_00000`, so every take logged
+        # "no motion context saved" beside the line that had just saved it,
+        # and Continue fell back to the last frame on a take that had its
+        # motion on disk. The newest match is the take's; older ones under
+        # the same id cannot exist, since ids are minted per take.
+        found = sorted((COMFY / "output" / "h3_context").glob(f"{job_id}_*.safetensors"),
+                       key=lambda f: f.stat().st_mtime)
+        if found:
+            ctx = found[-1]
             shutil.copyfile(ctx, OUTPUTS / f"{job_id}{H3MC_SUFFIX}")
-            ctx.unlink()
+            for f in found:
+                f.unlink(missing_ok=True)
         else:
             print(f"[video] {job_id} no motion context saved "
-                  f"(wanted {ctx}) — Continue will fall back to the last "
-                  f"frame", flush=True)
+                  f"(wanted {COMFY / 'output' / 'h3_context'}/{job_id}_*.safetensors)"
+                  f" — Continue will fall back to the last frame", flush=True)
         volume.commit()
 
         res = {
