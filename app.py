@@ -13094,15 +13094,22 @@ def _weights() -> dict[str, Any]:
                     if not files:
                         continue
                     trigger = ""
+                    # Which set trained this. The trainer has always written it
+                    # into the sidecar; nothing read it back, so a LoRA and the
+                    # pictures that made it were strangers on every surface.
+                    trained_from = ""
                     meta = d / "visionary.json"
                     if meta.exists():
                         try:
-                            trigger = json.loads(meta.read_text()).get("trigger_word", "")
+                            side = json.loads(meta.read_text())
+                            trigger = side.get("trigger_word", "")
+                            trained_from = str(side.get("dataset") or "")
                         except Exception:
                             pass
                     spec = CATALOGUE_LORA_ROOTS.get(str(d))
                     loras.append({
                         "name": d.name, "trigger_word": trigger,
+                        "dataset": trained_from,
                         "strength": None,
                         "path": str(files[0]),
                         # The sidecar is the tell: this platform's trainer wrote
@@ -13139,6 +13146,8 @@ def _weights() -> dict[str, Any]:
                     loras.append({
                         "name": d.stem,
                         "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
+                        # A loose file was not trained here, so it names no set.
+                        "dataset": "",
                         "strength": (KREA_STYLE_STRENGTH
                                      if d.stem in KREA_STYLE_LORAS else None),
                         "path": str(d),
