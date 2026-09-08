@@ -1272,10 +1272,10 @@ CAPTION_MODELS: dict[str, dict[str, str]] = {
         "label": "Qwen3-VL 8B uncensored",
         "note": "Same weights, refusal removed. First run pulls ~17 GB.",
     },
-    # The house prompt's method is a scratchpad the model fills before it
-    # writes; the Thinking checkpoint has that natively, and this is the open
-    # abliteration of it (only the text side was edited, the vision tower is
-    # stock). Qwen3-VL ships Instruct and Thinking as two checkpoints — the
+    # The Thinking checkpoint reasons before it writes — the scratchpad the
+    # house prompt used to ask for, native to the model and dropped from the
+    # answer — and this is the open abliteration of it (only the text side
+    # was edited, the vision tower is stock). Qwen3-VL ships Instruct and Thinking as two checkpoints — the
     # Instruct template has no switch, the Thinking template opens `<think>`
     # in the generation prompt itself, so it reasons on every image whether
     # asked or not. `thinking` is what the loop reads to drop the block and
@@ -1375,49 +1375,38 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_CAPTION_CHARS = 2048
 THUMB_PX = 320
 
-# One preset, and it is the owner's own text, verbatim.
+# One preset, and it is the owner's own text to tune.
 #
 # It used to be five, each composed out of JoyCaption's trained sentences with a
-# leave-out clause of ours appended in the Space's grammar. Retired 2026-09-02
-# for this one form-shaped instruction (the others live in git, to come back
-# one at a time as they are re-earned): a field per line, the subject named by
-# `{NAME}`, and every immutable — face, skin, eyes, age, body, ethnicity, hair
-# colour and length — kept out of every field so the trigger word is the only
-# place identity can live. The fields are the model's scratchpad; the last
-# paragraph has it write the caption *from* them, and `_caption_extract` keeps
-# only what follows that final CAPTION:, so the scratchpad never reaches a
-# sidecar.
+# leave-out clause of ours appended in the Space's grammar, retired 2026-09-02
+# for one form-shaped instruction: nine labelled fields as the model's
+# scratchpad and the caption written from them, with `_caption_extract` keeping
+# only what followed the final CAPTION:. Retired in turn on 2026-09-08 — the
+# owner's call, after the four-bit Qwen3-VL a client runs wrote the nine
+# fields and skipped the label five pictures out of five, and five sidecars
+# held the scratchpad: a cut that depends on the model's formatting is a coin
+# flip stacked on the writer, and the fields cost three times the tokens of
+# the caption they were for. What survives is the knowledge the fields
+# carried: the subject named by `{NAME}`, the shot type first, and every
+# immutable — face, skin, eyes, age, body, ethnicity, hair colour and length —
+# kept out so the trigger word is the only place identity can live; how the
+# hair is worn stays in, because that is wearable and separable.
 #
-# Not reworded here, and not to be. The text is the product: it was tuned by
-# reading what came back, and "improving" a sentence of it without re-reading
-# the captions is the same mistake as rewriting a function signature to sound
-# better. What composes around it on the server is exactly `{NAME}` and the
-# CAPTION: cut, and the line under the box says so (see `_caption_instruction`).
+# The reply is the caption, as the model writes it. Nothing composes around
+# the text but `{NAME}`, and the line under the box says so. The wording is a
+# starting point: it is tuned by reading what comes back, not by rewriting it
+# to sound better (see `_caption_instruction`).
 CHARACTER_INSTRUCTION = """\
-Describe this image for a text-to-image training caption. The subject is {NAME}. Output only the fields below, one per line, no extra text.
-
-SHOT: one of extreme close-up / close-up / medium close-up / medium shot / cowboy shot / medium wide shot / wide shot / extreme wide shot
-POSE: body position and what {NAME} is doing, in one sentence
-EXPRESSION: facial expression and gaze direction, in a few words
-HAIR ARRANGEMENT: only how the hair is worn (loose, tied back, braided, under a hat, wet, windblown). Never state color, length, or texture.
-CLOTHING: every visible garment and accessory, with colors and materials
-SETTING: location and background objects, with spatial relationships
-LIGHTING: source, direction, quality, color temperature
-CAMERA: angle, lens feel, depth of field
-FLAWS: none (unless the image clearly contains a watermark, text overlay, visible motion blur, on-camera flash, or obvious compression artifacts — then name only what is clearly present)
-
-Rules: Do not describe {NAME}'s face, skin, eyes, age, body type, ethnicity, or hair color/length anywhere in any field. Do not invent details you cannot see. Attach every adjective to the noun it belongs to, so it is unambiguous which garment or object each color and material describes.
-
-Then, using only what you wrote above, write CAPTION: one or two natural sentences describing the image. Start with "{NAME}" and the shot type. Do not add anything not in the fields."""
+Write a caption for this image for training a text-to-image model: one or two natural sentences in a formal tone, and nothing else. The subject is {NAME}. Start with "{NAME}" and the shot type, one of extreme close-up, close-up, medium close-up, medium shot, cowboy shot, medium wide shot, wide shot or extreme wide shot. Then say what {NAME} is doing and where the gaze goes; how the hair is worn (loose, tied back, braided, under a hat, wet, windblown) and never its color, length or texture; every visible garment and accessory with its color and material, each adjective attached to the noun it belongs to; the location and what is in the background; the lighting's source, direction and warmth; and the camera angle and depth of field. Name a watermark, text overlay, motion blur, on-camera flash or compression artifacts only if one is clearly present. Do not describe {NAME}'s face, skin, eyes, age, body type, ethnicity, or hair color or length. Do not invent details you cannot see."""
 
 # They are here rather than in the page for the reason `SHOT_VOCAB` is: the page
-# should send `character`, not four hundred words of instruction it could edit
+# should send `character`, not two hundred words of instruction it could edit
 # into something the run cannot reproduce. What the page shows is the label and
 # the note; the text prefills the box and the first keystroke makes it the run's.
 CAPTION_PRESETS: dict[str, dict[str, str]] = {
     "character": {
         "label": "Character",
-        "note": "One field per line, nothing about the face. Identity is the trigger's job.",
+        "note": "One or two sentences, nothing about the face. Identity is the trigger's job.",
         "instruction": CHARACTER_INSTRUCTION,
     },
 }
@@ -1486,8 +1475,8 @@ def _caption_instruction(
     2026-09-02. The owner learned of the rulebook after it was gone, and the
     rule that came out of that is the one in CLAUDE.md: what the model sees is
     shown. A preset that wants either sentence carries it in its own text,
-    where it can be read. The house prompt's reply is cut to its final
-    CAPTION: by `_caption_extract`, and the one line under the box says so.
+    where it can be read. The reply is saved as the model writes it, and the
+    one line under the box says so.
 
     `replace` rather than `format`, because this string is editable in the page.
     `.format()` on user-typed text raises on a stray brace, and the cost of that
@@ -1498,35 +1487,6 @@ def _caption_instruction(
     out = instruction.strip() or spec["instruction"]
     return out.replace("{NAME}", trigger_word or "the subject")
 
-
-# The last thing the house prompt asks for, and the only thing kept.
-CAPTION_MARK_RE = re.compile(r"CAPTION\s*:", re.I)
-
-
-def _caption_extract(reply: str) -> str:
-    """
-    What follows the final `CAPTION:` in a reply, or the whole reply.
-
-    The house prompt makes the model fill nine labelled fields and then write
-    the caption from them. The fields are the scratchpad — they are what make
-    the caption good, and they are not the caption — so the sidecar is the
-    text after the last CAPTION: mark. The *last*, because a model that drafts
-    twice writes the mark twice, and the final one is the one it meant.
-
-    Written here rather than asked for in the prompt: "output only the
-    caption" would cost the scratchpad, which is the whole method, and a rule
-    stacked on a probabilistic writer is a coin flip anyway. This was the
-    owner's original one-liner, `reply.split("CAPTION:")[-1]`, made
-    case-blind and bounded.
-
-    A reply with no mark comes back whole and is logged rather than emptied:
-    whatever it is, the raw text says more about it than a blank sidecar.
-    """
-    marks = list(CAPTION_MARK_RE.finditer(reply))
-    if not marks:
-        print(f"[caption] no CAPTION: in reply, kept whole: {reply[:120]!r}")
-        return reply.strip()
-    return reply[marks[-1].end():].strip().strip("*").strip()
 
 
 # --------------------------------------------------------------------------
@@ -3931,16 +3891,7 @@ def _caption_images(
 
     cache_dir = str(HF_CACHE)
     processor = _caption_processor(repo, cache_dir)
-    # Extraction is for the house prompt only. A user's own instruction — a
-    # draft, or a saved preset, which the page sends as an override — is kept
-    # as the model writes it, even if it happens to say CAPTION: somewhere:
-    # the owner's rule is that editing is binary when code depends on the
-    # text, and a prompt whose output is chopped by rules it cannot see is the
-    # half that drives people nuts.
-    house = not instruction.strip() and preset in CAPTION_PRESETS
     instruction = _caption_instruction(preset, trigger_word, instruction)
-    if house:
-        print("[caption] house prompt · keeping what follows the final CAPTION:")
     # Ahead of the weights rather than after them, which is the whole payoff of
     # settling this once: a captioner whose template refuses the image is not
     # going to caption anything, and finding that out here costs a processor
@@ -4059,11 +4010,9 @@ def _caption_images(
                 # is where "chgl, chgl, …" came from — and each recaption run
                 # stacked one more. Stripped here, once, so every branch below
                 # composes from a caption that is known not to carry it.
-                if house:
-                    caption = _caption_extract(caption)
-                # After the extraction, not before: the caption is told to
-                # open with the trigger, and this is what keeps that from
-                # doubling when the prepend below puts it there as well.
+                # The caption is told to open with the trigger, and this is
+                # what keeps that from doubling when the prepend below puts
+                # it there as well.
                 caption = _strip_leading_trigger(caption, trigger_word)
                 txt = img_path.with_suffix(".txt")
                 existing = txt.read_text().strip() if txt.exists() else ""

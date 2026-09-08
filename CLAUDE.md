@@ -152,16 +152,18 @@ below.
   models use parse grammar. See the `CAPTION_MODELS` comment.
 - **What the model sees is shown.** Nothing is appended to or stripped from
   text the user typed. What the run does is `{NAME}` becoming the trigger
-  word, and the house prompt's reply being cut to what follows its final
-  `CAPTION:`, and the line under the box says so. That cut is why editing is
-  binary there: the
-  house prompt runs whole and read-only, or you write your own from blank and
-  it is saved as the model writes it — a copy that is "mostly editable" while
-  code chops its output by rules you cannot see is the half that drives people
-  nuts. The captioner carried a hidden sixty-word rulebook
-  behind every preset for a month, then a hidden trigger clause; the owner
-  learned of the first after it was gone. Convenient on the surface, and a
-  wall when someone is wondering what is going on.
+  word, and the line under the box says so; the reply is saved as the model
+  writes it. The house prompt used to make the model fill nine fields and
+  then write the caption from them, with only what followed `CAPTION:` kept
+  — retired 2026-09-08 when a four-bit model wrote the fields and skipped the
+  label, and five sidecars held the scratchpad: a cut that depends on the
+  model's formatting is a coin flip stacked on the writer. Editing stays
+  binary: the house prompt runs whole and read-only, or you write your own
+  from blank — a copy that is "mostly editable" is the half that drives
+  people nuts. The captioner carried a hidden sixty-word rulebook behind
+  every preset for a month, then a hidden trigger clause; the owner learned
+  of the first after it was gone. Convenient on the surface, and a wall when
+  someone is wondering what is going on.
 - **Arithmetic in the validator, judgement in the harness.** The validator runs
   on every request and gates a render, so what belongs there are structural
   zeros — a probabilistic gate stacked on a probabilistic writer is two coin
