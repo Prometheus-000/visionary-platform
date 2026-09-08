@@ -1504,11 +1504,18 @@ This is the entire trust surface and it needs no dialogue. Kills the chat panel,
 the assistant sidebar, and clarifying questions — every question asked is a small
 failure, so pick something, mark it invented, move on.
 
-**The library is closed until you reach for it.** A drawer, not a workspace.
-Browsed, not searched. Things are applied, never imported: edits in a scene are
-scene-local, edits in the library propagate, and those are two different acts in
-two different places. Kills a persistent rail, a docked browser, an asset
-manager.
+**The library is closed until you reach for it, and the reach is visible.**
+A drawer, not a workspace. Browsed, not searched. Things are applied, never
+imported: edits in a scene are scene-local, edits in the library propagate, and
+those are two different acts in two different places. Kills a docked browser,
+an asset manager, a rail of *contents*. What it does not kill is the door: the
+floor along the bottom of the canvas holds the studio's own things at 64 pt —
+pictures, sets as stacks of their own photographs, faces, boards — hideable by
+one drag and never remembered. Reworded 2026-09-08, when every surface was
+built behind a corner glyph and the owner could not find one: a rule read as
+"hide the door" hides the library, and the judgment it proxies — the canvas
+is dominant, the library is objects and never a browser — survives a visible
+door intact.
 
 **It never remembers unless told.** Same words, same result, a year later. Kills
 personalisation, suggestion engines, learned preferences, recently-used
