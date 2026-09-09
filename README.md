@@ -2,8 +2,8 @@
 
 A generative studio that runs on your own [Modal](https://modal.com) account.
 Train a LoRA on your own photographs, make stills and clips with it, cast the
-people you trained into scenes, and lay the scenes out on a storyboard — one
-interface, one URL, nothing to keep running between sessions.
+people you trained into scenes, and lay the scenes out on a storyboard —
+nothing to keep running between sessions.
 
 ![A written prompt and the picture it produced, on a canvas that holds the screen](docs/generate.png)
 
@@ -13,10 +13,28 @@ modal setup
 modal deploy app.py
 ```
 
-That is the whole install. The last command prints a URL, and the URL is the
-application — interface, API and GPU jobs. Nothing runs on your machine, nothing
-runs while you are not using it, and a GPU starts when you press Generate and
-at no other time.
+That is the whole install on this side. The last command prints a URL, and the
+URL is training, inference, the stored weights and one job API behind Modal
+proxy auth. Nothing runs while you are not using it, and a GPU starts when a
+job is submitted and at no other time.
+
+> **The front end was retired on 2026-09-09**, and the pictures in this file
+> are of it. What deploys from `main` today is the engine and the seam: no
+> HTML, no static files, nothing a browser would open. Retirement is not
+> deletion — the whole Modal-served application, `app.py` with the web build
+> in its image and `web/` as the front end it served, is kept on the
+> [`modal-web`](../../tree/modal-web) branch, deployable as it was, because it
+> is a solid artefact of what can be built on Modal alone and the record of a
+> year of decisions. Nothing is developed on it and it is never rebased.
+>
+> **Read the next section as a description of that application**, because it is
+> one: where it names a button or a console, that is the surface on `modal-web`.
+> The capabilities under them are the platform's and still deploy from `main` —
+> the training, the two model families, regional LoRA, the compilers, the
+> Playground's engine — reached through the job API instead of a page.
+> `docs/roadmap.md`, Phase 7, has the account, including the five capabilities
+> that were moved onto the job API rather than allowed to fall between the two
+> halves.
 
 ---
 
@@ -304,14 +322,15 @@ python3 tools/smoke_prompt.py         # the shot compiler matches MiniMax's publ
 python3 tools/smoke_scene.py          # the scene compiler matches MiniMax's grammar: shots, cut times, speakers
 python3 tools/smoke_pins.py           # every pinned wheel still resolves, before a deploy spends 20 minutes finding out
 python3 tools/smoke_workflow.py       # the Playground's graph validator and the workflow toggle
-python3 tools/smoke_dupes.py          # duplicate grouping against real re-encodes
+python3 tools/smoke_longpoll.py       # a long poll answers on change and on the deadline, never before either
 python3 tools/smoke_stop.py           # a Stop press cannot be lost to a publish race
 python3 tools/upstream.py             # what moved upstream since the pins that a render here would notice
 ```
 
-The front end has its own harness under `tools/ui-checks/`: Playwright and HTTP
-scripts driven against the stubbed preview server, with a committed baseline
-that fails when the page's behaviour drifts. See the readme there.
+`tools/shot_fixtures.py` dumps the shot compiler's whole table and 807 of its
+outputs as golden fixtures, so a client that ports the compiler is held to this
+one by measurement rather than by reading. Pass it the destination — the
+client is a separate checkout, so there is no default that is not a guess.
 
 ### What has been run end to end
 
@@ -328,33 +347,47 @@ Being honest about coverage, since "it deploys" is not "it works":
 
 ---
 
-## Working on the UI locally
+## Writing a client
 
-The front end is React and TypeScript under `web/`, built by Vite into the image
-at deploy time — so `modal deploy app.py` stays the whole install and no local
-Node is needed to ship. For development, `npm run dev` in `web/` proxies to
-`tools/preview_ui.py`, which serves the real prompt compilers, shot vocabulary
-and menus (pulled out of `app.py` by AST) against stubbed jobs, so the entire
-UI is workable with no Modal account, no GPU and nothing billed:
+The deploy prints one URL for the `api` function. Paste it and a Modal proxy-auth
+key pair into whatever you are building, and that is the whole handshake — there
+are no Secrets and no CLI setup on the client side.
 
-```bash
-python3 tools/preview_ui.py
-```
+`GET /weights` is the first call to make: it answers with the checkpoints
+present, the LoRAs a run can load, the caption and trainer menus, the GPU
+options and the per-model control tables a composer builds itself from. It is
+also the first-launch check — a 401 is a bad key pair, a connection failure is
+a bad address, a 404 is nothing deployed at that URL.
+
+From there: `POST /jobs/{still,video,train,caption,export}` submits,
+`GET /jobs/{id}` is a **long poll** that holds the request open until the record
+differs from the token you already have (so a poll waits for its own reply
+rather than firing on a clock), `POST /jobs/{id}/stop` is cooperative, and
+`GET /files/{name}` fetches what a run wrote. Datasets mirror up file by file
+with `PUT /datasets/{name}/files/{file}` and one `POST /datasets/{name}/commit`,
+because a commit is a snapshot of the whole volume and one per file is one per
+file too many.
+
+`GET /where` answers with what that deployment can actually see on the volume,
+which is the cheap check for when a client's settings and a GPU job disagree.
 
 ---
 
 ## Layout
 
 ```
-app.py                the whole application — images, jobs, API, and the UI
+app.py                the whole application — images, GPU jobs, and the job API
 comfy_nodes/          our own ComfyUI nodes: the region shim, the edit-arity guard, the regional leak fix
-web/                  the front end; web/CLAUDE.md holds its rules and the veto list
-tools/                smoke tests, measurement harnesses, and the local UI preview server
+tools/                smoke tests and measurement harnesses
 tools/_from_app.py    pulls plain-Python pieces out of app.py by AST
+tools/shot_fixtures.py  golden fixtures for a client that ports the shot compiler
 docs/                 decisions.md (what was removed, and the measurement), roadmap.md (the phases, the vetoes)
 CLAUDE.md             the design rationale — why the code is shaped the way it is
 .claude/rules/        the backend rules, loaded when app.py is open
 ```
+
+The front end that used to sit here as `web/` is on the `modal-web` branch,
+with its own rules file and the veto list beside it.
 
 `app.py` is deliberately one file — long, but navigable by its banner comments,
 and it keeps `modal deploy app.py` the whole install. Upstream clones read

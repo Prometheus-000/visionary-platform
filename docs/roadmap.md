@@ -3,8 +3,10 @@
 Where this is going. Not loaded into a session; read it when deciding whether a
 new surface belongs.
 
-The veto list is the operative half and is duplicated into `web/CLAUDE.md`,
-because a veto that is not in context when someone adds a panel is not a veto.
+The veto list is the operative half. It is duplicated wherever a surface is
+built, because a veto that is not in context when someone adds a panel is not a
+veto — and it names no toolkit, no model and no GPU anywhere in it, which is why
+it outlived the front end it was written for.
 
 ---
 
@@ -25,18 +27,24 @@ because a veto that is not in context when someone adds a panel is not a veto.
      fidelity number, and a per-box likeness anchor
 5. Video LoRA training — **not started, and the trainer is not musubi.** H3
    trains under AI Toolkit; see below.
-6. **The Dynamic Canvas** — next, and sketched rather than specified below
+6. **The Dynamic Canvas** — sketched rather than specified below, and built
+   in a client rather than into the console this repository used to serve
    - The **storyboard** arrived first, behind a door: boards of strictly
      ordered intent panels, no duration anywhere on them, each frame cut to
      the board's aspect with the camera's move drawn on it in the industry's
      own stencil language and a subject's move as a hollow arrow, compiled
      through the machinery that exists — a panel carries a shot's pills, so
      the hand-off is a copy. Its final home is this phase — the wall as the
-     far zoom of the one canvas. See `web/CLAUDE.md`, "The storyboard".
+     far zoom of the one canvas.
+7. **The front end is retired** — done, 2026-09-09. What is deployed from
+   this repository is training, inference, the stored weights and one job
+   API. No HTML, no static files, nothing a browser would open. Specified
+   below.
 
 The end state is one application where a generated still flows into a clip
 without a round trip through the filesystem — the "Animate" and "As reference"
-buttons on a finished image are the first piece of that.
+buttons on a finished image are the first piece of that. It is not built here
+any more; what is built here is everything under it.
 
 ### Phase 5 — video LoRA training, and the trainer it needs
 
@@ -127,6 +135,77 @@ The consequence: the interaction is mostly reachable and the physics is not, so
 this phase should chase the first tier and leave the third alone until the model
 exists. Attempting it, failing, and concluding the whole direction is fantasy is
 the specific mistake this paragraph exists to prevent.
+
+### Phase 7 — The front end is retired
+
+*Decided 2026-09-07, landed 2026-09-09.* The product is the experience, and the
+browser stopped being the best one. The front end spent a year working around a
+vehicle that owns none of what this work needs — no window lifecycle, no
+filesystem, no keymap, no notifications, no drag in both directions, no GPU
+under the canvas: `keep.ts` swept scene records by age because no browser lets a
+page finish a write on unload, `thumb.tsx` rationed itself to four fetches so
+the status poll was not queued behind pictures, a heartbeat and a sweep ran on
+the server because a remote container cannot know whether a tab is open, and a
+twelve-hour horizon stood in for a quit event. Each of those is a receipt for a
+limitation of the vehicle, and the root file says what to do with a vehicle:
+replace it the day something serves the experience better.
+
+**What this repository is now.** Training, inference, the stored weights, and
+one job API: submit, wait, stop, dataset up, output down, weights list and
+fetch, behind Modal proxy auth with the key pasted in once. `app.py` keeps its
+images, its pins, its volumes, `train_job`, `caption_job`, the three ComfyUI
+classes and the weight downloader. It lost the web build, Node in the image,
+sixty-seven routes, the session Dict, drafts, thumbnails, the duplicate
+classifier and the CLIP encoder baked in for it, storyboards, characters and
+the page's own file serving — 17,363 lines to 13,745, and `web/` with them.
+The URL stops being public. HTTP is the honest channel between two things that
+are not written in the same language; the endpoints are a seam, not an app.
+
+**Retirement is not deletion.** The whole Modal-served application — `app.py`
+with the web build in its image, and `web/` as the front end it served — is
+kept on the `modal-web` branch, deployable as it was, because it is a solid
+artefact of what can be built on Modal alone and the record of a year of
+decisions. Nothing is developed on it, it is never rebased, and it sits at the
+last commit before this one.
+
+**Nothing was allowed to fall between the two halves.** The cut was measured
+route by route rather than reasoned about, and five capabilities had no home on
+either side of it once the page was gone: stitching a scene's takes into one
+file, deleting a run's files from the volume, purging many at once, deleting a
+whole set, and asking a deployment what it can actually see. Those are on the
+job API now (`POST /jobs/export`, `DELETE /outputs/{job}`, `POST
+/outputs/purge`, `DELETE /datasets/{name}`, `GET /where`). The failure this
+avoids is the one a retirement always risks: the capability that existed, was
+never named in the plan, and is discovered missing by somebody who needed it.
+
+**The volume migration moved with it.** The one-time job that flattens
+`outputs/` and puts each run's record inside its own files was started by the
+page's gallery listing, on first sight of a folder in the old layout. A client
+that lists its own library would never have triggered it, and every run from
+before the record moved into the file would have stayed unreachable by name.
+It runs on the job API container's start instead — once, `max_containers=1`,
+the job record still the lock, and only when `_entries_by_rpc` says there is
+something to move.
+
+**What survives verbatim, and the one deliberate port.** `docs/decisions.md`;
+the storage layout; the H3 grammar; the caption presets and the house prompt;
+the GPU half of the Python. And `SHOT_VOCAB` with its three compilers stays
+here rather than moving, because a prompt is a compilation target and the
+compiler is where this project's knowledge of each model's grammar lives. A
+client that composes the document has to hold it too, which makes a second
+implementation — and the rule about those is that a second implementation is
+one that can disagree. `tools/shot_fixtures.py` is what makes them agree by
+measurement rather than by reading: 807 compile cases and 21 validator cases
+compiled by the real Python and replayed by the client's tests, written to a
+path it is given, because the client is a separate checkout and a default
+would be a guess.
+
+**Three sentences were rewritten rather than deleted, because the judgment each
+proxied still holds.** In the root `CLAUDE.md`, "`modal deploy app.py` is the
+entire install" and "the front end is built into the image"; in `README.md`,
+"nothing runs on your machine." Install is still one step on this side, and
+nothing here still depends on a running dev machine — what changed is that
+there is another side, and it installs itself.
 
 ### The Playground, and where the veto line actually runs
 

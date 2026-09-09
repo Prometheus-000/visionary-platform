@@ -54,7 +54,7 @@ the next one. Concretely:
 - **Prefer the explanation with an unbounded shape over the one with a
   computable ceiling.** A payload has a ceiling — bytes over a rate, worked out
   in a minute. A queue does not. And anything that can take minutes says which
-  minutes they are, on both the page and the log: the phase names the step, and
+  minutes they are, on both the client and the log: the phase names the step, and
   `[api] spawned in Ns` / `accepted` stamp the hop a large body actually
   travels. The ten-minute render that established this, including the diagnosis
   that was wrong and why it was reached for, is in `docs/decisions.md`.
@@ -92,13 +92,16 @@ Scale here means the axis that actually binds: not requests per second, but
   than on a reply, so at 400ms against a network Dict a slow answer does not
   delay the next tick, it overlaps it. Replies then land out of order and the
   bar is painted by whichever arrived last rather than whichever is newest —
-  and the polls in flight hold connections, of which a browser gives one origin
-  about six. The gallery's covers, the canvas stills and a `<video>`
-  re-requesting byte ranges all come off that origin, so a pile of polls
-  starves them: the clip stutters and the grid comes back half-painted. Neither
-  symptom looks like a poll loop, which is why it went unfound. `everyMs` is
-  the whole fix and is a drop-in — same arguments, same id, so
-  `clearInterval(t)` inside the body still ends it.
+  and the polls in flight hold connections, of which the browser this was
+  found in gave one origin about six. The gallery's covers, the canvas stills
+  and a `<video>` re-requesting byte ranges all came off that origin, so a pile
+  of polls starved them: the clip stuttered and the grid came back
+  half-painted. Neither symptom looks like a poll loop, which is why it went
+  unfound. The six-connection ceiling was the browser's and left with it; the
+  rule did not, because the ordering half is the client's own and holds
+  wherever the clock is. The end state is `/jobs/{id}` on the job API, which
+  holds the request open until the record differs — a poll that waits for its
+  own reply by construction rather than by discipline.
 
   `_reload_volume()` is the same shape at the other end. Serialising it turned
   a race into a queue, and a queue of twelve identical reloads is the wrong
@@ -219,31 +222,29 @@ not a proxy, and until it runs, a text judge should be read as one.
 
 ## Layout, and why it is shaped this way
 
-**The front end is built into the image, not mounted from your disk.** That is
-what keeps `modal deploy app.py` the entire install: mounting a local
-`web/dist` would be simpler and would quietly make the deploy command a lie —
-a fresh clone has no dist, and a stale one deploys whatever you last built,
-which is the worst of the three because it looks like it worked. Node is a
-build-time dependency of the image; nothing at runtime needs it.
+**Nothing is mounted from your disk, and that is what keeps `modal deploy
+app.py` the entire install.** The front end was the reason this needed saying —
+it was built into the image rather than mounted, because a fresh clone has no
+`dist` and a stale one deploys whatever you last built, which is the worst of
+the three because it looks like it worked. It was retired on 2026-09-09 and the
+rule outlived it: every dependency is baked at build time, nothing installs at
+runtime, and a deploy from a fresh clone is the same deploy as yours. Node left
+the image with the build it was there for.
 
-The lockfile is copied before the sources so that editing a component re-runs
-`npm run build` and not `npm ci`. Modal invalidates from the first changed
-layer down, so the order of those four lines is a minute per deploy.
-
-`UI_HTML` is **gone**. It was the oracle the React port was checked against —
-`preview_ui.py` served it with no flags and the shipped bundle with `--dist` —
-and this paragraph said for a long time that it should go once a real deploy had
-been exercised. It did. Nothing reads it now, and the arrow-key note under "The
-page" is kept as the record of what it got wrong, because that fault is the kind
-that survives a port.
+**What is deployed is training, inference, the stored weights and one job API.**
+No HTML, no static files, nothing a browser would open — `docs/roadmap.md`,
+Phase 7, has the account and the five capabilities that were moved onto the job
+API rather than allowed to fall between the two halves. The whole Modal-served
+application is kept on the `modal-web` branch, deployable as it was; nothing is
+developed on it and it is never rebased.
 
 `_from_app.py` exists because two tools need the *real* thing rather than a
 copy: `smoke_prompt.py` checking a compiler against a reimplementation would be
-checking the reimplementation, and `preview_ui.py` drawing the shot palette from
-a hand-written vocabulary would be a preview of a palette that does not exist.
-Importing app.py is what it avoids — that pulls in modal and builds image
-definitions at module scope, so it wants credentials and a network to answer a
-question about a string.
+checking the reimplementation, and `shot_fixtures.py` dumping golden fixtures
+from a hand-written vocabulary would hold a client's port to a palette that does
+not exist. Importing app.py is what it avoids — that pulls in modal and builds
+image definitions at module scope, so it wants credentials and a network to
+answer a question about a string.
 
 `app.py` is deliberately one file. It is long, but the alternative — a package
 whose modules are imported by Modal image builds — trades one long file for a
@@ -296,12 +297,15 @@ metadata key now, `_output_record` and `_read_record`); the job folders
 (`outputs/` is flat, `{job}_{NN}.png`, `{job}.mp4`, and the run is read off
 the name by `_group_of`); `.thumbs/` under runs and under sets (covers and
 thumbnails are built by whoever has the pixels and kept in the spool);
-`drafts/.sessions` (a timestamp in the sessions Dict); `drafts/` itself
-(container disk); `work/` (each container's own scratch); and
-`.node_catalogue.json` (the harvest's *return value*, read once by call id
-and kept in the spool). A one-time job moves legacy job folders into place,
-started on first sight from the listing; legacy volume drafts are adopted
-into `datasets/` rather than lost, once, with a log line. The one honest
+`drafts/.sessions` (a timestamp in the sessions Dict, which went with the
+front end on 2026-09-09 along with the thumbnails and the covers above —
+a client builds its own); `drafts/` itself (container disk); `work/` (each
+container's own scratch); and `.node_catalogue.json` (the harvest's *return
+value*, read once by call id and kept in the spool). A one-time job moves
+legacy job folders into place, started when the job API container comes up
+and `_entries_by_rpc` finds one — it used to be started by the page's gallery
+listing, and a client that lists its own library would never have triggered
+it. The one honest
 second file that survives is a clip's motion-context tensor, `{job}.context.
 safetensors`, which is bytes rather than a record.
 
@@ -312,12 +316,13 @@ beside it. A panel's picture is a pointer — `{file, gallery: true}` into the
 flat `outputs/` for a render, `{file}` for an upload in this folder — never a copy, so
 deleting a render leaves the panel's words standing and deleting a board
 touches nothing in the gallery. The folder is the whole import format: copy
-one in and `/api/storyboards` lists it. Uploads are uprighted and capped at
-`STORYBOARD_MAX_SIDE` on arrival, once, because a panel's picture becomes a
-keyframe at the hand-off and the keyframe path would resize to the same edge
-anyway — one cap, in one place, so the wall and the run read the same bytes.
-The board's pills are `_validate_shot`'s own, which is what makes a panel a
-shot's intent rather than a translation of one.
+one in and it is a board. **Nothing here reads or writes it any more** — the
+routes went with the front end on 2026-09-09 and a client owns boards now —
+and the shape is documented anyway, because the layout is the contract and a
+folder the server has stopped touching is still a folder on the volume. What
+did not move is the reason a panel is a panel: the board's pills are
+`_validate_shot`'s own, which is what makes it a shot's intent rather than a
+translation of one, and that validator is still here.
 
 ### Orientation is resolved on arrival, not by each reader
 
@@ -383,9 +388,9 @@ exactly like a saved set — same folder shape, same sidecars, same code path �
 and the difference is where it sits: **on the web container's disk**, under
 `DRAFTS`, not on the volume. Saving moves the folder into `datasets/` under
 the name you type, which is a copy across filesystems and the one gesture
-that reaches the volume; the page never asks for a name before the images
-are in front of you, because "is this worth keeping" is not a question you
-can answer at drop time.
+that reaches the volume; nothing asks for a name before the images are in
+front of you, because "is this worth keeping" is not a question you can answer
+at drop time.
 
 What that costs, and is designed for: anything that rents another container
 reads a *saved* set. The captioner and the trainer refuse a draft with a
@@ -394,150 +399,14 @@ to every other machine. The dedupe scan and the insight run in-process and
 work on a draft as they are.
 
 A draft lives as long as the container, twenty minutes past the last request,
-and the drop surface says so. Within that life the window that made it still
-heartbeats `/api/session` — a timestamp in the sessions Dict, never a file —
-and a draft whose window has been quiet for fifteen minutes is swept, the
-folder's own mtime counting as a heartbeat so an upload still writing cannot
-be swept out from under itself. The overlay that reads committed captions
+and a client saying so is part of the drop surface. The heartbeat and the
+sweep that used to trim it — `/api/session` writing a timestamp into a
+sessions Dict, and a draft quiet for fifteen minutes being swept — went with
+the front end on 2026-09-09. They existed because a remote container cannot
+know whether a browser tab is open, which is a receipt for the vehicle rather
+than a property of the work: the container's own scaledown is the lifetime
+now, and it is the honest one. The overlay that reads committed captions
 knows a draft has nothing committed and reads the disk.
-
-### A duplicate is a copy; a similar image is a photograph
-
-A set arrives with duplicates in it far more often than not — the same shoot
-exported twice, a JPEG beside the PNG it came from, a phone album pulled in
-through two apps. They are not neutral: the trainer repeats every image the same
-number of times, so a picture present three times is trained three times as hard
-as the rest of the set, and the symptom ("everything comes out in that room")
-never points back at the folder it came from.
-
-**Two classes, and the second is not a softer first.** A *duplicate* is one
-picture stored more than once, so deleting all but one loses nothing and the
-group arrives with a keeper chosen. A *similar* pair is two photographs that look
-alike — on a training set that is usually a burst, all of it legitimately useful,
-and there is no deterministic way to prove the second is a re-save rather than
-the next shutter release. So a similar group is shown and **nothing in it is ever
-preselected**.
-
-A five-tier confidence scale between those two was built first and is the thing
-to not rebuild. Measured on a 731-image editorial set, 266,815 pairs: the tiered
-version flags **813 pairs**, the two classes flag **9**. Worse than the noise was
-where the tiers put the common case — a rule demoting same-size, same-format
-pairs to "possible" sent *most real duplicates* (exports at one size from one
-tool) into a review list where nothing is preselected, so the keeper flow never
-ran on the case it exists for.
-
-**Both hashes must agree, and they decide only the duplicate class.** dHash
-reads edge gradients, pHash reads low-frequency DCT energy, and they fail
-independently, so an AND is far tighter than either alone and much tighter than
-accepting on whichever is closer. On that same folder `dhash <= 6` *alone*
-isolates exactly the three real duplicates with a 7-bit gap to anything else —
-but the pair at that gap is `d7 p32`, two entirely unrelated photographs, which
-is precisely what the pHash half refuses. The pHash bound is then set by the
-other thing it has to survive: a re-grade barely moves dHash (a quarter-stop is
-3 bits, 1.4x is 4) while pHash climbs to 16. Swept from 10 to 24 the duplicate
-count never leaves 3, so the loosening is free and is what makes "the same
-picture, exported brighter" read as a copy.
-
-**The similar class is read by an embedding, because the hashes cannot read
-it — and the calibration lesson is the part to keep.** The editorial folder
-the thresholds came from contained only exact copies, so `SIMILAR_MATCH` was a
-line drawn from data with no true near-duplicate in it. Measured against
-ground truth that has them (INRIA Holidays, 500 same-scene groups, 1.1M
-pairs), the hash band's best case is 5% recall, no threshold rescues it, and
-199 burst-tier pairs sit at hash distances up to d40/p36 — a hash measures
-*storage* similarity and cannot see the next shutter release. So similar is
-now cosine over a CLIP ViT-B/32 embedding (int8 ONNX on CPU, baked into
-`web_image` by pinned revision and checksum), at `SIMILAR_COSINE = 0.94`:
-below that line both calibration folders put true re-takes and false pairs —
-two different models on one backdrop at 0.923, one model in two looks at
-0.925 — at the same cosine, so no lower line is honest. The hash band
-survives only as the fallback where the model is absent (the tools on a dev
-machine), and `SIMILAR_MATCH` is its constant.
-
-**Crop matching is the spec's own scheme on a leash, and the leash is the whole
-reason it is safe.** Two centre crops per image, compared every way but
-full-frame-to-full-frame. Taking the best of nine variant pairs is nine chances
-to draw a low number against an unrelated image, so read at a loose threshold it
-is ruinous — that is where most of the 813 came from. Read at `CROP_MATCH` it
-adds **zero** pairs across 266,815, and lands an exact 80% crop of a real
-photograph at distance 0 on both hashes. It may only ever claim *similar*, never
-a duplicate, so a crop match cannot preselect a deletion — which is also right on
-its own terms, because a deliberate reframe of a training image is a variation
-somebody made on purpose. `CROP_MATCH` is deliberately its own constant even
-though it agrees with `DUPLICATE_MATCH` today: they were one constant for an
-afternoon, and loosening the duplicate bound for re-grades silently changed which
-crops were found.
-
-**There is no index, and the measurement is why.** A BK-tree was built for this
-and profiled: at the radius the classifier uses it visits **96% of the tree per
-lookup**, so it is the same sweep with a tree walk's overhead on top. What
-actually inverts the cost is deduplicating fingerprints before comparing — the
-pathological input, one picture four hundred times, collapses to one comparison —
-and 266,815 pairs then take **0.6s**. The binding cost was never the comparison;
-it is the decode, at ~31ms an image.
-
-**So the scan is resumable, and the cache is its only state.** A request measures
-for `SCAN_BUDGET_S`, writes what it measured, and reports how many are left; the
-page calls again. No job record, no spawn, no second route — the fingerprint
-cache already holds the progress, so a container dying mid-scan costs the images
-it had in hand rather than the folder. Nothing is grouped until everything is
-measured, because half a folder groups into half the truth and half the truth
-here is a keeper suggested against copies nobody has looked at.
-
-One line in that loop is load-bearing: **at least one image is measured per
-request whatever the budget.** A budget check alone can be true before the first
-decode, and then every request skips every image, writes nothing, and asks to be
-called again forever. `smoke_dupes.py` drives exactly that at a zero budget; in
-production the same stall arrives as one image slower than the whole budget. The
-page carries the other half of the same invariant, refusing to loop when a round
-reports no progress.
-
-**An image is in at most one group, and duplicates win.** Similar links are
-computed only between images no duplicate group already holds. That drops a real
-edge — a copy's relationship to an outsider is not shown until the copies are
-dealt with — and it buys the invariant the whole review rests on: a name in two
-groups is a name you are asked about twice and can mark for deletion twice. The
-order it imposes is the order the work happens in anyway: clear the duplicates,
-rescan, review what is merely alike.
-
-**The selection is inverted, and that is the feature.** Every other delete
-surface here asks you to name what goes, which is the wrong half of the question
-for six near-identical frames of which you want one: naming the five is five
-decisions to express one. So a duplicate group arrives with everything but the
-keeper marked, and the gesture is *promotion* — touch a marked image and it
-becomes a keeper too, touch it back to demote. **The last keeper cannot be
-demoted**, and that single refusal is what makes the screen safe to move quickly
-through, because no sequence of clicks deletes a group entirely.
-
-The suggestion says which number decided it — "most pixels · 12.2 MP", "same
-size, least compressed" — against the *runner-up* rather than the group, because
-"nothing separates the top two" is the one statement that tells you your choice
-does not matter. `Derived or invented, always visible`, on the one surface where
-the derivation is a deletion.
-
-**The facts are one grid with the pictures as its columns.** The question a group
-asks is never "how big is this one", it is "which of these four", and that is
-read across: resolution, megapixels, weight, encoding and detail are rows, the
-label sits once in the gutter, the best cell in each row is marked and every
-other one carries its distance from that best. A per-card stack of the same
-numbers was the first version and it made you hold four values in your head to
-compare them. Two things that grid taught, both found by driving it rather than
-reading it: `min-width:max-content` sizes a column to its widest cell, which is
-the nowrap caption, so one long sentence blew a 150px column to 430px and the
-square thumbnail above it to 430px tall; and `.actions` only gets its flex rules
-inside `.opts`, so Keep all and Reset wrapped and doubled the header's height.
-
-The delete count is computed over **every** group, never the filtered view. A
-number that changes when you touch a dropdown you did not think was a decision is
-the specific way a confirm dialog stops being believed — and that dialog is the
-whole safety net, so it states the count, the weight, and how many of the groups
-involved are still carrying a suggestion nobody has opened.
-
-`tune_dupes.py` is where every number above came from and is the tool to re-run
-before moving one: point it at a real folder and it prints the distance
-distributions, the margin from the nearest *rejected* pair, and the pairs closest
-to each line by name. A threshold argued from first principles is a threshold
-nobody has looked at.
 
 ## Conventions
 
@@ -570,9 +439,9 @@ nobody has looked at.
   our wording for the same rules on top of a model already taught them in
   different words is one prompt arguing with itself. Write modes (skip, append, prepend,
   replace) and the sampling numbers travel with the job the same way, and
-  find & replace across sidecars is scoped by the page's current filter — the
-  filters are the targeting tool, and the count is on the button before you
-  press it.
+  find & replace across sidecars is scoped by whatever the client has
+  filtered to — the filters are the targeting tool, and the count belongs on
+  the button before it is pressed.
 
   The captioner picker is the other half, and the default moved. JoyCaption Beta
   One replaced Qwen3-VL because Qwen lost bindings on anything harder than a
@@ -639,7 +508,7 @@ nobody has looked at.
 
 - **Results are served off the container's spool; the volume is the record.**
   Every picture bug the gallery ever had traced back to one dependency:
-  serving bytes off the mount makes the page's freshness hang on
+  serving bytes off the mount makes a reader's freshness hang on
   `volume.reload()`, and reload is refusable — by our own `FileResponse`
   descriptors most of all, so painting pictures froze the view the next
   picture needed, and a render that had just finished 404'd on the canvas
@@ -674,8 +543,8 @@ nobody has looked at.
   overlap above, which is why neither was reachable from where it was being
   looked for. On the last line it stops being cosmetic: a tqdm write that read
   the record before the job finished puts `status: "running"` back over a
-  `completed` that was already there, and the page then polls a finished job
-  until someone reloads it. Modelled with the latency where it actually sits,
+  `completed` that was already there, and a client then polls a finished job
+  until it is restarted. Modelled with the latency where it actually sits,
   that lost the terminal status in 15 runs out of 15. The lock is process-local
   because `max_containers=1` means there is no second writer to coordinate
   with.
@@ -695,7 +564,7 @@ nobody has looked at.
   stale result into the *next* attempt's dict and sets the next attempt's event.
 
 - **`hf_transfer` is on, and the resume it costs is not worth having.** This
-  entry used to say the opposite — do not enable it on `web_image` without
+  entry used to say the opposite — do not enable it on `cpu_image` without
   checking resume first — and the checking is what reversed it. Measured on
   this image against a 21 GB file: **30.6 MB/s on the plain requests backend,
   243.8 MB/s on hf_transfer.** That 8x was the whole distance between "over
@@ -805,9 +674,9 @@ nobody has looked at.
 - **One download at a time, and being busy is a state rather than an error.**
   They share an uplink: three concurrent pulls measured 4-12 MB/s each against
   ~31 MB/s for one, so a second download is not a second download, it is the
-  same bandwidth divided plus a container to pay for. `/api/download` is
+  same bandwidth divided plus a container to pay for. The download route is
   therefore idempotent — a second press returns the job the first one started,
-  and the page removes the other buttons rather than answering a press with a
+  so a client can remove the other buttons rather than answer a press with a
   red message. Pressing twice is not a mistake to correct; it is what anyone
   does when the first press appears to do nothing, which is how this arrived:
   `_active_download()` scanned `dl_{key}` across the whole catalogue, and on a
@@ -841,7 +710,7 @@ nobody has looked at.
   43% hot, which its own tooltip warns gives "mottled, crumpled-looking
   texture", and downscaled every reference to 1024, which its tooltip says
   "costs likeness for speed". Neither was visible anywhere: not in the graph,
-  not in the sidecar, not on the page. Spelling every optional input out is a
+  not in the sidecar, not on any client. Spelling every optional input out is a
   few lines, and it turns a disagreement upstream can introduce silently into
   one a diff shows.
 
@@ -863,23 +732,24 @@ nobody has looked at.
   when it resizes, and bakes the EXIF rotation in when it does — a resized copy
   saved without the tag would reach the DiT sideways, which is `_upright_inplace`
   from the other end: not a reader that forgets the tag, but a writer that drops
-  it. The browser caps too, at the same number, for the payload; that copy is an
-  optimisation and the server's is the one that binds, so drift costs nothing.
+  it. A client may cap too, at the same number, for the payload; that copy is
+  an optimisation and the server's is the one that binds, so drift costs
+  nothing.
 
   **A cap on the pixels is not a cap on the payload, and that took a ten-minute
-  render to notice.** The browser's copy resizes to 1536 and then re-encoded as
+  render to notice.** The client's copy resized to 1536 and then re-encoded as
   PNG, which is 8.6x a photograph's own encoding — a number `shrinkB64`'s own
   comment already had, and had applied only to the *pass-through* case. Every
   photo over the cap took the other branch. Nine references is H3's maximum, so
   the case to size for is nine: **48 MB of base64 in one body**, up from the
-  browser, through the web container, into Modal's blob store and back down to
+  client, through the CPU container, into Modal's blob store and back down to
   the GPU, before a weight is read. At q0.92 the same nine are 3.8 MB.
 
   Lossless bought nothing: every reference is consumed at `LoadImage`'s index 0
   and no graph in this file takes the MASK output, so alpha is discarded
   downstream whatever is sent.
 
-  The general rule: an option whose cost is set by something the page never
+  The general rule: an option whose cost is set by something the client never
   measured is an option that will be found by whoever has the biggest camera —
   and *how many* is as much a cost as *how big*.
 
@@ -905,7 +775,7 @@ in this list because it is the case that shaped `needs`:
   four instruction sentences verbatim, including the guide's own inconsistency
   (i2va and l2va bracket their labels, fl2va does not), because they are a
   contract with the checkpoint rather than phrasing we chose. `_h3_task()` is a
-  deliberately *finer* read than the one `/api/video` makes: that one collapses
+  deliberately *finer* read than the one the video route makes: that one collapses
   to `ref2va` or `fl2va`, which is right for which checkpoint loads and too
   coarse for the alignment instruction, where first-only, last-only and both are
   three different sentences about where a picture sits in time.
@@ -933,10 +803,12 @@ The gallery shows no prompt at all — see the note above.
 The full accounts are in `docs/decisions.md`; these are the parts that still
 bind.
 
-- **`VIDEO_MODELS` is served to the page**, so the composer shows only the
-  controls the chosen model reads. A control that is present but ignored is
-  worse than one that is absent — it is the UI making a promise the model will
-  not keep.
+- **`VIDEO_MODELS` is served to the client** — through `/weights` now, as it
+  was through `/api/state` before — so a composer shows only the controls the
+  chosen model reads. A control that is present but ignored is worse than one
+  that is absent: it is the interface making a promise the model will not
+  keep. This is why the table is served rather than transcribed; a
+  hand-written copy is a composer for a model that does not exist.
 - **An unmatched LoRA is reported rather than assumed to have worked.** Keys
   that do not map load nothing, the clip arrives, and it looks like a LoRA that
   was simply subtle. `_drain` counts ComfyUI's `NOT LOADED` lines and publishes
@@ -944,7 +816,7 @@ bind.
 - **`MiniMaxH3SigmaShift` is opt-in and goes after the stack.** Its defaults are
   the model's own, so at rest it is a no-op; it stops being one under a
   distilled LoRA. `shift_video` and `shift_audio` are their own keys, and
-  reading `/api/video`'s shared `shift` would put 8.0 on every H3 take against
+  reading the video route's shared `shift` would put 8.0 on every H3 take against
   the model's 12.0.
 - **`<Subject N>` is numbered by order of first mention, `<Picture N>` by upload
   position, and the two are allowed to disagree.** These are different films:

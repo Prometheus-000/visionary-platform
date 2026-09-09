@@ -1,14 +1,14 @@
 """
 Pull plain-Python pieces out of app.py without importing it.
 
-Shared by `smoke_prompt.py` and `preview_ui.py`, which both need the real thing
+Shared by `smoke_prompt.py` and `shot_fixtures.py`, which both need the real thing
 rather than a copy of it: a compiler checked against a reimplementation checks
-the reimplementation, and a UI preview built against a hand-written vocabulary
-is a preview of a palette that does not exist.
+the reimplementation, and a client built against a hand-written vocabulary is a
+client for a palette that does not exist.
 
-Importing app.py is what this avoids, for the reason `preview_ui.py` already
-records — it pulls in modal and builds image definitions at module scope, so it
-wants credentials and a network to answer a question about a string. The AST is
+Importing app.py is what this avoids — it pulls in modal and builds image
+definitions at module scope, so it wants credentials and a network to answer a
+question about a string. The AST is
 already on disk, and a module assembled from a subset of its top-level
 statements runs on a laptop with no torch, no modal and no credentials.
 
@@ -114,9 +114,9 @@ CAPTION = {
 
 # What each video model can be asked for. Pulled rather than transcribed for
 # the reason every other set here is, and because this one has already drifted
-# once: `preview_ui.py` hand-wrote `supports` and went on rendering H3 with no
-# LoRA button for a release after the backend grew one. A stub that omits a
-# control is a preview of a control that does not exist.
+# once: the retired front end's stub server hand-wrote `supports` and went on
+# rendering H3 with no LoRA button for a release after the backend grew one. A
+# client that omits a control is a client for a control that does not exist.
 #
 # `requires` and `defaults` name six other constants, and they come too — the
 # rule this file's one real failure mode records: a constant a pulled definition
@@ -139,19 +139,3 @@ TRAINER = {
     "TRAIN_OPTIMIZERS", "LR_SCHEDULERS", "TIMESTEP_SAMPLINGS", "TRAIN_DEFAULTS",
 }
 
-# Duplicate grouping, whole. `smoke_dupes.py` checks the real hash against real
-# re-encodes, and `preview_ui.py` groups the preview's own fixtures with it —
-# a stub that hand-wrote its groups would be a preview of an arrangement the
-# server never produces, which is the one thing this file exists to prevent.
-DUPES = {
-    "IMAGE_EXTS", "THUMB_DIR", "FINGERPRINT_FILE", "FINGERPRINT_VERSION",
-    "SCAN_BUDGET_S",
-    "DUPLICATE_MATCH", "SIMILAR_MATCH", "CROP_SHARES", "CROP_MATCH",
-    "SIMILAR_COSINE", "EMB_MODEL", "_EMB_MEAN", "_EMB_STD", "_EMB_STATE",
-    "_FORMAT_RANK",
-    "_upright", "_dataset_images", "_caption_of",
-    "_dhash", "_phash", "_sharpness", "_crop_variants",
-    "_embedder", "_embed", "_emb_vec",
-    "_fingerprint", "_fingerprints", "_set_cache", "_link", "_components",
-    "_keep_rank", "_keep_reason", "_duplicate_groups",
-}

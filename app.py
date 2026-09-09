@@ -27,6 +27,13 @@ models volume holds weights, and nothing derived lives on either.
       workflows/{name}.json               Playground graphs, ComfyUI API format
       playground_nodes/                   node packs installed from git
 
+    The two folders in the middle are read and written by a client rather than
+    by anything here — the routes that served them went with the front end on
+    2026-09-09. They stay in this list because **the layout is the contract**:
+    a folder nothing in this file touches is still a folder on the volume, and
+    a layout that only lists what the server happens to read is a layout that
+    goes stale the first time a client puts something down.
+
     $VISIONARY_MODELS_VOLUME (default "visionary-models")  ->  /models
       krea2-raw.safetensors               Krea 2 RAW DiT   (training)
       krea2-turbo.safetensors             Krea 2 Turbo DiT (inference)
@@ -53,18 +60,15 @@ Nothing downloads on its own — pick what you want under the gear.
 
 import base64
 import hashlib
-import io
 import json
 import math
 import os
 import re
 import shutil
-import struct
 import subprocess
 import tempfile
 import threading
 import time
-import zipfile
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
@@ -130,23 +134,6 @@ HF_CACHE = Path("/hf")
 jobs = modal.Dict.from_name("visionary-jobs", create_if_missing=True)
 config = modal.Dict.from_name("visionary-config", create_if_missing=True)
 
-# Training sessions — the cards. A session outlives the run it started and the
-# window that started it: it is the *setup* (which set, which name, which dials)
-# plus a pointer at the last job spawned from it, so a finished run can be
-# re-run with one dial changed instead of retyped.
-#
-# The whole index lives under one key rather than one key per session, and that
-# is the `DL_ACTIVE` lesson rather than tidiness: this is a *network* Dict, and
-# `_active_download()` scanning twenty-odd keys across it made a route take
-# seven seconds to answer. The board polls, so a listing is one round trip.
-#
-# What is deliberately **not** in a session record is its status. A stored
-# "running" is a claim about a container that may not exist — the Dict outlives
-# every container, app and deploy that writes to it — so status is derived from
-# the job record and its `beat` on every read. See `_session_view`.
-sessions = modal.Dict.from_name("visionary-sessions", create_if_missing=True)
-SESSION_INDEX = "index"
-
 # Mount point is an internal detail; the layout under it is the contract.
 # Weights are addressed by exact path, never scanned, so models/ is flat with
 # descriptive filenames rather than the per-architecture directories a webui
@@ -179,13 +166,6 @@ DRAFTS = Path("/tmp/visionary-drafts")
 # staging — each on the disk of the container doing the work, disposable.
 WORK = Path("/tmp/visionary-work")
 OUTPUTS = WORKSPACE / "outputs"
-# The Arsenal's first shelf: characters, saved deliberately and recalled by
-# typing their name. A character is a folder of the files that make them —
-# their pictures, their voice, a note.txt you can read in a terminal — because
-# storage layout is the contract and nothing here is required to get your
-# people back out. `character.json` beside them is the receipt that keeps what
-# filenames cannot: which picture is the sheet, what each file provides.
-CHARACTERS = WORKSPACE / "characters"
 # The Playground's shelf. A saved workflow is the pure API-format graph —
 # byte-for-byte what ComfyUI's /prompt accepts, so a stock install could run
 # the file and nothing here is required to get an experiment back out. Our
@@ -193,25 +173,6 @@ CHARACTERS = WORKSPACE / "characters"
 # `{name}.meta.json` sidecar — the datasets split, so a reader that ignores us
 # still gets a workflow.
 WORKFLOWS = WORKSPACE / "workflows"
-# The storyboards: one folder per board, `board.json` beside the pictures that
-# were uploaded into it. A panel's picture is a *pointer* — into outputs/ for a
-# render (job and file, the gallery's own address), or a bare filename for a
-# picture dropped onto the board, which lives in this folder. Never a copy of a
-# render, so unpinning deletes nothing and deleting a render leaves the panel's
-# words standing. Legible without the app: `cat storyboard/*/board.json` is the
-# film, and the folder is the whole import format — copy one in and it lists.
-STORYBOARD = WORKSPACE / "storyboard"
-STORYBOARD_MAX_PANELS = 400
-# Per panel. A subject arrow is two points; the cap is generous for a client
-# that is not this page.
-STORYBOARD_MAX_ARROWS = 16
-STORYBOARD_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-STORYBOARD_FILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\.(png|jpg|jpeg|webp)$")
-# Uploads are capped at the reference cap on the long side, because a panel's
-# picture becomes a keyframe at the hand-off and the keyframe path resizes to
-# this anyway — capping once on arrival means the wall and the run read the
-# same bytes.
-STORYBOARD_MAX_SIDE = 1536
 # Node packs the Playground installs from git, one clone per folder, each
 # carrying a `.visionary-pin` (source URL + resolved SHA). On the volume rather
 # than in the image because installing one is a gesture, not a deploy — the
@@ -234,15 +195,6 @@ STAGING = MODELS / ".cache" / "hf-staging"
 # `_drop_legacy_trash` can clear what earlier versions left on the volume; no
 # code writes into it any more.
 LEGACY_TRASH_DIR = ".trash"
-THUMB_DIR = ".thumbs"
-
-
-def _set_cache(d: Path) -> Path:
-    """Where a set's derived files live — thumbnails and dedupe fingerprints —
-    on this container's disk, under the spool's LRU. They were `.thumbs/`
-    inside the set on the volume; a cache the writer rebuilds does not belong
-    beside the record it is derived from."""
-    return Path("/tmp/visionary-spool") / "datasets" / d.name
 MUSUBI = Path("/opt/musubi-tuner")
 
 # The default card for each family. Both default to Hopper for one reason
@@ -452,12 +404,19 @@ app = modal.App(APP_NAME)
 # Images — every dependency baked in, nothing installed at runtime
 # --------------------------------------------------------------------------
 
+# **The CPU image — every job that is not a render runs on this one.** It was
+# `web_image` until the front end was retired, and the rename is the point: the
+# name said which client it served, and there is no client in it. What it is is
+# the answer to "never rent a GPU to do CPU work" — the job API, the captioner,
+# the weight downloader and the dataset work all sit here, and a GPU is started
+# on Generate and nowhere else.
+#
 # Plain `fastapi`, not `fastapi[standard]`: Modal serves the ASGI app itself, so
 # the bundled uvicorn/typer/rich/httpx/jinja2/email-validator are all dead
-# weight. Only FastAPI, Request, HTMLResponse and JSONResponse are used, which
-# are core. python-multipart is listed explicitly because the upload form needs
-# it and plain fastapi does not pull it.
-web_image = (
+# weight. Only FastAPI, Request, JSONResponse and Response are used, which are
+# core. python-multipart is listed explicitly because the upload routes need it
+# and plain fastapi does not pull it.
+cpu_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "fastapi==0.115.6",
@@ -480,28 +439,6 @@ web_image = (
         # would mean a second build for a 200 kB pure-python package. The rule
         # is to split images when pins fight, not when responsibilities differ.
         "gdown==5.2.0",
-        # The similar class's eye: CLIP embeddings on CPU. onnxruntime rather
-        # than torch because this container's whole ML duty is one 85 MB int8
-        # encoder — a torch install is ~2 GB of image for the same matmul.
-        # numpy is named although onnxruntime would drag it in, because app.py
-        # imports it directly for the cosine matrix.
-        "onnxruntime==1.27.0",
-        "numpy==2.2.6",
-    )
-    # The model itself, pinned by revision and verified by checksum, baked at
-    # build time. Not a gear-menu download: the duplicate review must work on a
-    # fresh deploy with nothing chosen yet, and 85 MB is a dependency like a
-    # wheel, not a checkpoint anybody picks. Layered before the front end so
-    # editing a component does not re-pull it.
-    .run_commands(
-        "python -c \"import urllib.request; urllib.request.urlretrieve("
-        "'https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/"
-        "d15189d7028b43f1d3e65039190477f6af591c2a/onnx/vision_model_quantized.onnx',"
-        " '/opt/similar_clip_b32_q8.onnx')\"",
-        "python -c \"import hashlib; h = hashlib.sha256(open("
-        "'/opt/similar_clip_b32_q8.onnx', 'rb').read()).hexdigest(); "
-        "assert h == '583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0"
-        "ab9839299', h\"",
     )
     # The single biggest number in this file.
     #
@@ -531,62 +468,20 @@ web_image = (
     # is a second set of behaviour that only ever runs when things are already
     # going wrong. Retries stay on hf_transfer and start over.
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
-    # ---- the front end, built into the image ------------------------------
-    #
-    # `modal deploy app.py` is the entire install, and that is the whole reason
-    # the build happens here rather than on your machine. Mounting a local
-    # `web/dist` would be simpler and would quietly make the deploy command a
-    # lie: a fresh clone has no dist, and a stale one deploys whatever you last
-    # built, which is the worst of the three because it looks like it worked.
-    # Node is a build-time dependency only — nothing at runtime needs it.
-    #
-    # Layered in this order on purpose. The lockfile lands before the sources,
-    # so editing a component re-runs `npm run build` (about a second) and not
-    # `npm ci` (about a minute) — Modal invalidates from the first changed layer
-    # down, so the order of these four lines is the difference.
-    # A pinned tarball, not `apt_install("nodejs", "npm")`.
-    #
-    # Debian bookworm ships Node 18.20.4, and Vite 7 wants 20.19+ — it built
-    # anyway and printed "Please upgrade your Node.js version" every time,
-    # which is a build that works by luck on a floor upstream has already
-    # declared unsupported. The same shape as the cudnn pin NVIDIA pruned:
-    # a version resolved by somebody else's release schedule, quietly, until
-    # the day it stops.
-    #
-    # NODE_VERSION is here rather than in a variable at the top because it is
-    # the only place it can be read from — it belongs with the layer it builds,
-    # the way COMFY_SHA belongs with the clone. Bump it deliberately.
-    .apt_install("curl", "xz-utils")
-    .run_commands(
-        "curl -fsSL https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz"
-        " -o /tmp/node.tar.xz",
-        "mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1",
-        "rm /tmp/node.tar.xz",
-        # Symlinked rather than put on PATH with .env, which *replaces* the
-        # variable: node would be reachable and whatever Modal had put there
-        # would not be.
-        "ln -sf /opt/node/bin/node /opt/node/bin/npm /opt/node/bin/npx /usr/local/bin/",
-    )
-    .add_local_file("web/package.json", "/build/web/package.json", copy=True)
-    .add_local_file("web/package-lock.json", "/build/web/package-lock.json", copy=True)
-    .run_commands("cd /build/web && npm ci")
-    .add_local_dir("web", "/build/web", copy=True, ignore=["node_modules", "dist"])
-    .run_commands("cd /build/web && npm run build")
 )
 
-# **web_image plus ffmpeg, and it is a derived image rather than a fatter one.**
-# The export stitches finished takes into one file, which is CPU work — so it
-# gets a container, not a share of a GPU. What it must not get is a place in the
-# image the *UI* runs from: `web` is the container the page waits on before it
-# can draw anything, and ffmpeg's apt tree is ~100 MB of cold start charged to
-# every session for a button pressed at the end of a scene. Derived from
-# `web_image`, so every layer under it is the one already built and cached and
-# the only new layer is the one this needs.
+# **cpu_image plus ffmpeg, and it is a derived image rather than a fatter one.**
+# One job needs ffmpeg — the outputs migration, which remuxes every clip to put
+# the record in its header — and it runs once in the life of a volume. Putting
+# apt's ffmpeg tree in `cpu_image` would charge ~100 MB of cold start to the job
+# API, the captioner and every download, for a container that may never start.
+# Derived from `cpu_image`, so every layer under it is one already built and
+# cached and the only new layer is the one this needs.
 #
-# It is also why `web_image has no ffmpeg` stays true, and why the two notes
-# that say so — the clip cover in the gallery, the character-file transcode —
-# are still accurate rather than quietly stale.
-export_image = web_image.apt_install("ffmpeg")
+# It is also why `cpu_image has no ffmpeg` stays true, and why the note that
+# says so — the clip cover a set shows — is still accurate rather than quietly
+# stale.
+export_image = cpu_image.apt_install("ffmpeg")
 
 trainer_image = (
     modal.Image.from_registry(
@@ -796,7 +691,7 @@ comfy_image = (
     #
     # Nothing in this container has any business talking to HuggingFace anyway:
     # weights arrive on the volume via `_download_weight`, which runs on
-    # web_image on CPU. Leaving the pin out means ComfyUI's own resolution is
+    # cpu_image on CPU. Leaving the pin out means ComfyUI's own resolution is
     # the only thing deciding the hub version, which is the only way it can be
     # right. `tools/smoke_graphs.py` is what catches it if this regresses.
     .pip_install("pillow==11.3.0")
@@ -1373,8 +1268,6 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # punctuation) runs nearer 4.2 chars/token — where 2048 is 488 tokens and still
 # inside the budget.
 MAX_CAPTION_CHARS = 2048
-THUMB_PX = 320
-
 # One preset, and it is the owner's own text to tune.
 #
 # It used to be five, each composed out of JoyCaption's trained sentences with a
@@ -1382,11 +1275,11 @@ THUMB_PX = 320
 # for one form-shaped instruction: nine labelled fields as the model's
 # scratchpad and the caption written from them, with `_caption_extract` keeping
 # only what followed the final CAPTION:. Retired in turn on 2026-09-08 — the
-# owner's call, after the four-bit Qwen3-VL a client runs wrote the nine
-# fields and skipped the label five pictures out of five, and five sidecars
-# held the scratchpad: a cut that depends on the model's formatting is a coin
-# flip stacked on the writer, and the fields cost three times the tokens of
-# the caption they were for. What survives is the knowledge the fields
+# owner's call, after the four-bit Qwen3-VL a client runs locally wrote the
+# nine fields and skipped the label five pictures out of five, and five
+# sidecars held the scratchpad: a cut that depends on the model's formatting
+# is a coin flip stacked on the writer, and the fields cost three times the
+# tokens of the caption they were for. What survives is the knowledge the fields
 # carried: the subject named by `{NAME}`, the shot type first, and every
 # immutable — face, skin, eyes, age, body, ethnicity, hair colour and length —
 # kept out so the trigger word is the only place identity can live; how the
@@ -1905,30 +1798,6 @@ class StopRequested(Exception):
     """Raised when the user pressed Stop; not a failure."""
 
 
-def _safe_extract_zip(zip_path: Path, dest: Path) -> int:
-    """Extract images from a zip, flattened. Rebuilds names from the basename so
-    `../` members and absolute paths cannot escape (zip-slip)."""
-    count = 0
-    with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.infolist():
-            if member.is_dir() or "__MACOSX" in member.filename:
-                continue
-            name = Path(member.filename).name
-            if not name or name.startswith("."):
-                continue
-            suffix = Path(name).suffix.lower()
-            if suffix not in IMAGE_EXTS and suffix != ".txt":
-                continue
-            with zf.open(member) as src, open(dest / name, "wb") as out:
-                shutil.copyfileobj(src, out)
-            if suffix in IMAGE_EXTS:
-                # Same normalisation the loose-file path does. A zip is the more
-                # likely carrier of camera originals, not the less.
-                _upright_inplace(dest / name)
-                count += 1
-    return count
-
-
 def _require_models(*keys: str) -> None:
     """
     Assert the given models are on the volume, and if not, say what IS there.
@@ -2082,21 +1951,9 @@ def _mount_settled() -> None:
         pass
 
 
-# How long an insisting reload waits out an open-files refusal, in seconds
-# between attempts. Three tries, half a second of waiting at the very worst.
-# Sized against what actually holds the descriptor: a still off a warm volume is
-# tens of milliseconds, so the first pause covers the ordinary case, and a clip
-# streaming to a slow connection is seconds — far past anything worth sleeping
-# for inside a request handler. That one is what the False is for.
-RELOAD_INSIST_BACKOFF = (0.15, 0.35)
-
 # Above this, a reload is worth a line of its own. Under it there would be one
 # per gallery miss and the log would be reloads.
 RELOAD_SLOW_S = 2.0
-
-# Above this, a request is worth a line. Under it the log would be `/api/status`
-# at 400ms, which is a log made of polls and no more use than no log at all.
-REQUEST_SLOW_S = 2.0
 
 # Above this, a job that waited to reach a container is worth a line. Anything
 # under is scheduling noise.
@@ -2140,24 +1997,13 @@ def _reload_one(vol: Any, label: str) -> bool:
         return False
 
 
-def _reload_volume_locked() -> bool:
-    """
-    Both volumes, one freshness step — and the answer is about the data one.
-
-    Every caller of this asks about /workspace: a LoRA listing, a result
-    folder, a dataset. /models is reloaded on the same trip because the gear
-    downloads into it and a warm container should see that, but a refusal there
-    is not the answer to anybody's question, and returning it as one made
-    `_reload_insist` sleep half a second waiting out a mapped checkpoint it can
-    never unmap.
-
-    Data first, because that is the one whose staleness costs a render: a stale
-    weight listing costs a gear-menu refresh, a stale LoRA listing costs "that
-    LoRA is not there" in the middle of one.
-    """
-    ok = _reload_one(volume, "data")
-    _reload_one(models_volume, "models")
-    return ok
+# How long an insisting reload waits out an open-files refusal, in seconds
+# between attempts. Three tries, half a second of waiting at the very worst.
+# Sized against what actually holds the descriptor: a still off a warm volume is
+# tens of milliseconds, so the first pause covers the ordinary case, and a clip
+# streaming to a slow connection is seconds — far past anything worth sleeping
+# for inside a request handler. That one is what the False is for.
+RELOAD_INSIST_BACKOFF = (0.15, 0.35)
 
 
 def _reload_insist() -> bool:
@@ -2192,6 +2038,26 @@ def _reload_insist() -> bool:
             break
         time.sleep(pause)
         ok = _reload_volume()
+    return ok
+
+
+def _reload_volume_locked() -> bool:
+    """
+    Both volumes, one freshness step — and the answer is about the data one.
+
+    Every caller of this asks about /workspace: a LoRA listing, a result
+    folder, a dataset. /models is reloaded on the same trip because the gear
+    downloads into it and a warm container should see that, but a refusal there
+    is not the answer to anybody's question, and returning it as one made
+    `_reload_insist` sleep half a second waiting out a mapped checkpoint it can
+    never unmap.
+
+    Data first, because that is the one whose staleness costs a render: a stale
+    weight listing costs a gear-menu refresh, a stale LoRA listing costs "that
+    LoRA is not there" in the middle of one.
+    """
+    ok = _reload_one(volume, "data")
+    _reload_one(models_volume, "models")
     return ok
 
 
@@ -2351,9 +2217,6 @@ def _model_status() -> list[dict[str, Any]]:
 # On CPU, for the reason the downloads are: never rent a GPU to do CPU work.
 # --------------------------------------------------------------------------
 
-EXPORT_JOB = "export_scene"
-
-
 def _probe(path: Path) -> dict[str, Any]:
     """
     One take's shape, as ffprobe reports it.
@@ -2396,6 +2259,9 @@ def _probe(path: Path) -> dict[str, Any]:
         "audio": a is not None,
         "dur": dur,
     }
+
+
+EXPORT_JOB = "export_scene"
 
 
 @app.function(image=export_image, cpu=2.0, timeout=60 * 60,
@@ -2545,7 +2411,6 @@ def export_scene_job(job_id: str, takes: list[dict]) -> dict[str, Any]:
         return res
 
 
-
 MIGRATE_JOB = "migrate_outputs"
 
 
@@ -2619,7 +2484,7 @@ def migrate_outputs_job(job_id: str) -> dict[str, Any]:
     return res
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+@app.function(image=cpu_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def download_job(key: str) -> dict[str, Any]:
     job_id = f"dl_{key}"
     # Merged, not assigned. The route seeds this record before spawning, and a
@@ -2698,19 +2563,6 @@ def _download_alive(job_id: str) -> bool:
 # a button you press again — which is exactly how the first report of this
 # arrived, and the second press is the thing the check existed to prevent.
 DL_ACTIVE = "dl_active"
-
-
-def _family_job_id(family: str) -> str:
-    """
-    A stable job id for one family's queue, derived from its name.
-
-    Derived rather than passed in by the page: the id is what Cancel and every
-    status poll address, so it has to survive a reload, and a position in a list
-    does not — adding a model to the catalogue would silently repoint it at a
-    different family. The page never builds one; it uses whatever `job_id` the
-    route hands back.
-    """
-    return "dl_fam_" + (re.sub(r"[^a-z0-9]+", "-", family.lower()).strip("-")[:48] or "x")
 
 
 def _active_download() -> str | None:
@@ -2973,7 +2825,7 @@ def _download_weight(
             _publish(job_id, phase=f"{label} · stalled, restarting ({attempt} of {DOWNLOAD_TRIES})")
             # "Restarting", not "resuming": this image runs hf_transfer, which
             # was measured discarding a 5.09 GB partial rather than ranging over
-            # it. That is the accepted cost of the 8x — see web_image — and it
+            # it. That is the accepted cost of the 8x — see cpu_image — and it
             # is what keeps DOWNLOAD_STALL_S where it is rather than tuning it
             # down to match a two-minute transfer. A stall detector that fires
             # early used to cost the bytes since the stall; it now costs all of
@@ -3024,63 +2876,6 @@ def _download_weight(
     }
     _publish(job_id, **res)
     print(f"[download] {spec['label']}: {res['size_gb']} GB in {res['duration_s']}s")
-    return res
-
-
-@app.function(image=web_image, cpu=2.0, timeout=6 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
-def download_missing_job(keys: list[str], job_id: str = "dl_all") -> dict[str, Any]:
-    """
-    Fetch a list of missing weights in one container, sequentially.
-
-    Sequential rather than four parallel containers: these are large files
-    sharing one uplink, so running them at once mostly splits the same bandwidth
-    while multiplying container cost — and it gives the UI a single job to
-    follow instead of four independent ones.
-
-    `job_id` is a parameter because "every missing weight" and "this family's
-    missing weights" are the same walk over a different list. A second function
-    for the second one would be a second copy of the queue, the failure
-    accounting and the stop path, to no end — which is why one family's button
-    reaches this and not something new.
-    """
-    done, failed = [], []
-    for i, key in enumerate(keys, 1):
-        label = MODEL_CATALOGUE[key]["label"]
-        _publish(
-            job_id,
-            status="running",
-            phase=f"{label} ({i} of {len(keys)})",
-            index=i,
-            total=len(keys),
-            percent=round((i - 1) / len(keys) * 100),
-        )
-        try:
-            _download_weight(key, job_id, note=f"{i} of {len(keys)}",
-                             pct_base=(i - 1) * 100 / len(keys),
-                             pct_span=100 / len(keys))
-            done.append(key)
-        except StopRequested:
-            # The whole queue stops, not just this key — cancelling "download
-            # all" means getting the uplink back, not skipping ahead to the
-            # next multi-GB file.
-            print(f"[download-all] stop requested — {len(done)} of {len(keys)} done")
-            res = {"status": "stopped", "downloaded": done, "remaining": keys[i - 1:]}
-            _publish(job_id, **res)
-            return res
-        except Exception as exc:
-            # One gated repo must not abandon the rest of the queue.
-            print(f"[download-all] {label} failed: {exc}")
-            failed.append({"key": key, "label": label, "error": str(exc)})
-
-    res: dict[str, Any] = {
-        "status": "completed" if not failed else "failed",
-        "downloaded": done,
-        "failed": failed,
-        "percent": 100,
-    }
-    if failed:
-        res["error"] = "; ".join(f["error"] for f in failed)
-    _publish(job_id, **res)
     return res
 
 
@@ -3156,7 +2951,7 @@ def _drive_plan(url: str, stage: Path, present: set[str], refetch: bool) -> dict
     }
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+@app.function(image=cpu_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def gdrive_job(url: str, folder: str, refetch: bool = False) -> dict[str, Any]:
     """
     Pull one file or one folder off Google Drive into loras/.
@@ -3380,7 +3175,7 @@ def _hf_ref(raw: str) -> tuple[str, str]:
     return repo, filename
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+@app.function(image=cpu_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def hf_lora_job(repo: str, filename: str, folder: str, refetch: bool = False) -> dict[str, Any]:
     """
     Pull one file or a repo's weights off HuggingFace into loras/.
@@ -3543,7 +3338,7 @@ def hf_lora_job(repo: str, filename: str, folder: str, refetch: bool = False) ->
     return res
 
 
-@app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
+@app.function(image=cpu_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def hf_push_job(root: str, repo: str) -> dict[str, Any]:
     """
     Push a LoRA — or, with no `root`, the whole shelf — to a private
@@ -4539,132 +4334,6 @@ num_repeats = {num_repeats}
 # --------------------------------------------------------------------------
 
 
-# How long a record may go without a beat before its claim to be running is not
-# believed. Deliberately generous: `_run` beats on every tqdm line, but the
-# gaps between them are the phases that print nothing — a cold container pulling
-# the trainer image, the latent cache committing a large set — and calling one
-# of those dead would show a failed card for a run that is fine. Twenty minutes
-# of silence is a container that is gone.
-SESSION_STALE_S = 20 * 60
-
-# How many cards one listing carries. See `list_sessions` for why there is a
-# bound at all and why it is reported rather than silent.
-SESSION_LIST_MAX = 100
-
-
-def _sessions_all() -> list[dict[str, Any]]:
-    """Every session, newest first. One round trip."""
-    try:
-        index = sessions.get(SESSION_INDEX) or {}
-    except Exception as exc:
-        print(f"[sessions] read failed: {exc}")
-        return []
-    rows = [r for r in index.values() if isinstance(r, dict)]
-    rows.sort(key=lambda r: -float(r.get("created") or 0))
-    return rows
-
-
-def _session_put(rec: dict[str, Any]) -> dict[str, Any]:
-    """
-    Merge one session into the index.
-
-    Get-update-put against a network Dict, so it takes the same lock `_publish`
-    takes and for the same reason — except that here the second writer is
-    another *window* rather than another thread, which the lock cannot reach.
-    That is the accepted trade: two windows creating a session in the same
-    round trip is a lost card, not a lost run, and the alternative is a key per
-    session and the seven-second listing that came with it.
-    """
-    with _SESSION_LOCK:
-        index = sessions.get(SESSION_INDEX) or {}
-        cur = index.get(rec["id"]) or {}
-        cur.update(rec)
-        cur["updated"] = time.time()
-        index[rec["id"]] = cur
-        sessions[SESSION_INDEX] = index
-        return cur
-
-
-def _session_get(sid: str) -> dict[str, Any] | None:
-    index = sessions.get(SESSION_INDEX) or {}
-    rec = index.get(sid)
-    return rec if isinstance(rec, dict) else None
-
-
-def _session_drop(sid: str) -> bool:
-    with _SESSION_LOCK:
-        index = sessions.get(SESSION_INDEX) or {}
-        gone = index.pop(sid, None) is not None
-        if gone:
-            sessions[SESSION_INDEX] = index
-        return gone
-
-
-_SESSION_LOCK = threading.Lock()
-
-# What a card reads off the live job record. Named rather than merged wholesale
-# because the job record also carries `stop`, `session` and the log tail, and a
-# dict polled every few seconds must not grow with what the job happens to
-# publish next.
-_SESSION_LIVE = (
-    "phase", "percent", "step", "total_steps", "epoch", "total_epochs",
-    "rate", "eta", "elapsed", "loss", "note", "output_dir", "files",
-    "duration_s", "error", "started",
-)
-
-
-def _session_view(rec: dict[str, Any]) -> dict[str, Any]:
-    """
-    One card: the setup, plus whatever the run it points at is doing.
-
-    **Status is derived here and stored nowhere.** A status written into the
-    session record would be a claim about a container that outlives it — the
-    Dict survives the container, the app, the deploy and the image rebuild — and
-    the first version of this trusted such a field, which turned three
-    interrupted runs into three cards that said "training" for good. The job
-    record's `beat` is the only thing that can answer whether anything is
-    actually running, so a stale one is rewritten to failed on the way past:
-    the card, the Stop button and the Start button clear together rather than
-    the page having three opinions.
-    """
-    out = {k: rec.get(k) for k in
-           ("id", "lora_name", "trigger_word", "dataset", "params", "job_id",
-            "created", "updated", "runs")}
-    job_id = rec.get("job_id")
-    if not job_id:
-        return {**out, "status": "draft"}
-
-    job = jobs.get(job_id) or {}
-    status = str(job.get("status") or "")
-    if not status:
-        # The record is gone — the Dict is never swept, so in practice this is a
-        # job spawned against an older deployment. Inactive and honest about it
-        # beats a card stuck on "starting".
-        return {**out, "status": "unknown",
-                "note": "The record for this run has expired. Start it again to re-run it."}
-
-    if status in ("running", "queued"):
-        beat = float(job.get("beat") or job.get("started") or 0)
-        if beat and time.time() - beat > SESSION_STALE_S:
-            status = "failed"
-            job = {**job, "status": status,
-                   "error": "The container running this stopped reporting. "
-                            "Checkpoints written before it did are still in loras/."}
-            _publish(job_id, status=status, error=job["error"])
-
-    live = {k: job[k] for k in _SESSION_LIVE if k in job}
-    # The stop flag is never cleared — the job checks it between steps and
-    # unwinds, and nothing goes back to unset it — so a card that read it alone
-    # said "Stopping — finishing the step it is on" over a run that finished
-    # unwinding an hour ago. It is a fact about a *live* run, so it is only
-    # reported while there is one.
-    # Through `_stop_requested`, so the card reflects the same fact the job
-    # reads. Asking the record alone would show "stopping" only for a press
-    # that landed in the merged field — which is the half that could be lost.
-    stopping = _stop_requested(job_id) and status in ("running", "queued")
-    return {**out, **live, "status": status, "stopping": stopping}
-
-
 def _num(payload: dict, key: str, cast, default):
     try:
         v = payload.get(key)
@@ -5571,14 +5240,6 @@ class _Comfy:
 # --------------------------------------------------------------------------
 
 
-# A draft belongs to the window that made it. "When I close the app" has no
-# server-side event here — the web container scales to zero on Modal's schedule,
-# not yours, and a cold start is not something you did — so a page that has
-# stopped saying it is open is the only honest signal there is. The grace period
-# is long enough that a laptop asleep through a coffee break is still open.
-DRAFT_GRACE_S = 15 * 60
-
-
 def _check_name(name: str) -> str:
     if not NAME_RE.match(name or ""):
         raise ValueError("Set names are 1-64 chars of letters, numbers, _ or -.")
@@ -5604,40 +5265,6 @@ def _dataset_dir(name: str) -> Path:
     if not saved.is_dir():
         _mount_settled()
     return saved if saved.is_dir() else DRAFTS / name
-
-
-def _name_taken(name: str) -> bool:
-    # Same reason as `_dataset_dir`, and this one gates a create: a reload in
-    # flight makes every name look free, and the second set to claim one is
-    # the collision both roots exist to prevent.
-    if (DATASETS / name).exists() or (DRAFTS / name).exists():
-        return True
-    _mount_settled()
-    return (DATASETS / name).exists() or (DRAFTS / name).exists()
-
-
-def _window_key(sid: str) -> str:
-    return f"win:{sid}"
-
-
-def _touch_session(sid: str) -> None:
-    """Record that a window is still open. A timestamp in the sessions Dict
-    is the entire payload — it used to be an empty file's mtime under
-    `drafts/.sessions`, a volume write and a commit per beat per tab, for
-    a fact that is liveness and not a record."""
-    if not NAME_RE.match(sid or ""):
-        return
-    try:
-        sessions[_window_key(sid)] = time.time()
-    except Exception as exc:  # noqa: BLE001 — a missed beat is a late sweep, not a fault
-        print(f"[session] beat {sid}: {type(exc).__name__}: {exc}", flush=True)
-
-
-def _window_seen(sid: str) -> float:
-    try:
-        return float(sessions.get(_window_key(sid)) or 0.0)
-    except Exception:  # noqa: BLE001
-        return 0.0
 
 
 def _upright(im):
@@ -5769,149 +5396,8 @@ def _tree_bytes(root: Path) -> int:
     return total
 
 
-def _sweep_drafts() -> int:
-    """
-    Retire drafts whose window closed. Returns how many went.
-
-    Unlinked, like every other deletion here. This is the one that nobody asks
-    for by name, so it is the one where the grace period is doing all the work:
-    `DRAFT_GRACE_S` of silence from the session, and the folder's own mtime
-    counted as a heartbeat so an upload still writing cannot be swept out from
-    under itself. Liveness is per session and not per container, so a second tab
-    open on the same app keeps its own drafts and does not reap the first one's.
-    """
-    if not DRAFTS.is_dir():
-        return 0
-    now, swept = time.time(), 0
-    for d in sorted(DRAFTS.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        sid = ""
-        try:
-            sid = str(json.loads((d / "dataset.json").read_text()).get("session") or "")
-        except (OSError, json.JSONDecodeError):
-            pass
-        seen = _window_seen(sid) if NAME_RE.match(sid or "") else 0.0
-        # The folder's own mtime counts as a heartbeat, so a draft created
-        # seconds ago by a page whose first ping has not landed — or one made by
-        # a caller that never sends a session at all — is not swept out from
-        # under the upload that is still writing into it.
-        try:
-            seen = max(seen, d.stat().st_mtime)
-        except OSError:
-            continue
-        if now - seen < DRAFT_GRACE_S:
-            continue
-        # The one deletion nobody asks for by name, so it is the one that must
-        # explain itself in the log: what went, how much of it, whose window it
-        # belonged to and how long that window had been silent. 80 images
-        # vanishing mid-curation with no line anywhere is how this was learned.
-        held = sum(1 for p in d.iterdir()
-                   if p.suffix.lower() in IMAGE_EXTS | VIDEO_EXTS)
-        print(f"[sweep] retired draft {d.name!r}: {held} files, "
-              f"session {sid or 'none'} quiet {int((now - seen) / 60)}m",
-              flush=True)
-        shutil.rmtree(d, ignore_errors=True)
-        swept += 1
-
-    # This is the app's periodic housekeeping pass, which makes it the one place
-    # a one-time migration can run without waiting for the user to delete
-    # something in each root. Each is a no-op on a volume that never had the
-    # thing, and on one that did it runs once and then costs a stat.
-    _drop_legacy_trash(DATASETS)
-    _adopt_legacy_volume_drafts()
-    _drop_legacy_thumbs(DATASETS)
-
-    # Heartbeats outlive the drafts they kept alive; a day is well past the
-    # point where one can still be protecting anything.
-    try:
-        for key in list(sessions.keys()):
-            if isinstance(key, str) and key.startswith("win:"):
-                if now - float(sessions.get(key) or 0.0) > 86400:
-                    sessions.pop(key, None)
-    except Exception as exc:  # noqa: BLE001 — housekeeping never fails a beat
-        print(f"[sweep] heartbeats: {type(exc).__name__}: {exc}", flush=True)
-    return swept
-
-
-_ADOPTED_LEGACY = False
-
-
-def _adopt_legacy_volume_drafts() -> None:
-    """
-    Drafts left on the volume from before drafts moved off it, kept rather
-    than lost.
-
-    A set under the old `drafts/` was never saved, so under the rule it has
-    no claim on the volume — but deleting somebody's eighty images because a
-    rule changed is the wrong side of that rule. Each one is moved into
-    `datasets/` under its own name, once, and the log says so; deleting it
-    is one press in Sets. `.sessions` markers go with the folder. Once per
-    container, and a no-op on a volume that has no `drafts/`.
-    """
-    global _ADOPTED_LEGACY
-    if _ADOPTED_LEGACY:
-        return
-    _ADOPTED_LEGACY = True
-    legacy = WORKSPACE / "drafts"
-    if not legacy.is_dir():
-        return
-    moved = 0
-    for d in sorted(legacy.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        target = DATASETS / d.name
-        if target.exists():
-            target = DATASETS / f"{d.name}-recovered"
-        try:
-            DATASETS.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(d), str(target))
-            _write_dataset_meta(target, session="")
-            moved += 1
-            print(f"[sweep] kept the unsaved set {d.name!r} as {target.name!r}: "
-                  f"drafts live on the container now, and a rule change is "
-                  f"not a reason to lose it", flush=True)
-        except OSError as exc:
-            print(f"[sweep] could not keep {d.name!r}: {exc}", flush=True)
-    shutil.rmtree(legacy, ignore_errors=True)
-    if moved:
-        volume.commit()
-
-
-def _drop_legacy_thumbs(root: Path) -> None:
-    """The `.thumbs/` caches that used to sit inside every set on the volume.
-    Derived, and rebuilt on the container now, so the volume copy is only
-    bytes; swept once per set found holding one."""
-    if not root.is_dir():
-        return
-    for d in root.iterdir():
-        cache = d / THUMB_DIR
-        if d.is_dir() and cache.is_dir():
-            shutil.rmtree(cache, ignore_errors=True)
-
-
 def _dataset_images(d: Path) -> list[Path]:
     return sorted(p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS) if d.is_dir() else []
-
-
-def _dataset_videos(d: Path) -> list[Path]:
-    """
-    The clips in a set. Separate from the images rather than a `kind` filter on
-    one walk, because every caller so far wants one or the other: the trainer
-    trains images, the contact sheet counts both, and a caller that meant images
-    and silently got clips is the failure this split makes impossible.
-    """
-    return sorted(p for p in d.iterdir() if p.suffix.lower() in VIDEO_EXTS) if d.is_dir() else []
-
-
-def _caption_of(img: Path, overlay: dict[str, str] | None = None) -> str:
-    txt = img.with_suffix(".txt")
-    if overlay is not None and txt.name in overlay:
-        return overlay[txt.name].strip()
-    try:
-        return txt.read_text().strip() if txt.is_file() else ""
-    except OSError:
-        return ""
 
 
 # ── caption sidecars are read through a committed-state overlay ────────────
@@ -5936,103 +5422,6 @@ def _caption_of(img: Path, overlay: dict[str, str] | None = None) -> str:
 # has touched costs the listdir and nothing more. The mount stays what it is
 # everywhere else here: the write target.
 _OVERLAY_CACHE: dict[str, tuple[int, int, str]] = {}
-_OVERLAY_CACHE_MAX = 4096
-
-
-def _committed_sidecars(d: Path) -> dict[str, tuple[int, int]]:
-    """{sidecar name: (mtime, size)} in committed state, one RPC. Empty on
-    any failure — the overlay then falls back to the mount, which is the view
-    we were serving anyway."""
-    try:
-        rel = d.relative_to(WORKSPACE)
-    except ValueError:
-        return {}
-    out: dict[str, tuple[int, int]] = {}
-    try:
-        for e in volume.listdir(f"/{rel}", recursive=False):
-            if e.type != modal.volume.FileEntryType.FILE:
-                continue
-            name = e.path.rsplit("/", 1)[-1]
-            if name.endswith(".txt"):
-                out[name] = (int(e.mtime), int(e.size))
-    except modal.exception.NotFoundError:
-        pass  # nothing committed under this set yet — a brand-new draft
-    except Exception as exc:  # noqa: BLE001 — any RPC failure falls back
-        print(f"[overlay] listdir {rel} failed ({type(exc).__name__}: {exc})"
-              f" — captions read off the mount, which may be stale", flush=True)
-    return out
-
-
-def _committed_sidecar_tree(root: Path) -> dict[str, dict[str, tuple[int, int]]]:
-    """{set name: {sidecar: (mtime, size)}} for every set under one root, in
-    one recursive RPC. The listing used to ask per set, which put one round
-    trip per row on the route the page waits on with a blank screen — 2.4s
-    on a handful of sets, sequentially, for information one call answers."""
-    try:
-        rel = root.relative_to(WORKSPACE)
-    except ValueError:
-        return {}
-    out: dict[str, dict[str, tuple[int, int]]] = {}
-    try:
-        for e in volume.listdir(f"/{rel}", recursive=True):
-            if e.type != modal.volume.FileEntryType.FILE:
-                continue
-            path = e.path.lstrip("/")
-            if path.startswith(f"{rel}/"):
-                path = path[len(f"{rel}/"):]
-            parts = path.split("/")
-            # Exactly set/sidecar.txt — anything deeper is .thumbs and its kin.
-            if len(parts) != 2 or not parts[1].endswith(".txt"):
-                continue
-            out.setdefault(parts[0], {})[parts[1]] = (int(e.mtime), int(e.size))
-    except modal.exception.NotFoundError:
-        pass  # nothing committed under this root yet
-    except Exception as exc:  # noqa: BLE001 — any RPC failure falls back
-        print(f"[overlay] listdir {rel} failed ({type(exc).__name__}: {exc})"
-              f" — set stats read off the mount, which may be stale", flush=True)
-    return out
-
-
-def _caption_overlay(d: Path,
-                     committed: dict[str, tuple[int, int]] | None = None,
-                     ) -> dict[str, str]:
-    """{sidecar name: committed text} for every sidecar whose committed copy
-    is ahead of this mount's. Raw text, not stripped — replace needs the
-    bytes as written."""
-    if committed is None:
-        committed = _committed_sidecars(d)
-    out: dict[str, str] = {}
-    # A draft on this container's disk has no committed copy to be behind:
-    # what is on disk is the only copy, written by this container.
-    if not committed:
-        return out
-    rel_dir = d.relative_to(WORKSPACE)
-    for name, (mt, size) in committed.items():
-        p = d / name
-        try:
-            # Strict: the RPC's mtime is integer seconds, so a write of our
-            # own in the same second keeps the mount's copy — the newer of
-            # the two by construction.
-            if int(p.stat().st_mtime) >= mt:
-                continue
-        except OSError:
-            pass  # not on the mount at all — committed is the only copy
-        rel = f"{rel_dir}/{name}"
-        hit = _OVERLAY_CACHE.get(rel)
-        if hit and hit[0] == mt and hit[1] == size:
-            out[name] = hit[2]
-            continue
-        raw = _volume_bytes(rel)
-        if raw is None:
-            continue
-        text = raw.decode("utf-8", "replace")
-        if len(_OVERLAY_CACHE) >= _OVERLAY_CACHE_MAX:
-            _OVERLAY_CACHE.clear()  # blunt, and sized to never fire in practice
-        _OVERLAY_CACHE[rel] = (mt, size, text)
-        out[name] = text
-    return out
-
-
 def _dataset_stats(d: Path,
                    committed: dict[str, tuple[int, int]] | None = None,
                    ) -> dict[str, Any]:
@@ -6111,7 +5500,7 @@ def _dataset_stats(d: Path,
         "uncaptioned": len(images) + len(videos) - captioned,
         "trigger_word": str(info.get("trigger_word") or ""),
         "modified": newest,
-        # A clip has no cover — web_image has no ffmpeg — so a video-only set
+        # A clip has no cover — cpu_image has no ffmpeg — so a video-only set
         # shows the empty glyph rather than a broken thumbnail, which is what
         # /api/thumb would answer for one.
         "cover": images[0] if images else None,
@@ -6132,121 +5521,6 @@ def _write_dataset_meta(d: Path, **fields: Any) -> dict[str, Any]:
     info.update({k: v for k, v in fields.items() if v is not None})
     meta.write_text(json.dumps(info, indent=2))
     return info
-
-
-# Clause boundaries. Humans write captions as comma-delimited clauses, so this
-# is what a hand-edited caption divides into.
-_CLAUSE_RE = re.compile(r"[,.;:!?\n]+")
-
-
-def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any]:
-    """
-    What is this dataset accidentally teaching the model?
-
-    The tag-frequency histogram this replaces counted booru tags, which only
-    made sense while the text encoder was CLIP — a 77-token bag of words. Krea 2
-    reads through Qwen3-VL, which parses grammar, so captions are prose and the
-    unit that carries the same signal is the recurring *phrase*: if most
-    captions open "a woman standing in", the model learns that as surely as it
-    would learn an over-weighted tag. Tags cannot even express the failure they
-    were used to detect — "red, blue, dress, jacket" does not say which colour
-    binds to which garment, and that ambiguity is where attribute bleed starts.
-
-    Everything here is derived from the .txt files on demand. Nothing is cached,
-    because a dataset is a few hundred captions and a stale panel would be worse
-    than a recomputed one.
-    """
-    images = _dataset_images(d)
-    overlay = _caption_overlay(d)
-    captions = [(p.name, _caption_of(p, overlay)) for p in images]
-    non_empty = [(n, c) for n, c in captions if c]
-
-    trigger = (trigger or "").strip()
-    if not trigger:
-        try:
-            trigger = str(json.loads((d / "dataset.json").read_text()).get("trigger_word") or "")
-        except (OSError, json.JSONDecodeError):
-            trigger = ""
-
-    # Substring, not token match: triggers are often deliberately unwordlike
-    # ("ohwx_style"), and a word-boundary test would miss them inside prose.
-    with_trigger = [n for n, c in captions if trigger and trigger.lower() in c.lower()]
-
-    lengths = sorted(len(c.split()) for _, c in non_empty)
-    median = lengths[len(lengths) // 2] if lengths else 0
-    # Short captions are weak signal; flag them relative to this dataset rather
-    # than an absolute cutoff, since a style set and a character set differ.
-    floor = max(4, median // 3)
-    thin = [n for n, c in non_empty if len(c.split()) < floor]
-
-    # Comma-delimited clauses, counted whole.
-    #
-    # This watches hand-written and hand-edited captions, not generated ones.
-    # A VLM varies its phrasing, so counting sub-phrases of its output just
-    # splits one idea across rows — "she wears" and "she is wearing" are the
-    # same statement and neither count means anything alone. People are the
-    # ones who make caption mistakes, and people write in clauses: they paste a
-    # description across a batch, they leave tag-era fragments in a prose set,
-    # they duplicate a caption while editing. A whole clause repeating verbatim
-    # is copy-paste, not coincidence, which is why the comma is the right unit
-    # here even though it was the wrong one for n-grams.
-    #
-    # On clean generated captions this panel stays quiet. That is the correct
-    # reading, not a failure to find anything.
-    def _clauses(text: str) -> list[str]:
-        out = []
-        for raw in _CLAUSE_RE.split(text):
-            c = " ".join(raw.split()).strip().lower()
-            if c and (not trigger or c != trigger.lower()):
-                out.append(c)
-        return out
-
-    # Whole captions that are byte-identical after normalising — almost always
-    # a paste that was never edited.
-    whole: dict[str, list[str]] = {}
-    for name, caption in non_empty:
-        whole.setdefault(" ".join(caption.split()).strip().lower(), []).append(name)
-    duplicates = sorted(
-        ({"caption": text[:180], "images": names, "count": len(names)}
-         for text, names in whole.items() if len(names) > 1),
-        key=lambda r: -r["count"],
-    )
-
-    clause_use: dict[str, set[str]] = {}
-    for name, caption in non_empty:
-        for c in set(_clauses(caption)):
-            clause_use.setdefault(c, set()).add(name)
-
-    total = len(non_empty) or 1
-    repeated_clauses = sorted(
-        ({"phrase": c, "count": len(names), "share": round(len(names) / total, 3),
-          "words": len(c.split())}
-         for c, names in clause_use.items() if len(names) > 1),
-        key=lambda r: (-r["count"], -r["words"], r["phrase"]),
-    )[:top]
-
-    # Tag-era leftovers: a caption of many short comma fragments in a set that
-    # is otherwise prose. Krea 2 reads grammar, so a fragment list is a real
-    # mistake now rather than a style choice.
-    tag_style = []
-    for name, caption in non_empty:
-        cl = _clauses(caption)
-        if len(cl) >= 4 and sum(len(c.split()) for c in cl) / len(cl) <= 2.5:
-            tag_style.append(name)
-
-    return {
-        "images": len(images),
-        "captioned": len(non_empty),
-        "uncaptioned": len(images) - len(non_empty),
-        "trigger_word": trigger,
-        "with_trigger": len(with_trigger),
-        "missing_trigger": [n for n, c in captions if trigger and trigger.lower() not in c.lower()],
-        "median_words": median,
-        "thin": thin,
-        "duplicates": duplicates,
-        "tag_style": tag_style,
-        "phrases": repeated_clauses,
-    }
 
 
 # --------------------------------------------------------------------------
@@ -6273,756 +5547,11 @@ def _caption_insight(d: Path, trigger: str = "", top: int = 24) -> dict[str, Any
 # page that cannot be derived: "which of these two nearly identical frames is
 # the better photograph" is not a measurement.
 
-# Two classes, and the second one is not a softer first.
-#
-# A **duplicate** is one picture stored more than once — a re-encode, a resize,
-# a reformat, a re-grade. Deleting all but one loses nothing, so a duplicate
-# group arrives with a keeper already chosen.
-#
-# A **similar** pair is two photographs that look alike. On a training set that
-# is usually a burst: four consecutive frames of one subject, all of them
-# legitimately useful, and there is no deterministic way to prove the second is
-# a re-save rather than the next shutter release. So a similar group is shown
-# and nothing in it is preselected. Collapsing these two into one scale of
-# confidence is the mistake this replaces — five tiers between them meant the
-# common case (an export at the same size and format as its original) landed in
-# the middle, where nothing is preselected and the keeper flow never runs.
-#
-# **Both hashes must agree, and the two are not doing the same job.** dHash
-# reads edge gradients, pHash reads low-frequency DCT energy, and they fail
-# independently — so an AND is far tighter than either alone and much tighter
-# than accepting on whichever happens to be closer.
-#
-# Measured on a 731-image editorial set, 266,815 pairs. dHash is the
-# discriminator: `dhash <= 6` on its own isolates exactly the three real
-# duplicates in that folder, and the next-closest pair anywhere is 7 — but that
-# pair is `d7 p32`, two entirely unrelated photographs, which is precisely what
-# the pHash half is there to refuse. So the AND stays and the pHash bound is
-# set by the *other* thing it has to survive.
-#
-# That thing is a re-grade. dHash barely moves under one — a quarter-stop
-# brighter measures 3 bits, 1.4x measures 4 — while pHash climbs to 16, because
-# a global exposure change with any clipping in it moves the coarse structure
-# the DCT reads. A bound of 10 filed those as merely similar, which is wrong:
-# the same picture, exported brighter, is a copy. Swept from 10 to 24 against
-# the real folder the duplicate count never moves off 3, so the loosening is
-# free there and is what makes the re-grade land.
-#
-# The gap between the two classes is therefore carried by dHash — 6 against 12
-# — and that is the split the real data draws. Every burst-shaped pair in that
-# folder (two frames of one runway look) measures dHash 8 to 11: outside
-# `duplicate`, inside `similar`, which is exactly where a photograph that is
-# merely alike belongs.
-DUPLICATE_MATCH = {"dhash": 6, "phash": 16}
-SIMILAR_MATCH = {"dhash": 12, "phash": 18}
-
-# Crop detection, and the leash that is the whole reason it is safe.
-#
-# A reframed copy moves every edge, so its direct distance sits outside both
-# thresholds while a centre crop of one lines up exactly with the other. Two
-# crops per image, compared every way but original-to-original — that comparison
-# is the direct one, already made.
-#
-# **The variants are not the hazard; the threshold they were read at was.**
-# Taking the best of nine variant pairs is nine chances to draw a low number
-# against an unrelated image, so at a loose threshold it is ruinous: measured on
-# a 731-image editorial set, accepting variant matches at dhash<=20/phash<=24
-# flags 813 pairs against the 9 the direct comparison finds. Read at
-# DUPLICATE_MATCH instead, the same nine pairs add **zero** pairs to that set,
-# and land an 80% centre crop of a real photograph at distance 0 on both hashes.
-# Strictly stronger evidence, and it may only ever claim **similar** — never a
-# duplicate, so a crop match cannot preselect anything for deletion. That is
-# also right on its own terms: a deliberate crop of a training image is a
-# variation somebody made on purpose.
-#
-# What it does not reach is a crop it has no variant for. Measured on the same
-# photograph: 90% and 80% land, 70% and 60% are missed. Catching those needs
-# scale-invariant keypoints rather than a fixed grid of centre crops, which is a
-# different technique and a much heavier one. The shares below are the cheap
-# half of the problem and they are honest about being that.
-CROP_SHARES = (0.9, 0.8)
-# The crop gate, deliberately its own number even though it agrees with
-# DUPLICATE_MATCH today. They were the same constant for an afternoon, and
-# loosening the duplicate rule's pHash bound from 10 to 16 — a change argued
-# entirely about *re-grades* — silently changed which crops the pass finds. That
-# is a coupling with no reason behind it: a crop of a file has not been
-# re-exposed, so the pHash headroom a re-grade needs is headroom a crop match
-# gets for free, and it gets it nine times over because this is a minimum across
-# nine variant pairs. Two names, so the next threshold argument moves only the
-# thing it is about.
-CROP_MATCH = {"dhash": 6, "phash": 16}
-
-# The similar class is measured by a learned embedding, and the hashes above
-# decide only the duplicate class. The two-class design survives; what moved is
-# which instrument reads the second class, and the lesson is worth its length:
-# **the editorial set the thresholds came from contained only exact copies**,
-# so SIMILAR_MATCH was drawn from data with no true near-duplicate in it — a
-# line calibrated on the wrong question. Measured against ground truth that
-# actually holds near-duplicates (INRIA Holidays, 500 groups of one scene
-# photographed from shifted viewpoints, 1,110,795 pairs), the hash band's best
-# case is 5% recall at 17 false pairs, and no threshold rescues it: at
-# d24/p26 recall is still 18% while false accepts pass 22,000. Gradient and
-# DCT hashes measure *storage* similarity, so they find copies and cannot find
-# the next shutter release — 199 of Holidays' same-scene pairs sit at cosine
-# 0.95+ with hash distances up to d40/p36, invisible to any band.
-#
-# 0.94, and both folders drew the line. Below it the embedding stops
-# separating "the same scene re-shot" from "the same shoot, different
-# content": on the 731-image editorial folder the band from 0.90 to 0.925
-# holds a pair of *different models* on one backdrop (0.923) and one model in
-# two *different looks* on one stage (0.925) — pairs the page must never call
-# alike, because a claim like that is how the classifier stops being believed
-# — and then nothing at all until the exact copies at 1.0. On Holidays, 0.94
-# still reads every burst-tier pair (the product's actual target) at a 7e-5
-# false rate; what it gives up is the walk-around-the-corner viewpoint band at
-# 0.86–0.93, where this instrument genuinely cannot tell a re-take from a
-# different photograph of the same trip — both folders put true and false
-# pairs at the same cosine there, so no line in that band is honest.
-#
-# Rerun the calibration before moving it: `tools/tune_dupes.py` for the hash
-# side, and a labelled folder (Holidays has groundtruth.json) for this one.
-SIMILAR_COSINE = 0.94
-
-# CLIP ViT-B/32's image encoder, int8 ONNX, baked into web_image at build time
-# from a pinned revision with its checksum asserted — see the layer in
-# `web_image`. Baked rather than downloaded under the gear because the
-# duplicate review must work on a fresh deploy with nothing chosen yet: 85 MB
-# is a dependency, not a checkpoint anybody picks. On a dev machine running
-# the tools the file is simply absent and `_embedder()` answers None — the
-# similar class then falls back to the hash band rather than disappearing.
-EMB_MODEL = "/opt/similar_clip_b32_q8.onnx"
-_EMB_MEAN = (0.48145466, 0.4578275, 0.40821073)
-_EMB_STD = (0.26862954, 0.26130258, 0.27577711)
 # One-slot cache: "session" appears after the first attempt, holding the ONNX
 # session or None. A dict rather than a global-with-lock so the tools can pull
 # this without seeding `threading`; the benign race is two threads building
 # one session each and the second assignment winning.
 _EMB_STATE: dict[str, Any] = {}
-
-FINGERPRINT_FILE = "fingerprints.json"
-# How long one scan request will spend measuring before it answers with what it
-# has and asks to be called again.
-#
-# There is deliberately no job record, no spawn and no second route behind this.
-# The measurement is already cached per file, so the cache *is* the progress
-# state: a request measures what it can, writes what it measured, and reports
-# how many are left. The next request picks up exactly where it stopped, and a
-# container that dies mid-scan costs the images it had in hand rather than the
-# folder. A job id would be a parallel contract for something the existing
-# route can already resume.
-#
-# Ten seconds because a scan measures ~31 images a second on this image, so the
-# common case — a training set of twenty to eighty — finishes in the first
-# request and never sees the polling path at all. A 731-image source folder
-# takes three.
-SCAN_BUDGET_S = 10.0
-# The cache is rewritten whole when this moves, rather than being migrated: it
-# is a decode cache, and a rescan is the only thing a wrong one costs.
-# 5: the decoder itself changed — Pillow 11.3 reads the AVIFs 11.1 could not,
-# so every entry (and every cached failure) measured under 11.1 is stale.
-# 6: fingerprints grew the CLIP embedding the similar class now reads.
-FINGERPRINT_VERSION = 6
-# Which encoding to prefer when two files are the same picture at the same size
-# and the same weight. Lossless first: a PNG re-saved as JPEG can be recovered
-# from neither direction, and the tie only ever arises between an original and
-# a re-export of it.
-_FORMAT_RANK = {"PNG": 0, "WEBP": 1, "AVIF": 2, "BMP": 3, "JPEG": 4}
-
-
-def _dhash(im) -> int:
-    """
-    64 bits of horizontal gradient: is this pixel brighter than the one to its
-    right, over a 9x8 grayscale.
-
-    A gradient rather than a mean (aHash) because a re-export that shifts
-    exposure, gamma or a colour profile moves every pixel the same way and
-    leaves every *comparison between neighbours* alone. That is the whole
-    reason two exports of one frame at different JPEG qualities land on the
-    same hash while two different photographs of the same room do not.
-
-    Takes an already-upright image: orientation is resolved on arrival, and a
-    hash computed off the stored pixels would file a phone photo and its
-    rotated copy as two different pictures.
-    """
-    from PIL import Image
-
-    small = im.convert("L").resize((9, 8), Image.LANCZOS)
-    px = small.load()
-    bits = 0
-    for y in range(8):
-        for x in range(8):
-            bits = (bits << 1) | int(px[x, y] > px[x + 1, y])
-    return bits
-
-
-def _phash(im) -> int:
-    """
-    64 bits of low-frequency DCT energy, thresholded at its own median.
-
-    Here to disagree with dHash rather than to outvote it. The two read
-    different things — edges against coarse structure — so a pair that satisfies
-    both is a pair two independent measurements agree about, and that agreement
-    is what lets the thresholds sit far enough out to catch a re-grade without
-    reaching a different photograph.
-
-    The DC term is dropped before the median, because it is the average
-    brightness of the whole frame: leaving it in makes the hash of a picture
-    depend on how the picture was exposed, which is exactly the transform this
-    is supposed to survive.
-    """
-    from PIL import Image
-
-    small = im.convert("L").resize((32, 32), Image.LANCZOS)
-    px = list(small.getdata())
-    # Separable DCT-II: the row transform is computed once per (v, y) rather
-    # than once per (v, u, y), which is the difference between ~2k and ~67k
-    # cosine calls per hash.
-    cos = [[math.cos((2 * i + 1) * k * math.pi / 64) for i in range(32)] for k in range(8)]
-    rows = [[sum(px[y * 32 + x] * cos[u][x] for x in range(32)) for u in range(8)]
-            for y in range(32)]
-    coeffs = [sum(rows[y][u] * cos[v][y] for y in range(32))
-              for v in range(8) for u in range(8)]
-    median = sorted(coeffs[1:])[31]
-    bits = 0
-    for value in coeffs[1:]:
-        bits = (bits << 1) | int(value > median)
-    return bits
-
-
-def _sharpness(im) -> float:
-    """
-    Mean absolute neighbour difference at a fixed 64x64.
-
-    A tie-breaker between two copies of one picture and nothing more. At a fixed
-    analysis size it answers "which of these two survived less blur and less
-    smoothing", which is the question a re-encode raises; it is not a judgement
-    about the photograph, and it is never compared across different pictures.
-    """
-    from PIL import Image
-
-    small = im.convert("L").resize((64, 64), Image.LANCZOS)
-    px = small.load()
-    total = 0
-    for y in range(63):
-        for x in range(63):
-            total += abs(px[x, y] - px[x + 1, y]) + abs(px[x, y] - px[x, y + 1])
-    return round(total / (63 * 63 * 2), 2)
-
-
-def _crop_variants(im) -> list:
-    """The full frame first, then one centre crop per CROP_SHARES entry."""
-    out = [im]
-    w, h = im.size
-    for share in CROP_SHARES:
-        cw, ch = int(w * share), int(h * share)
-        if cw >= 16 and ch >= 16:
-            left, top = (w - cw) // 2, (h - ch) // 2
-            out.append(im.crop((left, top, left + cw, top + ch)))
-    return out
-
-
-def _embedder():
-    """
-    The ONNX session behind the similar class, or None where the model is not.
-
-    None is a mode, not an error: the tools run on machines whose python has no
-    onnxruntime and whose disk has no model, and they still have to classify —
-    they just fall back to the hash band for the similar class. The deployed
-    image always has both, so a None *there* is worth the printed line.
-    """
-    if "session" not in _EMB_STATE:
-        sess = None
-        try:
-            import onnxruntime
-
-            if Path(EMB_MODEL).is_file():
-                sess = onnxruntime.InferenceSession(
-                    EMB_MODEL, providers=["CPUExecutionProvider"])
-            else:
-                print(f"[dupes] no similarity model at {EMB_MODEL}; "
-                      "the similar class falls back to the hash band", flush=True)
-        except Exception as exc:
-            print(f"[dupes] similarity model unavailable ({exc}); "
-                  "the similar class falls back to the hash band", flush=True)
-        _EMB_STATE["session"] = sess
-    return _EMB_STATE["session"]
-
-
-def _embed(up) -> str | None:
-    """
-    A unit-normalised CLIP image embedding, quantised to int8 and base64ed.
-
-    Quantised because the fingerprint cache is JSON read and rewritten whole
-    per scan request: 512 floats print at ~4 KB an image where the int8 bytes
-    are 684 characters, and at 1/127 per dimension the quantisation moves a
-    cosine by less than a thousandth — nothing against a threshold of 0.90.
-
-    Takes the already-upright image `_fingerprint` is holding open, so the
-    embedding can never disagree with the hashes about which way is up.
-    """
-    sess = _embedder()
-    if sess is None:
-        return None
-    try:
-        import numpy as np
-        from PIL import Image
-
-        im = up.convert("RGB")
-        w, h = im.size
-        s = 224 / min(w, h)
-        im = im.resize((max(224, round(w * s)), max(224, round(h * s))),
-                       Image.BICUBIC)
-        w, h = im.size
-        left, top = (w - 224) // 2, (h - 224) // 2
-        x = np.asarray(im.crop((left, top, left + 224, top + 224)),
-                       dtype=np.float32) / 255.0
-        # float32 arrays, not the bare tuples: numpy promotes float32 minus a
-        # python tuple to float64, and the session refuses a double tensor.
-        x = ((x - np.asarray(_EMB_MEAN, np.float32))
-             / np.asarray(_EMB_STD, np.float32))
-        v = sess.run(None, {"pixel_values": x.transpose(2, 0, 1)[None]})[0][0]
-        v = v / (float(np.linalg.norm(v)) or 1.0)
-        q = np.clip(np.round(v * 127.0), -127, 127).astype(np.int8)
-        return base64.b64encode(q.tobytes()).decode("ascii")
-    except Exception as exc:
-        # An image the hashes could measure still fingerprints without its
-        # embedding; the grouping falls back for the whole set and says so.
-        print(f"[dupes] embedding failed: {exc}", flush=True)
-        return None
-
-
-def _emb_vec(rec: dict[str, Any]):
-    """The stored embedding back as a unit numpy vector, or None."""
-    b = rec.get("emb")
-    if not b:
-        return None
-    try:
-        import numpy as np
-
-        q = np.frombuffer(base64.b64decode(b), dtype=np.int8).astype(np.float32)
-        n = float(np.linalg.norm(q))
-        return q / n if n else None
-    except Exception:
-        return None
-
-
-def _fingerprint(img: Path) -> dict[str, Any] | None:
-    """One image measured: its hashes, its bytes, its pixels, its encoding."""
-    from PIL import Image
-
-    try:
-        st = img.stat()
-        digest = hashlib.sha256()
-        with img.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(1 << 20), b""):
-                digest.update(chunk)
-        with Image.open(img) as raw:
-            fmt = (raw.format or img.suffix.lstrip(".")).upper()
-            up = _upright(raw)
-            w, h = up.size
-            # Index 0 is the full frame, which is what every direct comparison
-            # and every distance the page shows is measured from.
-            variants = [[_dhash(v), _phash(v)] for v in _crop_variants(up)]
-            rec = {"dhash": variants[0][0], "phash": variants[0][1],
-                   "variants": variants, "sharpness": _sharpness(up)}
-            emb = _embed(up)
-            if emb:
-                rec["emb"] = emb
-    except Exception:
-        # A file PIL cannot open is not a reason to fail the scan — but it is
-        # never a normal state either: every extension the upload accepts is an
-        # extension this image's Pillow decodes, so a failure here means the
-        # two have drifted apart (AVIF sat in that gap for months, invisible to
-        # every group it belonged in). The caller caches the failure so it is
-        # not re-decoded every scan, counts it, and the count is reported.
-        return None
-    return {**rec, "sha": digest.hexdigest(), "bytes": st.st_size,
-            "width": w, "height": h, "format": fmt, "mtime": st.st_mtime,
-            "v": FINGERPRINT_VERSION, "stamp": [st.st_mtime_ns, st.st_size]}
-
-
-def _fingerprints(d: Path, budget_s: float | None = None) -> tuple[dict, bool, int, list[str]]:
-    """
-    Every image in the set, measured once and cached beside the thumbnails.
-
-    Cached for the reason thumbnails are: a scan decodes every image in the
-    folder, and a two-hundred-image set of 12 MP phone photos is minutes of CPU
-    that must not be paid again for looking at the second group. Keyed on
-    `(mtime_ns, size)` rather than mtime alone, because replacing an image with
-    another of the same age is exactly what an overwriting re-upload does, and
-    on a version, because an entry measured by an older classifier is not a
-    cheaper answer to today's question — it is a wrong one.
-
-    Returns the map, whether anything was written, and how many images it did
-    not reach — so the caller commits the volume once for a scan rather than
-    once per file, and can answer "still measuring" instead of holding a request
-    open for a minute.
-
-    `budget_s` bounds the measuring, not the reading: everything already cached
-    is collected however long the folder is, because that costs a dict lookup.
-    Only the decodes are on the clock.
-    """
-    images = _dataset_images(d)
-    cache_path = _set_cache(d) / FINGERPRINT_FILE
-    cached: dict[str, Any] = {}
-    if cache_path.is_file():
-        try:
-            cached = json.loads(cache_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            cached = {}
-
-    out: dict[str, dict[str, Any]] = {}
-    changed = False
-    pending = 0
-    measured = 0
-    unreadable: list[str] = []
-    deadline = None if budget_s is None else time.monotonic() + budget_s
-    for img in images:
-        try:
-            st = img.stat()
-        except OSError:
-            continue
-        was = cached.get(img.name)
-        if (was and was.get("stamp") == [st.st_mtime_ns, st.st_size]
-                and was.get("v") == FINGERPRINT_VERSION):
-            out[img.name] = was
-            if was.get("failed"):
-                unreadable.append(img.name)
-            continue
-        # Out of time: leave it out of `out` entirely rather than half-measured.
-        # It is absent from the cache too, which is exactly what makes the next
-        # request pick it up — there is no separate cursor to keep in step.
-        #
-        # `measured` is what makes the loop terminate rather than merely slow
-        # down. A budget check on its own is a check that can be true before the
-        # first decode — at a zero budget it is true immediately, and then every
-        # request skips every image, writes nothing and asks to be called again
-        # forever. `smoke_dupes.py` drives exactly that case. In production the
-        # same stall arrives as one image slower than the whole budget, which is
-        # a 200 MP scan or a volume having a bad minute, and it would have hung
-        # the panel on one file with no way to tell which.
-        if measured and deadline is not None and time.monotonic() > deadline:
-            pending += 1
-            continue
-        fp = _fingerprint(img)
-        measured += 1
-        changed = True
-        if fp:
-            out[img.name] = fp
-        else:
-            # Cached too, or a file that cannot be decoded is re-decoded on
-            # every scan forever. The marker carries the stamp so a replaced
-            # file is re-tried, and the version so a decoder upgrade (the AVIF
-            # case: Pillow 11.1 → 11.3) re-tries everything it used to fail.
-            out[img.name] = {"failed": True, "v": FINGERPRINT_VERSION,
-                             "stamp": [st.st_mtime_ns, st.st_size]}
-            unreadable.append(img.name)
-    # A deleted image leaves its entry behind, which is why the rewrite is of
-    # `out` rather than of `cached | out`: the cache must not grow forever on a
-    # folder that is edited all day.
-    if changed or len(cached) != len(out):
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(out))
-            changed = True
-        except OSError:
-            pass
-    good = {k: v for k, v in out.items() if not v.get("failed")}
-    return good, changed, pending, unreadable
-
-
-def _keep_rank(fp: dict[str, Any], name: str, captioned: bool) -> tuple:
-    """
-    Which of two copies of one picture is the one to keep.
-
-    Pixels first, because resolution is the only axis on this list the trainer
-    reads directly — a 2048px original and its 512px re-post are one picture and
-    only one of them is worth bucketing. Then the lossless encoding, then
-    sharpness, then weight: three ways of asking the same question, which is how
-    much of the original survived. A caption last, because it is the only entry
-    here that is about your work rather than the file, and it is cheap to move.
-
-    Never applied across different pictures — see `_sharpness`.
-    """
-    return (
-        -(fp["width"] * fp["height"]),
-        _FORMAT_RANK.get(fp["format"], 9),
-        -fp.get("sharpness", 0),
-        -fp["bytes"],
-        0 if captioned else 1,
-        name,
-    )
-
-
-def _keep_reason(best: dict[str, Any], runner: dict[str, Any]) -> str:
-    """
-    The axis that decided, named — and named against the runner-up rather than
-    against the whole group, because "nothing separates the top two" is the one
-    statement that tells you your choice does not matter.
-
-    Derived, so it is visible: a suggestion you have to re-derive by hand before
-    you can trust it costs more than making the choice yourself.
-    """
-    if best["width"] * best["height"] != runner["width"] * runner["height"]:
-        return f"most pixels · {best['megapixels']} MP"
-    if best["format"] != runner["format"]:
-        return f"{best['format']} over {runner['format']}"
-    if best.get("sharpness", 0) != runner.get("sharpness", 0):
-        return "sharpest copy at this resolution"
-    if best["bytes"] != runner["bytes"]:
-        return "same size, least compressed"
-    if bool(best["caption"]) != bool(runner["caption"]):
-        return "the only one captioned"
-    return "identical in every respect — first by name"
-
-
-def _link(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
-    """
-    What relates two images, if anything.
-
-    Returns `kind` of "duplicate", "similar" or "", plus the evidence the page
-    shows: both distances, and the transforms that would explain them. Every
-    accept is an AND over the two hashes — see DUPLICATE_MATCH.
-    """
-    if a["sha"] == b["sha"]:
-        return {"kind": "duplicate", "dhash": 0, "phash": 0, "same_file": True,
-                "transforms": ["byte-for-byte identical"]}
-
-    dd = (a["dhash"] ^ b["dhash"]).bit_count()
-    dp = (a["phash"] ^ b["phash"]).bit_count()
-    transforms = []
-    if (a["width"], a["height"]) != (b["width"], b["height"]):
-        transforms.append("resized")
-    if a["format"] != b["format"]:
-        transforms.append("reformatted")
-    elif a["bytes"] != b["bytes"]:
-        transforms.append("recompressed")
-
-    if dd <= DUPLICATE_MATCH["dhash"] and dp <= DUPLICATE_MATCH["phash"]:
-        kind = "duplicate"
-    elif dd <= SIMILAR_MATCH["dhash"] and dp <= SIMILAR_MATCH["phash"]:
-        kind = "similar"
-    else:
-        # The crop pass, on its leash. Every variant against every variant
-        # except full-frame-to-full-frame, which is the comparison just made.
-        hit = min(((x[0] ^ y[0]).bit_count(), (x[1] ^ y[1]).bit_count())
-                  for i, x in enumerate(a["variants"])
-                  for j, y in enumerate(b["variants"]) if i or j)
-        if hit[0] <= CROP_MATCH["dhash"] and hit[1] <= CROP_MATCH["phash"]:
-            return {"kind": "similar", "dhash": dd, "phash": dp, "same_file": False,
-                    "transforms": [*transforms, "cropped"],
-                    "crop_dhash": hit[0], "crop_phash": hit[1]}
-        return {"kind": "", "dhash": dd, "phash": dp, "same_file": False,
-                "transforms": transforms}
-    return {"kind": kind, "dhash": dd, "phash": dp, "same_file": False,
-            "transforms": transforms}
-
-
-def _components(names: list[str], edges: list[tuple[str, str]]) -> list[list[str]]:
-    """Connected components, so an image is decided about once rather than once
-    per pair it happens to resemble."""
-    parent = {n: n for n in names}
-
-    def find(n: str) -> str:
-        while parent[n] != n:
-            parent[n] = parent[parent[n]]
-            n = parent[n]
-        return n
-
-    for a, b in edges:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-    out: dict[str, list[str]] = {}
-    for n in names:
-        out.setdefault(find(n), []).append(n)
-    return [sorted(m) for m in out.values() if len(m) > 1]
-
-
-def _duplicate_groups(d: Path, budget_s: float | None = None) -> dict[str, Any]:
-    """
-    The set's duplicate groups, then its similar ones.
-
-    **Pairwise, over distinct fingerprints.** A BK-tree was here and was
-    measured: at the radius this classifier uses it visits 96% of the tree per
-    lookup, so it is the same sweep with a tree walk's overhead on top. What
-    inverts the cost is deduplicating the hashes first — the pathological input
-    for a pairwise scan, one picture present four hundred times, collapses to a
-    single fingerprint and one comparison — and what makes a *rescan* free is
-    the fingerprint cache. Neither of those is an index.
-
-    **An image is in at most one group, and duplicates win.** Similar links are
-    computed only between images no duplicate group already holds. A similar
-    relationship between a copy and an outsider is therefore not shown until the
-    copies are dealt with — which is the order the work happens in anyway: clear
-    the duplicates, rescan, review what is merely alike. The invariant it buys
-    is worth more than the edge it drops, because a name in two groups is a name
-    you are asked about twice and can mark for deletion twice.
-    """
-    prints, wrote, pending, unreadable = _fingerprints(d, budget_s)
-    if pending:
-        # Half a folder groups into half the truth, and half the truth here is a
-        # keeper suggested against copies that have not been looked at yet. So
-        # nothing is grouped until everything is measured; what comes back is
-        # the count, which is the only honest thing to draw.
-        return {"scanning": True, "measured": len(prints) + len(unreadable),
-                "total": len(prints) + len(unreadable) + pending,
-                "groups": [], "images": len(prints),
-                "unreadable": unreadable,
-                "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
-                               "similar_cosine": SIMILAR_COSINE, "crop": CROP_MATCH},
-                "summary": {"duplicate_groups": 0, "duplicate_images": 0,
-                            "similar_groups": 0, "similar_images": 0},
-                "reclaim": 0, "_wrote": wrote}
-
-    # Distinct fingerprints, so identical files are compared once. The sha is in
-    # the key because two different pictures cannot share both hashes but two
-    # copies of one file must stay distinguishable as *the same file*.
-    by_print: dict[tuple, list[str]] = {}
-    for name, fp in prints.items():
-        by_print.setdefault(
-            (tuple(tuple(v) for v in fp["variants"]), fp["sha"]), []).append(name)
-    keys = list(by_print)
-
-    # The similar class reads the embeddings when every image has one — all or
-    # nothing, because a set half-measured by each instrument would group into
-    # two different definitions of "alike". A build without the model writes no
-    # embeddings, and the class falls back to the hash band it used to be.
-    reps = [by_print[k][0] for k in keys]
-    vecs = [_emb_vec(prints[r]) for r in reps]
-    cosmat = None
-    if vecs and all(v is not None for v in vecs):
-        import numpy as np
-
-        cosmat = np.stack(vecs) @ np.stack(vecs).T
-    elif any(v is not None for v in vecs):
-        missing = sum(1 for v in vecs if v is None)
-        print(f"[dupes] {missing} of {len(vecs)} fingerprints lack embeddings; "
-              "the similar class falls back to the hash band", flush=True)
-    emb_of = ({n: v for k, v in zip(keys, vecs) for n in by_print[k]}
-              if cosmat is not None else {})
-
-    dup_edges: list[tuple[str, str]] = []
-    sim_edges: list[tuple[str, str]] = []
-    evidence: dict[tuple[str, str], dict[str, Any]] = {}
-    for i in range(len(keys)):
-        # Files sharing a fingerprint are the same picture by definition.
-        same = by_print[keys[i]]
-        for other in same[1:]:
-            dup_edges.append((same[0], other))
-        for j in range(i + 1, len(keys)):
-            a, b = by_print[keys[i]][0], by_print[keys[j]][0]
-            link = _link(prints[a], prints[b])
-            if cosmat is not None and link["kind"] != "duplicate":
-                # The embedding decides similar; the crop pass keeps its say
-                # because a hard crop moves the global embedding while the
-                # centre-crop hashes still land it. The hash similar band is
-                # deliberately *not* consulted here — it is the line calibrated
-                # on a set with no true near-duplicates in it.
-                cos = float(cosmat[i, j])
-                link["cosine"] = round(cos, 3)
-                link["kind"] = ("similar"
-                                if cos >= SIMILAR_COSINE
-                                or "cropped" in link["transforms"] else "")
-            if not link["kind"]:
-                continue
-            evidence[(a, b)] = link
-            (dup_edges if link["kind"] == "duplicate" else sim_edges).append((a, b))
-
-    names = list(prints)
-    dup_groups = _components(names, dup_edges)
-    held = {n for g in dup_groups for n in g}
-    # Similar is computed over what is left, which is what keeps every image in
-    # at most one group.
-    sim_groups = _components([n for n in names if n not in held],
-                             [(a, b) for a, b in sim_edges
-                              if a not in held and b not in held])
-
-    def build(members: list[str], kind: str) -> dict[str, Any]:
-        rows = []
-        for name in members:
-            fp = prints[name]
-            rows.append({
-                "name": name, "caption": _caption_of(d / name), "bytes": fp["bytes"],
-                "width": fp["width"], "height": fp["height"],
-                # Rounded here rather than on the page: it is the one figure in
-                # this row that is computed rather than read, and two consumers
-                # rounding it differently is two answers to "which is bigger".
-                "megapixels": round(fp["width"] * fp["height"] / 1e6, 1),
-                "format": fp["format"], "sharpness": fp.get("sharpness", 0),
-                "mtime": fp["mtime"],
-            })
-        rows.sort(key=lambda r: _keep_rank(prints[r["name"]], r["name"], bool(r["caption"])))
-        keeper = rows[0]
-        for r in rows:
-            link = (_link(prints[keeper["name"]], prints[r["name"]])
-                    if r["name"] != keeper["name"] else None)
-            # The number that actually accepted an embedding-linked pair, so
-            # the Match row can quote it instead of quoting hash distances
-            # that rejected the pair — the crop rule's own lesson.
-            cos = None
-            if link is not None and emb_of:
-                va, vb = emb_of.get(keeper["name"]), emb_of.get(r["name"])
-                if va is not None and vb is not None:
-                    cos = round(float(va @ vb), 3)
-            r.update(
-                cosine=cos,
-                dhash_distance=link["dhash"] if link else 0,
-                phash_distance=link["phash"] if link else 0,
-                same_file=bool(link and link["same_file"]),
-                transforms=link["transforms"] if link else [],
-                # Only a crop match has these, and it is the one case where the
-                # direct distance shown beside it is *outside* the threshold
-                # that accepted the pair — because what accepted it was the
-                # crop comparison. Reporting the first number without the
-                # second is reporting a contradiction.
-                crop_dhash=link.get("crop_dhash") if link else None,
-                crop_phash=link.get("crop_phash") if link else None,
-            )
-        return {
-            # Stable across a rescan so the page's per-group state survives one:
-            # the alphabetically first member, which only moves when that member
-            # is deleted and the group is therefore a different group.
-            "key": members[0],
-            "kind": kind,
-            # Only a duplicate group preselects. A similar group is evidence, so
-            # it arrives with everything kept and nothing to undo.
-            "suggest": keeper["name"] if kind == "duplicate" else "",
-            "why": _keep_reason(keeper, rows[1]) if kind == "duplicate" else "",
-            "images": rows,
-        }
-
-    groups = ([build(g, "duplicate") for g in dup_groups]
-              + [build(g, "similar") for g in sim_groups])
-    # Duplicates first and the biggest first inside each class: a group of six
-    # copies is the one press worth the most, and a pair of burst frames is a
-    # judgement you should reach after the decided work is done.
-    groups.sort(key=lambda g: (g["kind"] != "duplicate", -len(g["images"]), g["key"]))
-    dupes = [g for g in groups if g["kind"] == "duplicate"]
-    return {
-        "scanning": False,
-        "images": len(prints),
-        # Should always be empty: everything the upload accepts, the scan
-        # decodes. Reported by name rather than swallowed, because a file the
-        # scan cannot see is excluded from every group it belongs in — which
-        # reads as "the scan missed obvious duplicates", not as a decode fault.
-        "unreadable": unreadable,
-        "groups": groups,
-        "thresholds": {"duplicate": DUPLICATE_MATCH, "similar": SIMILAR_MATCH,
-                       "similar_cosine": SIMILAR_COSINE, "crop": CROP_MATCH},
-        "summary": {
-            "duplicate_groups": len(dupes),
-            "duplicate_images": sum(len(g["images"]) for g in dupes),
-            "similar_groups": len(groups) - len(dupes),
-            "similar_images": sum(len(g["images"]) for g in groups if g["kind"] != "duplicate"),
-        },
-        # What accepting every suggestion would reclaim. Duplicates only —
-        # nothing in a similar group is marked, so nothing in one is counted.
-        "reclaim": sum(r["bytes"] for g in dupes for r in g["images"]
-                       if r["name"] != g["suggest"]),
-        "_wrote": wrote,
-    }
-
 
 def _on_gpu(cls: Any, requested: Any, allowed: tuple[str, ...], default: str) -> Any:
     """
@@ -7252,111 +5781,6 @@ def _mp4_with_record(src: Path, dst: Path, fields: dict[str, Any],
         shutil.copyfile(src, dst)
         return False
     return True
-
-
-def _record_from_png(head: bytes) -> dict[str, Any] | None:
-    """The record chunk out of a PNG's head. None when the head is too short
-    to say; `{}` when the file has no record (the image data began)."""
-    if not head.startswith(b"\x89PNG\r\n\x1a\n"):
-        return {} if len(head) >= 8 else None
-    pos = 8
-    while pos + 8 <= len(head):
-        length, ctype = struct.unpack(">I4s", head[pos:pos + 8])
-        if ctype in (b"IDAT", b"IEND"):
-            return {}
-        body = head[pos + 8:pos + 8 + length]
-        if len(body) < length:
-            return None
-        if ctype in (b"tEXt", b"iTXt"):
-            key, _, val = body.partition(b"\x00")
-            if key == RECORD_KEY.encode():
-                if ctype == b"iTXt":
-                    # flag, method, language\0, translated keyword\0, text.
-                    # Read for a file written by some other tool; ours is
-                    # always ASCII and lands in tEXt.
-                    flag = val[0:1]
-                    rest = val[2:].split(b"\x00", 2)
-                    val = rest[2] if len(rest) == 3 else b""
-                    if flag == b"\x01":
-                        import zlib
-                        val = zlib.decompress(val)
-                try:
-                    return json.loads(val.decode("utf-8", "replace"))
-                except ValueError:
-                    return {}
-        pos += 8 + length + 4
-    return None
-
-
-def _mp4_atoms(buf: bytes, start: int, end: int):
-    pos = start
-    while pos + 8 <= end:
-        size, atype = struct.unpack(">I4s", buf[pos:pos + 8])
-        hdr = 8
-        if size == 1:
-            if pos + 16 > end:
-                return
-            size = struct.unpack(">Q", buf[pos + 8:pos + 16])[0]
-            hdr = 16
-        elif size == 0:
-            size = end - pos
-        if size < hdr or pos + size > end:
-            return
-        yield atype, pos + hdr, pos + size
-        pos += size
-
-
-def _record_from_mp4(head: bytes) -> dict[str, Any] | None:
-    """
-    The record key out of `moov/udta/meta`, in ffmpeg's `use_metadata_tags`
-    shape — a `keys` atom naming the entries, an `ilst` indexed from one —
-    with the plain four-character `ilst` form accepted too. None until a
-    whole `moov` is in the head; `{}` for a clip that has none.
-    """
-    for atype, a, b in _mp4_atoms(head, 0, len(head)):
-        if atype == b"mdat":
-            return {}  # data before moov: no record on the head
-        if atype != b"moov":
-            continue
-        keys: list[bytes] = []
-        items: dict[bytes, bytes] = {}
-        for t, c, d in _mp4_atoms(head, a, b):
-            if t != b"udta":
-                continue
-            for u, e, f in _mp4_atoms(head, c, d):
-                if u != b"meta":
-                    continue
-                for v, g, h in _mp4_atoms(head, e + 4, f):
-                    if v == b"keys":
-                        n = struct.unpack(">I", head[g + 4:g + 8])[0]
-                        p = g + 8
-                        for _ in range(n):
-                            ksize = struct.unpack(">I", head[p:p + 4])[0]
-                            keys.append(head[p + 8:p + ksize])
-                            p += ksize
-                    elif v == b"ilst":
-                        for w, i, j in _mp4_atoms(head, g, h):
-                            for x, k, m in _mp4_atoms(head, i, j):
-                                if x == b"data":
-                                    items[w] = head[k + 8:m]
-        for w, val in items.items():
-            if w[0] == 0 and keys:
-                idx = struct.unpack(">I", w)[0] - 1
-                name = keys[idx] if 0 <= idx < len(keys) else b""
-            else:
-                name = w
-            if name.split(b".")[-1] == RECORD_KEY.encode():
-                try:
-                    return json.loads(val.decode("utf-8"))
-                except ValueError:
-                    return {}
-        return {}
-    return None
-
-
-# Past this much of a file with no record found, the file has none. A PNG's
-# text chunks and a faststart clip's `moov` both sit in the first few KB.
-_RECORD_HEAD_MAX = 4 << 20
 
 
 # ── A LoRA carries its own record ──────────────────────────────────────────
@@ -7603,26 +6027,6 @@ def _lora_facts(file: Path) -> tuple[dict[str, Any], str]:
     return answer
 
 
-def _read_record(rel: str) -> dict[str, Any]:
-    """The record out of one committed file's head, by RPC — chunks pulled
-    only until the record can be read, never the whole render."""
-    parse = _record_from_png if rel.lower().endswith(".png") else _record_from_mp4
-    head = b""
-    try:
-        for chunk in _read_committed(rel):
-            head += chunk
-            got = parse(head)
-            if got is not None:
-                return got
-            if len(head) > _RECORD_HEAD_MAX:
-                break
-    except Exception as exc:  # noqa: BLE001 — a record is best-effort
-        if not isinstance(exc, FileNotFoundError):
-            print(f"[record] {rel}: {type(exc).__name__}: {exc}", flush=True)
-        return {}
-    return parse(head) or {}
-
-
 def _group_of(name: str) -> str:
     """Which run a file belongs to, read off its name: `{job}_{NN}.png` and
     `{job}.mp4` both group under `{job}`. The batch is a property of the name,
@@ -7744,6 +6148,31 @@ def _trim_spool() -> None:
                 break
 
 
+def _group_files(group: str) -> list[str]:
+    """Every file of one run in outputs/, results and the context tensor
+    alike — what a delete takes. Off the mount, after the caller's reload."""
+    if not NAME_RE.match(group):
+        return []
+    try:
+        return sorted(p.name for p in OUTPUTS.iterdir()
+                      if p.is_file() and _group_of(p.name) == group)
+    except OSError:
+        return []
+
+
+def _forget_output(group: str) -> None:
+    """A deleted run takes its caches with it — the record entry, the spooled
+    bytes and the covers — or a re-used id would wear a dead run's face."""
+    _META_CACHE.pop(group, None)
+    for d in (SPOOL / "outputs", SPOOL / "outputs" / ".covers"):
+        try:
+            for p in d.iterdir():
+                if p.is_file() and _group_of(p.name) == group:
+                    p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _entries_by_rpc() -> tuple[dict[str, list[tuple[str, float]]], list[str]]:
     """
     ({group: [(filename, mtime)]}, [legacy job folders]) asked of Modal, not
@@ -7775,130 +6204,6 @@ def _entries_by_rpc() -> tuple[dict[str, list[tuple[str, float]]], list[str]]:
     return out, legacy
 
 
-def _entries_by_walk() -> tuple[dict[str, list[tuple[str, float]]], list[str]]:
-    """The same answer off the mount, for when the RPC cannot give one."""
-    out: dict[str, list[tuple[str, float]]] = {}
-    legacy: list[str] = []
-    if not OUTPUTS.is_dir():
-        return out, legacy
-    for p in OUTPUTS.iterdir():
-        if p.is_dir():
-            if not p.name.startswith("."):
-                legacy.append(p.name)
-            continue
-        if p.is_file() and _keep_entry(p.name):
-            out.setdefault(_group_of(p.name), []).append((p.name, p.stat().st_mtime))
-    return out, legacy
-
-
-def _output_entries() -> tuple[dict[str, list[tuple[str, float]]], list[str]]:
-    """
-    ({group: [(filename, mtime)]}, legacy folders), by RPC, falling back to
-    the mount.
-
-    Not silent: a fallback that says nothing makes "the gallery is behind
-    again" indistinguishable from "the RPC has been failing all week", which
-    is the same reason `_reload_volume` prints when it skips. An empty or
-    absent `outputs/` is not a failure — it is a volume nobody has generated
-    on yet.
-    """
-    try:
-        return _entries_by_rpc()
-    except modal.exception.NotFoundError:
-        return {}, []
-    except Exception as exc:  # noqa: BLE001 — any RPC failure falls back
-        print(f"[gallery] listdir failed ({type(exc).__name__}: {exc}) — "
-              f"listing off the mount, which may be stale", flush=True)
-        return _entries_by_walk()
-
-
-def _group_files(group: str) -> list[str]:
-    """Every file of one run in outputs/, results and the context tensor
-    alike — what a delete takes. Off the mount, after the caller's reload."""
-    if not NAME_RE.match(group):
-        return []
-    try:
-        return sorted(p.name for p in OUTPUTS.iterdir()
-                      if p.is_file() and _group_of(p.name) == group)
-    except OSError:
-        return []
-
-
-def _gallery(limit: int = 200, before: float = 0.0) -> tuple[list[dict[str, Any]], int, list[str]]:
-    """
-    A page of runs, newest first, how many there are in total, and any job
-    folders still waiting to be migrated.
-
-    Keyed by what is on the volume, not by a job id the browser happened to
-    keep: a reload, a redeploy, or a job whose record expired all leave the
-    work reachable. A file with no record still lists — older results predate
-    the record and are not less real for it.
-
-    `before` is the previous page's last sort key, so paging is a window over
-    a stable order rather than an offset into a list that grows under it.
-
-    The record is read only for the page being returned, off the head of
-    each run's first file by RPC — mtimes arrive without touching
-    `/workspace`, so the sort and the window are both decided before a byte
-    of picture is pulled, and a deep gallery costs the same per request as a
-    shallow one.
-    """
-    entries, legacy = _output_entries()
-
-    rows: list[tuple[float, str, list[str]]] = []
-    for group, files in entries.items():
-        files.sort(key=lambda f: f[0])
-        rows.append((max(m for _, m in files), group, [n for n, _ in files]))
-
-    # Descending, with the group breaking ties. `mtime` is integer seconds off
-    # the RPC, so two runs in the same second tie, and nothing promises a stable
-    # order underneath — an unstable sort reshuffles the grid between reloads,
-    # which is indistinguishable from the staleness this listing exists to fix.
-    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
-    total = len(rows)
-    if before:
-        rows = [r for r in rows if r[0] < before]
-
-    # Records by RPC, like everything else this listing reads. Cached per run
-    # because a finished file never changes — except the moments right after
-    # it lands, so an *empty* answer is only cached once the run is old enough
-    # that the record is either committed or never coming. Parallel, because
-    # serial was the page's whole wait.
-    page = rows[:limit]
-    need = [(group, modified, names[0]) for modified, group, names in page
-            if group not in _META_CACHE]
-    if need:
-        from concurrent.futures import ThreadPoolExecutor
-
-        def fetch(row: tuple[str, float, str]) -> tuple[str, float, dict[str, Any]]:
-            group, modified, first = row
-            return group, modified, _read_record(f"outputs/{first}")
-
-        with ThreadPoolExecutor(max_workers=min(16, len(need))) as ex:
-            fetched = list(ex.map(fetch, need))
-        now = time.time()
-        for group, modified, meta in fetched:
-            if meta or now - modified > 300:
-                _META_CACHE[group] = meta
-        fresh_meta = {group: meta for group, _, meta in fetched}
-    else:
-        fresh_meta = {}
-
-    out: list[dict[str, Any]] = []
-    for modified, group, names in page:
-        meta = _META_CACHE.get(group, fresh_meta.get(group, {}))
-        out.append({
-            # The record first, so the derived fields win: the record
-            # describes the run, the files are the result.
-            **meta,
-            "job_id": group,
-            "kind": "video" if names[0].lower().endswith(".mp4") else "image",
-            "files": names,
-            "modified": modified,
-        })
-    return out, total, legacy
-
-
 # Records already read, for the life of the container. Safe because a
 # finished file is immutable; evicted on delete so a re-used id can never
 # wear a dead run's metadata.
@@ -7918,19 +6223,6 @@ def _start_migration() -> str:
     _publish(MIGRATE_JOB, status="running", percent=0, phase="Queued", files=[])
     migrate_outputs_job.spawn(MIGRATE_JOB)
     return MIGRATE_JOB
-
-
-def _forget_output(group: str) -> None:
-    """A deleted run takes its caches with it — the record entry, the spooled
-    bytes and the covers — or a re-used id would wear a dead run's face."""
-    _META_CACHE.pop(group, None)
-    for d in (SPOOL / "outputs", SPOOL / "outputs" / ".covers"):
-        try:
-            for p in d.iterdir():
-                if p.is_file() and _group_of(p.name) == group:
-                    p.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 # Where a LoRA the mount cannot show us is pulled to, and the second directory
@@ -9233,10 +7525,11 @@ class _ImageSide:
             "duration_s": round(time.time() - started, 1),
             **report,
             # The record itself, once, on the terminal publish. A client that
-            # writes the file into its own library embeds
-            # this rather than re-deriving it from the fields above, so what
-            # it writes is byte-for-byte what this container would have; the
-            # fields above stay for the page that already reads them. Small
+            # writes the file into its own library embeds this rather than
+            # re-deriving it from the fields above, so what it writes is
+            # byte-for-byte what this container would have; the fields above
+            # stay because a reader that drops one makes every run that has
+            # it unreadable. Small
             # (no bytes, by construction) and published exactly once.
             "record": record,
         }
@@ -12571,8 +10864,8 @@ class _VideoSide:
         # finished three-minute render over its sidecar would be the wrong
         # trade twice.
         # By glob, not by name: the save node numbers its file with ComfyUI's
-        # own counter — `{job}_00001_.safetensors` on the first take from the
-        # job API — while this looked for `_00000`, so every take logged
+        # own counter — `{job}_00001_.safetensors` on the first take through
+        # the job API — while this looked for `_00000`, so every take logged
         # "no motion context saved" beside the line that had just saved it,
         # and Continue fell back to the last frame on a take that had its
         # motion on disk. The newest match is the take's; older ones under
@@ -12885,107 +11178,6 @@ class BothGenerator(_Generator):
 # A workflow name becomes a filename on the volume, so the rule is the
 # filename's — and the error says so, because "invalid name" explains nothing.
 _WORKFLOW_NAME_RE = re.compile(r"[\w][\w .-]{0,63}")
-
-
-def _storyboard_name(raw: Any) -> str:
-    """A board's folder name. The same shape a workflow name has, lower-cased
-    because it is a path on the volume and a URL segment at once."""
-    name = str(raw or "").strip()
-    if not STORYBOARD_NAME_RE.fullmatch(name):
-        raise ValueError("A storyboard name is lowercase letters, digits, "
-                         "dashes and underscores — up to 64 of them.")
-    return name
-
-
-def _validate_storyboard(raw: Any) -> dict:
-    """
-    Structural zeros only — the page writes the whole document back on every
-    edit, so the only thing to refuse is a shape no reader could follow: a
-    panel without an id, two panels sharing one, a picture pointer missing
-    half its address, an arrow with a point outside the frame. Content is the
-    person's and travels verbatim. A picture's `file` is path-stripped because
-    it becomes half of a file address; a picture with no `job_id` lives in the
-    board's own folder, and one with a job id is a render in outputs/.
-
-    The pills are `_validate_shot`'s — a panel is a shot's intent, so it
-    carries a shot's vocabulary, camera amplitude and speed included — and
-    that is what makes the hand-off a copy rather than a translation.
-    """
-    if not isinstance(raw, dict):
-        raise ValueError("The storyboard must be an object with `panels`.")
-    panels_in = raw.get("panels")
-    if not isinstance(panels_in, list):
-        raise ValueError("`panels` must be a list.")
-    if len(panels_in) > STORYBOARD_MAX_PANELS:
-        raise ValueError(f"A storyboard holds at most {STORYBOARD_MAX_PANELS} "
-                         f"panels; this one has {len(panels_in)}.")
-    aspect = str(raw.get("aspect") or "16:9")
-    if aspect not in VIDEO_ASPECTS:
-        raise ValueError(f"Unknown aspect {aspect!r}. "
-                         f"One of: {', '.join(VIDEO_ASPECTS)}")
-    panels: list[dict] = []
-    seen: set[str] = set()
-    for i, p in enumerate(panels_in):
-        if not isinstance(p, dict):
-            raise ValueError(f"Panel {i + 1} is not an object.")
-        pid = str(p.get("id") or "")
-        if not pid or pid in seen:
-            raise ValueError(f"Panel {i + 1} needs an id no other panel has.")
-        seen.add(pid)
-        pic = p.get("picture")
-        if pic is not None:
-            if not isinstance(pic, dict) or not pic.get("file"):
-                raise ValueError(f"Panel {i + 1}'s picture needs a file.")
-            # `gallery` says which folder: a render in outputs/, or a picture
-            # dropped onto the board. Either way the file is the address.
-            name = Path(str(pic["file"])).name
-            if pic.get("gallery") and not OUTPUT_FILE_RE.match(name):
-                raise ValueError(f"Panel {i + 1}'s picture names a render no "
-                                 f"run could have written: {name!r}")
-            pic = {"file": name, **({"gallery": True} if pic.get("gallery") else {})}
-        fit = str(p.get("fit") or "crop")
-        if fit not in ("crop", "whole"):
-            raise ValueError(f"Panel {i + 1}'s fit is {fit!r}; crop or whole.")
-        focus_in = p.get("focus") or [0.5, 0.5]
-        try:
-            focus = [min(1.0, max(0.0, float(focus_in[0]))),
-                     min(1.0, max(0.0, float(focus_in[1])))]
-        except (TypeError, ValueError, IndexError):
-            raise ValueError(f"Panel {i + 1}'s focus is not a point.")
-        arrows_in = p.get("motion") or []
-        if not isinstance(arrows_in, list):
-            raise ValueError(f"Panel {i + 1}'s motion is not a list.")
-        if len(arrows_in) > STORYBOARD_MAX_ARROWS:
-            raise ValueError(f"Panel {i + 1} has {len(arrows_in)} arrows; "
-                             f"at most {STORYBOARD_MAX_ARROWS}.")
-        motion: list[dict] = []
-        for a in arrows_in:
-            if not isinstance(a, dict):
-                raise ValueError(f"Panel {i + 1} has an arrow that is not "
-                                 f"an object.")
-            try:
-                pts = [[float(x), float(y)] for x, y in a.get("pts") or []]
-            except (TypeError, ValueError):
-                raise ValueError(f"Panel {i + 1} has an arrow with a point "
-                                 f"that is not a pair of numbers.")
-            if len(pts) < 2:
-                raise ValueError(f"Panel {i + 1} has an arrow with one end.")
-            if any(not (0 <= x <= 1 and 0 <= y <= 1) for x, y in pts):
-                raise ValueError(f"Panel {i + 1} has an arrow leaving the "
-                                 f"frame — points are fractions of it.")
-            motion.append({"id": str(a.get("id") or f"a{len(motion) + 1}"),
-                           "pts": pts[:2],
-                           "label": _oneline(str(a.get("label") or ""))[:80]})
-        panels.append({"id": pid,
-                       "prose": str(p.get("prose") or ""),
-                       "note": str(p.get("note") or ""),
-                       "picture": pic,
-                       "fit": fit,
-                       "focus": focus,
-                       "pills": _validate_shot(p.get("pills")),
-                       "motion": motion})
-    return {"title": str(raw.get("title") or "")[:200],
-            "aspect": aspect, "panels": panels}
 
 
 def _workflow_name(raw: Any) -> str:
@@ -13422,14 +11614,16 @@ def playground_catalogue_job(job_id: str, url: str | None = None,
 
 
 # --------------------------------------------------------------------------
-# Route bodies two callers share
+# Route bodies, at module level rather than inside a route
 #
-# The page's routes below and the job API further down are two
-# callers of one contract. Each body here used to live inside one route, and
-# the day a second caller needed it the choice was to copy it or to move it.
-# Copied, the two drift — a validation added to one is a cold H100 wasted by
-# the other — so they moved. Module level rather than nested, because both
-# ASGI functions are separate containers and share nothing but this file.
+# These were pulled out of the page's handlers the day the job API became a
+# second caller of the same contract: copied, the two drift, and a validation
+# added to one is a cold H100 wasted by the other. The page is gone and there
+# is one caller again, and they stay out here anyway — going back would put a
+# submit's validation inside the handler that happens to have it today, which
+# is exactly the shape the next caller has to copy. The rule is the file's:
+# a new capability extends this contract rather than growing a parallel one,
+# and that is cheap only while the contract is not welded to a route.
 # --------------------------------------------------------------------------
 
 
@@ -13438,10 +11632,9 @@ def _weights() -> dict[str, Any]:
     What is on the volume that a run can load: the checkpoint catalogue with
     `present` per entry, and every LoRA the picker may offer.
 
-    The reload and both walks are here rather than in `/api/state` because the
-    second caller asks the same question of a different URL, and a listing that
-    the two answered differently would be a picker offering a file the run
-    cannot find.
+    The reload and both walks are here rather than inside the route because a
+    second caller asking the same question of a different URL, answered
+    differently, is a picker offering a file the run cannot find.
     """
     _reload_volume()
     # Two shapes, because the volume really holds two.
@@ -14049,9 +12242,10 @@ def _submit_video(payload: dict[str, Any]) -> dict[str, Any]:
 
 # ── the Playground and the workflows: bodies two callers share ─────────────
 #
-# The room's routes and the workflow shelf, moved out of the web app for the
-# reason the still and clip routes were: the job API calls the
-# same functions, so the two cannot drift. The web routes below delegate.
+# The room's routes and the workflow shelf, pulled out of the page's handlers
+# for the reason the still and clip routes were: the job API calls the same
+# functions, so two callers cannot drift. One caller is left and the shape
+# stays — see the banner above "Route bodies".
 
 def _playground_seed(payload: dict[str, Any]) -> dict[str, Any]:
     """
@@ -14428,9 +12622,9 @@ def _delete_workflow(name: str) -> dict[str, Any]:
 # ── the gear: bodies two callers share ──────────────────────────────────────
 #
 # Everything decided once behind the gear — the HF token, a weight download,
-# a LoRA moved in or out or deleted, a caption model or preset — moved out of
-# the web app so the job API calls the same functions. The web
-# routes above delegate; nothing here changed meaning by moving.
+# a LoRA moved in or out or deleted, a caption model or preset — pulled out of
+# the page's handlers so the job API calls the same functions. Nothing here
+# changed meaning by moving, and nothing changed meaning when the page went.
 
 def _delete_lora(payload: dict[str, Any]) -> dict[str, Any]:
     """
@@ -14997,1999 +13191,31 @@ def _start_training(*, dataset: str, lora_name: str, trigger_word: str,
 
 
 # --------------------------------------------------------------------------
-# Web app — UI + API on a single URL
-#
-# The routes below are `def`, not `async def`, and that is deliberate: FastAPI
-# runs a sync handler in a threadpool, so everything blocking in it stays off
-# the event loop. Nearly every route here blocks twice over — a Modal Dict or
-# volume call, and real filesystem work (a directory walk, a PIL thumbnail, a
-# file read off the volume). `async def` served by 20 concurrent inputs meant
-# one slow thumbnail stalled every other request in the container, and Modal
-# said so on each one: "A blocking Modal interface is being used in an async
-# context", once per poll of /api/status, which the UI hits every two seconds
-# for the length of a training run.
-#
-# Awaiting the `.aio()` variants would have silenced that warning without
-# fixing it — the Dict call is the part Modal can see, not the part that costs
-# the most. `/api/upload` is the one exception and stays async, because it
-# awaits the multipart stream itself; its one Modal call is `.aio()`d in place.
-# --------------------------------------------------------------------------
-
-
-@app.function(
-    image=web_image, cpu=1.0, timeout=900, volumes={"/workspace": volume, "/models": models_volume},
-    max_containers=1,
-    # Modal's maximum, and the one line that retires a family of bandages.
-    # With no window set the container died about a minute after the last
-    # request, so a cold start was the steady state and the mount was the
-    # only place guaranteed to exist — which is why the read path, the
-    # covers, the drafts and the session markers all ended up on the volume.
-    # Twenty warm minutes cost cents; the spool stays warm across a coffee
-    # and a draft on this disk outlives a glance away. See the Storage rule.
-    scaledown_window=20 * 60,
-)
-@modal.concurrent(max_inputs=20)
-@modal.asgi_app()
-def web():
-    from fastapi import FastAPI, Request
-    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-    from fastapi.staticfiles import StaticFiles
-
-    api = FastAPI()
-
-    # **The first thing that happens to a request, and the last thing that was
-    # visible.** `t_route` inside a handler starts after FastAPI has read the
-    # body off the wire and parsed it — so a 48 MB upload spent its whole life
-    # before any line this file prints. Somebody who gave up on the screen and
-    # opened the dashboard found ComfyUI's own output either side of a gap with
-    # nothing of ours in it, and this is the near end of that gap.
-    #
-    # Only the slow ones. `/api/status` is polled every 400ms and a line per
-    # request would be a log made of polls — which is the same failure as no
-    # log, arrived at from the other side.
-    @api.middleware("http")
-    async def _timed(request: Request, call_next):
-        t0 = time.time()
-        response = await call_next(request)
-        took = time.time() - t0
-        if took >= REQUEST_SLOW_S:
-            n = request.headers.get("content-length")
-            size = f", {int(n) / 1_000_000:.1f} MB in" if n and n.isdigit() else ""
-            print(f"[api] {request.method} {request.url.path} took "
-                  f"{took:.1f}s{size}", flush=True)
-        return response
-
-    # Where the build landed. A constant rather than a search, because a page
-    # that cannot be found should say which path was empty — the same reason
-    # _require_models() prints the path it wanted.
-    DIST = Path("/build/web/dist")
-
-    # Hashed filenames, so the bytes at a given name never change and the
-    # browser never needs to ask again. index.html is the opposite: it is the
-    # one unhashed file and it is what points at the current hashes, so a cached
-    # copy of it is a deploy that never arrives.
-    #
-    # check_dir=False because StaticFiles raises at construction on a missing
-    # directory, and this line runs at import: a build that did not produce a
-    # bundle would take the whole container down with a stack trace about a
-    # path, rather than reaching the route below that explains what is missing.
-    # A dead API is a worse answer than a page that says why it is empty.
-    api.mount("/assets",
-              StaticFiles(directory=str(DIST / "assets"), check_dir=False),
-              name="assets")
-
-    @api.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
-        page = DIST / "index.html"
-        if not page.is_file():
-            # Diagnosing itself rather than 500ing: this can only happen if the
-            # image built without the front end, and the three facts that
-            # separate "npm build failed" from "mounted at the wrong path" are
-            # what it wants, not a traceback.
-            listing = "\n".join(sorted(p.name for p in DIST.iterdir())) \
-                if DIST.is_dir() else "(the directory does not exist)"
-            return HTMLResponse(
-                "<pre>No front end in this image.\n\n"
-                f"wanted:  {page}\n"
-                f"in {DIST}:\n{listing}\n</pre>",
-                status_code=503,
-            )
-        return HTMLResponse(
-            page.read_text(),
-            headers={"cache-control": "no-store"},
-        )
-
-    @api.get("/api/where")
-    def where() -> dict[str, Any]:
-        """
-        What this deployment can actually see on the volume.
-
-        Cheap CPU check for when Settings and a GPU job disagree — the
-        usual cause is the app resolving a different volume than the one
-        holding the weights, so the resolved name is part of the answer.
-        """
-        _reload_volume()
-        tree: dict[str, Any] = {}
-        for d in (MODELS, LORAS, DATASETS, DRAFTS, OUTPUTS):
-            if d.is_dir():
-                tree[str(d)] = sorted(
-                    f"{p.name} ({p.stat().st_size / 1e9:.2f} GB)" if p.is_file() else f"{p.name}/"
-                    for p in d.iterdir() if not p.name.startswith(".")
-                )[:25]
-            else:
-                tree[str(d)] = "(directory does not exist)"
-        return {"volume": VOLUME_NAME, "mounted_at": str(WORKSPACE), "contents": tree}
-
-    @api.get("/api/state")
-    def state() -> dict[str, Any]:
-        w = _weights()
-        models, loras = w["models"], w["loras"]
-        return {
-            "models": models,
-            "loras": loras,
-            "hf_token_set": bool(_hf_token()),
-            "samplers": SAMPLERS,
-            "schedulers": SCHEDULERS,
-            # Which of those two menus opens selected. The video side already
-            # carries its defaults per model in VIDEO_MODELS; this is the image
-            # side's one row of the same thing.
-            "image_defaults": IMAGE_DEFAULTS,
-            "max_loras": MAX_LORAS,
-            "max_regions": MAX_REGIONS,
-            "krea2_defaults": KREA2_DEFAULTS,
-            # Whether the scene/outfit controls are live. Same rule VIDEO_MODELS
-            # follows: a control that is present but ignored is worse than one
-            # that is absent, and without this weight those two drops render a
-            # picture that quietly has nothing to do with the photo.
-            "edit_lora": bool(
-                _sizes_on_disk([MODEL_CATALOGUE["krea2_edit"]["dest"]])[
-                    MODEL_CATALOGUE["krea2_edit"]["dest"]]
-            ),
-            # Served rather than hardcoded in the page: the allowed cards are a
-            # property of what the images were compiled for (see VIDEO_GPUS), so
-            # a copy in the HTML would be a second source of truth that drifts
-            # silently the first time one of them changes.
-            "gpus": {
-                "image": {"options": list(IMAGE_GPUS), "default": GPU},
-                "video": {"options": list(VIDEO_GPUS), "default": VIDEO_GPU},
-                "both": {"options": list(BOTH_GPUS), "default": BOTH_GPU},
-            },
-            "max_refs": MAX_H3_REFS,
-            "max_ref_audios": MAX_H3_REF_AUDIOS,
-            "max_ref_videos": MAX_H3_REF_VIDEOS,
-            # Same reason as gpus: which controls each video model reads, and
-            # what is on the volume for each of its tasks, are properties of
-            # the deployment. The composer builds itself from this.
-            "video_models": _video_model_status(),
-            # The shot palette builds itself from these, for the same reason
-            # the composer builds itself from `video_models`: a copy of the
-            # vocabulary in the front end would be a second source of truth, and
-            # the first pill added on one side and not the other would compile to
-            # "No such shot pill" against the page that offered it.
-            "shot_vocab": SHOT_VOCAB,
-            "shot_langs": H3_LANGUAGES,
-            "shot_roles": [dict(spec, key=k) for k, spec in SHOT_REF_ROLES.items()],
-            **_caption_menus(),
-            # The trainer's vocabulary, served for the reason every other table
-            # here is: the form builds its menus out of this, so a value it can
-            # send is a value the job will accept. A hardcoded list in the page
-            # is a run that cold-starts a GPU to die on argparse.
-            **_train_menus(),
-        }
-
-    @api.post("/api/loras/delete")
-    def delete_lora(payload: dict) -> dict[str, Any]:
-        return _delete_lora(payload)
-
-    @api.post("/api/token")
-    def set_token(payload: dict) -> dict[str, Any]:
-        return _set_token(payload)
-
-    @api.post("/api/download")
-    def download(payload: dict) -> dict[str, Any]:
-        return _start_download(payload)
-
-    @api.post("/api/gdrive")
-    def gdrive(payload: dict) -> dict[str, Any]:
-        return _start_gdrive(payload)
-
-    @api.post("/api/loras/hf")
-    def hf_lora(payload: dict) -> dict[str, Any]:
-        return _start_hf_lora(payload)
-
-    @api.post("/api/loras/push")
-    def push_lora(payload: dict) -> dict[str, Any]:
-        return _push_lora(payload)
-
-    @api.post("/api/loras/upload")
-    async def upload_lora(request: Request) -> JSONResponse:
-        """
-        A LoRA from this computer, into loras/.
-
-        Staged then moved, the Drive rule: the picker globs loras/ live, so a
-        file written straight there is offered while it is half a file.
-        `async`, like `/api/upload`, because it awaits the multipart stream —
-        and `.aio()` on the commit for the reason that handler gives.
-        """
-        try:
-            form = await request.form()
-        except Exception as exc:
-            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, 400)
-        folder = str(form.get("folder") or "").strip()
-        if folder and not NAME_RE.match(folder):
-            return JSONResponse(
-                {"error": "Folder name must be 1-64 chars of [A-Za-z0-9_-]."}, 400)
-        dest_dir = (LORAS / folder) if folder else LORAS
-        stage = WORK / f"lora-upload-{int(time.time() * 1000):x}"
-        stage.mkdir(parents=True, exist_ok=True)
-        staged: list[Path] = []
-        skipped: list[str] = []
-        try:
-            for up in form.getlist("files"):
-                filename = getattr(up, "filename", None)
-                if not filename:
-                    continue
-                name = Path(filename).name
-                if Path(name).suffix.lower() != ".safetensors":
-                    skipped.append(name)
-                    continue
-                target = stage / name
-                with open(target, "wb") as out:
-                    while chunk := await up.read(1024 * 1024):
-                        out.write(chunk)
-                staged.append(target)
-            if not staged:
-                return JSONResponse({"error": "No .safetensors in the upload"
-                                     + (f" — got {', '.join(skipped[:6])}." if skipped
-                                        else ".")}, 400)
-            landed = _land_weights(staged, dest_dir)
-        finally:
-            shutil.rmtree(stage, ignore_errors=True)
-        await volume.commit.aio()
-        size = sum((dest_dir / n).stat().st_size for n in landed)
-        return JSONResponse({"ok": True, "files": landed, "skipped": skipped,
-                             "folder": folder, "bytes": size})
-
-    @api.get("/api/loras/file/{rel:path}")
-    def lora_file(rel: str):
-        return _lora_file_response(rel)
-
-    @api.post("/api/download-missing")
-    def download_missing(payload: dict) -> dict[str, Any]:
-        """
-        Save the token (if one was supplied) and queue missing weights.
-
-        `family` scopes it to one group from the catalogue; without it the queue
-        is everything missing. One route rather than two because the only
-        difference is which keys go in the list — the queue, the sequencing, the
-        stop and the failure accounting are identical, and a second endpoint
-        would be a second copy of all four.
-
-        Taking the token in the same call is deliberate: pasting a key and then
-        having to press Save before Download is a step that exists for no reason.
-        """
-        token = str(payload.get("hf_token") or "").strip()
-        if token:
-            config["hf_token"] = token
-
-        family = str(payload.get("family") or "").strip()
-        job_id = _family_job_id(family) if family else "dl_all"
-
-        # Same rule as `/api/download`: already-running is a state, not an error.
-        busy = _active_download()
-        if busy:
-            rec = jobs.get(busy) or {}
-            return {"ok": True, "started": False, "job_id": busy,
-                    "mine": busy == job_id,
-                    "busy_with": rec.get("phase") or busy}
-
-        _reload_volume()
-        models = _model_status()
-        if family:
-            models = [m for m in models if m["family"] == family]
-            if not models:
-                return {"error": f"No such family: {family}"}
-        missing = [m["key"] for m in models if not m["present"]]
-        if not missing:
-            return {"ok": True, "job_id": None, "missing": [], "note": "Everything is already here."}
-
-        gated = [k for k in missing if MODEL_CATALOGUE[k]["gated"]]
-        if gated and not _hf_token():
-            return {
-                "error": "A HuggingFace token is required for "
-                + ", ".join(MODEL_CATALOGUE[k]["label"] for k in gated)
-                + ". Paste one in the field above."
-            }
-
-        jobs[job_id] = {"status": "running", "phase": "Starting…", "percent": 0,
-                        "stop": False, "beat": time.time()}
-        jobs[DL_ACTIVE] = {"job_id": job_id}
-        download_missing_job.spawn(missing, job_id)
-        return {"ok": True, "started": True, "job_id": job_id, "mine": True,
-                "missing": missing}
-
-    @api.post("/api/upload")
-    async def upload(request: Request) -> JSONResponse:
-        """
-        Stage images. Pass an existing job_id to add to that dataset instead of
-        starting a new one, so more files can be dropped in at any point.
-        """
-        try:
-            return await _do_upload(request)
-        except Exception as exc:
-            # Surface the real reason in the UI instead of an opaque 500. A
-            # missing python-multipart, a full volume or a permissions problem
-            # all look identical otherwise.
-            import traceback
-
-            traceback.print_exc()
-            return JSONResponse(
-                {"error": f"{type(exc).__name__}: {exc}"}, status_code=500
-            )
-
-    async def _do_upload(request: Request) -> JSONResponse:
-        form = await request.form()
-
-        # Uploads always target a named set — an existing one by name, which is
-        # how a second batch lands in the set you already have, otherwise a new
-        # draft. Appending must never be able to delete one that already exists,
-        # so track whether this call created it. `dataset` is deliberately not
-        # reused as a loop variable below — an earlier version named both this
-        # and the per-file basename `name`, so the response reported the last
-        # uploaded filename as the dataset.
-        dataset = str(form.get("dataset") or "").strip()
-        if not dataset:
-            return JSONResponse({"error": "A dataset name is required."}, 400)
-        try:
-            raw = _dataset_dir(dataset)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, 400)
-        appending = raw.is_dir()
-        raw.mkdir(parents=True, exist_ok=True)
-        sid = str(form.get("session") or "")
-        if not appending:
-            # Stamp the window before the first byte is written: an upload that
-            # takes longer than the grace period would otherwise be writing into
-            # a folder the sweep considers ownerless.
-            _write_dataset_meta(raw, session=sid)
-        elif sid and raw.parent == DRAFTS:
-            # Re-stamp on append too. A draft created in a closed tab keeps
-            # that tab's session id forever, so the window now uploading into
-            # it was not the window keeping it alive — and fifteen quiet
-            # minutes after the upload, the sweep took the whole set.
-            _write_dataset_meta(raw, session=sid)
-
-        count, zips = 0, []
-        for up in form.getlist("files"):
-            filename = getattr(up, "filename", None)
-            if not filename:
-                continue
-            basename = Path(filename).name
-            suffix = Path(basename).suffix.lower()
-            if suffix not in IMAGE_EXTS and suffix not in VIDEO_EXTS \
-                    and suffix not in {".zip", ".txt"}:
-                continue
-            target = raw / basename
-            with open(target, "wb") as out:
-                while chunk := await up.read(1024 * 1024):
-                    out.write(chunk)
-            if suffix == ".zip":
-                zips.append(target)
-            elif suffix in IMAGE_EXTS:
-                _upright_inplace(target)
-                count += 1
-            elif suffix in VIDEO_EXTS:
-                # No upright pass: rotation in a clip is a container-level
-                # matrix that PIL cannot see and re-encoding to bake it in is a
-                # transcode this container has no ffmpeg for. Noted rather than
-                # half-done — see the TODO at `train_job`.
-                count += 1
-
-        for z in zips:
-            try:
-                count += _safe_extract_zip(z, raw)
-            except zipfile.BadZipFile:
-                return JSONResponse({"error": f"{z.name} is not a valid zip."}, 400)
-            finally:
-                z.unlink(missing_ok=True)
-
-        if not count:
-            # Only bin the directory if this call made it — an append that
-            # happens to contain no images must leave the dataset alone.
-            if not appending:
-                shutil.rmtree(raw, ignore_errors=True)
-            return JSONResponse({"error": "No images or clips found in the upload."}, 400)
-
-        # Thumbs are built on arrival, not on first view. The upload already
-        # decoded every image once to bake the rotation in, and a set whose
-        # first open fired eighty full-resolution decodes held the sheet
-        # blank for thirty seconds — while holding the mount open, which is
-        # what kept refusing the reloads (see the overlay note). Incremental:
-        # an append stats the existing thumbs and builds only its own. Off
-        # the event loop for the same reason the commit below is `.aio()` —
-        # this is the one async handler, and a stretch of PIL decodes inline
-        # would stall every poll the page has out.
-        def _warm_thumbs() -> None:
-            for img in _dataset_images(raw):
-                try:
-                    _ensure_thumb(raw, img)
-                except Exception as exc:
-                    print(f"[upload] thumb {img.name}: {exc}")
-
-        import asyncio
-
-        await asyncio.to_thread(_warm_thumbs)
-
-        # `.aio()` rather than the blocking call every other route uses: this
-        # is the one handler that has to stay `async def`, because it awaits
-        # the multipart stream. A blocking commit here stalls the event loop
-        # for the whole web container, not just this request.
-        await volume.commit.aio()
-        # Same-named files overwrite rather than duplicate, so re-dropping the
-        # same folder is idempotent instead of doubling the dataset.
-        return JSONResponse({"dataset": dataset, "added": count, **_dataset_stats(raw)})
-
-    def _dataset_or_error(name: str):
-        """Resolve a dataset name, returning (dir, None) or (None, error dict)."""
-        try:
-            d = _dataset_dir(name)
-        except ValueError as exc:
-            return None, {"error": str(exc)}
-        if not d.is_dir():
-            return None, {"error": f"No dataset named {name!r}."}
-        return d, None
-
-    @api.post("/api/session")
-    def session_ping(payload: dict) -> dict[str, Any]:
-        """
-        The page saying it is still open, and the only thing keeping a draft
-        alive. This is also the *only* place drafts are swept now — the listing
-        used to sweep too, and moving housekeeping off the route the page waits
-        on is part of why Sets opens fast. A window left open on Generate still
-        clears out the drafts of the one you closed, because the beat fires on
-        load and then periodically wherever the app is open.
-        """
-        _reload_volume()
-        DRAFTS.mkdir(parents=True, exist_ok=True)
-        sid = str(payload.get("session") or "")
-        _touch_session(sid)
-        # Liveness follows attention, not authorship. A draft records the
-        # session that *created* it, and that id dies with its tab — so a
-        # draft reopened in a later window was being kept alive by a marker
-        # nobody was touching, and the sweep took 80 images out from under the
-        # person curating them. The beat therefore names the set on screen,
-        # and a draft you are looking at becomes yours before anything sweeps.
-        opened = str(payload.get("open") or "")
-        if sid and opened and NAME_RE.match(sid) and NAME_RE.match(opened):
-            od = DRAFTS / opened
-            if od.is_dir():
-                try:
-                    cur = json.loads((od / "dataset.json").read_text()).get("session")
-                except (OSError, json.JSONDecodeError):
-                    cur = None
-                if cur != sid:
-                    _write_dataset_meta(od, session=sid)
-        swept = _sweep_drafts()
-        volume.commit()
-        return {"ok": True, "swept": swept}
-
-    @api.post("/api/export-scene")
-    def export_scene(payload: dict) -> dict[str, Any]:
-        """
-        Queue a stitch of this scene's takes into one file.
-
-        Validated here rather than in the job for the reason `/api/gdrive`
-        gives: an empty chain is a form error, and finding it inside the job
-        costs a container start before anything can say so. What this cannot
-        check is whether the files are still on the volume — a reload settles
-        that, and the job names the take by number when one is gone.
-
-        One job id, not one per press: the export is a property of the scene on
-        screen, so a second press replaces the first rather than racing it, the
-        same way `GDRIVE_JOB` is one name.
-        """
-        takes = payload.get("takes")
-        if not isinstance(takes, list) or not takes:
-            return {"error": "Nothing to export — render a take first."}
-        if len(takes) > 64:
-            return {"error": f"{len(takes)} takes is past what one export "
-                             "handles. Clear the scene and chain fewer."}
-        rows = []
-        for t in takes:
-            if not isinstance(t, dict):
-                continue
-            name = Path(str(t.get("file") or "")).name
-            if name and OUTPUT_FILE_RE.match(name):
-                rows.append({"file": name})
-        if not rows:
-            return {"error": "The takes carried no filenames — reload and try "
-                             "again."}
-        _clear_stop(EXPORT_JOB)
-        # Seeded before the spawn, so the first poll finds a record rather than
-        # a 404 it has to read as "not started yet" — the contract every other
-        # job here keeps.
-        _publish(EXPORT_JOB, status="running", percent=0,
-                 phase=f"Queued — {len(rows)} takes", files=[], error=None)
-        export_scene_job.spawn(EXPORT_JOB, rows)
-        return {"ok": True, "job_id": EXPORT_JOB, "takes": len(rows)}
-
-    # ── the Arsenal: characters ─────────────────────────────────────────────
-
-    @api.get("/api/characters")
-    def list_characters() -> dict[str, Any]:
-        """
-        The saved cast, for the mention picker. Names and notes only — the
-        picker is typed into mid-sentence, so this must answer at popover
-        speed, and the files come one at a time off their own route when
-        somebody actually picks.
-        """
-        _reload_volume()
-        # No mkdir here either, and for the reason list_datasets carries in
-        # full: it is the write route that creates the folder, and a directory
-        # this route made but nobody committed is the one thing a concurrent
-        # reload erases underneath it. Its own reload is no protection against
-        # the next one — that lock is released before this loop starts — so
-        # the walk runs under it, or the cast reads empty for the same reason
-        # the library did.
-        out = []
-        # The whole walk, not just the first `iterdir()`: a reload landing
-        # mid-loop takes character.json with it — read as a note-less
-        # character by the `except` below, which is a lie a hand-made folder
-        # is entitled to and this is not — and takes the second `iterdir()`
-        # with it as an uncaught FileNotFoundError.
-        with _RELOAD_LOCK:
-            for d in (sorted(CHARACTERS.iterdir()) if CHARACTERS.is_dir() else []):
-                if not d.is_dir() or d.name.startswith("."):
-                    continue
-                meta = {}
-                try:
-                    meta = json.loads((d / "character.json").read_text())
-                except (OSError, json.JSONDecodeError):
-                    # A folder somebody made by hand is still a character — the
-                    # layout is the contract, and the receipt is optional the
-                    # same way a sidecar-less output still lists in the gallery.
-                    pass
-                files = sorted(f.name for f in d.iterdir()
-                               if f.is_file() and f.name != "character.json"
-                               and not f.name.startswith(".")
-                               and f.suffix.lower() != ".txt")
-                row = {"handle": d.name,
-                       "note": str(meta.get("note") or ""),
-                       "retention": str(meta.get("retention") or ""),
-                       "refs": meta.get("refs") or
-                       [{"file": f} for f in files],
-                       "files": files}
-                # Only when there is one. The key is absent rather than null
-                # for a character with no weight behind it, so the picker's
-                # rows do not all carry a field three quarters of them cannot
-                # fill.
-                if isinstance(meta.get("lora"), dict):
-                    row["lora"] = meta["lora"]
-                out.append(row)
-        return {"characters": out}
-
-    @api.post("/api/characters/{handle}")
-    def save_character(handle: str, payload: dict) -> dict[str, Any]:
-        """
-        Save one character, whole. Saving twice replaces — the folder is the
-        record and a record does not accumulate versions of itself.
-
-        Deliberate, never automatic: "it never remembers unless told" is the
-        rule, and this route is the telling.
-        """
-        try:
-            _check_name(handle)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        refs = payload.get("refs") or []
-        weight = payload.get("lora")
-        held = bool(isinstance(weight, dict) and str(weight.get("path") or ""))
-        # **A LoRA counts as something to save, and this used to refuse it.**
-        # "A character with no files is a name" was written when a character was
-        # photographs, and on a platform whose other half trains weights it
-        # refused the strongest case there is: somebody who exists as a LoRA and
-        # no reference photo. Files *or* a weight — a name with neither is still
-        # a name, and that is what this sentence was always about.
-        if (not isinstance(refs, list) or not refs) and not held:
-            return {"error": "A character with no photograph and no LoRA is a "
-                             "name, and a name is already in your head. Attach "
-                             "something first."}
-        _reload_volume()
-        d = CHARACTERS / handle
-        if d.exists():
-            shutil.rmtree(d)
-        d.mkdir(parents=True, exist_ok=True)
-        exts = {"image": "png", "audio": "wav", "video": "mp4"}
-        recorded = []
-        for i, r in enumerate(refs):
-            kind = str(r.get("kind") or "image")
-            blob = str(r.get("b64") or "")
-            if not blob or kind not in exts:
-                continue
-            name = f"{i:02d}-{kind}.{exts[kind]}"
-            try:
-                (d / name).write_bytes(base64.b64decode(blob))
-            except (ValueError, OSError) as exc:
-                shutil.rmtree(d, ignore_errors=True)
-                return {"error": f"Could not write {name}: {exc}"}
-            entry: dict[str, Any] = {"file": name, "kind": kind}
-            if r.get("note"):
-                entry["note"] = _oneline(str(r["note"]))[:SHOT_VALUE_MAX]
-            if r.get("sheet") and kind == "image":
-                entry["sheet"] = True
-            recorded.append(entry)
-        note = _oneline(str(payload.get("note") or ""))[:SHOT_VALUE_MAX]
-        # The note is its own .txt as well as a field in the receipt, because
-        # the folder has to make sense in a terminal: cat note.txt is the
-        # character, no app required.
-        if note:
-            (d / "note.txt").write_text(note + "\n")
-        # **A pointer, never the weight.** The LoRA is already a file on this
-        # volume under `loras/`, so what a character stores is the path to it —
-        # copying a 300 MB weight into every character that uses it would make
-        # saving a character cost what training one did, and two copies of one
-        # file is two things to delete. The consequence is stated rather than
-        # hidden: delete the LoRA and the character recalls without it, which
-        # `hydrate` shows as a chip that is simply not there.
-        #
-        # It is here at all because this platform's other half is a trainer. A
-        # character whose likeness *is* a trained weight is the case the whole
-        # product is for, and a record that dropped it would save the least
-        # valuable half of them.
-        lora = payload.get("lora")
-        record: dict[str, Any] = {
-            "note": note,
-            "retention": str(payload.get("retention") or ""),
-            "refs": recorded,
-            "saved": time.time(),
-        }
-        if isinstance(lora, dict) and str(lora.get("path") or ""):
-            record["lora"] = {
-                "path": str(lora["path"]),
-                "rel": str(lora.get("rel") or ""),
-                "strength": float(lora.get("strength") or 1),
-            }
-        (d / "character.json").write_text(json.dumps(record, indent=1))
-        volume.commit()
-        return {"ok": True, "handle": handle, "files": len(recorded)}
-
-    @api.get("/api/character-file/{handle}/{name}")
-    def character_file(handle: str, name: str) -> Any:
-        """One saved file, streamed off the volume — bytes by their own route,
-        never inlined into a listing the picker polls."""
-        try:
-            _check_name(handle)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        f = (CHARACTERS / handle / Path(name).name)
-        if not f.is_file():
-            _reload_volume()
-        if not f.is_file():
-            return JSONResponse({"error": f"No {name!r} for {handle!r}."},
-                                status_code=404)
-        return FileResponse(f)
-
-    @api.get("/api/datasets")
-    def list_datasets() -> dict[str, Any]:
-        """
-        Read-only, deliberately. The draft sweep used to run here too, which
-        put a JSON read per draft — and a volume commit whenever anything
-        swept — on the path the page waits on with a blank screen. The session
-        heartbeat already sweeps, fires on page load and then periodically, and
-        nobody is watching its latency; housekeeping lives there.
-        """
-        # Drafts only. /tmp is this container's own disk, so the folder cannot
-        # be taken away again — but datasets/ is on the volume, and a *mkdir
-        # nothing has committed yet* does not survive a `volume.reload()`, which
-        # any of the twenty concurrent requests on this container can run at any
-        # moment. On a fresh volume that mkdir was the only thing holding the
-        # directory up, so `iterdir()` raised FileNotFoundError the moment a
-        # reload landed under it — a 500 on the first screen of a new
-        # deployment. A read path had no business creating it in the first
-        # place; the docstring above says read-only and this line was the
-        # exception.
-        DRAFTS.mkdir(parents=True, exist_ok=True)
-        # No reload, and stats carry the committed sidecar listing — one
-        # recursive RPC for the whole library, never one per set: the per-set
-        # version ran them sequentially and put 2.4s on the route the page
-        # waits on with a blank screen. Drafts are this container's own disk
-        # and have nothing committed to overlay.
-        trees = {DATASETS: _committed_sidecar_tree(DATASETS), DRAFTS: {}}
-        # **Under the reload lock, and this is the half that guarding the
-        # `is_dir()` on its own got wrong.** Reading an absent folder as an
-        # empty library is only honest when the folder is absent; during a
-        # reload every folder is, and every page load fires this route beside
-        # one that reloads. So the 500 came back as `0 sets` over 37 saved
-        # images — the quieter of the two failures and much the worse one,
-        # because a 500 at least says look at me. The RPC stays outside the
-        # lock: it reads committed state and owes the mount nothing, and
-        # holding a lock across a network call would stall the very reloads
-        # this is waiting on.
-        with _RELOAD_LOCK:
-            out = [
-                _dataset_stats(d, trees[root].get(d.name))
-                for root in (DATASETS, DRAFTS)
-                if root.is_dir()
-                for d in sorted(root.iterdir())
-                if d.is_dir() and not d.name.startswith(".")
-            ]
-        out.sort(key=lambda r: -r["modified"])
-        _warm_set_thumbs([DATASETS / r["name"] for r in out if r["saved"]])
-        return {"datasets": out}
-
-    _WARMED = {"done": False}
-
-    def _warm_set_thumbs(sets: list[Path]) -> None:
-        """
-        Refill a cold container's thumbnails for the library, in the
-        background, most recent set first.
-
-        The upload builds a thumbnail on arrival, so a warm container never
-        pays for one on first view. A container that has just started has
-        none, and the grid would build them one tile at a time as it scrolled
-        — which was the cost that used to justify keeping them on the volume.
-        Once per container, bounded, and off the request thread: the listing
-        returns at once and the grid fills as they land.
-        """
-        if _WARMED["done"]:
-            return
-        _WARMED["done"] = True
-
-        def run() -> None:
-            budget = 600
-            for d in sets:
-                for img in _dataset_images(d):
-                    if budget <= 0:
-                        return
-                    try:
-                        _ensure_thumb(d, img)
-                    except Exception as exc:  # noqa: BLE001 — one bad file
-                        print(f"[thumbs] {d.name}/{img.name}: {exc}", flush=True)
-                    budget -= 1
-
-        threading.Thread(target=run, name="warm-thumbs", daemon=True).start()
-
-    @api.post("/api/datasets")
-    def create_dataset(payload: dict) -> dict[str, Any]:
-        """
-        New sets start as drafts. Pass `saved` to make one in the library
-        directly; the page does not, because naming a set is a decision worth
-        having images in front of you for.
-        """
-        name = str(payload.get("name") or "").strip()
-        try:
-            _check_name(name)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        _reload_volume()
-        if _name_taken(name):
-            return {"error": f"A set named {name!r} already exists."}
-        d = (DATASETS if payload.get("saved") else DRAFTS) / name
-        d.mkdir(parents=True)
-        _write_dataset_meta(
-            d,
-            trigger_word=str(payload.get("trigger_word") or ""),
-            session=str(payload.get("session") or ""),
-        )
-        volume.commit()
-        return {"ok": True, **_dataset_stats(d)}
-
-    @api.post("/api/datasets/{name}/save")
-    def save_dataset(name: str, payload: dict) -> dict[str, Any]:
-        """
-        Keep a draft: move it into datasets/, under the name you give it here.
-
-        A move and not a copy, because the draft was already the real thing —
-        the only difference it ever had was which parent it sat under, so
-        nothing has to be rebuilt and the images are never on the volume twice.
-        """
-        _reload_volume()
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        if d.parent == DATASETS:
-            return {"error": f"{name!r} is already saved."}
-        new = str(payload.get("name") or name).strip() or name
-        try:
-            _check_name(new)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        if new != name and _name_taken(new):
-            return {"error": f"A set named {new!r} already exists."}
-        DATASETS.mkdir(parents=True, exist_ok=True)
-        target = DATASETS / new
-        # Across filesystems now — a draft is on this container's disk and
-        # the library is the volume — so this is a copy and a delete, which
-        # is what "saved" costs. The derived cache follows the name.
-        shutil.move(str(d), str(target))
-        if new != name and _set_cache(d).is_dir():
-            shutil.rmtree(_set_cache(target), ignore_errors=True)
-            shutil.move(str(_set_cache(d)), str(_set_cache(target)))
-        # Drop the session: a saved set has no window it belongs to, and leaving
-        # a stale id on it would be a fact that stops being true.
-        _write_dataset_meta(target, session="")
-        volume.commit()
-        return {"ok": True, **_dataset_stats(target)}
-
-    @api.get("/api/datasets/{name}")
-    def dataset_detail(name: str) -> dict[str, Any]:
-        """
-        Image metadata only — thumbnails come from /api/thumb one at a time.
-
-        The previous version inlined every thumbnail as base64 in this response,
-        which put a 200-image dataset at ~6.6 MB before a single tile rendered
-        and rebuilt every thumbnail on every load.
-        """
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        # No reload: captions come through the committed-state overlay, and
-        # everything else in this folder is this container's own writing.
-        committed = _committed_sidecars(d)
-        overlay = _caption_overlay(d, committed)
-
-        from concurrent.futures import ThreadPoolExecutor
-
-        from PIL import Image
-
-        # The scan already paid for most dimensions: reuse its cache where the
-        # stamp still matches, and read only the headers it has not covered.
-        prints: dict[str, Any] = {}
-        try:
-            prints = json.loads((_set_cache(d) / FINGERPRINT_FILE).read_text())
-        except (OSError, json.JSONDecodeError):
-            prints = {}
-
-        def measure(img: Path) -> dict[str, Any] | None:
-            try:
-                st = img.stat()
-            except OSError:
-                return None
-            if img.suffix.lower() in VIDEO_EXTS:
-                # No dimensions and no duration: both need a demuxer, and this
-                # container has none. The tile paints its own first frame out of
-                # bytes the browser fetches anyway — the same trade the gallery
-                # card makes for a clip.
-                return {"name": img.name, "kind": "video",
-                        "caption": _caption_of(img, overlay),
-                        "bytes": st.st_size, "mtime": st.st_mtime}
-            # Pixel dimensions alongside filesize: together they are what
-            # actually informs a keep/cut call. PIL parses the header only, so
-            # this is a small read per file rather than a decode.
-            w = h = None
-            was = prints.get(img.name)
-            if (was and was.get("stamp") == [st.st_mtime_ns, st.st_size]
-                    and was.get("width")):
-                w, h = was["width"], was["height"]
-            else:
-                try:
-                    with Image.open(img) as im:
-                        # The size after orientation, which is the size the
-                        # browser draws and the size the bucketer will see.
-                        # Reporting the stored one labelled a portrait photo
-                        # "4032×3024".
-                        w, h = _upright(im).size
-                except Exception:
-                    pass
-            return {"name": img.name, "kind": "image",
-                    "caption": _caption_of(img, overlay), "bytes": st.st_size,
-                    "width": w, "height": h, "mtime": st.st_mtime}
-
-        # Images first, then clips: a mixed set is browsed by kind far more
-        # often than by name, and the filter above the grid is the same split.
-        # Measured in parallel because each file is one FUSE round trip and the
-        # sidecar beside it is a second: read one at a time on a cold volume,
-        # an 80-image set held the sheet blank for ten-plus seconds.
-        files = _dataset_images(d) + _dataset_videos(d)
-        with ThreadPoolExecutor(max_workers=min(16, max(1, len(files)))) as ex:
-            items = [r for r in ex.map(measure, files) if r]
-        return {**_dataset_stats(d, committed), "images": items}
-
-    @api.post("/api/datasets/{name}/meta")
-    def dataset_meta(name: str, payload: dict) -> dict[str, Any]:
-        _reload_volume()
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        _write_dataset_meta(d, trigger_word=str(payload.get("trigger_word") or ""))
-        volume.commit()
-        return {"ok": True, **_dataset_stats(d)}
-
-    @api.post("/api/datasets/{name}/delete")
-    def delete_dataset(name: str) -> dict[str, Any]:
-        """Delete a set and everything in it. Unlinked, not recoverable."""
-        _reload_volume()
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        shutil.rmtree(d, ignore_errors=True)
-        shutil.rmtree(_set_cache(d), ignore_errors=True)
-        _drop_legacy_trash(d.parent)
-        volume.commit()
-        return {"ok": True}
-
-    def _ensure_thumb(d: Path, img: Path) -> Path:
-        """The cached thumbnail for one image, built if the cache is stale.
-
-        Cached by mtime, so re-editing a caption never re-encodes the image
-        and replacing an image does invalidate it. On the container, never
-        the volume: derived, and the writer that has the pixels rebuilds it —
-        the upload warms it on arrival, and `_warm_set_thumbs` refills a cold
-        container's for the library in the background.
-        """
-        from PIL import Image
-
-        thumbs = _set_cache(d)
-        thumbs.mkdir(parents=True, exist_ok=True)
-        cached = thumbs / (img.stem + ".jpg")
-        if not cached.exists() or cached.stat().st_mtime < img.stat().st_mtime:
-            with Image.open(img) as im:
-                # Upright before thumbnailing: browsers rotate the original
-                # from EXIF and PIL does not, so without this the tile and
-                # the full-screen view of the same file disagreed by 90°.
-                im = _upright(im).convert("RGB")
-                im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
-                buf = io.BytesIO()
-                im.save(buf, "JPEG", quality=78, optimize=True)
-                cached.write_bytes(buf.getvalue())
-        return cached
-
-    @api.get("/api/thumb/{name}/{filename}")
-    def thumb(name: str, filename: str):
-        """One thumbnail, cached beside the dataset, served with a long
-        max-age. The cache is usually warm — the upload builds it on arrival
-        — so this is the fallback for sets that predate that."""
-        from fastapi.responses import Response
-
-        d, err = _dataset_or_error(name)
-        if err:
-            return JSONResponse(err, status_code=404)
-        img = d / Path(filename).name  # basename only — no directory escape
-        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
-            return JSONResponse({"error": "Image not found."}, status_code=404)
-
-        try:
-            data = _ensure_thumb(d, img).read_bytes()
-        except Exception as exc:
-            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
-
-        return Response(content=data, media_type="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=86400"})
-
-    @api.get("/api/image/{name}/{filename}")
-    def full_image(name: str, filename: str):
-        """The original file, for the full-size viewer. Never the thumbnail."""
-        from fastapi.responses import Response
-
-        d, err = _dataset_or_error(name)
-        if err:
-            return JSONResponse(err, status_code=404)
-        img = d / Path(filename).name
-        if img.suffix.lower() not in IMAGE_EXTS or not img.is_file():
-            return JSONResponse({"error": "Image not found."}, status_code=404)
-        mime = {"png": "image/png", "webp": "image/webp"}.get(
-            img.suffix.lower().lstrip("."), "image/jpeg")
-        return Response(content=img.read_bytes(), media_type=mime,
-                        headers={"Cache-Control": "public, max-age=86400"})
-
-    @api.get("/api/clip/{name}/{filename}")
-    def dataset_clip(name: str, filename: str):
-        """
-        One clip off a dataset, streamed.
-
-        `FileResponse` rather than the `Response(read_bytes())` its image
-        sibling uses, and the difference is the whole reason this is a second
-        route: a clip is tens of megabytes, so reading it into the container to
-        avoid holding a descriptor would trade the thing that refuses
-        `volume.reload()` for the thing that fills the container's memory. It
-        also has to answer a Range request — a `<video>` seeking to `#t=` asks
-        for the first few hundred kilobytes and nothing else, which is what
-        makes a grid of clips affordable at all.
-
-        The tiles gate this behind an IntersectionObserver for the same reason
-        the gallery does: forty clips mounting at once is forty descriptors, and
-        that is what froze the listing they were being shown in.
-        """
-        d, err = _dataset_or_error(name)
-        if err:
-            return JSONResponse(err, status_code=404)
-        clip = d / Path(filename).name  # basename only — no directory escape
-        if clip.suffix.lower() not in VIDEO_EXTS or not clip.is_file():
-            return JSONResponse({"error": "Clip not found."}, status_code=404)
-        return FileResponse(
-            str(clip),
-            media_type=MEDIA_TYPES.get(clip.suffix.lower(), "video/mp4"),
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
-
-    @api.post("/api/datasets/{name}/caption")
-    def save_caption(name: str, payload: dict) -> dict[str, Any]:
-        """One caption, saved on blur. Bulk save was how edits went missing."""
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        img = d / Path(str(payload.get("image") or "")).name
-        # A clip's caption is a `.txt` beside it, same as an image's — the
-        # sidecar layout is the contract, and a route that refused one would be
-        # a caption box on the tile that silently saved nothing.
-        if img.suffix.lower() not in IMAGE_EXTS | VIDEO_EXTS or not img.is_file():
-            return {"error": "Image not found."}
-        saved = str(payload.get("caption") or "").strip()[:MAX_CAPTION_CHARS]
-        img.with_suffix(".txt").write_text(saved)
-        volume.commit()
-        # Echoed so the page patches its own state from the reply — the
-        # response is the truth, and a refetch is a second chance to be wrong.
-        return {"ok": True, "caption": saved}
-
-    @api.post("/api/datasets/{name}/remove")
-    def remove_image(name: str, payload: dict) -> dict[str, Any]:
-        """
-        Delete an image, its caption and its thumbnail. Not recoverable.
-
-        Takes `image` or `images`, and the plural is the same route rather than
-        a second one: a duplicate review resolves fourteen files in one press,
-        and fourteen requests against a network volume is fourteen reloads,
-        fourteen commits and a listing that is briefly right about a folder
-        nobody is looking at any more. What the plural must not become is a
-        looser guard — every name still goes through the same basename and
-        extension check, and one bad name fails only itself.
-        """
-        _reload_volume()
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        asked = payload.get("images")
-        if not isinstance(asked, list):
-            asked = [payload.get("image")]
-        wanted = [str(x or "") for x in asked if str(x or "").strip()]
-        if not wanted:
-            return {"error": "No image named."}
-
-        removed, missing = [], []
-        for raw in wanted:
-            img = d / Path(raw).name
-            if img.suffix.lower() not in IMAGE_EXTS | VIDEO_EXTS or not img.is_file():
-                missing.append(Path(raw).name)
-                continue
-            for part in (img, img.with_suffix(".txt")):
-                part.unlink(missing_ok=True)
-            (_set_cache(d) / (img.stem + ".jpg")).unlink(missing_ok=True)
-            removed.append(img.name)
-        _drop_legacy_trash(d)
-
-        if not removed:
-            # Singular and plural answer the same way they always did: one name
-            # that resolves to nothing is an error, not a no-op reported as ok.
-            return {"error": "Image not found." if len(wanted) == 1
-                    else f"None of the {len(wanted)} images named are in this set."}
-        # Nothing prunes the fingerprint cache here on purpose: the next scan
-        # builds its map from the folder listing, so an entry for a file that is
-        # gone is never read, and one that comes back under the same name is
-        # caught by the (mtime, size) stamp.
-        volume.commit()
-        return {"ok": True, "removed": removed, "missing": missing,
-                **_dataset_stats(d)}
-
-    @api.get("/api/datasets/{name}/insight")
-    def dataset_insight(name: str, trigger: str = "") -> dict[str, Any]:
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        return _caption_insight(d, trigger)
-
-    @api.get("/api/datasets/{name}/duplicates")
-    def dataset_duplicates(name: str) -> dict[str, Any]:
-        """
-        The set's classified duplicate and review groups.
-
-        Its own route rather than a field on `/insight`, because the two are
-        priced differently: insight reads a few hundred `.txt` files and is
-        refreshed on every caption edit, while this decodes every image in the
-        folder the first time it runs. Folding it in would make saving one
-        caption cost a full rescan.
-        """
-        _reload_volume()
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        report = _duplicate_groups(d, SCAN_BUDGET_S)
-        # Fingerprints are derived data, like thumbnails — but unlike a
-        # thumbnail a rescan costs a decode of the whole folder, so the one
-        # commit per scan is worth paying and the per-file one is not.
-        if report.pop("_wrote", False):
-            volume.commit()
-        return report
-
-    @api.post("/api/datasets/{name}/prepend-trigger")
-    def prepend_trigger(name: str, payload: dict) -> dict[str, Any]:
-        """
-        Put the trigger word at the front of every caption that lacks it.
-
-        For imported datasets: your own .txt files are used verbatim, so a
-        caption without the trigger word trains a LoRA the trigger cannot
-        summon. This fixes that without discarding the text.
-
-        Idempotent by design — the test is `startswith`, not `in`. A substring
-        test would false-positive on short triggers (a "cat" LoRA would skip
-        "a cat sitting"), and running this twice must never double the prefix.
-        """
-        trigger = str(payload.get("trigger_word") or "").strip()
-        if not trigger:
-            return {"error": "A trigger word is required."}
-
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        overlay = _caption_overlay(d)
-
-        changed = 0
-        for img in _dataset_images(d):
-            txt = img.with_suffix(".txt")
-            cur = _caption_of(img, overlay)
-            if not cur:
-                new = trigger
-            else:
-                # Composed from the caption with the trigger stripped, not
-                # tested with a bare `startswith`: exact-case startswith let
-                # "Chgl, …" collect a second "chgl, " on top, and a sidecar the
-                # captioner had already doubled kept every copy. Building the
-                # canonical form heals both, and skipping when it matches is
-                # what keeps this idempotent.
-                new = f"{trigger}, {_strip_leading_trigger(cur, trigger)}".rstrip(", ")
-            if new == cur:
-                continue
-            txt.write_text(new[:MAX_CAPTION_CHARS])
-            changed += 1
-
-        _write_dataset_meta(d, trigger_word=trigger)
-        volume.commit()
-        return {"ok": True, "changed": changed}
-
-    @api.post("/api/caption")
-    def caption(payload: dict) -> dict[str, Any]:
-        return _submit_caption(payload)
-
-    # ---- caption presets and models ---------------------------------------
-    #
-    # Both live in the `config` Dict beside the HF token, because they are the
-    # same kind of thing: something typed into the UI once that every later
-    # session should still have. The catalogue is not the model here — a
-    # captioner is pulled into the HF cache on first use, not downloaded under
-    # the gear — so these are rows in a menu, not entries with a `dest` path.
-
-    @api.post("/api/caption/presets")
-    def save_caption_preset(payload: dict) -> dict[str, Any]:
-        return _save_caption_preset(payload)
-
-    @api.post("/api/caption/presets/delete")
-    def delete_caption_preset(payload: dict) -> dict[str, Any]:
-        return _delete_caption_preset(payload)
-
-    @api.post("/api/caption/models")
-    def add_caption_model(payload: dict) -> dict[str, Any]:
-        return _add_caption_model(payload)
-
-    @api.post("/api/caption/models/delete")
-    def delete_caption_model(payload: dict) -> dict[str, Any]:
-        return _delete_caption_model(payload)
-
-    @api.post("/api/datasets/{name}/replace")
-    def replace_in_captions(name: str, payload: dict) -> dict[str, Any]:
-        """
-        Find & replace across caption sidecars.
-
-        The page sends the names in its current filtered view, so the filters
-        are the targeting tool — "Uncaptioned" can never match anything, and a
-        search narrows the blast radius to what is on screen. No names means
-        the whole set, which is what an unfiltered view shows anyway.
-        """
-        find = str(payload.get("find") or "")
-        if not find:
-            return {"error": "Nothing to find."}
-        replace = str(payload.get("replace") or "")
-        match_case = bool(payload.get("match_case"))
-
-        d, err = _dataset_or_error(name)
-        if err:
-            return err
-        # Read through the overlay, never the bare mount. This is the route
-        # that turned a stale view into committed data: it substituted in old
-        # text and wrote the result back over a caption run's output, which
-        # is why a replace could need three passes and still miss instances.
-        overlay = _caption_overlay(d)
-
-        wanted = payload.get("images")
-        names = {str(n) for n in wanted} if isinstance(wanted, list) else None
-        # A regex only for the case fold; the find string itself is literal.
-        # The lambda replacement keeps backslashes in the replacement literal
-        # too — re.sub would otherwise read "\1" as a group reference.
-        pat = re.compile(re.escape(find), 0 if match_case else re.IGNORECASE)
-        changed: dict[str, str] = {}
-        # Clips too: their captions are the same sidecars, and a replace that
-        # skipped them would be the caption box's silent no-op one route over.
-        for img in _dataset_images(d) + _dataset_videos(d):
-            if names is not None and img.name not in names:
-                continue
-            txt = img.with_suffix(".txt")
-            if txt.name in overlay:
-                cur = overlay[txt.name]
-            elif txt.exists():
-                cur = txt.read_text()
-            else:
-                continue
-            new = pat.sub(lambda _m: replace, cur)
-            if new != cur:
-                final = new.strip()[:MAX_CAPTION_CHARS]
-                txt.write_text(final)
-                changed[img.name] = final
-        volume.commit()
-        # The new text rides the reply so the page patches its state directly
-        # instead of refetching — see save_caption.
-        return {"ok": True, "changed": len(changed), "captions": changed}
-
-    # ---- training sessions ------------------------------------------------
-    #
-    # A card, not a page. The run used to be a console under the contact sheet,
-    # which made "one at a time" a property of the UI rather than of the
-    # backend — `train_job` shares nothing between runs and never did. What
-    # these five routes add is the record that outlives the run: the setup you
-    # can re-run, edit or delete, whether or not anything is training now.
-
-    def _session_new() -> dict[str, Any]:
-        return {
-            "id": f"s{time.strftime('%Y%m%d%H%M%S')}{os.urandom(2).hex()}",
-            "created": time.time(), "runs": 0, "job_id": "",
-        }
-
-    def _session_fields(payload: dict) -> dict[str, Any]:
-        """
-        The half of a session the form owns.
-
-        Deliberately not validated the way starting one is: a session exists to
-        be filled in over more than one sitting — picking "a new set" from the
-        dataset menu saves the card and walks away to go make the set — so a
-        half-written record is the normal state rather than an error. The
-        refusals live on `start`, which is the moment the answers have to be
-        real.
-        """
-        return {
-            "lora_name": str(payload.get("lora_name") or "").strip()[:64],
-            "trigger_word": str(payload.get("trigger_word") or "").strip()[:64],
-            "dataset": str(payload.get("dataset") or "").strip()[:64],
-            "params": _train_params(payload.get("params") or {}),
-        }
-
-    @api.get("/api/sessions")
-    def list_sessions() -> dict[str, Any]:
-        """
-        Every card, with whatever its run is doing. One Dict read plus one per
-        live job, and no volume touch at all — this is polled while a run is on,
-        so the image and video counts a card shows are joined on the page out of
-        the dataset listing it already holds rather than re-walked here.
-
-        Bounded, and the bound is stated. Nothing sweeps a session — a card is
-        the setup you re-run from, so it is deleted by hand or not at all — and
-        this is polled every couple of seconds, which is exactly the shape the
-        "keep the polled thing small" rule is about. The gallery's answer is the
-        one taken here: serve the newest, say how many there are, and let the
-        page say "showing 100 of 140" rather than quietly stopping at a hundred.
-        """
-        rows = _sessions_all()
-        return {"sessions": [_session_view(r) for r in rows[:SESSION_LIST_MAX]],
-                "total": len(rows)}
-
-    @api.post("/api/sessions")
-    def put_session(payload: dict) -> dict[str, Any]:
-        """Create a card, or save an edit to one. `id` decides which."""
-        sid = str(payload.get("id") or "").strip()
-        rec = _session_get(sid) if sid else None
-        if sid and not rec:
-            return {"error": "That session is gone — it was deleted in another window."}
-        if rec and _session_view(rec).get("status") in ("running", "queued"):
-            # Editing the dials under a run would put the card and the process
-            # out of step with no way to tell which one is the truth.
-            return {"error": "That run is going. Stop it before editing the setup."}
-        try:
-            fields = _session_fields(payload)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        base = rec or _session_new()
-        return {"ok": True, "session": _session_view(_session_put({**base, **fields}))}
-
-    @api.post("/api/sessions/{sid}/start")
-    def start_session(sid: str) -> dict[str, Any]:
-        """
-        Spawn the run this card describes.
-
-        Idempotent against a double press the way `/api/download` is: a card
-        already running answers with the job it is already running rather than
-        starting a second one against the same output folder.
-        """
-        rec = _session_get(sid)
-        if not rec:
-            return {"error": "That session is gone — it was deleted in another window."}
-        view = _session_view(rec)
-        if view.get("status") in ("running", "queued"):
-            return {"ok": True, "job_id": rec.get("job_id"), "already": True,
-                    "session": view}
-
-        started = _start_training(
-            dataset=str(rec.get("dataset") or ""),
-            lora_name=str(rec.get("lora_name") or ""),
-            trigger_word=str(rec.get("trigger_word") or ""),
-            params=rec.get("params") or {}, session=sid,
-        )
-        if started.get("error"):
-            return started
-        rec = _session_put({**rec, "job_id": started["job_id"],
-                            "runs": int(rec.get("runs") or 0) + 1})
-        return {"ok": True, "job_id": started["job_id"], "session": _session_view(rec)}
-
-    @api.post("/api/sessions/{sid}/stop")
-    def stop_session(sid: str) -> dict[str, Any]:
-        """
-        Cooperative, and the card stays. Checkpoints already written survive,
-        which is what makes stopping a choice rather than a loss — and the run
-        it stops is left on the card with the progress it reached, because that
-        is what you re-run from.
-        """
-        rec = _session_get(sid)
-        if not rec:
-            return {"error": "That session is gone — it was deleted in another window."}
-        job_id = str(rec.get("job_id") or "")
-        if job_id:
-            _request_stop(job_id)
-        return {"ok": True, "session": _session_view(rec)}
-
-    @api.post("/api/sessions/{sid}/delete")
-    def delete_session(sid: str) -> dict[str, Any]:
-        """
-        The card goes. Anything it started is asked to stop on the way out —
-        a deleted card that leaves a GPU container running is the one outcome
-        nobody would predict from the word delete.
-
-        Nothing on the volume is touched: the checkpoints under loras/ are the
-        run's output, not the card's, and they are deleted where every other
-        LoRA is deleted.
-        """
-        rec = _session_get(sid)
-        if not rec:
-            return {"ok": True, "gone": True}
-        job_id = str(rec.get("job_id") or "")
-        if job_id and _session_view(rec).get("status") in ("running", "queued"):
-            _request_stop(job_id)
-        _session_drop(sid)
-        return {"ok": True}
-
-    @api.post("/api/train")
-    def train(payload: dict) -> dict[str, Any]:
-        """
-        Start a run in one call: make the card, then start it.
-
-        Kept because a training run is startable without a page, and folded onto
-        the session routes rather than kept beside them — the rule against a
-        second way to do the first thing, applied to the one route that would
-        otherwise have its own spawn, its own validation and its own idea of
-        what a run is.
-        """
-        try:
-            fields = _session_fields({**payload, "params": payload.get("params") or payload})
-        except ValueError as exc:
-            return {"error": str(exc)}
-        rec = _session_put({**_session_new(), **fields})
-        started = start_session(rec["id"])
-        if started.get("error"):
-            _session_drop(rec["id"])
-        return started
-
-    @api.post("/api/compile")
-    def compile_prompt(payload: dict) -> dict[str, Any]:
-        """
-        What the encoder would be given, without renting anything to find out.
-
-        A take is two to three minutes, so before this every question about the
-        format — where does the camera direction go, does the score line appear,
-        did the dialogue survive its commas — was answered at that price. It is
-        the same compiler the run uses, called from the same web container: a
-        preview with its own implementation is a preview that can disagree with
-        what runs, which is worse than no preview at all.
-
-        No volume reload and no base64. This is re-fetched on every pill and
-        every keystroke, and what the compiler needs from a reference is only
-        that there is one — the pictures themselves would make a route polled
-        four times a second carry megabytes.
-        """
-        typed = str(payload.get("prompt") or "").strip()
-        try:
-            shot = _validate_shot(payload.get("shot"))
-            n_refs = max(0, min(MAX_H3_REFS, int(payload.get("references") or 0)))
-            n_vids = max(0, min(MAX_H3_REF_VIDEOS, int(payload.get("ref_videos") or 0)))
-            n_auds = max(0, min(MAX_H3_REF_AUDIOS, int(payload.get("ref_audios") or 0)))
-            roles = _validate_ref_roles(payload.get("ref_roles"), n_refs)
-        except (TypeError, ValueError) as exc:
-            return {"error": str(exc)}
-
-        if str(payload.get("kind") or "video") == "image":
-            return {"prompt": _compile_image_prompt(typed, shot)}
-        d = VIDEO_MODELS["h3"]["defaults"]
-        # `or` rather than a `not in (None, "")` check, and deliberately: zero
-        # seconds is a still, and `/api/video` compiles a still's document at
-        # this same default because a still is a frame *out of* a shot. So zero
-        # falling through to the default here is what keeps the preview and the
-        # run saying the same thing — and a later edit "fixing" this to pass 0
-        # through would give the composer a document the run does not use, which
-        # is worse than no preview at all.
-        try:
-            seconds = float(payload.get("seconds") or d["seconds"])
-        except (TypeError, ValueError):
-            seconds = float(d["seconds"])
-        # The scene is validated here rather than only on the way to the GPU,
-        # because this route is what the composer polls on every keystroke: a
-        # handle nobody defined should be a sentence under the timeline the
-        # moment it is typed, not a refusal discovered at Generate.
-        try:
-            scene = _validate_scene(payload.get("scene"), n_refs=n_refs,
-                                    n_vids=n_vids, n_auds=n_auds,
-                                    seconds=seconds)
-        except (TypeError, ValueError) as exc:
-            return {"error": str(exc)}
-        return {"prompt": _compile_h3_prompt(
-            typed=typed, pills=shot, seconds=seconds, roles=roles, scene=scene,
-            task=_h3_task(payload.get("first_frame"), payload.get("last_frame"),
-                          n_refs, n_vids, n_auds),
-        )}
-
-    @api.post("/api/generate")
-    def generate(payload: dict) -> dict[str, Any]:
-        return _submit_still(payload)
-
-    @api.post("/api/video")
-    def video(payload: dict) -> dict[str, Any]:
-        return _submit_video(payload)
-
-    @api.get("/api/gallery")
-    def gallery(before: float = 0.0, limit: int = 200) -> dict[str, Any]:
-        """
-        A page of everything on the volume, newest first — no job id required.
-
-        `stale` used to mean "this listing may be missing the run you just
-        made". It cannot mean that any more: `_output_entries` asks Modal
-        rather than the mount, so the *set* is right whether or not a reload
-        landed. What a refused reload still costs is the mount — the sidecars
-        read below, and the covers this reply is about to send the page after.
-        So `stale` now means: **the mount is behind this listing, so the newest
-        items may be thin and their pictures may not resolve yet.**
-
-        Narrower, and still worth reporting. It is the difference between
-        "nothing new" and "not looked at", and the client's cue to come back
-        once it has stopped loading pictures. Not an error, and not something
-        to apologise for on screen.
-
-        `limit` is clamped rather than trusted: the sidecar read is per item,
-        so an unbounded page is an unbounded number of file reads on a route
-        anyone can call.
-
-        No reload, and no `_reload_insist` sleeping in the handler: every part
-        of this listing — the entry set, the mtimes, the sidecars — now comes
-        off committed state by RPC, and the covers the page asks for next are
-        served off the spool the same way. `stale` is kept in the reply for
-        the page that still reads it, and it is now always false, because
-        there is no mount left in this path to be behind.
-        """
-        items, total, legacy = _gallery(limit=max(1, min(limit, 500)), before=before)
-        out: dict[str, Any] = {"items": items, "total": total, "stale": False}
-        if legacy:
-            # Job folders from before the record lived inside the file. They
-            # are moved into place by a one-time job, started here on first
-            # sight; until it lands they are not results the page can address,
-            # so the reply says how many are still on their way.
-            out["migrating"] = {"job_id": _start_migration(), "pending": len(legacy)}
-        return out
-
-    @api.get("/api/file/{name}")
-    def output_file(name: str):
-        """
-        Stream one result off the volume, image or video.
-
-        Deliberately not base64 in a JSON body: inlining is what made a gallery
-        impossible, since a page of stills or a clip with its soundtrack is tens
-        of megabytes of JSON before anything renders, and a <video> cannot seek
-        until all of it has arrived. The route that did it that way is gone —
-        this is now the only way a result's bytes reach the page, from the canvas
-        the moment a run finishes through to the gallery.
-
-        Matching the whole filename, not its stem: `Path("../../x").stem` is
-        "x", which passes NAME_RE while the joined path still escapes outputs/.
-        The separators have to be visible to the regex to be rejected. One
-        segment: outputs/ is flat and the name carries its run.
-
-        **Served off the spool, never the mount.** The mount needs a reload to
-        see a fresh run, reload is refusable — by this route's own descriptors
-        most of all — and every "broken picture on a run that is sitting on
-        the volume" traced back to that loop. The spool pulls committed bytes
-        by RPC, which no open file can refuse, so a render that has finished
-        is a render this route can serve, first ask included. It also puts a
-        clip's range requests on local disk: the browser re-asking for byte
-        ranges used to be a descriptor on /workspace per ask.
-        """
-        return _output_response(name)
-
-    @api.get("/api/cover/{name}")
-    def output_cover(name: str):
-        """
-        One gallery cover: the same result at 320px, and never a descriptor.
-
-        The grid had no thumbnail at all — a 232px cell was served the full
-        1024px PNG, and the drawer, the mobile grid at 104px and the 36px
-        last-generation button all did the same. That is roughly 37x the bytes
-        it needs, but the bytes were the cheaper half of the cost.
-
-        The expensive half is that `/api/file` answers with `FileResponse`,
-        which holds a descriptor open on /workspace for the length of the
-        transfer *to the client*. Reading the bytes into memory and answering
-        with `Response` closes the descriptor before anything goes on the
-        wire, which is the entire point of this route existing rather than a
-        `?w=320` on the other one.
-
-        **Derived, so it lives on this container and nowhere else.** A copy
-        used to be written onto the volume "for the next container", which
-        was reasoning correctly about a web container that died a minute
-        after the last request. With the scaledown window at twenty minutes
-        the spool is warm for a session, and a cover rebuilt after a genuine
-        cold start is the honest price of not keeping caches on the volume.
-
-        Named `/api/cover/...` rather than `/api/thumb/...` because the dataset
-        thumbnail route is two segments: FastAPI resolves by registration
-        order, and a gallery cover reaching that handler 404s as "Image not
-        found" for a dataset that was never named.
-        """
-        from fastapi.responses import Response
-        from PIL import Image
-
-        if not OUTPUT_FILE_RE.match(name):
-            return JSONResponse({"error": "Invalid name."}, status_code=400)
-        if name.lower().endswith(".mp4"):
-            # Not a fallthrough to the clip. A cover route that sometimes
-            # answers with five megabytes of mp4 is the thing it exists to
-            # prevent; the card falls back to a gated <video>, which paints a
-            # frame from bytes it had to fetch anyway once it is on screen.
-            return JSONResponse(
-                {"error": "No cover for a clip: web_image has no ffmpeg."},
-                status_code=404)
-
-        # The size is in the cache name, so raising the constant invalidates
-        # by construction. No mtime check beside it: a finished file never
-        # changes.
-        local = SPOOL / "outputs" / ".covers" / f"{name}@{THUMB_PX}.jpg"
-        try:
-            if local.is_file():
-                os.utime(local)
-                data = local.read_bytes()
-            else:
-                src = _spooled(f"outputs/{name}")
-                if src is None:
-                    # The mount as last resort, same two-step as /api/file.
-                    src = OUTPUTS / name
-                    if not src.is_file():
-                        _reload_volume()
-                        if not _sizes_on_disk([src])[src]:
-                            return JSONResponse({"error": "Not found."},
-                                                status_code=404)
-                with Image.open(src) as im:
-                    # Upright even for our own renders: the viewer shows this
-                    # same file at full size and browsers rotate from EXIF
-                    # while PIL does not, so without this the card and the
-                    # full-screen view of one file disagree by 90°.
-                    im = _upright(im).convert("RGB")
-                    im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
-                    buf = io.BytesIO()
-                    im.save(buf, "JPEG", quality=78, optimize=True)
-                data = buf.getvalue()
-                local.parent.mkdir(parents=True, exist_ok=True)
-                local.write_bytes(data)
-        except Exception as exc:
-            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
-
-        # A day rather than /api/file's hour: a finished file never changes,
-        # so a cover derived from one is immutable in a way a dataset image —
-        # which you can replace in place — is not.
-        return Response(content=data, media_type="image/jpeg",
-                        headers={"Cache-Control": "private, max-age=86400"})
-
-    @api.post("/api/outputs/{job_id}/delete")
-    def delete_output(job_id: str) -> dict[str, Any]:
-        """Delete a run and every file of it — the results and the motion
-        context beside them. Unlinked, not recoverable."""
-        if not NAME_RE.match(job_id):
-            return {"error": "Invalid job_id."}
-        # Insisting, because the card you are most likely to delete on impulse
-        # is the one that just appeared, and a refused reload turns that into
-        # "Not found" about files that are sitting on the volume.
-        _reload_insist()
-        files = _group_files(job_id)
-        if not files:
-            return {"error": "Not found."}
-        for name in files:
-            (OUTPUTS / name).unlink(missing_ok=True)
-            _forget_listed(name, OUTPUTS)
-        _forget_output(job_id)
-        volume.commit()
-        return {"ok": True, "removed": len(files)}
-
-    @api.post("/api/outputs/purge")
-    def purge_outputs(payload: dict) -> dict[str, Any]:
-        """
-        Delete many runs in one request.
-
-        Two guards, because deletion here does not go anywhere first.
-
-        `confirm` has to be in the body, so a bare POST to a guessed URL cannot
-        fire it. And the caller names the runs rather than describing them:
-        re-deriving the set here from a filter would delete whatever matched at
-        request time, which is not the set the user was shown a count of and
-        agreed to. A run that finished during the confirm dialog would go
-        without ever having been on screen. The list is the agreement.
-        """
-        if payload.get("confirm") != "delete":
-            return {"error": "Unconfirmed."}
-
-        job_ids = payload.get("job_ids")
-        if not isinstance(job_ids, list) or not job_ids:
-            return {"error": "Nothing to delete."}
-        if any(not isinstance(j, str) or not NAME_RE.match(j) for j in job_ids):
-            return {"error": "Invalid job_id."}
-
-        _reload_insist()
-        removed, missing = 0, []
-        for job_id in dict.fromkeys(job_ids):
-            files = _group_files(job_id)
-            if files:
-                for name in files:
-                    (OUTPUTS / name).unlink(missing_ok=True)
-                    _forget_listed(name, OUTPUTS)
-                _forget_output(job_id)
-                removed += 1
-            else:
-                missing.append(job_id)
-
-        _drop_legacy_trash(OUTPUTS)
-        volume.commit()
-        # Named, not just subtracted from the count. The list is the agreement,
-        # so a run in it that could not be found is the one thing this route
-        # owes an answer about — and the cause is nearly always a view too old
-        # to hold it, which is a different problem from a bad id.
-        return {"ok": True, "removed": removed,
-                **({"missing": missing} if missing else {})}
-
-    @api.get("/api/outputs/zip")
-    def zip_outputs(ids: str = ""):
-        """
-        One zip of the named results, built from committed state on local
-        disk and streamed from there.
-
-        A GET, because a download has to be a navigable URL — an <a> click is
-        the one gesture every browser turns into a saved file without holding
-        the bytes in page memory, which a fetch-into-blob would and a
-        selection of clips would blow through. ZIP_STORED, because every
-        member is already compressed media and deflating it again is CPU
-        spent making the file marginally larger. Built
-        from `_spooled`, so nothing here opens the mount and a slow selection
-        cannot refuse anyone's reload.
-        """
-        from fastapi.responses import FileResponse
-        from starlette.background import BackgroundTask
-
-        job_ids = [j for j in ids.split(",") if j]
-        if not job_ids or len(job_ids) > 500:
-            return JSONResponse({"error": "ids is a comma-separated list of "
-                                          "job ids (at most 500)."},
-                                status_code=400)
-        if any(not NAME_RE.match(j) for j in job_ids):
-            return JSONResponse({"error": "Invalid job_id."}, status_code=400)
-
-        entries, _legacy = _output_entries()
-        picked = [(j, sorted(n for n, _ in entries.get(j, [])))
-                  for j in dict.fromkeys(job_ids)]
-        if not any(files for _, files in picked):
-            return JSONResponse({"error": "None of those results were "
-                                          "found."}, status_code=404)
-
-        fd, tmp = tempfile.mkstemp(suffix=".zip", prefix="visionary-sel-")
-        os.close(fd)
-        out = Path(tmp)
-        n = 0
-        try:
-            with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
-                for _job_id, files_ in picked:
-                    for fname in files_:
-                        src = _spooled(f"outputs/{fname}")
-                        if src is not None:
-                            # Its own name: the run is in it, so two runs'
-                            # files can no longer both be called 00.png.
-                            zf.write(src, fname)
-                            n += 1
-        except Exception:
-            out.unlink(missing_ok=True)
-            raise
-        return FileResponse(
-            str(out), media_type="application/zip",
-            filename=f"visionary-{n}-files.zip",
-            # Unlinked once the response has streamed. It lives on /tmp, so
-            # the open descriptor refuses nothing while it does.
-            background=BackgroundTask(out.unlink, missing_ok=True),
-        )
-
-    # There was a GET /api/outputs/{job_id} here that returned every PNG of a run
-    # base64'd into one JSON body. It is gone rather than left unused: /api/file
-    # already serves the same bytes, streamed and cacheable, and it is what the
-    # gallery, the drawer and now the canvas all use. Two routes for one job,
-    # where the second one is strictly slower, is the shape a future change
-    # picks the wrong half of.
-
-    # ── Playground ─────────────────────────────────────────────────────────
-
-    @api.post("/api/playground/seed")
-    def playground_seed(payload: dict) -> dict[str, Any]:
-        return _playground_seed(payload)
-
-    @api.post("/api/playground/run")
-    def playground_run(payload: dict) -> dict[str, Any]:
-        return _playground_submit(payload)
-
-    @api.post("/api/playground/restart")
-    def playground_restart(payload: dict) -> dict[str, Any]:
-        return _playground_restart(payload)
-
-    @api.get("/api/playground/nodes")
-    def playground_nodes():
-        return _playground_nodes()
-
-    @api.post("/api/playground/refresh")
-    def playground_refresh() -> dict[str, Any]:
-        return _playground_refresh()
-
-    @api.get("/api/playground/packs")
-    def playground_packs() -> dict[str, Any]:
-        return _playground_packs()
-
-    @api.post("/api/playground/packs")
-    def playground_pack_install(payload: dict) -> dict[str, Any]:
-        return _playground_pack_install(payload)
-
-    @api.post("/api/playground/packs/delete")
-    def playground_pack_delete(payload: dict) -> dict[str, Any]:
-        return _playground_pack_delete(payload)
-
-    @api.get("/api/workflows")
-    def list_workflows() -> dict[str, Any]:
-        return _list_workflows()
-
-    @api.get("/api/workflows/{name}")
-    def get_workflow(name: str) -> dict[str, Any]:
-        return _get_workflow(name)
-
-    @api.post("/api/workflows/{name}")
-    def save_workflow(name: str, payload: dict) -> dict[str, Any]:
-        return _save_workflow(name, payload)
-
-    @api.post("/api/workflows/{name}/delete")
-    def delete_workflow(name: str) -> dict[str, Any]:
-        return _delete_workflow(name)
-
-    # ── the storyboards ───────────────────────────────────────────────
-    # A board travels whole, both ways. There is no per-panel route because
-    # the page holds the sequence and order is the meaning — a panel saved on
-    # its own would be a panel with no "and then". Several boards, one folder
-    # each, because a scene you put down on Tuesday is picked up on Friday
-    # beside the one you started on Thursday.
-    def _storyboard_dir(name: str) -> Path:
-        return STORYBOARD / _storyboard_name(name)
-
-    def _read_board(path: Path) -> dict[str, Any] | None:
-        try:
-            raw = json.loads(path.read_text())
-        except (OSError, ValueError):
-            return None
-        return raw if isinstance(raw, dict) else None
-
-    @api.get("/api/storyboards")
-    def list_storyboards() -> dict[str, Any]:
-        if not STORYBOARD.is_dir():
-            _reload_volume()
-        rows: list[dict[str, Any]] = []
-        # And under the lock for the walk, which is the part the reload above
-        # does not cover: it has released the lock by now, and a board.json
-        # that disappears mid-loop is read as a board with no panels — the
-        # same silent empty the Sets listing was giving.
-        with _RELOAD_LOCK:
-            for d in (sorted(STORYBOARD.iterdir()) if STORYBOARD.is_dir() else []):
-                if not d.is_dir() or not STORYBOARD_NAME_RE.fullmatch(d.name):
-                    continue
-                raw = _read_board(d / "board.json")
-                if raw is None:
-                    continue
-                panels = raw.get("panels") or []
-                # The first picture is the board's face in the list — the same
-                # pointer the panel holds, resolved by the page.
-                cover = next((p.get("picture") for p in panels
-                              if isinstance(p, dict) and p.get("picture")), None)
-                rows.append({"name": d.name, "title": str(raw.get("title") or ""),
-                             "panels": len(panels), "updated": raw.get("updated"),
-                             "cover": cover})
-        rows.sort(key=lambda r: -float(r["updated"] or 0))
-        return {"boards": rows}
-
-    @api.get("/api/storyboard/{name}")
-    def get_storyboard(name: str) -> dict[str, Any]:
-        try:
-            path = _storyboard_dir(name) / "board.json"
-        except ValueError as exc:
-            return {"error": str(exc)}
-        if not path.is_file():
-            _reload_volume()
-        if not path.is_file():
-            return {"error": f"No storyboard called {name!r}."}
-        raw = _read_board(path)
-        if raw is None:
-            return {"error": f"{path} is not valid JSON."}
-        raw["name"] = name
-        return {"board": raw}
-
-    @api.post("/api/storyboard/{name}")
-    def save_storyboard(name: str, payload: dict) -> dict[str, Any]:
-        try:
-            folder = _storyboard_dir(name)
-            board = _validate_storyboard(payload.get("board"))
-        except ValueError as exc:
-            return {"error": str(exc)}
-        board["updated"] = time.time()
-        folder.mkdir(parents=True, exist_ok=True)
-        # Staged then renamed, the weights rule: a reader arriving mid-write
-        # sees the last whole document rather than half of this one.
-        tmp = folder / "board.json.part"
-        tmp.write_text(json.dumps(board, indent=2))
-        tmp.replace(folder / "board.json")
-        volume.commit()
-        return {"ok": True, "updated": board["updated"]}
-
-    @api.post("/api/storyboard/{name}/delete")
-    def delete_storyboard(name: str) -> dict[str, Any]:
-        """The folder, whole: the board and every picture uploaded into it.
-        Renders it pointed at are in outputs/ and are not touched — the
-        confirm on the page says exactly that."""
-        try:
-            folder = _storyboard_dir(name)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        if not folder.is_dir():
-            _reload_volume()
-        if not folder.is_dir():
-            return {"error": f"No storyboard called {name!r}."}
-        shutil.rmtree(folder)
-        volume.commit()
-        return {"ok": True}
-
-    @api.post("/api/storyboard/{name}/upload")
-    async def upload_storyboard(name: str, request: Request) -> JSONResponse:
-        """
-        Pictures dropped onto the board, into its own folder.
-
-        Uprighted and capped on arrival, once, for the reason
-        `STORYBOARD_MAX_SIDE` gives; re-encoded as PNG when the source is a
-        format nothing downstream reads (avif, bmp). Names are minted here
-        rather than kept, because two drops of `IMG_0001.jpg` from two
-        cameras are two pictures.
-        """
-        from PIL import Image, ImageOps
-
-        try:
-            folder = _storyboard_dir(name)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, 400)
-        folder.mkdir(parents=True, exist_ok=True)
-        form = await request.form()
-        out: list[dict[str, Any]] = []
-        stamp = f"{int(time.time() * 1000):x}"
-        for n, up in enumerate(form.getlist("files")):
-            filename = getattr(up, "filename", None)
-            if not filename:
-                continue
-            suffix = Path(filename).suffix.lower()
-            if suffix not in IMAGE_EXTS:
-                continue
-            ext = suffix if suffix in (".png", ".jpg", ".jpeg", ".webp") else ".png"
-            target = folder / f"{stamp}{n:02d}{ext}"
-            tmp = target.with_name(target.name + ".part")
-            with open(tmp, "wb") as fh:
-                while chunk := await up.read(1024 * 1024):
-                    fh.write(chunk)
-            try:
-                with Image.open(tmp) as im:
-                    im = ImageOps.exif_transpose(im)
-                    im.thumbnail((STORYBOARD_MAX_SIDE, STORYBOARD_MAX_SIDE))
-                    if ext in (".jpg", ".jpeg") and im.mode not in ("RGB", "L"):
-                        im = im.convert("RGB")
-                    im.save(target)
-                    w, h = im.size
-            except Exception as exc:
-                tmp.unlink(missing_ok=True)
-                return JSONResponse(
-                    {"error": f"{filename} is not a picture this can read: "
-                              f"{type(exc).__name__}: {exc}"}, 400)
-            tmp.unlink(missing_ok=True)
-            out.append({"file": target.name, "width": w, "height": h})
-        volume.commit()
-        return JSONResponse({"files": out})
-
-    @api.get("/api/storyboard/{name}/file/{file}")
-    def storyboard_file(name: str, file: str):
-        """One uploaded picture, off the spool like a render — see
-        `output_file` for why the spool and not the mount."""
-        try:
-            folder = _storyboard_dir(name)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        if not STORYBOARD_FILE_RE.match(file):
-            return JSONResponse({"error": "Invalid name."}, status_code=400)
-        path = _spooled(f"storyboard/{folder.name}/{file}")
-        if path is None:
-            mounted = folder / file
-            if not mounted.is_file():
-                _reload_volume()
-            if not mounted.is_file():
-                return JSONResponse({"error": "Not found."}, status_code=404)
-            path = mounted
-        return FileResponse(
-            str(path),
-            media_type=MEDIA_TYPES.get(path.suffix.lower(), "image/png"),
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
-
-    @api.get("/api/status/{job_id}")
-    def status(job_id: str) -> dict[str, Any]:
-        """
-        There was a "warm reload" here — the poll that first saw "completed"
-        pulled the volume forward so the canvas's first /api/file would not
-        miss, insisting through refusals with up to half a second of sleep on
-        the hot poll path. Retired with the mount, not just moved: the pixels
-        are served off the spool from committed state now, so the first ask
-        for a fresh run cannot miss, and nothing in the serving path needs a
-        reload to happen at all.
-        """
-        try:
-            return jobs.get(job_id) or {"status": "unknown"}
-        except Exception as exc:
-            return {"status": "unknown", "error": str(exc)}
-
-    @api.post("/api/stop/{job_id}")
-    def stop(job_id: str) -> dict[str, Any]:
-        _request_stop(job_id)
-        return {"ok": True}
-
-    return api
-
-
-# --------------------------------------------------------------------------
-# Job API — a client's seam, behind proxy auth
+# Job API — the seam, and since the front end went, the whole surface
 #
 # Phase 7 keeps three things on Modal: training, inference and the stored
 # weights. This is how a client that is not a browser reaches them: submit a
 # still, wait for the job record to change, stop, fetch a file, list the
-# weights. No HTML, no static files. The same helpers the page's routes call,
-# the same `jobs` Dict, the same generator classes — a second caller of the
-# one job/status/stop contract, not a second contract.
+# weights, delete what a run left, ask what this deployment can see. No HTML,
+# no static files. The same helpers, the same `jobs` Dict, the same generator
+# classes the page's routes used — one job/status/stop contract, never a
+# second one.
 #
-# A second ASGI function rather than routes on `web()`, because proxy auth is
-# a property of a Modal function: turned on for `web()` it would lock the page
-# out of its own routes, since a browser cannot send `Modal-Key`. The key pair
-# is minted in the Modal dashboard and pasted into the app once, the gesture
-# the HF token already uses — so there is still no Secret and no CLI setup on
-# the client side, and the URL Modal prints at deploy is the one to paste.
+# It was a second ASGI function while the page still existed, because proxy
+# auth is a property of a Modal function: turned on for `web()` it would have
+# locked the page out of its own routes, since a browser cannot send
+# `Modal-Key`. The page is gone and this is the only function left, so the
+# reason is spent — but the shape is not, and folding it into a single
+# unauthenticated app would be undoing the one thing that made the URL stop
+# being public. The key pair is minted in the Modal dashboard and pasted in
+# once, the gesture the HF token already uses, so there is still no Secret
+# and no CLI setup on the client side; the URL Modal prints at deploy is the
+# one to paste.
 # --------------------------------------------------------------------------
 
 
 @app.function(
-    image=web_image, cpu=1.0, timeout=900,
+    image=cpu_image, cpu=1.0, timeout=900,
     volumes={"/workspace": volume, "/models": models_volume},
     max_containers=1,
     # The web container's window, for the same reason: the spool stays warm
@@ -17002,6 +13228,28 @@ def web():
 def api():
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse, Response
+
+    # **The outputs migration used to be started by the page's gallery
+    # listing, and the page is gone.** It fired on first sight of a job folder
+    # in the old layout, which meant a client that lists its own library —
+    # every client there is now — would never trigger it, and the runs from
+    # before the record moved inside the file would stay unreachable by name
+    # forever. It moves to the one place that still happens exactly once and
+    # is nobody's request: this container starting. `max_containers=1`, so
+    # there is one of these, and the job record is still the lock.
+    #
+    # Only when there is something to move. `_entries_by_rpc` is a metadata
+    # call against committed state, cheap and already the listing this file
+    # trusts — spawning a container per cold start to find nothing is exactly
+    # the speculative rental the Storage rule forbids.
+    try:
+        _, legacy = _entries_by_rpc()
+        if legacy:
+            print(f"[migrate] {len(legacy)} job folder(s) still in the old "
+                  f"layout; starting the migration", flush=True)
+            _start_migration()
+    except Exception as exc:  # noqa: BLE001 — a repair must not stop the API
+        print(f"[migrate] not started: {type(exc).__name__}: {exc}", flush=True)
 
     routes = FastAPI()
 
@@ -17082,11 +13330,146 @@ def api():
     def file(name: str):
         return _output_response(name)
 
+    # ---- what the volume still owes you back
+    #
+    # A client's own delete is its Trash and stops at its disk. The volume's
+    # copy is what the page used to reach, and without these two routes the
+    # only thing that reclaims space on it is the Modal CLI — which is the
+    # complaint Phase 7 exists to remove, not one to inherit.
+
+    @routes.delete("/outputs/{job_id}")
+    def delete_output(job_id: str) -> dict[str, Any]:
+        """Delete a run and every file of it — the results and the motion
+        context beside them. Unlinked, not recoverable."""
+        if not NAME_RE.match(job_id):
+            return {"error": "Invalid job_id."}
+        # Insisting, because the run you are most likely to delete on impulse
+        # is the one that just landed, and a refused reload turns that into
+        # "Not found" about files sitting on the volume.
+        _reload_insist()
+        files = _group_files(job_id)
+        if not files:
+            return {"error": "Not found."}
+        for name in files:
+            (OUTPUTS / name).unlink(missing_ok=True)
+            _forget_listed(name, OUTPUTS)
+        _forget_output(job_id)
+        volume.commit()
+        return {"ok": True, "removed": len(files)}
+
+    @routes.post("/outputs/purge")
+    def purge_outputs(payload: dict) -> dict[str, Any]:
+        """
+        Delete many runs in one request.
+
+        Two guards, because deletion here does not go anywhere first.
+
+        `confirm` has to be in the body, so a bare POST to a guessed URL
+        cannot fire it. And the caller names the runs rather than describing
+        them: re-deriving the set here from a filter would delete whatever
+        matched at request time, which is not the set the user was shown a
+        count of and agreed to. A run that finished during the confirm dialog
+        would go without ever having been on screen. The list is the
+        agreement.
+        """
+        if payload.get("confirm") != "delete":
+            return {"error": "Unconfirmed."}
+        job_ids = payload.get("job_ids")
+        if not isinstance(job_ids, list) or not job_ids:
+            return {"error": "Nothing to delete."}
+        if any(not isinstance(j, str) or not NAME_RE.match(j) for j in job_ids):
+            return {"error": "Invalid job_id."}
+
+        _reload_insist()
+        removed, missing = 0, []
+        for job_id in dict.fromkeys(job_ids):
+            files = _group_files(job_id)
+            if files:
+                for name in files:
+                    (OUTPUTS / name).unlink(missing_ok=True)
+                    _forget_listed(name, OUTPUTS)
+                _forget_output(job_id)
+                removed += 1
+            else:
+                missing.append(job_id)
+
+        _drop_legacy_trash(OUTPUTS)
+        volume.commit()
+        # Named, not just subtracted from the count. The list is the
+        # agreement, so a run in it that could not be found is the one thing
+        # this route owes an answer about — and the cause is nearly always a
+        # view too old to hold it, which is a different problem from a bad id.
+        return {"ok": True, "removed": removed,
+                **({"missing": missing} if missing else {})}
+
+    @routes.get("/where")
+    def where() -> dict[str, Any]:
+        """
+        What this deployment can actually see on the volume.
+
+        Cheap CPU check for when a client's Settings and a GPU job disagree —
+        the usual cause is the two resolving different volumes, so the
+        resolved name is part of the answer.
+        """
+        _reload_volume()
+        tree: dict[str, Any] = {}
+        for d in (MODELS, LORAS, DATASETS, OUTPUTS):
+            if d.is_dir():
+                tree[str(d)] = sorted(
+                    f"{p.name} ({p.stat().st_size / 1e9:.2f} GB)"
+                    if p.is_file() else f"{p.name}/"
+                    for p in d.iterdir() if not p.name.startswith(".")
+                )[:25]
+            else:
+                tree[str(d)] = "(directory does not exist)"
+        return {"volume": VOLUME_NAME, "mounted_at": str(WORKSPACE),
+                "contents": tree}
+
+    @routes.post("/jobs/export")
+    def export_scene(payload: dict) -> dict[str, Any]:
+        """
+        Queue a stitch of a scene's takes into one file.
+
+        Validated here rather than in the job for the reason the downloads
+        route gives: an empty chain is a caller error, and finding it inside
+        the job costs a container start before anything can say so. What this
+        cannot check is whether the files are still on the volume — a reload
+        settles that, and the job names the take by number when one is gone.
+
+        One job id, not one per press: the export is a property of the scene
+        being exported, so a second press replaces the first rather than
+        racing it.
+        """
+        takes = payload.get("takes")
+        if not isinstance(takes, list) or not takes:
+            return {"error": "Nothing to export — render a take first."}
+        if len(takes) > 64:
+            return {"error": f"{len(takes)} takes is past what one export "
+                             "handles. Chain fewer."}
+        rows = []
+        for t in takes:
+            if not isinstance(t, dict):
+                continue
+            name = Path(str(t.get("file") or "")).name
+            if name and OUTPUT_FILE_RE.match(name):
+                rows.append({"file": name})
+        if not rows:
+            return {"error": "The takes carried no filenames — reload and try "
+                             "again."}
+        _clear_stop(EXPORT_JOB)
+        # Seeded before the spawn, so the first poll finds a record rather
+        # than a 404 it has to read as "not started yet" — the contract every
+        # other job here keeps.
+        _publish(EXPORT_JOB, status="running", percent=0,
+                 phase=f"Queued — {len(rows)} takes", files=[], error=None)
+        export_scene_job.spawn(EXPORT_JOB, rows)
+        return {"ok": True, "job_id": EXPORT_JOB, "takes": len(rows)}
+
     # ---- the gear: the token, the weights, the LoRAs, the caption menus
     #
-    # Each is the web gear's own function. A download is a job under
-    # dl_<key>, watched through /jobs/{id} like any other; a LoRA from this
-    # Mac streams up as a PUT the way a dataset file does.
+    # Each is the retired page's own gear function. A download is a job
+    # under dl_<key>, watched through /jobs/{id} like any other; a LoRA on the
+    # client's disk streams up as a PUT the way a dataset file does.
 
     @routes.post("/token")
     def token(payload: dict) -> dict[str, Any]:
@@ -17317,6 +13700,20 @@ def api():
             return {"error": f"No dataset named {name!r} on the volume."}
         volume.commit()
         return {"ok": True, **_dataset_stats(d)}
+
+    @routes.delete("/datasets/{name}")
+    def delete_dataset(name: str) -> dict[str, Any]:
+        """Delete a set and everything in it. Unlinked, not recoverable —
+        the confirm is the client's, and the blast radius it states is this
+        folder and every caption in it."""
+        _reload_volume()
+        d, err = _saved_dataset(name)
+        if err:
+            return err
+        shutil.rmtree(d, ignore_errors=True)
+        _drop_legacy_trash(d.parent)
+        volume.commit()
+        return {"ok": True}
 
     @routes.get("/datasets/{name}/files/{file}")
     def get_dataset_file(name: str, file: str):

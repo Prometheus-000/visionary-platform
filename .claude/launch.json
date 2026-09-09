@@ -14,39 +14,6 @@
       "port": 4173
     },
     {
-      "name": "web",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "dev"
-      ],
-      "port": 5173,
-      "autoPort": true,
-      "cwd": "web"
-    },
-    {
-      "name": "blocking",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "dev",
-        "--",
-        "--port",
-        "5174"
-      ],
-      "port": 5174,
-      "cwd": "web"
-    },
-    {
-      "name": "preview-ui",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "tools/preview_ui.py"
-      ],
-      "port": 8791,
-      "autoPort": true
-    },
-    {
       "name": "strata-visionary",
       "runtimeExecutable": "python3",
       "runtimeArgs": [
@@ -69,25 +36,6 @@
         "docs/design-notes"
       ],
       "port": 4174
-    },
-    {
-      "name": "preview-ui-8793",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "tools/preview_ui.py",
-        "8793"
-      ],
-      "port": 8793
-    },
-    {
-      "name": "web-8793",
-      "runtimeExecutable": "sh",
-      "runtimeArgs": [
-        "-c",
-        "VISIONARY_API=http://localhost:8793 npm run dev -- --port 5177"
-      ],
-      "port": 5177,
-      "cwd": "web"
     }
   ]
 }

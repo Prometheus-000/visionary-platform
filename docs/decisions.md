@@ -6,8 +6,8 @@ the account you come back to when someone proposes rebuilding one of them.
 
 Each entry keeps the measurement that ended it, because the measurement is the
 part that does not have to be taken on trust. Where an entry still teaches a
-live rule, that rule is stated in `.claude/rules/backend.md` or `web/CLAUDE.md`
-and points back here.
+live rule, that rule is stated in `.claude/rules/backend.md` and points back
+here.
 
 ---
 
@@ -422,4 +422,3 @@ CacheDiT was caught by a stopwatch at the right shape, TeaCache was not caught
 by a stopwatch at all. Whatever comes next needs a fidelity arm with LoRAs
 loaded before it needs a timing arm, and the H3 path ships with no step cache
 until something passes it.
-

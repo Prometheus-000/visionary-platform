@@ -68,13 +68,12 @@ Visionary Surface Audit_files/
 # screenshots have real names (generate.png, regional.png) and live in docs/, so
 # anchoring to the root keeps those while ignoring the scratch ones.
 /Screenshot*.png
+# The design-system sync's working directories. The sync itself synced
+# `web/src/ds/` and left with the front end on 2026-09-09; these are what it
+# put on disk and they are ignored the way they always were.
 .ds-sync/
 ds-bundle/
-.design-sync/.cache/
-.design-sync/learnings/
-.design-sync/node_modules
-web/dist-ds/
-.design-sync/upload-manifest.txt
+.design-sync/
 
 # Upstream clones, read rather than built against — MiniMax-H3 for the prompt
 # guides `_compile_h3_scene` is checked against, ai-toolkit for the trainer
@@ -107,7 +106,8 @@ research/*.pdf
 A0000268.jpg
 void.jpg
 
-# The near-duplicate set the alike thresholds are checked against; 1,491 photographs, not ours to commit.
+# The near-duplicate set the classifier's thresholds were checked against;
+# 1,491 photographs, not ours to commit.
 INRIA Holidays/
 
 # Per-machine agent config, alongside .claude/settings.local.json above. The
@@ -128,7 +128,7 @@ procr/
 # Images dropped at the top of the tree: a phone photo, a press shot, a render
 # somebody wanted a second look at. Nothing at the root is ours to publish and
 # nothing here has ever been committed on purpose — the ones the repo does
-# keep live in docs/ and web/ where they are addressed by name.
+# keep live in docs/ where they are addressed by name.
 /*.png
 /*.jpg
 /*.jpeg

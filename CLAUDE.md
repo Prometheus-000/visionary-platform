@@ -39,8 +39,9 @@ replaceable the day something serves the experience better.
 That is what makes a teardown cheap rather than tragic. What accumulates is an
 understanding of a workflow almost nobody has designed before, and it outlives
 every implementation: the thesis below survived the deletion of everything built
-to serve it, and `web/CLAUDE.md`'s veto list — the densest artefact in the
-project — names no GPU, no model and no framework anywhere in it. Volatility in
+to serve it, and so did the veto list — the densest artefact this project has
+produced — which names no GPU, no model and no framework anywhere in it and
+outlived the front end it was written against. Volatility in
 this field is the only instrument that reveals what the product should be, so a
 shock costs a receipt and pays the record. **Treat radical rebuilds as the
 environment, not the emergency.**
@@ -130,8 +131,11 @@ below.
 - **No `from __future__ import annotations`.** It broke FastAPI's
   `get_type_hints()` against module globals and turned `/api/upload` into a 422.
   See the note at the top of `app.py`.
-- **No Modal Secrets, no CLI setup.** The HF token is pasted into the UI and
-  stored in a Modal Dict. `modal deploy app.py` is the entire install.
+- **No Modal Secrets, no CLI setup.** The HF token is pasted in by hand and
+  stored in a Modal Dict, and so is the proxy-auth key pair a client uses.
+  `modal deploy app.py` is the entire install on this side — which is the
+  judgment the sentence "the entire install" always stood for, and it survives
+  a client existing: one step per side, neither touching the other.
 - **Nothing downloads on its own.** Weights are chosen explicitly, under the
   gear.
 - **Pin to what you can reproduce.** A commit SHA, not a branch or a floating
@@ -177,17 +181,21 @@ below.
 | Where | What it holds | Loads |
 | --- | --- | --- |
 | `.claude/rules/backend.md` | `app.py`, the ComfyUI nodes, the tools: the philosophy in detail, storage behaviour, conventions, the shot vocabulary | on reading `app.py`, `comfy_nodes/**`, `tools/**` |
-| `web/CLAUDE.md` | the page, the console budget, the canvas, region cards, LoRA chips, the shot palette, the scene composer, and the veto list | on reading anything under `web/` |
 | `docs/decisions.md` | what was removed or refused, and the measurement that settled it — the semantic layer, the rewrite, `forge/`, Wan 2.2, 2K, the ten-minute render | never; read it for the measurement and the trap it names, not as a standing no |
-| `docs/roadmap.md` | the phases, and the veto list in full | never; read it when deciding whether a new surface belongs |
+| `docs/roadmap.md` | the phases, the retirement of the front end, and the veto list in full | never; read it when deciding whether a new surface belongs |
 
 Layout and the storage schema are not written down here because they are
 readable: `ls`, and `app.py` around the `WORKSPACE` constants. What is written
 down is why they are shaped that way, in the rules files above.
 
-**The front end is built into the image, not mounted from your disk.** That is
-what keeps `modal deploy app.py` the entire install. Node is a build-time
-dependency of the image; nothing at runtime needs it.
+**Nothing is mounted from your disk, and that is what keeps `modal deploy
+app.py` the entire install.** The front end used to be the reason this rule
+needed saying — it was built into the image rather than mounted, because a
+fresh clone has no `dist` and a stale one deploys whatever you last built,
+which is the worst of the three because it looks like it worked. The front end
+is gone and the rule is not: every dependency is baked at build time, nothing
+installs at runtime, and a deploy from a fresh clone is the same deploy as
+yours.
 
 ## Documentation discipline
 
