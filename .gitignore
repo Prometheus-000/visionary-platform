@@ -109,3 +109,26 @@ void.jpg
 
 # The near-duplicate set the alike thresholds are checked against; 1,491 photographs, not ours to commit.
 INRIA Holidays/
+
+# Per-machine agent config, alongside .claude/settings.local.json above. The
+# rules an agent reads are committed; where one machine put its API key is not.
+.codex/
+
+# A find-replace of CLAUDE.md for the agents that read AGENTS.md instead —
+# same file with `.claude` swapped for `.Codex` throughout. Committing it
+# would put the project's rules in two places, and the copy is the one that
+# silently falls behind. CLAUDE.md is the record.
+AGENTS.md
+
+# Reference pulled off other people's products and screenshots taken while
+# working — 58MB of it, none of it ours to redistribute. Same reason as
+# "screenshots for styling inspiration/" above.
+procr/
+
+# Images dropped at the top of the tree: a phone photo, a press shot, a render
+# somebody wanted a second look at. Nothing at the root is ours to publish and
+# nothing here has ever been committed on purpose — the ones the repo does
+# keep live in docs/ and web/ where they are addressed by name.
+/*.png
+/*.jpg
+/*.jpeg
