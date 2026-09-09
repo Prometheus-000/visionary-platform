@@ -4352,23 +4352,33 @@ num_repeats = {num_repeats}
         status = "stopped"
 
     produced = sorted(p.name for p in out_dir.glob("*.safetensors"))
-    (out_dir / "visionary.json").write_text(
-        json.dumps(
-            {"job_id": job_id, "dataset": dataset, "lora_name": lora_name,
-             "trigger_word": trigger_word,
-             "images": len(images), "status": status, "files": produced,
-             "hyperparams": {
-                 "resolution": resolution, "network_dim": network_dim,
-                 "network_alpha": network_alpha, "learning_rate": learning_rate,
-                 "max_train_epochs": max_train_epochs, "seed": seed,
-                 "batch_size": batch_size, "num_repeats": num_repeats,
-                 "optimizer_type": optimizer_type, "lr_scheduler": lr_scheduler,
-                 "timestep_sampling": timestep_sampling,
-                 "discrete_flow_shift": discrete_flow_shift,
-             }},
-            indent=2,
-        )
+    # The record goes into each epoch it describes rather than into a
+    # `visionary.json` beside them — the same move the renders made, and for
+    # the same reason: a weight dragged out of this folder used to leave its
+    # trigger word behind, and a LoRA without its trigger word is a file that
+    # quietly does nothing. Every epoch carries it, because any one of them
+    # can be the one you keep.
+    record = _output_record(
+        job_id=job_id, dataset=dataset, lora_name=lora_name,
+        trigger_word=trigger_word, images=len(images), status=status,
+        hyperparams={
+            "resolution": resolution, "network_dim": network_dim,
+            "network_alpha": network_alpha, "learning_rate": learning_rate,
+            "max_train_epochs": max_train_epochs, "seed": seed,
+            "batch_size": batch_size, "num_repeats": num_repeats,
+            "optimizer_type": optimizer_type, "lr_scheduler": lr_scheduler,
+            "timestep_sampling": timestep_sampling,
+            "discrete_flow_shift": discrete_flow_shift,
+        },
     )
+    for name in produced:
+        # `modelspec.architecture` beside it, in kohya's spelling, so the two
+        # pickers here and any other tool that opens the file agree on what
+        # it is without opening a single tensor. musubi trains Krea 2 RAW.
+        _safetensors_add_record(
+            out_dir / name, record,
+            extra={"modelspec.architecture": "krea2/lora"},
+        )
     volume.commit()
 
     res = {
@@ -5609,10 +5619,10 @@ def _tree_bytes(root: Path) -> int:
     Every byte a delete of `root` would reclaim, whether it is a file or a folder.
 
     Walked rather than summed off the listing that calls it. A trained LoRA's
-    folder is flat and holds only checkpoints and `visionary.json`, so the two
-    agree on everything this app writes — but the number's whole job is to be
-    what the confirm dialog says is going, and a dialog that undersells the blast
-    radius is the failure the .trash removal was answering. A folder that arrived
+    folder is flat and holds only its checkpoints now that the record moved
+    inside them, so the two agree on everything this app writes — but the
+    number's whole job is to be what the confirm dialog says is going, and a
+    dialog that undersells the blast radius is the failure the .trash removal was answering. A folder that arrived
     some other way, with a preview subdirectory in it, is exactly the case where
     "sum the files I was already going to list" quietly reports less than it
     unlinks.
@@ -6934,8 +6944,11 @@ OUTPUT_FILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}\.(png|jpg|webp|mp4)$")
 # The run record's key, inside the file: a PNG `tEXt` chunk and an MP4
 # metadata key by the same name. See `_output_record`.
 RECORD_KEY = "visionary"
-# What the job folders used to carry beside their files. Read by the
-# migration only; nothing writes it any more.
+# What a job folder and a trained LoRA used to carry beside their files.
+# Nothing writes it any more — the record lives inside the file it describes,
+# in a PNG chunk, an MP4 tag or a safetensors `__metadata__` map. Still read
+# in two places: the outputs migration, and the LoRA listing, where a weight
+# trained before the move is the only copy of its own trigger word.
 LEGACY_META = "visionary.json"
 
 
@@ -7217,6 +7230,250 @@ def _record_from_mp4(head: bytes) -> dict[str, Any] | None:
 # Past this much of a file with no record found, the file has none. A PNG's
 # text chunks and a faststart clip's `moov` both sit in the first few KB.
 _RECORD_HEAD_MAX = 4 << 20
+
+
+# ── A LoRA carries its own record ──────────────────────────────────────────
+#
+# The same rule a render's record follows: it goes inside the file it
+# describes, never beside it. A LoRA used to arrive with a `visionary.json`
+# next to its epochs, and that made the trigger word — the one fact deciding
+# whether the weight does anything at all — a separate file, which any copy,
+# move or hand-off left behind.
+#
+# safetensors keeps a `__metadata__` map of strings at the head of the file.
+# That is where kohya's trainers write their `ss_*` and `modelspec.*` facts,
+# and musubi-tuner is one of them, so a LoRA this platform trains already
+# arrives carrying that map — ours is merged into it rather than over it,
+# under the same key a PNG chunk and an MP4 tag use, holding the same JSON.
+# One record shape covers all three containers.
+
+
+def _safetensors_head(path: Path) -> tuple[dict[str, str], list[str]]:
+    """
+    `(__metadata__, tensor names)` off the front of a safetensors file.
+
+    The header is a little-endian u64 length followed by that many bytes of
+    JSON, so this is two short reads however large the weights are — which is
+    what lets the listing read every LoRA on the volume without pulling one.
+    Anything unreadable answers empty rather than raising: a picker that dies
+    on one malformed file offers no LoRAs at all.
+    """
+    try:
+        with path.open("rb") as f:
+            raw = f.read(8)
+            if len(raw) < 8:
+                return {}, []
+            size = int.from_bytes(raw, "little")
+            # A real header is kilobytes. The cap is what stops a corrupt or
+            # hostile length from asking for a gigabyte of JSON.
+            if not 0 < size <= 64 * 1024 * 1024:
+                return {}, []
+            head = json.loads(f.read(size))
+    except Exception:
+        return {}, []
+    if not isinstance(head, dict):
+        return {}, []
+    meta = head.get("__metadata__")
+    return ({k: str(v) for k, v in meta.items()} if isinstance(meta, dict) else {},
+            [k for k in head if k != "__metadata__"])
+
+
+def _safetensors_add_record(path: Path, fields: dict[str, Any],
+                            extra: dict[str, str] | None = None) -> bool:
+    """
+    Merge a record into a safetensors file's `__metadata__`, in place.
+
+    Tensor offsets are relative to the end of the header, so growing the
+    header moves nothing: this is a header rewrite and a stream copy, never a
+    load. It writes a neighbour and renames, so a failure part-way leaves the
+    trained weights whole.
+
+    Only ever called on a file this platform has just produced. Nothing
+    already on the volume is rewritten — weights are the one thing here that
+    cannot be regenerated, and that risk buys nothing when the listing can
+    still read an older LoRA's record out of its sidecar.
+    """
+    tmp = path.with_name(path.name + ".record")
+    try:
+        with path.open("rb") as f:
+            size = int.from_bytes(f.read(8), "little")
+            head = json.loads(f.read(size))
+            meta = head.get("__metadata__")
+            meta = dict(meta) if isinstance(meta, dict) else {}
+            meta.update(extra or {})
+            meta[RECORD_KEY] = _record_json(fields)
+            head["__metadata__"] = meta
+            blob = json.dumps(head, separators=(",", ":")).encode("utf-8")
+            # The spec wants the header 8-byte aligned; the reference writer
+            # pads with spaces and readers skip them as JSON whitespace.
+            blob += b" " * (-len(blob) % 8)
+            with tmp.open("wb") as out:
+                out.write(len(blob).to_bytes(8, "little"))
+                out.write(blob)
+                shutil.copyfileobj(f, out, 4 * 1024 * 1024)
+        tmp.replace(path)
+        return True
+    except Exception as e:
+        print(f"[record] {path.name}: could not embed the record ({e}) — "
+              f"left exactly as trained", flush=True)
+        tmp.unlink(missing_ok=True)
+        return False
+
+
+# Which family a LoRA belongs to, read off the modules it trains — and
+# compared against the checkpoints themselves rather than against a list of
+# names written from memory.
+#
+# The first cut here was such a list, and it was wrong in the one direction
+# that costs something: it carried `to_q`/`to_k` as MiniMax-H3 markers because
+# H3's diffusers export uses them, when they are the generic diffusers spelling
+# that half the field uses — so a Krea 2 LoRA in diffusers form would have been
+# called H3 and hidden from the picker that wants it. Names a trainer chose are
+# not knowledge this file has; the weights on the volume are.
+#
+# So the base checkpoints answer it. Their headers list every module by name,
+# and reading a header is two short reads whatever the file weighs, so a 26 GB
+# checkpoint costs the same as a small one. A LoRA trains a subset of its
+# base's modules and keeps their names, mangled only by the trainer's
+# separator and its own affixes — flatten both sides the same way and the
+# subset shows up as overlap. Whatever the checkpoints are called, the
+# comparison follows; nothing here has to be told.
+_ARCH_CHECKPOINTS: dict[str, tuple[str, ...]] = {
+    "krea2": ("raw", "turbo"),
+    "h3": ("h3_dit", "h3_ref_dit"),
+}
+
+# The last resort, for a volume that has one family's checkpoints and not the
+# other's. Only names no other architecture shares: H3 is the one model here
+# carrying audio and video through the same tower, and `txtfusion` is Krea 2's
+# own. Nothing generic — a marker that half the field uses is what the first
+# cut got wrong.
+_ARCH_MARKERS: dict[str, tuple[str, ...]] = {
+    "h3": ("video_patch_proj", "audio_patch_proj", "token_refiner",
+           "audio_proj_in", "video_out", "audio_out"),
+    "krea2": ("txtfusion",),
+}
+
+# Everything a trainer wraps around the module it is training. Stripped from
+# both ends so what is left is the module's own path, which is the only part
+# the base checkpoint also knows.
+_LORA_AFFIXES = ("lora_unet_", "lora_te_", "lora_down", "lora_up", "lora_a",
+                 "lora_b", "diffusion_model_", "transformer_", "base_model_",
+                 "model_", "_default", "_weight", "_bias", "_alpha")
+
+
+def _module_path(key: str) -> str:
+    """One tensor name reduced to the module it belongs to.
+
+    Separators flattened and the trainer's affixes taken off, so kohya's
+    `lora_unet_blocks_0_attn_wq.lora_down.weight` and the diffusers
+    `diffusion_model.blocks.0.attn.wq.lora_A.weight` both come out as
+    `blocks_0_attn_wq` — and so does the checkpoint's own `blocks.0.attn.wq.weight`.
+    """
+    k = key.replace(".", "_").lower()
+    changed = True
+    while changed:
+        changed = False
+        for affix in _LORA_AFFIXES:
+            if affix.endswith("_") and k.startswith(affix):
+                k, changed = k[len(affix):], True
+            elif not affix.endswith("_") and k.endswith(affix):
+                k, changed = k[: -len(affix)], True
+            k = k.strip("_")
+    return k
+
+
+def _base_modules(arch: str) -> frozenset[str]:
+    """Every module name in a family's checkpoints, or empty when none is
+    downloaded. Read once — a checkpoint is replaced by a download, never
+    edited, and the listing asks for this on every call."""
+    if arch in _BASE_MODULES:
+        return _BASE_MODULES[arch]
+    names: set[str] = set()
+    for key in _ARCH_CHECKPOINTS.get(arch, ()):
+        dest = MODEL_CATALOGUE.get(key, {}).get("dest")
+        if isinstance(dest, Path) and dest.exists():
+            names.update(_module_path(k) for k in _safetensors_head(dest)[1])
+    found = frozenset(n for n in names if n)
+    if found:
+        _BASE_MODULES[arch] = found
+    return found
+
+
+_BASE_MODULES: dict[str, frozenset[str]] = {}
+
+
+def _arch_from_lora_keys(keys: list[str]) -> str:
+    """
+    The family a LoRA is for, or `""` when its keys do not say.
+
+    Answers only when one family clearly owns the modules and the other
+    clearly does not. A wrong answer here *hides* a usable LoRA from the
+    picker that ought to have it, which is worse than the crossing this
+    exists to stop — so anything ambiguous stays unclaimed and both pickers
+    go on offering it, exactly as they did before.
+    """
+    trained = {m for m in (_module_path(k) for k in keys) if m}
+    if not trained:
+        return ""
+    share = {}
+    for arch in _ARCH_CHECKPOINTS:
+        base = _base_modules(arch)
+        share[arch] = (len(trained & base) / len(trained)) if base else None
+    known = {a: v for a, v in share.items() if v is not None}
+    if known:
+        best = max(known, key=lambda a: known[a])
+        others = [v for a, v in known.items() if a != best]
+        if known[best] >= 0.5 and all(v < 0.25 for v in others):
+            return best
+        # A checkpoint answered and said no. Falling through to the name
+        # markers here would let a guess overrule a measurement.
+        if all(v is not None for v in share.values()):
+            return ""
+    flat = [k.replace(".", "_").lower() for k in keys]
+    claimed = [a for a, markers in _ARCH_MARKERS.items()
+               if any(m in k for m in markers for k in flat)]
+    return claimed[0] if len(claimed) == 1 else ""
+
+
+# One entry per weight, keyed on what a rewrite would change. The listing
+# walks every LoRA on the volume, and a fresh volume reads each file slowly
+# the first time — so the answer is kept rather than the file reopened on
+# every call. Bounded by how many LoRAs exist, which is what the picker draws.
+_LORA_FACTS: dict[tuple[str, int, int], tuple[dict[str, Any], str]] = {}
+
+
+def _lora_facts(file: Path) -> tuple[dict[str, Any], str]:
+    """
+    `(record, arch)` for one LoRA weight: what the file says about itself.
+
+    The record is this platform's own, written at training time. The arch is
+    preferred from `modelspec.architecture` — the field kohya's trainers
+    write and the one another tool would also read — and falls back to the
+    modules the file actually trains.
+    """
+    try:
+        st = file.stat()
+        key = (str(file), st.st_size, st.st_mtime_ns)
+    except OSError:
+        return {}, ""
+    if key in _LORA_FACTS:
+        return _LORA_FACTS[key]
+    meta, keys = _safetensors_head(file)
+    record: dict[str, Any] = {}
+    raw = meta.get(RECORD_KEY)
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, dict):
+                record = loaded
+        except Exception:
+            pass
+    declared = (meta.get("modelspec.architecture") or "").lower()
+    found = next((a for a in _ARCH_MARKERS if a in declared), "")
+    answer = (record, found or _arch_from_lora_keys(keys))
+    _LORA_FACTS[key] = answer
+    return answer
 
 
 def _read_record(rel: str) -> dict[str, Any]:
@@ -13093,32 +13350,41 @@ def _weights() -> dict[str, Any]:
                     files = ([final] if final.exists() else []) + ckpts
                     if not files:
                         continue
-                    trigger = ""
-                    # Which set trained this. The trainer has always written it
-                    # into the sidecar; nothing read it back, so a LoRA and the
-                    # pictures that made it were strangers on every surface.
-                    trained_from = ""
-                    meta = d / "visionary.json"
-                    if meta.exists():
+                    # What the weights say about themselves: the trigger word
+                    # and the set that trained them, out of the file's own
+                    # header. A LoRA trained before that moved inside still has
+                    # its `visionary.json`, so the sidecar is read when the
+                    # header is silent — nothing existing was rewritten, and a
+                    # LoRA whose trigger word went missing on an upgrade is a
+                    # LoRA that stops working with no way to tell.
+                    record, sniffed = _lora_facts(files[0])
+                    legacy = d / LEGACY_META
+                    if not record and legacy.exists():
                         try:
-                            side = json.loads(meta.read_text())
-                            trigger = side.get("trigger_word", "")
-                            trained_from = str(side.get("dataset") or "")
+                            loaded = json.loads(legacy.read_text())
+                            if isinstance(loaded, dict):
+                                record = loaded
                         except Exception:
                             pass
+                    trigger = str(record.get("trigger_word") or "")
+                    trained_from = str(record.get("dataset") or "")
                     spec = CATALOGUE_LORA_ROOTS.get(str(d))
                     loras.append({
                         "name": d.name, "trigger_word": trigger,
                         "dataset": trained_from,
                         "strength": None,
                         "path": str(files[0]),
-                        # The sidecar is the tell: this platform's trainer wrote
-                        # it, and the trainer trains Krea 2 RAW — so the folder's
-                        # weights are Krea 2's. A folder with neither sidecar nor
-                        # catalogue entry arrived by hand and claims nothing, so
-                        # both pickers keep offering it.
+                        # The weights are the tell, not where the folder came
+                        # from. Provenance used to stand in for architecture —
+                        # a sidecar meant "this platform trained it, so it is
+                        # Krea 2" — which was right for what this trained and
+                        # said nothing about the rest, so every LoRA brought in
+                        # by hand claimed nothing and both pickers offered it.
+                        # That put Krea 2 weights in the video picker, where
+                        # they load nothing and warn nowhere.
                         "arch": (spec or {}).get(
-                            "arch", "krea2" if meta.exists() else ""),
+                            "arch",
+                            sniffed or ("krea2" if legacy.exists() else "")),
                         "internal": bool((spec or {}).get("internal")),
                         # `root` is served rather than left for the page to
                         # rebuild from a file path, for the same reason the LoRA
@@ -13143,20 +13409,31 @@ def _weights() -> dict[str, Any]:
                     # picker nothing about the one fact that decides whether the
                     # weight does anything on a first try.
                     spec = CATALOGUE_LORA_ROOTS.get(str(d))
+                    loose, loose_arch = _lora_facts(d)
                     loras.append({
                         "name": d.stem,
-                        "trigger_word": KREA_STYLE_LORAS.get(d.stem, ""),
-                        # A loose file was not trained here, so it names no set.
-                        "dataset": "",
+                        # A loose file that was trained here — handed over,
+                        # or pulled back off a Drive — now arrives carrying
+                        # its own record, so its trigger word and its set come
+                        # with it. That is the whole point of the record being
+                        # inside the file: it used to be left behind by the
+                        # first copy. The catalogue's phrase stands in for the
+                        # style weights, which nobody here trained.
+                        "trigger_word": (str(loose.get("trigger_word") or "")
+                                         or KREA_STYLE_LORAS.get(d.stem, "")),
+                        "dataset": str(loose.get("dataset") or ""),
                         "strength": (KREA_STYLE_STRENGTH
                                      if d.stem in KREA_STYLE_LORAS else None),
                         "path": str(d),
                         "root": str(d),
                         "bytes": _tree_bytes(d),
                         "catalogue": (spec or {}).get("family", ""),
-                        # A loose file claims no architecture unless the
-                        # catalogue put it there — see the folder branch above.
-                        "arch": (spec or {}).get("arch", ""),
+                        # A loose file has no sidecar and never had: read the
+                        # architecture out of the modules it trains. This is
+                        # the branch that matters — a LoRA pulled in by hand
+                        # lands exactly here, and there are more of those than
+                        # of anything this platform trained itself.
+                        "arch": (spec or {}).get("arch", loose_arch),
                         "internal": bool((spec or {}).get("internal")),
                         "files": [{"name": d.name, "path": str(d)}],
                     })
