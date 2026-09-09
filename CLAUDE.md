@@ -143,10 +143,15 @@ below.
   is a declaration, not a binding — bumping one is editing a number, and what
   binds you is the cost of the bump. A pin that moves is a seed; a pin that has
   not moved in two years is a fossil.
-- **Storage layout is the contract, not the code — and the volume holds
-  weights and what you pressed Save on, nothing derived.** Datasets are folders of
-  images with `.txt` sidecars beside them — the same thing the trainer reads.
-  Nothing here is required to get your data back out.
+- **Storage layout is the contract, not the code — and the volumes hold
+  weights, nothing else.** Not "weights and what you saved": a render is
+  returned to the client and read back by call id, and a set is uploaded to a
+  container's disk and handed to the job that reads it. Neither reaches
+  storage. The client's folder is the library, so anything here is a copy in
+  transit and losing one costs a re-upload or a re-render, never data. A set
+  is still a folder of images with `.txt` sidecars beside them — the same
+  thing the trainer reads — and nothing here is required to get your data back
+  out.
 - **Do not build a second way to do the first thing.** New capability extends
   the existing job/status/stop contract rather than inventing a parallel one.
 - **A reader that drops a field makes every run that has one unreadable.** A

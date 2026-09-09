@@ -15,27 +15,23 @@ pins, and coupling them would mean every ComfyUI bump re-litigates training.
 Storage is ours, not borrowed. The volumes are created on first deploy and the
 layout is flat and self-describing — nothing here mirrors a checkout of another
 project, so there is no directory that only makes sense to somebody who has
-read a backend's source. **A render never reaches either volume** — it is
-returned to the client and read back by call id, see `TAKES`. What is left
-here is weights, plus the two things the Playground's engine loads, plus a
-set on its way to a training run.
+read a backend's source. **The volumes hold weights, and nothing else.**
+Neither a render nor a set reaches storage: a take is returned to the client
+and read back by call id (`TAKES`), and a set is uploaded to a container's
+disk and handed to the job that reads it (`SETS`). The library is the
+client's folder; this side keeps what a GPU loads.
 
     $VISIONARY_VOLUME (default "visionary")  ->  /workspace
       loras/{folder}/{name}.safetensors   trained output, any nesting
       workflows/{name}.json               Playground graphs, ComfyUI API format
       playground_nodes/                   node packs installed from git
-      datasets/{name}/                    images + .txt sidecars, for a job
 
     $VISIONARY_MODELS_VOLUME holds what re-downloads; this one holds what does
     not. A trained LoRA exists nowhere else, which is why it is here and not
-    beside the checkpoints — see the note on that volume below.
-
-    **`datasets/` is the last thing here that is not a weight**, and it is on
-    its way out: a set exists to be read by one training or caption run, and
-    the client's folder is the record of it. What keeps it here for now is
-    that the container a set is uploaded to is not the container that trains
-    on it, and the job API is behind proxy auth a GPU container has no key
-    for. See `docs/roadmap.md`.
+    beside the checkpoints — see the note on that volume below. The two
+    Playground folders are receipts by that test and could move; they have not
+    been, because a node pack is a git clone with a pinned SHA and the cost of
+    getting that wrong is a room that will not open.
 
     $VISIONARY_MODELS_VOLUME (default "visionary-models")  ->  /models
       krea2-raw.safetensors               Krea 2 RAW DiT   (training)
@@ -149,22 +145,20 @@ LORAS = WORKSPACE / "loras"
 # we build here is required to get a dataset back out. Datasets outlive the
 # training runs that use them; WORK is the per-run scratch copy musubi resizes
 # and caches into, and is disposable.
-DATASETS = WORKSPACE / "datasets"
-# A set you have not kept yet. Identical folder shape to a dataset — images
-# with .txt sidecars — so the contact sheet and the caption box never learn
-# which root a set came from, and saving one is a move rather than a
-# conversion. The split is the whole meaning of "saved": what is under
-# datasets/ is your library, and nothing else is promised to survive.
-#
-# **On the container's disk, not the volume**, since 2026-09-01: the volume
-# holds weights and what you pressed Save on, and an unsaved set is neither.
-# It lives as long as the web container does — twenty minutes past the last
-# request — and Save is the one gesture that reaches the volume. The cost to
-# design for: anything that rents another container (captioning, dedupe on a
-# GPU, training) reads a *saved* set, because this folder is invisible to
-# every other machine. The owner refused a named exception: *"exceptions have
-# a way of setting precedence … unsaved datasets aren't holy."*
-DRAFTS = Path("/tmp/visionary-drafts")
+# **A set is never saved here.** It is uploaded to the container that will
+# hand it to a job, read once, and goes when that container does — the same
+# disk, and the same reasoning, as the drafts it replaces. The client's studio
+# folder is the library; this is a copy in transit, and losing one costs a
+# re-upload rather than data.
+SETS = Path("/tmp/visionary-sets")
+# `DRAFTS` was here, and `SETS` above is what it became. It held a set you had
+# not kept yet, on this disk, against `datasets/` on the volume — and the
+# split was the whole meaning of "saved". The cost it recorded is the reason
+# it is gone: *anything that rents another container reads a saved set,
+# because this folder is invisible to every other machine.* That sentence was
+# true, and it made a GPU job depend on the volume. A set now travels to the
+# job that reads it instead of being left somewhere the job can reach, so the
+# folder is invisible to other machines and it no longer matters.
 # Per-run scratch for the trainer's resized copy and the Drive puller's
 # staging — each on the disk of the container doing the work, disposable.
 WORK = Path("/tmp/visionary-work")
@@ -3681,7 +3675,8 @@ def _caption_images(
              str(HF_CACHE): hf_cache},
 )
 def caption_job(
-    job_id: str, dataset: str, trigger_word: str = "",
+    job_id: str, dataset: str, files: dict[str, bytes] | None = None,
+    trigger_word: str = "",
     preset: str = DEFAULT_CAPTION_PRESET,
     write_mode: str = "skip", model: str = DEFAULT_CAPTION_MODEL,
     instruction: str = "", max_tokens: int = 320,
@@ -3695,10 +3690,15 @@ def caption_job(
     # difference between that and "it is fetching the uncensored weights".
     jobs[job_id] = {"status": "running", "phase": "caption", "stop": False,
                     "model": model, "model_label": spec["label"]}
-    _reload_volume()
-    src = _dataset_dir(dataset)
-    if not src.is_dir():
-        raise RuntimeError(f"No dataset named {dataset!r}.")
+    # **The set arrives with the job**, for the reason `train_job` gives: this
+    # container cannot see the disk it was uploaded to, and that — not the
+    # captioner — is what used to make a set have to be on the volume.
+    if not files:
+        raise RuntimeError(f"No images arrived for {dataset!r}.")
+    src = WORK / job_id / "images"
+    src.mkdir(parents=True, exist_ok=True)
+    for name, blob in files.items():
+        (src / Path(name).name).write_bytes(blob)
 
     started = time.time()
     written, refused = _caption_images(
@@ -3723,7 +3723,17 @@ def caption_job(
         "stopped": _stop_requested(job_id),
     }
     _publish(job_id, **res)
-    return res
+    # The captions ride the return value, never the record — same rule as a
+    # take, and for the same reason: the record is polled while the run works.
+    # They are what this job produced, and the container that has them is not
+    # the one the client asks; `_land_captions` puts them back beside the set.
+    sidecars = {}
+    for f in sorted(src.glob("*.txt")):
+        try:
+            sidecars[f.name] = f.read_bytes()
+        except OSError as exc:
+            print(f"[caption] {f.name}: {type(exc).__name__}: {exc}", flush=True)
+    return {**res, "blobs": sidecars}
 
 
 # --------------------------------------------------------------------------
@@ -3790,6 +3800,7 @@ TRAIN_DEFAULTS = {
 )
 def train_job(
     job_id: str, dataset: str, lora_name: str, trigger_word: str,
+    files: dict[str, bytes] | None = None,
     resolution: int = 1024, batch_size: int = 1, num_repeats: int = 1,
     network_dim: int = 32, network_alpha: int = 32, learning_rate: float = 1e-4,
     max_train_epochs: int = 30, save_every_n_epochs: int = 5,
@@ -3842,29 +3853,35 @@ def train_job(
 
     _require_models("raw", "vae", "text_encoder")
 
-    src = _dataset_dir(dataset)
-    if not src.is_dir():
-        raise RuntimeError(f"No dataset named {dataset!r}.")
+    # **The set arrives with the job.** It used to be read off the volume, and
+    # that is the only reason a set had to be there: this container cannot see
+    # the disk it was uploaded to. Handed over as an argument instead, Modal
+    # blobs anything past 8 KiB on a spawn, so the bytes travel the same path
+    # a large return value does and nothing is stored to make the hop.
+    if not files:
+        raise RuntimeError(f"No images arrived for {dataset!r}.")
 
-    # Copy into per-run scratch rather than training out of the dataset: musubi
-    # writes latent caches beside the images and rewrites missing .txt files, and
-    # a dataset that survives its training runs must not accumulate either.
+    # Per-run scratch, as before: musubi writes latent caches beside the images
+    # and rewrites missing .txt files, and neither should touch what the client
+    # sent.
     work = WORK / job_id
     image_dir, cache_dir = work / "images", work / "cache"
     image_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    # Orientation is baked in on the way into scratch, not left to the trainer:
-    # musubi opens with PIL and PIL does not rotate, so an EXIF-rotated portrait
-    # would be measured landscape, bucketed landscape and trained sideways. The
-    # scratch copy is the right place for it — the dataset on the volume keeps
+    # Orientation is baked in on the way onto disk, not left to the trainer:
+    # musubi opens with PIL and PIL does not rotate, so an EXIF-rotated
+    # portrait would be measured landscape, bucketed landscape and trained
+    # sideways. Here is the right place for it — the client's own file keeps
     # its original bytes, and every run gets upright pixels without the user
     # having to know the tag exists.
     rotated = 0
-    for item in src.iterdir():
-        if item.suffix.lower() in IMAGE_EXTS:
-            rotated += _upright_copy(item, image_dir / item.name)
-        elif item.suffix.lower() == ".txt":
-            shutil.copy2(item, image_dir / item.name)
+    for name, blob in files.items():
+        dest = image_dir / Path(name).name
+        if dest.suffix.lower() in IMAGE_EXTS:
+            dest.write_bytes(blob)
+            rotated += _upright_inplace(dest)
+        elif dest.suffix.lower() == ".txt":
+            dest.write_bytes(blob)
 
     images = [p for p in image_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS]
     if not images:
@@ -4943,25 +4960,78 @@ def _check_name(name: str) -> str:
     return name
 
 
+def _set_payload(d: Path) -> dict[str, bytes]:
+    """
+    One set as `{filename: bytes}`, for handing to the job that reads it.
+
+    Read here on CPU rather than anywhere else because this is the container
+    the client uploaded to, and it is the only one that can see the files. The
+    whole set is held while it is serialized — that is the cost of not putting
+    it on storage, and it is the reason the job API asks for memory. A few
+    gigabytes is the shape this is sized for; a full fine-tune's corpus is not,
+    and would want streaming rather than a bigger number.
+    """
+    out: dict[str, bytes] = {}
+    for f in sorted(d.iterdir()):
+        if not f.is_file() or f.name.startswith("."):
+            continue
+        if f.suffix.lower() in IMAGE_EXTS or f.suffix.lower() == ".txt":
+            try:
+                out[f.name] = f.read_bytes()
+            except OSError as exc:
+                print(f"[set] {f.name}: {type(exc).__name__}: {exc}", flush=True)
+    return out
+
+
+def _land_captions(job_id: str, rec: dict[str, Any]) -> None:
+    """
+    Put a finished caption run's sidecars back beside the set on this disk.
+
+    The captions are the point of the run and they were written on another
+    machine. They come back on the job's return value, and this is where they
+    stop being a result and start being part of the set the client will fetch
+    with `GET /datasets/{name}/files/{file}`.
+
+    Idempotent and quiet: called from the poll that reports the job finished,
+    so a client that polls twice, or a container that died before it could
+    write them, simply lands them on the next ask.
+    """
+    name = str(rec.get("dataset") or "")
+    if not name or rec.get("status") not in ("completed", "stopped"):
+        return
+    try:
+        d = _dataset_dir(name)
+    except ValueError:
+        return
+    if not d.is_dir():
+        return
+    for fn, blob in _take_blobs(job_id).items():
+        if not fn.endswith(".txt"):
+            continue
+        try:
+            (d / Path(fn).name).write_bytes(blob)
+        except OSError as exc:
+            print(f"[caption] landing {fn}: {type(exc).__name__}: {exc}", flush=True)
+
+
 def _dataset_dir(name: str) -> Path:
     """
-    Where the set called `name` lives: saved under datasets/, else drafts/.
+    Where the set called `name` lives — one root, on this container's disk.
 
-    A name is unique across both roots — creating and saving each refuse one the
-    other root already holds — so this never has to choose between two folders.
-    An unused name resolving into drafts/ is what makes dropping images produce
-    a draft without a second create path to keep in step with this one.
+    It used to be two, `datasets/` on the volume against `drafts/` here, and
+    the difference was the whole meaning of "saved". That distinction belonged
+    to a client that had no library of its own. The studio folder is the
+    library now, so a set on this side is only ever a copy in transit to the
+    job that reads it, and there is nothing here for "saved" to mean.
+
+    What went with the second root: the reload race this function used to
+    guard against. A set that was not under `datasets/` *right now* might only
+    have been mid-reload, which is how a saved set became "No dataset named
+    'set_1'" on requests that raced the heartbeat. A local directory is either
+    there or it is not.
     """
     _check_name(name)
-    saved = DATASETS / name
-    # A set that is not under datasets/ *right now* may only be mid-reload:
-    # falling through to drafts/ on that answer is how a saved set became "No
-    # dataset named 'set_1'" on every request that raced the heartbeat's
-    # reload — and on a write route it aims the write at a draft folder that
-    # does not exist. Settle first, then believe it.
-    if not saved.is_dir():
-        _mount_settled()
-    return saved if saved.is_dir() else DRAFTS / name
+    return SETS / name
 
 
 def _upright(im):
@@ -5201,9 +5271,11 @@ def _dataset_stats(d: Path,
         # shows the empty glyph rather than a broken thumbnail, which is what
         # /api/thumb would answer for one.
         "cover": images[0] if images else None,
-        # Which parent it sits under, not a field in dataset.json: the flag and
-        # the folder cannot then disagree about whether the set is kept.
-        "saved": d.parent == DATASETS,
+        # Always true, and kept only because a client may still read it.
+        # It used to mean "under datasets/ rather than drafts/", which was the
+        # difference between a set on the volume and one on this disk. There
+        # is one root now and the client's folder is what "kept" means.
+        "saved": True,
     }
 
 
@@ -12732,7 +12804,7 @@ def _saved_dataset(name: str) -> tuple[Path | None, dict[str, Any] | None]:
     except ValueError as exc:
         return None, {"error": str(exc)}
     _reload_volume()
-    d = DATASETS / name
+    d = SETS / name
     if not d.is_dir():
         return None, {"error": f"No dataset named {name!r} on the volume."}
     return d, None
@@ -12815,15 +12887,9 @@ def _submit_caption(payload: dict[str, Any]) -> dict[str, Any]:
         return {"error": str(exc)}
     if not d.is_dir():
         return {"error": f"No dataset named {name!r}."}
-    if d.parent == DRAFTS:
-        # The captioner is another machine, and a draft is on this one.
-        return {"error": f"Save {name!r} first — captioning runs on a GPU "
-                         f"container, and only a saved set is on the volume "
-                         f"it reads."}
     trigger = str(payload.get("trigger_word") or "")
     if trigger:
         _write_dataset_meta(d, trigger_word=trigger)
-        volume.commit()
 
     # Named rather than defaulted. The page builds both menus out of the
     # tables `/api/state` serves, so a key that is not in them is the two
@@ -12859,8 +12925,8 @@ def _submit_caption(payload: dict[str, Any]) -> dict[str, Any]:
     # nothing during it is a press that looks like it did nothing.
     jobs[job_id] = {"status": "queued", "phase": "waiting for a GPU container",
                     "beat": time.time()}
-    caption_job.spawn(
-        job_id=job_id, dataset=name, trigger_word=trigger,
+    fc = caption_job.spawn(
+        job_id=job_id, dataset=name, files=_set_payload(d), trigger_word=trigger,
         preset=preset, model=model,
         write_mode=write_mode,
         instruction=str(payload.get("instruction") or "")[:4000],
@@ -12868,6 +12934,7 @@ def _submit_caption(payload: dict[str, Any]) -> dict[str, Any]:
         temperature=_clamp("temperature", 0.6, 0.0, 1.5),
         top_p=_clamp("top_p", 0.9, 0.05, 1.0),
     )
+    _publish(job_id, call_id=fc.object_id)
     return {"ok": True, "job_id": job_id}
 
 
@@ -12893,10 +12960,6 @@ def _start_training(*, dataset: str, lora_name: str, trigger_word: str,
         return {"error": str(exc)}
     if not d.is_dir():
         return {"error": f"No dataset named {dataset!r}."}
-    if d.parent == DRAFTS:
-        return {"error": f"Save {dataset!r} first — the trainer runs on a "
-                         f"GPU container, and only a saved set is on the "
-                         f"volume it reads."}
     if not _dataset_images(d):
         return {"error": f"{dataset!r} has no images."}
     lora_name = lora_name.strip()
@@ -12914,10 +12977,11 @@ def _start_training(*, dataset: str, lora_name: str, trigger_word: str,
     jobs[job_id] = {"status": "queued", "phase": "queued", "stop": False,
                     "percent": 0, "session": session,
                     "started": time.time(), "beat": time.time()}
-    train_job.spawn(
-        job_id=job_id, dataset=dataset, lora_name=lora_name,
-        trigger_word=trigger, session=session, **dials,
+    fc = train_job.spawn(
+        job_id=job_id, dataset=dataset, files=_set_payload(d),
+        lora_name=lora_name, trigger_word=trigger, session=session, **dials,
     )
+    _publish(job_id, call_id=fc.object_id)
     return {"ok": True, "job_id": job_id}
 
 
@@ -12947,6 +13011,15 @@ def _start_training(*, dataset: str, lora_name: str, trigger_word: str,
 
 @app.function(
     image=cpu_image, cpu=1.0, timeout=900,
+    # **Room to hold a set while it is handed to a job.** A set travels as an
+    # argument now rather than being left on the volume, and Modal serializes
+    # it here before blobbing it — so the largest set that can be trained on
+    # is a number this container is given rather than a property of storage.
+    # 8 GiB against a working assumption of "a few gigabytes at most, and a
+    # full fine-tune is not supported yet". A starting figure, not a
+    # measurement — the same honesty as the 96 GiB on `BothGenerator`, and the
+    # thing to read before moving it is what a real set costs to serialize.
+    memory=8 * 1024,
     volumes={"/workspace": volume, "/models": models_volume},
     max_containers=1,
     # The web container's window, for the same reason: the spool stays warm
@@ -13028,6 +13101,13 @@ def api():
             except Exception as exc:  # the Dict, not the job — say so
                 return {"status": "unknown", "error": str(exc)}
         rec, token = _await_change(read, since, min(max(wait, 0.0), JOB_WAIT_MAX_S))
+        # A caption run's output is text files written on another machine, and
+        # this is the moment the client is told the run finished — so it is
+        # also the moment they have to exist here, or the fetch that follows
+        # this reply asks for a sidecar nothing has written. Idempotent, so a
+        # second poll or a restarted container simply lands them again.
+        if rec.get("phase") == "caption" or rec.get("dataset"):
+            _land_captions(job_id, rec)
         return {**rec, "token": token}
 
     @routes.post("/jobs/{job_id}/stop")
@@ -13050,7 +13130,7 @@ def api():
         """
         _reload_volume()
         tree: dict[str, Any] = {}
-        for d in (MODELS, LORAS, DATASETS):
+        for d in (MODELS, LORAS):
             if d.is_dir():
                 tree[str(d)] = sorted(
                     f"{p.name} ({p.stat().st_size / 1e9:.2f} GB)"
@@ -13210,9 +13290,9 @@ def api():
     def datasets() -> dict[str, Any]:
         _reload_volume()
         rows = []
-        if DATASETS.is_dir():
+        if SETS.is_dir():
             with _RELOAD_LOCK:
-                rows = [_dataset_stats(d) for d in sorted(DATASETS.iterdir())
+                rows = [_dataset_stats(d) for d in sorted(SETS.iterdir())
                         if d.is_dir() and not d.name.startswith(".")]
         rows.sort(key=lambda r: -r["modified"])
         return {"datasets": rows}
@@ -13250,7 +13330,7 @@ def api():
             return JSONResponse({"error": f"{file!r} is not a file a set can hold — one "
                                           "segment, an image, clip, .txt or .json."},
                                 status_code=400)
-        d = DATASETS / name
+        d = SETS / name
         d.mkdir(parents=True, exist_ok=True)
         target = d / file
         tmp = d / f".{file}.{os.getpid()}.part"
@@ -13275,21 +13355,30 @@ def api():
             return {"error": str(exc)}
         if not DATASET_FILE_RE.match(file):
             return {"error": f"{file!r} is not a file a set can hold."}
-        (DATASETS / name / file).unlink(missing_ok=True)
+        (SETS / name / file).unlink(missing_ok=True)
         return {"ok": True}
 
     @routes.post("/datasets/{name}/commit")
     def commit_dataset(name: str) -> dict[str, Any]:
-        """Make the mirror visible to other containers. One commit per sync,
-        not per file: a commit is a snapshot of the whole volume."""
+        """
+        The end of a sync: what this side now holds for that set.
+
+        It used to commit the volume, and the name is from then — one commit
+        per sync rather than per file, because a commit snapshotted the whole
+        volume. There is no volume in this path any more and nothing to make
+        visible to another container, so what is left is the useful half: the
+        client says it has finished sending and gets back the count and the
+        bytes to check its own diff against. Kept rather than deleted because
+        that check is the point, and a sync with no end is a sync you cannot
+        tell has finished.
+        """
         try:
             _check_name(name)
         except ValueError as exc:
             return {"error": str(exc)}
-        d = DATASETS / name
+        d = SETS / name
         if not d.is_dir():
-            return {"error": f"No dataset named {name!r} on the volume."}
-        volume.commit()
+            return {"error": f"Nothing uploaded for {name!r}."}
         return {"ok": True, **_dataset_stats(d)}
 
     @routes.delete("/datasets/{name}")
@@ -13322,7 +13411,7 @@ def api():
             return JSONResponse({"error": f"{file!r} is not a file a set can hold."}, status_code=400)
         data = _volume_bytes(f"datasets/{name}/{file}")
         if data is None:
-            mounted = DATASETS / name / file
+            mounted = SETS / name / file
             if not mounted.is_file():
                 _reload_volume()
             if not mounted.is_file():

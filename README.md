@@ -246,17 +246,16 @@ to show.
 
 ## Storage
 
-Two Modal Volumes, and the layout under each is the contract. `/workspace`
-holds what you pressed Save on; `/models` holds the weights. Nothing derived lives on either: thumbnails, drafts and caches live
-on the container's own disk and are rebuilt when it scales to zero.
+Two Modal Volumes, and the layout under each is the contract. **Both hold
+weights and nothing else.** A render is returned to the client and read back
+by call id; a set is uploaded to a container's disk and handed to the job that
+reads it. Neither reaches storage, and neither do thumbnails, caches or
+anything else derived — the client's folder is the library, and everything
+here is a copy in transit.
 
 ```
 /workspace                          visionary
   loras/                            trained LoRAs, one folder each; loose files work too
-  datasets/{name}/                  images (and clips) + .txt caption sidecars
-  outputs/                          renders, flat: {job}_{NN}.png, {job}.mp4
-  characters/{handle}/              pictures, voice, note.txt, character.json
-  storyboard/{name}/board.json      panels, beside the pictures dropped on the board
   workflows/{name}.json             Playground graphs, plain ComfyUI API format
   playground_nodes/                 node packs installed from git, pinned by SHA
 /models                             visionary-models — weights, flat, by exact filename
@@ -264,9 +263,10 @@ on the container's own disk and are rebuilt when it scales to zero.
 
 A render's record — the typed prose, the pills, the seed, what the encoder was
 told — lives *inside* the file, as a PNG text chunk or an MP4 metadata key, so
-a picture dragged out of the browser carries its own receipt. Datasets are
-folders of images with text files beside them. Nothing here is required to get
-your data back out.
+a picture carries its own receipt wherever it lands. That matters more now
+than it did: the file is the only copy that persists, because this side hands
+the bytes over and keeps nothing. A set is a folder of images with text files
+beside them. Nothing here is required to get your data back out.
 
 Run a second, isolated copy against its own storage by setting the volume
 names:

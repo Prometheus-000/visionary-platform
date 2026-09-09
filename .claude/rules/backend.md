@@ -254,7 +254,30 @@ build-order problem, and the file is navigable by its banner comments.
 
 Set `VISIONARY_VOLUME` to run a second copy against its own storage.
 
-### The volume holds weights and what you saved, and nothing else
+### The volumes hold weights, and nothing else
+
+**Restated 2026-09-09, and it got stricter.** It used to be "weights and what
+you saved", and the account below is how that rule was arrived at. What
+changed is that there is nothing left for "saved" to mean on this side: a
+render is returned to the client and read back by call id, and a set is
+uploaded to a container's disk and handed to the job that reads it. Neither
+touches a volume. `datasets/` and `outputs/` are gone from the layout, and so
+is the distinction between a saved set and a draft — the client's studio
+folder is the library, and everything here is a copy in transit.
+
+The two things that made this possible were both already in the file. Modal
+holds a spawned call's return value, which is how a take gets from the GPU
+container to the one that serves it — the shape `_node_catalogue_bytes` uses
+for the harvest. And Modal blobs any argument past 8 KiB on a spawn, which is
+how a set gets from the container it was uploaded to into the job that trains
+on it. The cost of the second is that the set is held in memory while it is
+serialized, which is why the job API asks for `memory=8 * 1024`: a few
+gigabytes, against a working assumption that a full fine-tune's corpus is not
+supported yet. A starting figure, not a measurement.
+
+The account that produced the original rule follows, because the failure it
+names is why any of this is written down.
+
 
 Stated by the owner on 2026-09-01, and the root cause was found the same
 afternoon: the web function set no `scaledown_window`, so the container died
@@ -381,32 +404,34 @@ rather than a path, so `reuse.ts` still starts from one and still has to land on
 the right file. The failure would just arrive somewhere else now: a reused card
 silently coming back with one fewer LoRA than the run it claims to reproduce.
 
-### Saving a set is a choice, and it is the only thing `drafts/` means
+### Saving a set was a choice, and `drafts/` was the only thing it meant
 
-Dropping images makes a **draft**. It filters, captions by hand and reviews
-exactly like a saved set — same folder shape, same sidecars, same code path —
-and the difference is where it sits: **on the web container's disk**, under
-`DRAFTS`, not on the volume. Saving moves the folder into `datasets/` under
-the name you type, which is a copy across filesystems and the one gesture
-that reaches the volume; nothing asks for a name before the images are in
-front of you, because "is this worth keeping" is not a question you can answer
-at drop time.
+**Retired 2026-09-09, and the argument is kept because it is the one that ate
+itself.** Dropping images made a *draft*: same folder shape, same sidecars,
+same code path as a saved set, and the difference was only where it sat — on
+the container's disk under `DRAFTS`, not the volume. Saving copied it into
+`datasets/` under the name you typed, which was the one gesture that reached
+storage, and nothing asked for a name before the images were in front of you,
+because "is this worth keeping" is not a question you can answer at drop time.
 
-What that costs, and is designed for: anything that rents another container
-reads a *saved* set. The captioner and the trainer refuse a draft with a
-sentence that names Save, because a folder on this container is invisible
-to every other machine. The dedupe scan and the insight run in-process and
-work on a draft as they are.
+The cost was written down at the time, and it is what eventually removed the
+whole distinction: **anything that rents another container — captioning,
+dedupe on a GPU, training — reads a *saved* set, because a container's disk is
+invisible to every other machine.** That sentence was true, and it meant a GPU
+job depended on the volume. The owner refused a named exception for it —
+*"exceptions have a way of setting precedence … unsaved datasets aren't
+holy"* — which was the right call and left the cost standing.
 
-A draft lives as long as the container, twenty minutes past the last request,
-and a client saying so is part of the drop surface. The heartbeat and the
-sweep that used to trim it — `/api/session` writing a timestamp into a
-sessions Dict, and a draft quiet for fifteen minutes being swept — went with
-the front end on 2026-09-09. They existed because a remote container cannot
-know whether a browser tab is open, which is a receipt for the vehicle rather
-than a property of the work: the container's own scaledown is the lifetime
-now, and it is the honest one. The overlay that reads committed captions
-knows a draft has nothing committed and reads the disk.
+What removed it was not an exception but a different question: instead of
+leaving a set somewhere a job can reach, hand the set to the job. Modal blobs
+any argument past 8 KiB on a spawn, so a set travels with the call that needs
+it and a container's disk being private stops mattering. `SETS` is the one
+root now, every set is a copy in transit, and the client's studio folder is
+what "saved" means.
+
+The general shape is worth keeping: **a rule whose cost is written down is a
+rule that can be retired when something pays the cost off.** This one sat for
+eight days with its price in the comment above the constant.
 
 ## Conventions
 
