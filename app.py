@@ -3468,12 +3468,6 @@ def _think_budget(think_end: int, prompt_len: int, think_tokens: int,
     return StoppingCriteriaList([_Budget()])
 
 
-# How long a caption run goes between commits. Small enough that the page's
-# mid-run tile refresh shows real progress, large enough that the commit's
-# pause is noise against the per-image inference it interrupts.
-CAPTION_COMMIT_S = 20
-
-
 def _caption_images(
     image_dir: Path, trigger_word: str, job_id: str,
     preset: str, write_mode: str, model_key: str,
@@ -3547,11 +3541,15 @@ def _caption_images(
         print(f"[caption] hf cache commit skipped: {exc}")
 
     written = refused = 0
-    last_commit = time.time()
+    # Reset per picture, because it is read by the publish at the foot of the
+    # loop: one that failed inside the try would otherwise report the caption
+    # of the picture before it, and the first one would have nothing to read.
+    final = ""
     for i, img_path in enumerate(todo, 1):
         if _stop_requested(job_id):
             print("[caption] stop requested")
             break
+        final = ""
         try:
             image = _upright(Image.open(img_path)).convert("RGB")
             inputs = _vlm_inputs(processor, image, instruction, shape,
@@ -3650,20 +3648,25 @@ def _caption_images(
         except Exception as exc:
             print(f"[caption] {img_path.name} failed: {exc}")
 
+        # **The caption just written rides the record.** The sidecars
+        # themselves cannot be seen until this job returns — they are on this
+        # container's disk and the client asks a different one — so without
+        # this a run of forty pictures would show a number climbing and not a
+        # word of what it is producing. One caption is a few hundred bytes,
+        # which keeps the polled thing small; the set lands whole at the end.
+        #
+        # It replaces a `volume.commit()` on a timer here, whose entire job
+        # was to let a reader refresh tiles mid-run. There is no volume in
+        # this path now, so the mechanism goes and the behaviour it bought is
+        # kept: you can read the first caption and judge the preset without
+        # waiting for the last.
         _publish(job_id, phase="caption", step=i, total_steps=len(todo),
-                 percent=round(i / len(todo) * 100))
-        # Committed as it goes, not only at the end: the page refreshes tiles
-        # mid-run, and against an end-only commit that refresh could never
-        # show a thing — "captions land visibly" was a fiction for the whole
-        # run. Time-based, so the cost tracks the clock (about a second of
-        # idle every twenty), not the size of the set.
-        if time.time() - last_commit >= CAPTION_COMMIT_S:
-            volume.commit()
-            last_commit = time.time()
+                 percent=round(i / len(todo) * 100),
+                 last_caption={"name": img_path.name,
+                               "text": _trimmed(final)[:400]} if final else None)
 
     del model
     torch.cuda.empty_cache()
-    volume.commit()
     return written, refused
 
 
