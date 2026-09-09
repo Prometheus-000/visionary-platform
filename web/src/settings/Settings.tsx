@@ -149,8 +149,8 @@ export function Settings({
     const repo = prompt(
       `Push “${l.name}” to HuggingFace?\n\n`
       + `${n} file${n === 1 ? '' : 's'} (${fmtBytes(l.bytes)}) go to a private repo under `
-      + 'your account — created if it does not exist, files replaced by name if it does. '
-      + 'Repo name, or owner/name:',
+      + 'your account — created if it does not exist, and only the files whose bytes '
+      + 'differ from what is already up there are sent. Repo name, or owner/name:',
       l.name.replace(/[^A-Za-z0-9_.-]+/g, '-'),
     )
     if (repo == null || !repo.trim()) return

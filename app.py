@@ -3546,13 +3546,27 @@ def hf_lora_job(repo: str, filename: str, folder: str, refetch: bool = False) ->
 @app.function(image=web_image, cpu=2.0, timeout=4 * 60 * 60, volumes={"/workspace": volume, "/models": models_volume})
 def hf_push_job(root: str, repo: str) -> dict[str, Any]:
     """
-    Push one LoRA to a private HuggingFace repo, creating it if it is new.
+    Push a LoRA — or, with no `root`, the whole shelf — to a private
+    HuggingFace repo, creating it if it is new, and sending only what is
+    not already there.
 
     A file per commit rather than one `upload_folder`, because a commit
     boundary is a stop point and a progress line — twenty epochs as one
     opaque upload is the still button this project does not ship. Private
     always: this is your own instrument going to your own shelf, and a repo
     made public is a decision to take on huggingface.co, not a default here.
+
+    The difference, not a rewrite: the hub's tree carries an LFS sha256 for
+    every file, so a file whose bytes are already up there is skipped and
+    said so. Matching on the digest rather than the size, because a LoRA
+    retrained at the same rank is the same length to the byte — size would
+    have called a whole new instrument unchanged. A file the hub reports no
+    digest for is pushed: the only silent outcome this can have is the
+    wrong one.
+
+    One repo holds one LoRA when `root` names one, and the shelf's own
+    layout when it does not — `loras/<name>/…`, the layout the volume uses,
+    because that is the contract and a pull has to be able to put it back.
 
     No byte-level progress, because the hub client offers none: what moves is
     the file count and the clock, and both are on the line.
@@ -3579,19 +3593,58 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
     if not token:
         return fail("No HuggingFace token saved — a push needs one with write access.")
     _reload_volume()
-    path = Path(root).resolve()
-    if path.parent != LORAS.resolve():
-        return fail(f"Not a LoRA: {root!r}")
-    if path.is_dir():
-        files = sorted(p for p in path.rglob("*") if p.is_file()
-                       and p.suffix.lower() == ".safetensors")
-    elif path.is_file():
-        files = [path]
+    # `in_repo` per file rather than one rule applied later: the two units
+    # name their files differently — a single LoRA's repo holds that LoRA's
+    # contents at its root, the shelf's holds the shelf's layout — and
+    # deciding it beside the file that has it is the only place both are known.
+    files: list[tuple[Path, str]] = []
+    skipped: list[str] = []
+    if root:
+        path = Path(root).resolve()
+        if path.parent != LORAS.resolve():
+            return fail(f"Not a LoRA: {root!r}")
+        if path.is_dir():
+            files = [(f, f.relative_to(path).as_posix())
+                     for f in sorted(path.rglob("*"))
+                     if f.is_file() and f.suffix.lower() == ".safetensors"]
+        elif path.is_file():
+            files = [(path, path.name)]
+        else:
+            return fail(f"No LoRA named {path.name!r} on the volume — reopen "
+                        "Settings to refresh the list.")
+        if not files:
+            return fail(f"{path.name} holds no .safetensors to push.")
+        what = path.name
     else:
-        return fail(f"No LoRA named {path.name!r} on the volume — reopen Settings to "
-                    "refresh the list.")
-    if not files:
-        return fail(f"{path.name} holds no .safetensors to push.")
+        # `LORAS` unresolved, the way `state()` walks it: the catalogue's roots
+        # are keyed on the unresolved path, and a resolve here would look up
+        # every one of them under a key that does not exist — a catalogue LoRA
+        # would stop being recognised as one and get pushed as if it were yours.
+        for d in sorted(LORAS.iterdir()) if LORAS.is_dir() else []:
+            spec = CATALOGUE_LORA_ROOTS.get(str(d)) or {}
+            # A catalogue LoRA is skipped and said so, not quietly included:
+            # it is already on the hub under someone else's account, and
+            # copying forty gigabytes of it into a private repo is a bill for
+            # a second copy of a public file. The internal ones are machinery
+            # the list never shows, so pushing them would put a file on your
+            # shelf you never chose.
+            if spec.get("internal"):
+                continue
+            if spec.get("family"):
+                skipped.append(d.name if d.is_dir() else d.stem)
+                continue
+            if d.is_dir():
+                files += [(f, f.relative_to(LORAS).as_posix())
+                          for f in sorted(d.rglob("*"))
+                          if f.is_file() and f.suffix.lower() == ".safetensors"]
+            elif d.suffix.lower() == ".safetensors":
+                files.append((d, d.name))
+        if not files:
+            return fail("No LoRAs of your own on the volume to push"
+                        + (f" — the {len(skipped)} up there came out of the "
+                           "catalogue and are already on HuggingFace."
+                           if skipped else "."))
+        what = "the shelf"
 
     api = HfApi(token=token)
     try:
@@ -3609,18 +3662,76 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
     except Exception as exc:
         return fail(f"{type(exc).__name__}: {exc}")
 
-    total = sum(f.stat().st_size for f in files)
     started = time.time()
-    pushed: list[str] = []
-    print(f"[hf push] {path.name} -> {repo} · {len(files)} file(s), {total / 1e9:.2f} GB")
-    for i, f in enumerate(files, 1):
+    # What the repo already holds, by digest. A repo made a moment ago has no
+    # tree, and a listing that fails for any other reason means the push is
+    # simply the one it always was — an unreadable tree must not turn into a
+    # skipped file.
+    have: dict[str, str] = {}
+    try:
+        _publish(job_id, phase=f"Reading what {repo} already holds")
+        for item in api.list_repo_tree(repo, recursive=True):
+            digest = getattr(getattr(item, "lfs", None), "sha256", None)
+            if digest:
+                have[item.path] = digest
+    except Exception as exc:
+        print(f"[hf push] could not read {repo}'s tree ({exc}); pushing everything")
+
+    sending: list[tuple[Path, str]] = []
+    already: list[str] = []
+    for n, (f, in_repo) in enumerate(files, 1):
         if _stop_requested(job_id):
-            res = {"status": "stopped", "downloaded": pushed,
-                   "remaining": [x.name for x in files if x.name not in pushed],
+            res = {"status": "stopped", "files": [], "repo": repo,
+                   "note": "Stopped before anything was uploaded."}
+            _publish(job_id, **res)
+            return res
+        want = have.get(in_repo)
+        if want is None:
+            sending.append((f, in_repo))
+            continue
+        # Read and hashed on this thread, and the line moved while it runs:
+        # a 2 GB checkpoint takes long enough off the volume that a phase
+        # naming only the file would sit still through the whole of it, which
+        # is the shape of a wait this project treats as a stuck one.
+        size = f.stat().st_size
+        digest = hashlib.sha256()
+        seen = 0
+        spoke = 0.0
+        with f.open("rb") as fh:
+            for block in iter(lambda: fh.read(8 << 20), b""):
+                digest.update(block)
+                seen += len(block)
+                if time.time() - spoke > 2:
+                    spoke = time.time()
+                    _publish(job_id, phase=f"Comparing {n} of {len(files)} · {f.name} · "
+                                           f"{seen / 1e9:.2f} of {size / 1e9:.2f} GB")
+        if digest.hexdigest() == want:
+            already.append(in_repo)
+        else:
+            sending.append((f, in_repo))
+
+    if not sending:
+        res = {"status": "completed", "percent": 100, "files": [], "repo": repo,
+               "url": f"https://huggingface.co/{repo}", "size_gb": 0.0,
+               "duration_s": round(time.time() - started, 1),
+               "note": f"Nothing to push — all {len(already)} file"
+                       f"{'' if len(already) == 1 else 's'} of {what} are already "
+                       f"in {repo}."}
+        _publish(job_id, **res)
+        print(f"[hf push] nothing to send in {res['duration_s']}s")
+        return res
+
+    total = sum(f.stat().st_size for f, _ in sending)
+    pushed: list[str] = []
+    print(f"[hf push] {what} -> {repo} · {len(sending)} of {len(files)} file(s), "
+          f"{total / 1e9:.2f} GB · {len(already)} already there")
+    for i, (f, in_repo) in enumerate(sending, 1):
+        if _stop_requested(job_id):
+            res = {"status": "stopped", "files": pushed,
+                   "remaining": [d for _, d in sending if d not in pushed],
                    "repo": repo}
             _publish(job_id, **res)
             return res
-        in_repo = f.relative_to(path).as_posix() if path.is_dir() else f.name
         size_gb = f.stat().st_size / 1e9
         # The upload in a worker and the clock on this thread, the download
         # pattern: `upload_file` blocks with no callback, and a line that does
@@ -3628,10 +3739,16 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
         result: dict[str, Any] = {}
         done = threading.Event()
 
-        def push(sink: dict[str, Any], flag: "threading.Event", src: Path, dst: str) -> None:
+        # "Update" when the path was already up there and its bytes differed —
+        # the commit list is the only record of what a push did, and every line
+        # of it saying "Add" makes a replacement look like a first arrival.
+        verb = "Update" if in_repo in have else "Add"
+
+        def push(sink: dict[str, Any], flag: "threading.Event", src: Path, dst: str,
+                 word: str = verb) -> None:
             try:
                 api.upload_file(path_or_fileobj=str(src), path_in_repo=dst, repo_id=repo,
-                                commit_message=f"Add {dst}")
+                                commit_message=f"{word} {dst}")
             except Exception as exc:
                 sink["error"] = exc
             finally:
@@ -3641,8 +3758,8 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
         t0 = time.time()
         while not done.wait(5):
             el = int(time.time() - t0)
-            _publish(job_id, percent=round((i - 1) / len(files) * 100),
-                     phase=f"Uploading {i} of {len(files)} · {f.name} · "
+            _publish(job_id, percent=round((i - 1) / len(sending) * 100),
+                     phase=f"Uploading {i} of {len(sending)} · {in_repo} · "
                            f"{size_gb:.2f} GB · {el // 60}m{el % 60:02d}s")
         if result.get("error") is not None:
             exc = result["error"]
@@ -3654,17 +3771,27 @@ def hf_push_job(root: str, repo: str) -> dict[str, Any]:
                     "under your own account or org."
                     if code in (401, 403) else f"{type(exc).__name__}: {exc}")
             return fail(head
-                        + (f" {len(pushed)} of {len(files)} pushed before it;"
-                           " press Push again and the hub skips the bytes it already has."
+                        + (f" {len(pushed)} of {len(sending)} pushed before it;"
+                           " press Push again and those are the ones it skips."
                            if pushed else ""))
-        pushed.append(f.name)
+        pushed.append(in_repo)
 
+    # The three counts, because each answers a different question a push
+    # leaves open: what moved, what was there already, and what this deliberately
+    # did not touch.
+    note = (f"Pushed {len(pushed)} file{'' if len(pushed) == 1 else 's'} to "
+            f"{repo} (private).")
+    if already:
+        note += f" {len(already)} already there."
+    if skipped:
+        note += (f" {len(skipped)} skipped — {', '.join(skipped[:4])}"
+                 f"{f' and {len(skipped) - 4} more' if len(skipped) > 4 else ''} "
+                 "came out of the catalogue and are already on HuggingFace.")
     res = {
         "status": "completed", "percent": 100, "files": pushed, "repo": repo,
-        "url": f"https://huggingface.co/{repo}",
+        "url": f"https://huggingface.co/{repo}", "already": already,
         "size_gb": round(total / 1e9, 2), "duration_s": round(time.time() - started, 1),
-        "note": f"Pushed {len(pushed)} file{'' if len(pushed) == 1 else 's'} to "
-                f"{repo} (private).",
+        "note": note,
     }
     _publish(job_id, **res)
     print(f"[hf push] done in {res['duration_s']}s")
@@ -14473,19 +14600,31 @@ def _start_hf_lora(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _push_lora(payload: dict[str, Any]) -> dict[str, Any]:
     """
-    Push one LoRA — the row `state()` lists — to a private HuggingFace repo.
+    Push one LoRA — the row `state()` lists — to a private HuggingFace repo,
+    or the whole shelf when no path is given.
 
     Guarded like delete: the unit is a folder or a loose file directly
-    under loras/, never an epoch inside a folder. The token is checked
-    here because it is the one precondition a form can see, and a
+    under loras/, never an epoch inside a folder. No path at all is the
+    shelf, which is the one address that needs no guarding. The token is
+    checked here because it is the one precondition a form can see, and a
     container started to discover there is no token is a container
     started for nothing.
     """
     raw = str(payload.get("path") or "")
-    root = Path(raw).resolve()
-    if not raw or root.parent != LORAS.resolve():
+    if raw and Path(raw).resolve().parent != LORAS.resolve():
         return {"error": f"Not a LoRA: {raw!r}"}
-    repo = str(payload.get("repo") or "").strip()
+    root = str(Path(raw).resolve()) if raw else ""
+    # Through `_hf_ref` first, because the shelf push shares its field with
+    # Pull and the thing somebody pastes into that field is the URL in their
+    # browser bar. A bare `name` has no owner and is not a ref, so it falls
+    # through to the pattern, where the job fills the owner in from the token.
+    raw_repo = str(payload.get("repo") or "").strip()
+    repo = raw_repo
+    if "/" in raw_repo:
+        try:
+            repo = _hf_ref(raw_repo)[0]
+        except ValueError as exc:
+            return {"error": str(exc)}
     if not HF_REPO_RE.match(repo):
         return {"error": "Repo id must be `name` or `owner/name` — letters, digits, "
                          "`-`, `_` and `.`."}
@@ -14498,7 +14637,7 @@ def _push_lora(payload: dict[str, Any]) -> dict[str, Any]:
     if refusal:
         return {"error": refusal}
     _arm_spawn(HF_PUSH_JOB)
-    hf_push_job.spawn(str(root), repo)
+    hf_push_job.spawn(root, repo)
     return {"ok": True, "job_id": HF_PUSH_JOB}
 
 
