@@ -62,11 +62,21 @@ krea_ckpt = (["first.weight", "txtfusion.projector.weight"]
              + [f"blocks.{i}.mlp.{w}.weight" for i in range(8)
                 for w in ("w1", "w2", "w3")])
 
-# H3's diffusers export, kept as the odd one out below: its 638 real parameter
-# names, from the tensor index vendored beside this repo.
-h3_diffusers = list(json.load(open(
-    "MiniMax-H3/transformer/diffusion_pytorch_model.safetensors.index.json"
-))["weight_map"])
+# H3's diffusers export, kept as the odd one out below. Real names, read out
+# of the tensor index in the MiniMax-H3 clone — and copied here rather than
+# read at run time, because that clone is an upstream checkout this repo
+# ignores: a test that opens it passes on the machine that has it and fails
+# for everyone else, which is the opposite of what it is for.
+h3_diffusers = (["proj_in.weight", "audio_proj_in.weight",
+                 "context_embedder.weight", "norm_out.linear.weight"]
+                + [f"transformer_blocks.{i}.attn.{m}.weight" for i in range(4)
+                   for m in ("to_q", "to_k", "to_v", "to_out.0",
+                             "norm_q", "norm_k")]
+                + [f"transformer_blocks.{i}.ff.net.{m}.weight" for i in range(4)
+                   for m in ("0.proj", "2")]
+                + [f"transformer_blocks.{i}.adaln_proj.weight" for i in range(4)]
+                + [f"token_refiner.refiner_blocks.{i}.attn.to_q.weight"
+                   for i in range(2)])
 
 # A LoRA is written in whichever convention its checkpoint uses — it has to be,
 # or it would not load — so each is turned into LoRA keys both ways a trainer
