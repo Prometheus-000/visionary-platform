@@ -5919,6 +5919,18 @@ def _group_of(name: str) -> str:
     return re.sub(r"_\d{2}$", "", stem)
 
 
+# **How long a take may take to become fetchable, and why this is not zero.**
+# It was `timeout=0` — poll once, give up — and that lost a render on every
+# run. The job publishes `status: completed` to the record and *then* returns,
+# so the client, which is watching that record on a long poll, asks for the
+# file inside the gap. Measured on 2026-09-10: the route answered 404 in 91 ms
+# while the same call fetched fine 1.6 s later, and nothing was logged because
+# giving up is not an error to `.get`. A bounded wait closes the window; an
+# expired result still raises straight away, so a take that really is gone is
+# still a fast 404 rather than a stall.
+TAKE_WAIT_S = 30
+
+
 def _take_blobs(job_id: str) -> dict[str, bytes]:
     """
     Every file one run wrote, off that run's own result.
@@ -5935,8 +5947,9 @@ def _take_blobs(job_id: str) -> dict[str, bytes]:
     if not cid:
         return {}
     try:
-        res = modal.FunctionCall.from_id(cid).get(timeout=0)
-    except Exception:  # noqa: BLE001 — not done, expired, or gone
+        res = modal.FunctionCall.from_id(cid).get(timeout=TAKE_WAIT_S)
+    except Exception as exc:  # noqa: BLE001 — expired, gone, or still not out
+        print(f"[take] {job_id}: {type(exc).__name__}: {exc}", flush=True)
         return {}
     blobs = (res or {}).get("blobs") if isinstance(res, dict) else None
     return blobs if isinstance(blobs, dict) else {}
@@ -5991,12 +6004,20 @@ def _spooled_take(name: str) -> Path | None:
         local.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_bytes(data)
         tmp.replace(local)
-        _trim_spool()
-        return local
     except OSError as exc:
         print(f"[take] {name}: {type(exc).__name__}: {exc}", flush=True)
         tmp.unlink(missing_ok=True)
         return None
+    # Outside the write, because it used to be inside it: `_trim_spool` walks
+    # the whole spool and unlinks, so a file vanishing under a concurrent
+    # request raises OSError — and the handler above then answered 404 for a
+    # take that had already landed whole. Housekeeping cannot be allowed to
+    # lose the thing it is housekeeping for.
+    try:
+        _trim_spool()
+    except OSError as exc:
+        print(f"[spool] trim: {type(exc).__name__}: {exc}", flush=True)
+    return local
 
 
 def _spooled(rel: str) -> Path | None:
