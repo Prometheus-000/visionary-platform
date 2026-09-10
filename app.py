@@ -1554,6 +1554,54 @@ def _clear_stop(job_id: str) -> None:
         pass
 
 
+# **The call id lives in its own key for the reason the stop flag does**, and it
+# was found the same way: by a thing that silently never worked. It was written
+# with `_publish(job_id, call_id=...)` from the *web* container, moments after
+# `.spawn()`, onto a record the *job* container rewrites — and `_PUBLISH_LOCK`
+# is process-local, so the two never coordinated. The job's first progress
+# publish was already holding a copy read before the id was written and put it
+# back without it. A caption run publishes on every picture, so the id was gone
+# inside the first frame; on 936 render records in the Dict there was not one
+# survivor either.
+#
+# Nothing said so, because every reader treats a missing id as "that result is
+# not here any more" — the honest answer to an expired call, and
+# indistinguishable from this. What it cost: `_take_blobs` always returned {},
+# so `_land_captions` landed nothing and a finished caption run's sidecars were
+# fetched as a 404. The client had already written the record's 400-character
+# preview into each sidecar by then, so a set came out captioned and every
+# caption was cut mid-word.
+def _call_key(job_id: str) -> str:
+    return f"call:{job_id}"
+
+
+def _record_call(job_id: str, call_id: str) -> None:
+    """The spawned call's id, where no merge can reach it."""
+    jobs[_call_key(job_id)] = call_id
+    # Still on the record too: a job already in flight when this deploys has a
+    # reader that only knows the old place, and the field costs nothing.
+    _publish(job_id, call_id=call_id)
+
+
+def _clear_call(job_id: str) -> None:
+    """At the top of a run, so a fixed-id job cannot serve the last run's
+    result — the same staleness `_clear_stop` exists for."""
+    try:
+        jobs.pop(_call_key(job_id))
+    except Exception:
+        pass
+
+
+def _call_of(job_id: str) -> str:
+    try:
+        cid = jobs.get(_call_key(job_id))
+        if cid:
+            return str(cid)
+        return str((jobs.get(job_id) or {}).get("call_id") or "")
+    except Exception:
+        return ""
+
+
 def _arm_spawn(job_id: str, phase: str = "Starting…") -> None:
     """
     What a route does for a fixed-id job in the moment before `.spawn()`.
@@ -1574,6 +1622,7 @@ def _arm_spawn(job_id: str, phase: str = "Starting…") -> None:
     merges with `_publish` instead of assigning, so the request survives.
     """
     _clear_stop(job_id)
+    _clear_call(job_id)
     jobs[job_id] = {"status": "running", "phase": phase, "percent": 0,
                     "stop": False, "beat": time.time()}
 
@@ -5857,18 +5906,15 @@ def _take_blobs(job_id: str) -> dict[str, bytes]:
     """
     Every file one run wrote, off that run's own result.
 
-    The job record carries the call id because `.spawn()` returns before the
-    container starts and the record is the only thing both sides can see. A
-    result Modal has already handed back, expired, or never finished is an
-    empty dict, not an error: the caller's next step is a 404, which is the
-    honest answer for "that take is not here any more".
+    The call id is kept because `.spawn()` returns before the container starts,
+    and it is kept in `call:{job_id}` rather than on the record: see
+    `_record_call` for the merge that used to eat it. A result Modal has
+    already handed back, expired, or never finished is an empty dict, not an
+    error: the caller's next step is a 404, which is the honest answer for
+    "that take is not here any more" — and the reason this failure was silent
+    for as long as it was.
     """
-    rec = {}
-    try:
-        rec = jobs.get(job_id) or {}
-    except Exception:  # noqa: BLE001 — a Dict hiccup is a miss, not a crash
-        pass
-    cid = str(rec.get("call_id") or "")
+    cid = _call_of(job_id)
     if not cid:
         return {}
     try:
@@ -11756,7 +11802,7 @@ def _submit_still(payload: dict[str, Any]) -> dict[str, Any]:
     # from whichever CPU container is alive when the client asks. Recorded
     # after the spawn and merged in, so a poll that arrives first still
     # finds the queued record this route seeded.
-    _publish(job_id, call_id=fc.object_id)
+    _record_call(job_id, fc.object_id)
     _log_spawn("image", job_id, payload, t_route)
     return {"ok": True, "job_id": job_id}
 
@@ -12034,7 +12080,7 @@ def _submit_video(payload: dict[str, Any]) -> dict[str, Any]:
     # from whichever CPU container is alive when the client asks. Recorded
     # after the spawn and merged in, so a poll that arrives first still
     # finds the queued record this route seeded.
-    _publish(job_id, call_id=fc.object_id)
+    _record_call(job_id, fc.object_id)
     _log_spawn("video", job_id, payload, t_route)
     return {"ok": True, "job_id": job_id, "model": model, "mode": task}
 
@@ -12185,7 +12231,7 @@ def _playground_submit(payload: dict[str, Any]) -> dict[str, Any]:
     # from whichever CPU container is alive when the client asks. Recorded
     # after the spawn and merged in, so a poll that arrives first still
     # finds the queued record this route seeded.
-    _publish(job_id, call_id=fc.object_id)
+    _record_call(job_id, fc.object_id)
     _log_spawn("playground", job_id, payload, t_route)
     return {"ok": True, "job_id": job_id}
 
@@ -12937,7 +12983,7 @@ def _submit_caption(payload: dict[str, Any]) -> dict[str, Any]:
         temperature=_clamp("temperature", 0.6, 0.0, 1.5),
         top_p=_clamp("top_p", 0.9, 0.05, 1.0),
     )
-    _publish(job_id, call_id=fc.object_id)
+    _record_call(job_id, fc.object_id)
     return {"ok": True, "job_id": job_id}
 
 
@@ -12984,7 +13030,7 @@ def _start_training(*, dataset: str, lora_name: str, trigger_word: str,
         job_id=job_id, dataset=dataset, files=_set_payload(d),
         lora_name=lora_name, trigger_word=trigger, session=session, **dials,
     )
-    _publish(job_id, call_id=fc.object_id)
+    _record_call(job_id, fc.object_id)
     return {"ok": True, "job_id": job_id}
 
 
