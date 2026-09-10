@@ -3594,6 +3594,29 @@ def _caption_images(
     # loop: one that failed inside the try would otherwise report the caption
     # of the picture before it, and the first one would have nothing to read.
     final = ""
+    # **Every caption written so far, whole, keyed by picture.** This was one
+    # slot — `last_caption`, holding the most recent caption cut to 400
+    # characters — and both halves of that were wrong.
+    #
+    # Lossy: `_await_change` compares a token against whatever the record says
+    # *now*, so anything that changed between two polls is never delivered. Two
+    # pictures captioned inside one tick and the first one is simply gone. A
+    # run of 76 landed 52; the other 24 were written here and no client ever
+    # saw them.
+    #
+    # Truncated: the cut existed to keep the polled record small, against a
+    # caption already capped at MAX_CAPTION_CHARS. It saved about 1.6 KB and
+    # cost the end of every sentence — and the client wrote what it was given
+    # into the sidecar, so sets came out captioned and cut mid-word.
+    #
+    # Accumulating and whole, the record is the delivery: a client that missed
+    # a poll, reconnected, or relaunched mid-run still sees every caption
+    # written up to now and writes the ones it does not have. Nothing has to
+    # arrive at the end, which is the whole of what "the set lands whole at the
+    # end" was buying. A real caption is 400-800 bytes, so a 76-picture run
+    # carries ~50 KB at its largest — the thing this record must not carry is
+    # the megabytes of base64 a take used to put in it, not this.
+    done: dict[str, str] = {}
     for i, img_path in enumerate(todo, 1):
         if _stop_requested(job_id):
             print("[caption] stop requested")
@@ -3697,22 +3720,16 @@ def _caption_images(
         except Exception as exc:
             print(f"[caption] {img_path.name} failed: {exc}")
 
-        # **The caption just written rides the record.** The sidecars
-        # themselves cannot be seen until this job returns — they are on this
-        # container's disk and the client asks a different one — so without
-        # this a run of forty pictures would show a number climbing and not a
-        # word of what it is producing. One caption is a few hundred bytes,
-        # which keeps the polled thing small; the set lands whole at the end.
-        #
-        # It replaces a `volume.commit()` on a timer here, whose entire job
-        # was to let a reader refresh tiles mid-run. There is no volume in
-        # this path now, so the mechanism goes and the behaviour it bought is
-        # kept: you can read the first caption and judge the preset without
-        # waiting for the last.
+        # **The captions ride the record, and that is how they arrive.** The
+        # sidecars are written on this container's disk and the client asks a
+        # different one, so this is the only channel that reaches it while the
+        # run is working — and a picture the client can read is a picture it
+        # can write beside its own copy immediately, finished and editable,
+        # the way a render appears. Nothing waits for the end.
+        if final:
+            done[img_path.name] = _trimmed(final)
         _publish(job_id, phase="caption", step=i, total_steps=len(todo),
-                 percent=round(i / len(todo) * 100),
-                 last_caption={"name": img_path.name,
-                               "text": _trimmed(final)[:400]} if final else None)
+                 percent=round(i / len(todo) * 100), captions=dict(done))
 
     del model
     torch.cuda.empty_cache()
