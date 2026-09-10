@@ -197,10 +197,12 @@ down is why they are shaped that way, in the rules files above.
 app.py` the entire install.** The front end used to be the reason this rule
 needed saying — it was built into the image rather than mounted, because a
 fresh clone has no `dist` and a stale one deploys whatever you last built,
-which is the worst of the three because it looks like it worked. The front end
-is gone and the rule is not: every dependency is baked at build time, nothing
-installs at runtime, and a deploy from a fresh clone is the same deploy as
-yours.
+which is the worst of the three because it looks like it worked. That build is
+gone from the image and the rule is not: every dependency is baked at build
+time, nothing installs at runtime, and a deploy from a fresh clone is the same
+deploy as yours. `web/` itself stayed in the tree when the deploy left, because
+retirement is not removal — nothing reads it, which is the whole reason it can
+sit there without costing the rule anything.
 
 ## Documentation discipline
 

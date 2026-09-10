@@ -21,17 +21,20 @@ job is submitted and at no other time.
 > **The front end was retired on 2026-09-09**, and the pictures in this file
 > are of it. What deploys from `main` today is the engine and the seam: no
 > HTML, no static files, nothing a browser would open. Retirement is not
-> deletion — the whole Modal-served application, `app.py` with the web build
-> in its image and `web/` as the front end it served, is kept on the
+> deletion, and it is not removal either: `web/` is in this tree, as source,
+> built by nothing and mounted by nothing. What was retired is the deploy, not
+> the record. The Modal-served application it was half of — `app.py` with
+> `web()` and the web build in its image — is kept on the
 > [`modal-web`](../../tree/modal-web) branch, deployable as it was, because it
 > is a solid artefact of what can be built on Modal alone and the record of a
 > year of decisions. Nothing is developed on it and it is never rebased.
 >
 > **Read the next section as a description of that application**, because it is
-> one: where it names a button or a console, that is the surface on `modal-web`.
-> The capabilities under them are the platform's and still deploy from `main` —
-> the training, the two model families, regional LoRA, the compilers, the
-> Playground's engine — reached through the job API instead of a page.
+> one: where it names a button or a console, that is the surface whose source
+> is under `web/`. The capabilities under them are the platform's and still
+> deploy from `main` — the training, the two model families, regional LoRA, the
+> compilers, the Playground's engine — reached through the job API instead of a
+> page.
 > `docs/roadmap.md`, Phase 7, has the account, including the five capabilities
 > that were moved onto the job API rather than allowed to fall between the two
 > halves.
@@ -381,13 +384,17 @@ comfy_nodes/          our own ComfyUI nodes: the region shim, the edit-arity gua
 tools/                smoke tests and measurement harnesses
 tools/_from_app.py    pulls plain-Python pieces out of app.py by AST
 tools/shot_fixtures.py  golden fixtures for a client that ports the shot compiler
+web/                  the retired front end, kept as source — nothing builds it, nothing deploys it
 docs/                 decisions.md (what was removed, and the measurement), roadmap.md (the phases, the vetoes)
 CLAUDE.md             the design rationale — why the code is shaped the way it is
 .claude/rules/        the backend rules, loaded when app.py is open
 ```
 
-The front end that used to sit here as `web/` is on the `modal-web` branch,
-with its own rules file and the veto list beside it.
+`web/` is the retired front end, with its own rules file and the veto list
+beside it. It is source and nothing else: no image copies it, no build runs on
+it, and `modal deploy app.py` never reads it. The version that still deploys,
+`web()` and its sixty-seven routes inside `app.py`, is on the `modal-web`
+branch.
 
 `app.py` is deliberately one file — long, but navigable by its banner comments,
 and it keeps `modal deploy app.py` the whole install. Upstream clones read

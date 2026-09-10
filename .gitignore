@@ -68,12 +68,15 @@ Visionary Surface Audit_files/
 # screenshots have real names (generate.png, regional.png) and live in docs/, so
 # anchoring to the root keeps those while ignoring the scratch ones.
 /Screenshot*.png
-# The design-system sync's working directories. The sync itself synced
-# `web/src/ds/` and left with the front end on 2026-09-09; these are what it
-# put on disk and they are ignored the way they always were.
+# The design-system sync's working directories, and the library build beside
+# them. The sync synced `web/src/ds/` and left on 2026-09-09; what it put on
+# disk is build output of source that is in the tree, ignored the way it always
+# was. `web/dist-ds/` is on this list because the retirement deleted the line
+# and swept the build in — a receipt tracked for a day while its record was not.
 .ds-sync/
 ds-bundle/
 .design-sync/
+web/dist-ds/
 
 # Upstream clones, read rather than built against — MiniMax-H3 for the prompt
 # guides `_compile_h3_scene` is checked against, ai-toolkit for the trainer

@@ -38,8 +38,8 @@ it outlived the front end it was written for.
      far zoom of the one canvas.
 7. **The front end is retired** — done, 2026-09-09. What is deployed from
    this repository is training, inference, the stored weights and one job
-   API. No HTML, no static files, nothing a browser would open. Specified
-   below.
+   API. No HTML, no static files, nothing a browser would open. `web/` stays
+   in the tree as source that nothing builds. Specified below.
 
 The end state is one application where a generated still flows into a clip
 without a round trip through the filesystem — the "Animate" and "As reference"
@@ -157,16 +157,31 @@ images, its pins, its volumes, `train_job`, `caption_job`, the three ComfyUI
 classes and the weight downloader. It lost the web build, Node in the image,
 sixty-seven routes, the session Dict, drafts, thumbnails, the duplicate
 classifier and the CLIP encoder baked in for it, storyboards, characters and
-the page's own file serving — 17,363 lines to 13,745, and `web/` with them.
-The URL stops being public. HTTP is the honest channel between two things that
-are not written in the same language; the endpoints are a seam, not an app.
+the page's own file serving — 17,363 lines to 13,745. The URL stops being
+public. HTTP is the honest channel between two things that are not written in
+the same language; the endpoints are a seam, not an app.
 
-**Retirement is not deletion.** The whole Modal-served application — `app.py`
-with the web build in its image, and `web/` as the front end it served — is
-kept on the `modal-web` branch, deployable as it was, because it is a solid
-artefact of what can be built on Modal alone and the record of a year of
-decisions. Nothing is developed on it, it is never rebased, and it sits at the
-last commit before this one.
+**Retirement is not deletion, and it is not removal either.** The whole
+Modal-served application — `app.py` with the web build in its image, and `web/`
+as the front end it served — is kept on the `modal-web` branch, deployable as
+it was, because it is a solid artefact of what can be built on Modal alone and
+the record of a year of decisions. Nothing is developed on it, it is never
+rebased, and it sits at the last commit before this one.
+
+`web/` is also here on `main`, as source. The cut of 2026-09-09 took it out of
+the tree as well as out of the deploy, and that was one decision too many: every
+argument written for the retirement — the URL stops being public, Node leaves
+the image, sixty-seven routes go, `web_image` becomes `cpu_image` — is an
+argument about `web()` inside `app.py`, and none of them needs the directory to
+be absent. `main` reads it never; a directory nothing builds costs a deploy
+nothing. What made the error visible was its own side effect: deleting
+`web/.gitignore` un-ignored `web/dist/`, the root `.gitignore` lost its
+`web/dist-ds/` line in the same commit, and the retirement quietly *added*
+sixteen files of compiled bundle while deleting the hundred and sixteen files of
+source that produced them. A repository whose thesis is that the record is kept
+and the derived thing is disposable had, for one day, kept the receipt and
+thrown away the record. Restored 2026-09-10: the source is tracked, the bundles
+are ignored again, and `web()` stays retired.
 
 **Nothing was allowed to fall between the two halves.** The cut was measured
 route by route rather than reasoned about, and five capabilities had no home on

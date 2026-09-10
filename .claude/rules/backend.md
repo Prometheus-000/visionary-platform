@@ -234,9 +234,11 @@ the image with the build it was there for.
 **What is deployed is training, inference, the stored weights and one job API.**
 No HTML, no static files, nothing a browser would open — `docs/roadmap.md`,
 Phase 7, has the account and the five capabilities that were moved onto the job
-API rather than allowed to fall between the two halves. The whole Modal-served
-application is kept on the `modal-web` branch, deployable as it was; nothing is
-developed on it and it is never rebased.
+API rather than allowed to fall between the two halves. `web/` is still in this
+tree as source — retired, built by nothing, copied into no image — because what
+was retired is the deploy and not the record. The whole Modal-served
+application, `web()` included, is kept on the `modal-web` branch, deployable as
+it was; nothing is developed on it and it is never rebased.
 
 `_from_app.py` exists because two tools need the *real* thing rather than a
 copy: `smoke_prompt.py` checking a compiler against a reimplementation would be
